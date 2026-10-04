@@ -67,3 +67,13 @@ describe('宿主谓词读取调用时刻的全局 window', () => {
     expect(isSwiftHost()).toBe(false)
   })
 })
+
+/** 与 dev 的运行环境判定契约一致：桥属性存在即优先识别 Tauri。 */
+it('Tauri 桥值为 undefined 时仍优先 Swift 标记', () => {
+  expect(
+    detectHostKind({
+      __TAURI_INTERNALS__: undefined,
+      __pwNativeHost: { kind: 'swift' },
+    }),
+  ).toBe('tauri')
+})

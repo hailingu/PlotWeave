@@ -6,14 +6,28 @@
  * 代次**：每次入队自增，新保存一排队旧代次重试即作废——陈旧文档的重试
  * 不得后完成覆盖新内容。删除同样排进链：在途保存落定后才删，且先取消
  * 全部重试登记，已删项目不得被迟到的完成/重试复活。
+ *
+ * 可变状态归属（issue #162，工程标准「可变全局单例须登记有界生命周期与
+ * 移除计划」的批准例外）：saveChains/pendingRetryDocs 等模块级可变表由
+ * 本模块（保存协调器）独占所有，外部模块只经窄操作消费——
+ * `pendingRetryDocOf`（查询）、`replacePendingRetryDoc`（同一性条件
+ * 替换）、`saveChainTokenOf`（不透明链身份令牌，仅同值比较），不得直接
+ * 读写 Map。生命周期：条目随保存失败登记、保存成功/删除落定清除，与
+ * 进程同寿是产品目的（导航/卸载后最新未落盘文档只存于此）；移除计划：
+ * 无——进程内保留即设计本身，若未来引入项目级显式关闭语义再评估。
  */
 import { serializeProject } from '../model/convert'
 import type { ProjectContent } from '../model/content'
-import { hostInvoke } from '../platform/hostCommands'
+import { IPC_COMMANDS } from '../ipc/commands'
+import { ipcInvoke } from '../ipc/invoke'
 
 const SAVE_RETRY_DELAY_MS = 5000
-export const saveChains = new Map<string, Promise<unknown>>()
-export const pendingRetryDocs = new Map<string, ProjectContent>()
+/** 项目 id → 保存链尾 Promise（模块私有，issue #162）：外部经
+ * `saveChainTokenOf` 取不透明令牌做身份比较，不持有 Map 本身。 */
+const saveChains = new Map<string, Promise<unknown>>()
+/** 项目 id → 待重试的最新未落盘文档（模块私有，issue #162）：外部经
+ * `pendingRetryDocOf` / `replacePendingRetryDoc` 消费。 */
+const pendingRetryDocs = new Map<string, ProjectContent>()
 /** 重试登记的触发器：定时器句柄 + 登记代次（触发时代次不符即自灭）。 */
 const retryTimers = new Map<
   string,
@@ -31,7 +45,24 @@ const retryPersistedDocs = new Map<string, ProjectContent>()
 /** 删除墓碑：删除开始即立——之后为该项目排队的任何保存被吸收，迟到的
  * 合并冲刷/重试不得重建 JSON 复活用户刚删的项目；删除落定（成功或失败）
  * 后清除，失败时项目仍在、可继续保存。 */
-const deletingIds = new Set<string>()
+/** 删除墓碑（引用计数，PR #224 第八轮评审）：重叠的 enqueueDelete（如
+ * duplicate 清理分支在首个删除活跃期再排队一笔）共享同一墓碑——每笔
+ * 删除落定自减，计数归零才解除。Set 形态下第一笔的 finally 提前抹掉
+ * 墓碑，重叠窗口内的迟到普通保存不再被吸收、越过仍在排队的删除以
+ * create-if-missing 重建已删项目。 */
+const deletingIds = new Map<string, number>()
+
+/** 删除组级状态（PR #224 第十/十一轮评审）：重叠删除共享一个组对象——
+ * 任一笔后端删除成功即置位 succeeded，后续失败的回吐分支据此丢弃（而非
+ * 重放）吸收的文档：项目已被成功笔移除，重放会以 create-if-missing 语义
+ * 复活它，而保存调用方当初拿到的是「吸收为成功」。
+ *
+ * 组对象与组同寿：各笔闭包持有组引用（不经 map 查询），finally 清除的
+ * 只是「是否新周期」的 map 入口——清除时序（finally 先于处理器）不影响
+ * 在途处理器的判定（第十一轮评审：Set 查询式标记会被 finally/成功分支
+ * 提前清除，导致失败处理器误判重放）。新一轮删除周期（计数归零后）从
+ * 干净组状态开始。 */
+const deleteGroups = new Map<string, { succeeded: boolean }>()
 /** 删除期间被吸收的迟到保存：留存最新文档——删除失败（项目仍在磁盘）时
  * 回吐重存，否则该次冲刷已被上游视为成功，最新编辑既没落盘也无重试
  * 登记；删除成功即随项目一并丢弃，绝不复活已删项目。 */
@@ -217,17 +248,35 @@ export function notifyRetryPersisted(doc: ProjectContent): void {
   retryPersistedListeners.forEach((listener) => listener(doc))
 }
 
-/** 链上写盘动作（save_project 命令，P2 起经平台宿主传输）：入参为会话
- * 文档，序列化（剥离会话态）在写入边界执行——归一化/迁移在 model/convert。 */
+/** 链上写盘动作（Tauri save_project 命令）：入参为会话文档，序列化
+ * （剥离会话态）在写入边界执行——归一化/迁移在 model/convert。 */
 export async function tauriSave(
   id: string,
   doc: ProjectContent,
+  expectExisting = false,
 ): Promise<void> {
-  await hostInvoke('save_project', { id, doc: serializeProject(doc, id) })
+  await ipcInvoke(IPC_COMMANDS.saveProject, {
+    id,
+    doc: serializeProject(doc, id),
+    expectExisting,
+  })
 }
 
-export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
+/** 保存入队（§3.1 协调入口）：删除墓碑期被吸收留存（删除失败回吐），
+ * 否则自增代次排入该项目的串行链；落盘成功清除待重试登记并通知订阅，
+ * 失败登记最新文档并按代次调度后台重试（详见模块头）。 */
+export function enqueueSave(
+  id: string,
+  doc: ProjectContent,
+  expectExisting = false,
+): Promise<void> {
   if (deletingIds.has(id)) {
+    if (expectExisting) {
+      // 副本后续保存（PR #224 第七轮评审）：墓碑活跃即目标删除在途——
+      // 吸收会让 duplicate 对不存在的项目报成功（flag 被墓碑分支丢弃）。
+      // 拒绝并抛出：调用方落入清理分支，墓碑解除后目标已被移除
+      return Promise.reject(new Error(`项目删除中，拒绝写入副本：${id}`))
+    }
     // 吸收但不丢弃：留存最新文档，删除失败时回吐（见 enqueueDelete）
     absorbedSaveDocs.set(id, doc)
     console.warn('[projectStore] 项目删除中，吸收本次保存排队', id)
@@ -238,7 +287,7 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
   const next = run.then(async () => {
     try {
-      await tauriSave(id, doc)
+      await tauriSave(id, doc, expectExisting)
       // 任何成功保存都取代并清除既有登记（陈旧登记不得残留）；仅当落盘的
       // 正是登记文档时通知订阅者并记忆落盘文档（画布闸据此清脏、冗余
       // 重写失败据此免登记，PR #174 评审）
@@ -284,7 +333,13 @@ export function enqueueSave(id: string, doc: ProjectContent): Promise<void> {
  * onProjectWriteReplayFailure 通知订阅者（画布回吐失败自带登记重试，
  * 不需此通道）。 */
 export function enqueueDelete(id: string): Promise<void> {
-  deletingIds.add(id)
+  const outstanding = deletingIds.get(id) ?? 0
+  // 同一删除组：墓碑仍在（在途笔）或链上仍有该项目的未清空活动
+  //（首笔已落定时 saveChains 条目仍在）——组级成功状态跨笔共享；
+  // 完全无活动才是新一轮周期（干净组）
+  const group = deleteGroups.get(id) ?? { succeeded: false }
+  deleteGroups.set(id, group)
+  deletingIds.set(id, outstanding + 1)
   clearSaveRetryTimer(id)
   const run = (saveChains.get(id) ?? Promise.resolve()).catch(() => undefined)
   let retainedRetryDoc: ProjectContent | undefined
@@ -293,7 +348,10 @@ export function enqueueDelete(id: string): Promise<void> {
     // 捕获值会把被取代的旧文档重放覆盖已落盘的新内容
     retainedRetryDoc = pendingRetryDocs.get(id)
     clearSaveRetry(id)
-    await hostInvoke('delete_project', { id })
+    await ipcInvoke(IPC_COMMANDS.deleteProject, { id })
+    // 本笔删除已成功：项目在盘上已不存在——同组后续失败的回吐必须丢弃
+    // 吸收的写入（重放即复活），组级成功状态随组存活（见 deleteGroups）
+    group.succeeded = true
   })
   /** 删除失败时的回吐分支：重新登记保留/吸收的快照与附属写入。该链纳入
    * 未落定跟踪（PR #174 评审）：stored 只覆盖删除本身——按微任务续延排序
@@ -302,7 +360,11 @@ export function enqueueDelete(id: string): Promise<void> {
    * 依赖这一排序。 */
   const recovery = next
     .finally(() => {
-      deletingIds.delete(id)
+      const remaining = (deletingIds.get(id) ?? 1) - 1
+      if (remaining <= 0) {
+        deletingIds.delete(id)
+        deleteGroups.delete(id)
+      } else deletingIds.set(id, remaining)
       retryPersistedDocs.delete(id)
     })
     .then(
@@ -317,6 +379,7 @@ export function enqueueDelete(id: string): Promise<void> {
         const absorbedWrite = absorbedProjectWrites.get(id)
         absorbedSaveDocs.delete(id)
         absorbedProjectWrites.delete(id)
+        if (group.succeeded) return
         if (retained !== undefined)
           void enqueueSave(id, retained).catch(() => undefined)
         if (absorbed !== undefined)
@@ -349,4 +412,31 @@ export async function waitForSaveChainIdle(id: string): Promise<void> {
     await chain.catch(() => undefined)
     if (saveChains.get(id) === chain) return
   }
+}
+
+/** 链身份令牌（issue #162 的窄查询口）：返回当前链尾 Promise 作为不透明
+ * 身份——调用方只许同值比较（观测窗口内是否有新保存/删除排队），不得
+ * await 之外的任何读取（等待静止用 waitForSaveChainIdle）。 */
+export function saveChainTokenOf(id: string): Promise<unknown> | undefined {
+  return saveChains.get(id)
+}
+
+/** 待重试文档的窄查询口（issue #162）：返回当前登记的最新未落盘文档，
+ * 无登记返回 undefined。 */
+export function pendingRetryDocOf(id: string): ProjectContent | undefined {
+  return pendingRetryDocs.get(id)
+}
+
+/** 待重试文档的同一性条件替换（issue #162，tauriLoad 复验净载荷回写）：
+ * 仅当当前登记仍是要替换的那份（对象同一）才替换为 next 并返回 true——
+ * 复验 await 期间登记被更新保存清除/取代时返回 false，调用方按当前保存
+ * 状态整体重来，不把已被取代的旧文档复活进登记。 */
+export function replacePendingRetryDoc(
+  id: string,
+  expected: ProjectContent,
+  next: ProjectContent,
+): boolean {
+  if (pendingRetryDocs.get(id) !== expected) return false
+  pendingRetryDocs.set(id, next)
+  return true
 }

@@ -11,6 +11,7 @@
     "build": "tsc --noEmit && vite build",
     "build:native-canvas": "vite build --config vite.native-canvas.config.ts",
     "build:native": "npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData build",
+    "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -19,7 +20,9 @@
     "tauri": "tauri",
     "test:coverage": "vitest run --coverage",
     "hooks:install": "git config core.hooksPath .githooks",
-    "sonar:gate": "sh scripts/sonar-quality-gate.sh"
+    "sonar:gate": "sh scripts/sonar-quality-gate.sh",
+    "check:static": "sh scripts/check-static.sh",
+    "check:size": "node scripts/check-file-size.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -35,11 +38,14 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4",
     "@vitest/coverage-v8": "^4.1.11",
+    "axe-core": "^4.13.0",
     "eslint": "^9",
     "eslint-plugin-react-hooks": "^5",
     "eslint-plugin-react-refresh": "^0.4",
     "globals": "^15",
     "happy-dom": "^20.11.12",
+    "jsdom": "^26.1.0",
+    "postcss": "^8.5.26",
     "prettier": "^3.9.6",
     "typescript": "^5.6",
     "typescript-eslint": "^8",

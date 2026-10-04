@@ -17,14 +17,14 @@ import {
 import { invoke } from '@tauri-apps/api/core'
 import type { ChatMessage, AssistantMessage } from '../ai/chat'
 import type { AiCommand } from '../ai/commands'
-import { normalizeAiSession, type AiSession } from '../ai/session'
+import { normalizeAiSession, type AiSession } from '../../ai/session'
 import { useAiBridge, type AiBridgeDeps } from '../useAiBridge'
 import { CommandStack } from '../history'
 import { EMPTY_SETTINGS } from '../settings'
 import { mergeNodeData } from '../nodes/patch'
 import type { CanvasNode, DialogueFlowNode } from '../nodes/types'
 import { settingsStore } from '../../settings/settingsStore'
-import RightPanel from './RightPanel'
+import { RightPanel } from './RightPanel'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 const invokeMock = vi.mocked(invoke)
@@ -107,7 +107,7 @@ function canvasHarness(
   const state = { nodes: initialNodes, aiRevision }
   const history = new CommandStack()
   const deps: AiBridgeDeps = {
-    nodes: state.nodes,
+    contentNodes: state.nodes,
     edges: [],
     settings: EMPTY_SETTINGS,
     nodesRef: { current: state.nodes },
@@ -125,7 +125,7 @@ function canvasHarness(
       ),
     setNodes: (update) => {
       state.nodes = update(state.nodes)
-      deps.nodes = state.nodes
+      deps.contentNodes = state.nodes
       deps.nodesRef.current = state.nodes
     },
     setEdges: (update) => {
@@ -167,26 +167,37 @@ async function setup(
     width: 320,
     tab: 'ai' as const,
     settings: EMPTY_SETTINGS,
-    projectId: options.projectId ?? 'p-context',
     onResize: () => undefined,
     onTabChange: () => undefined,
-    onOpenSettings: options.onOpenSettings,
-    aiSessionLoadFailed: options.loadFailed,
-    canvasDigest: canvas.hook.result.current.canvasDigest,
-    onValidateCommands: canvas.hook.result.current.validateCommands,
-    onValidateAi: canvas.hook.result.current.validateAiReply,
-    onApplyAiBatch: canvas.hook.result.current.applyAiBatch,
-    onReadNode: canvas.hook.result.current.readNode,
-    aiSession: options.session,
-    aiRevision: canvas.state.aiRevision,
-    whenCanvasCommitted: options.whenCanvasCommitted,
-    onSaveAiSession: async (session: AiSession) => {
-      saved.push(JSON.parse(JSON.stringify(session)) as AiSession)
+    ai: {
+      projectId: options.projectId ?? 'p-context',
+      onOpenSettings: options.onOpenSettings,
+      sessionLoadFailed: options.loadFailed,
+      canvasDigest: canvas.hook.result.current.canvasDigest,
+      onValidateCommands: canvas.hook.result.current.validateCommands,
+      onValidateAi: canvas.hook.result.current.validateAiReply,
+      onApplyAiBatch: canvas.hook.result.current.applyAiBatch,
+      onReadNode: canvas.hook.result.current.readNode,
+      session: options.session,
+      commitIdentity: {
+        aiRevision: canvas.state.aiRevision,
+        ...(options.whenCanvasCommitted
+          ? { whenCanvasCommitted: options.whenCanvasCommitted }
+          : {}),
+      },
+      onSaveSession: async (session: AiSession) => {
+        saved.push(JSON.parse(JSON.stringify(session)) as AiSession)
+      },
     },
   })
   const view = render(<RightPanel {...props()} />)
   if (options.loadFailed) await screen.findByRole('alert')
-  else await screen.findByLabelText('AI 对话输入')
+  // busy 时输入行被「取消」按钮替代（issue #154）——等待取消或输入任一出现
+  else
+    await waitFor(() => {
+      if (screen.queryByRole('button', { name: '取消' })) return
+      screen.getByLabelText('AI 对话输入')
+    })
   return {
     ...canvas,
     saved,
@@ -575,7 +586,7 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     expect(new Set(last.entries.map((e) => e.id)).size).toBe(2)
   })
 
-  it('重挂载时回合仍在途：忙碌态恢复，落定后上屏', async () => {
+  it('重挂载时回合仍在途：忙碌态恢复（取消按钮替代输入框），落定后上屏', async () => {
     const reply = deferredReply()
     const h = await setup({ projectId: 'p63-wait' })
     await sendInFlight()
@@ -583,6 +594,9 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     h.unmount()
     await setup({ projectId: 'p63-wait', session })
     expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    // busy 恢复：取消按钮替代输入框（issue #154）
+    expect(screen.getByRole('button', { name: '取消' })).toBeTruthy()
+    expect(screen.queryByLabelText('AI 对话输入')).toBeNull()
     await act(async () => {
       reply({ role: 'assistant', content: '等待后到达。' })
     })
@@ -639,6 +653,7 @@ describe('AiThread 在途回合的归还与失败（issue #63）', () => {
     h.unmount()
     const middle = await setup({ projectId: 'p63-return', session })
     expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '取消' })).toBeTruthy()
     middle.unmount() // 等待期间再次进入设置
     await setup({ projectId: 'p63-return', session })
     expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
@@ -701,6 +716,61 @@ describe('AiThread 常驻设置入口（issue #87）', () => {
     expect(screen.queryByLabelText('AI 对话输入')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '打开设置' }))
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('AiThread 在途回合取消（issue #154）', () => {
+  it('busy 时输入行切换为取消按钮；取消后立即可发下一轮并追加「已取消」回执', async () => {
+    const h = await setup({ projectId: 'p154-cancel' })
+    // 「丰富开场」含动词走词表、不触发改写：首个 llm_chat 即回合请求，挂起。
+    // 以取消按钮出现为 busy 就绪信号（比「正在思考」/调用序更稳）。
+    invokeMock.mockImplementationOnce(
+      () => new Promise<AssistantMessage>(() => undefined),
+    )
+    await sendInFlight('丰富开场')
+    expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    const cancel = () => screen.getByRole('button', { name: '取消' })
+    expect(cancel()).toBeTruthy()
+
+    fireEvent.click(cancel())
+    expect(await screen.findByText('已取消')).toBeTruthy()
+    expect(screen.queryByText('✦ 正在思考…')).toBeNull()
+    // 取消后立即可发下一轮：输入框恢复可用
+    const input = screen.getByLabelText('AI 对话输入') as HTMLInputElement
+    expect(input.disabled).toBe(false)
+
+    // 下一轮能正常发出并回复
+    invokeMock.mockResolvedValue({ role: 'assistant', content: '下一轮回复。' })
+    fireEvent.change(input, { target: { value: '继续丰富' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(await screen.findByText('下一轮回复。')).toBeTruthy()
+    expect(screen.getByText('已取消')).toBeTruthy()
+    const last = h.saved[h.saved.length - 1]
+    expect(last.entries.map((e) => e.text ?? '')).toEqual(
+      expect.arrayContaining(['已取消', '下一轮回复。']),
+    )
+  })
+
+  it('取消后经导航卸载重开（#63）：迟到的已取消结果仍丢弃，不复活旧轮', async () => {
+    const reply = deferredReply()
+    const h = await setup({ projectId: 'p154-nav' })
+    await sendInFlight()
+    const cancel = screen.getByRole('button', { name: '取消' })
+    fireEvent.click(cancel)
+    expect(await screen.findByText('已取消')).toBeTruthy()
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    h.unmount()
+    // 卸载后回合落定（已取消结果）
+    await act(async () => {
+      reply({ role: 'assistant', content: '应被丢弃。' })
+    })
+    await flushAfterUnmount()
+    await setup({ projectId: 'p154-nav', session })
+    // 不复活旧轮的迟到助手回复；已取消回执保留（取消路径与迟到结果各一条，
+    // 迟到结果同样收敛为「已取消」不上屏助手内容）
+    expect(screen.queryByText('应被丢弃。')).toBeNull()
+    expect(screen.getAllByText('已取消').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText('✦ 正在思考…')).toBeNull()
   })
 })
 

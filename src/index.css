@@ -2,6 +2,7 @@
 @import './home/home.css';
 @import './editor/editor.css';
 @import './editor/panels/panels.css';
+@import './editor/panels/assets.css';
 @import './editor/panels/documents.css';
 @import './editor/panels/settings-detail.css';
 @import './editor/nodes/settings/settings.css';
@@ -24,6 +25,17 @@ body {
   font-family: -apple-system, 'PingFang SC', 'Segoe UI', sans-serif;
   background: var(--surface-window);
   color: var(--text-primary);
+}
+
+/* 应用级错误横幅（App 退出冲刷 + 编辑器保存/导入/生成失败共用，issue #318）：
+ * role=alert 语义由组件持有；配色经语义令牌进入 sheetTokens 全表契约与
+ * 配对契约——令牌双外观恒定（视觉零变化），横幅不随主题变体切换是保留
+ * 的视觉边界。 */
+.pw-error-banner {
+  padding: 6px 16px;
+  background: var(--error-banner-bg);
+  color: var(--error-banner-fg);
+  font-size: 13px;
 }
 
 /* 画布占三栏中栏，占满工具栏之外的剩余高度。 */

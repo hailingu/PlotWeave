@@ -1,13 +1,10 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { SCENE_SHOT_HANDLE } from '../graphRules'
-import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
-import NodeSettingsGear from './settings/NodeSettingsGear'
+import { NodeSettingsPanel, EditableName } from './settings/NodeSettingsPanel'
+import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import { resolveCharacterAvatar, resolveLocationName } from '../settings'
 import type { SceneFlowNode } from './types'
-
-// 常量权威定义在 graphRules（连线规则纯函数），此处按原导出名转出
-export { SCENE_SHOT_HANDLE }
 
 /**
  * 场景节点 = 索引卡（docs/ui-design.md §4.2，编剧侧纸面）。
@@ -52,11 +49,9 @@ function CharacterAvatarStrip({
   )
 }
 
-export default function SceneNode({
-  id,
-  data,
-  selected,
-}: NodeProps<SceneFlowNode>) {
+/** 场景索引卡（§4.3）：卡片头（场号 + 可改名标题）、设定摘要与底部
+ * shots 端口（attach 下挂分镜卡，§4.4）；设置面板锚定展开。 */
+export function SceneNode({ id, data, selected }: NodeProps<SceneFlowNode>) {
   const { openSettingsId, toggleSettings, patchNode, shotCountOf, settings } =
     useNodeEdit()
   const settingsOpen = openSettingsId === id

@@ -1,4 +1,4 @@
-import Field from './Field'
+import { Field } from './Field'
 import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import { useImageJobs } from '../../imagegen/context'
@@ -55,7 +55,7 @@ function ImageModelSelect({
  * 枚举），空值 = 跟随设置页默认图像模型；生成中的取消为协作式（Rust 侧
  * 放弃结果）；作业失败文案就地展示。
  */
-export default function ImageNodeForm({
+export function ImageNodeForm({
   node,
 }: {
   readonly node: { readonly id: string; readonly data: ImageNodeData }

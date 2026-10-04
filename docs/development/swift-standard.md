@@ -4,7 +4,7 @@
 shell, its host adapters, and its tests (`native/macos/` today). Like the
 root `AGENTS.md`, this file is written in English for agent interoperability.
 
-**Last reviewed**: 2026-09-15
+**Last reviewed**: 2026-10-04
 
 ## Required Reading
 
@@ -50,8 +50,11 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
 - Document types, protocols, functions, and properties with intent-bearing
   doc comments before their implementation bodies, including target-internal
   declarations (root `AGENTS.md`).
-- The size caps from the root `AGENTS.md` (800/1800/80 physical lines) apply
-  to `native/**` without local relaxation.
+- The root `AGENTS.md` file caps apply to `native/**`: 800 physical lines
+  for source and 1800 for Swift tests under `Tests/`. The executable-unit
+  standard is 80 code lines, excluding comments but counting blank lines,
+  and is review-enforced under the same owner decision as other languages.
+  `npm run check:size` measures Swift files and classifies native project files.
 - Use public SwiftUI/AppKit/WebKit API only. No private API, no KVC
   background tricks, and no whole-window-transparency assumptions
   (migration plan §2.2).

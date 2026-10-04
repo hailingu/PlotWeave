@@ -5,61 +5,11 @@
 //! 以符合源文件 800 行上限，评审修复）。
 
 use super::*;
+use crate::library_fixture::*;
 use crate::store::new_id;
-use cap_std::ambient_authority;
-use cap_std::fs::Dir as CapDir;
 use serde_json::json;
 use std::fs;
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
-
-/// 测试内核的受信句柄：对临时目录做环境打开（等价生产端锚定句柄）。
-fn cap(p: &Path) -> CapDir {
-    CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
-}
-
-/// 唯一临时根：`{tmp}/pw-library-test-{new_id}/` 下含 `library/assets/`；
-/// 返回 (library, root)——root 供库外受害者文件与清理。
-fn temp_fixture() -> (PathBuf, PathBuf) {
-    let root = std::env::temp_dir().join(format!("pw-library-test-{}", new_id()));
-    fs::create_dir_all(root.join("library").join("assets")).expect("创建临时库目录");
-    (root.join("library"), root)
-}
-
-fn cleanup(root: &Path) {
-    let _ = fs::remove_dir_all(root);
-}
-
-/// 直接按字节写脏索引（绕过写入内核，模拟手工修改/损坏的 library.json）。
-fn write_index_raw(library: &Path, index: &Value) {
-    let mut f = fs::File::create(library.join("library.json")).expect("创建索引文件");
-    f.write_all(serde_json::to_string(index).expect("序列化").as_bytes())
-        .expect("写入索引");
-}
-
-/// 最小合法索引条目（目标 Record 形状，含 §7.2 必填 source/ISO createdAt；
-/// relPath 按需投毒）。
-fn entry(id: &str, rel: &str) -> Value {
-    json!({
-        "id": id,
-        "name": "x",
-        "kind": "other",
-        "mime": "image/png",
-        "relPath": rel,
-        "source": "upload",
-        "createdAt": "2026-01-01T00:00:00.000Z",
-        "tags": [],
-    })
-}
-
-/// 把最小条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
-fn by_id(entries: impl IntoIterator<Item = Value>) -> Value {
-    let mut m = serde_json::Map::new();
-    for e in entries {
-        m.insert(e["id"].as_str().unwrap().to_string(), e);
-    }
-    json!({ "byId": m })
-}
+use std::path::Path;
 
 #[test]
 fn asset_id_rules() {
@@ -76,14 +26,6 @@ fn name_and_kind_rules() {
     assert!(validate_kind("prop").is_err());
 }
 
-#[test]
-fn ext_mapping_prefers_name_and_falls_back_to_mime() {
-    assert_eq!(ext_for("立绘.PNG", "image/png"), "png");
-    assert_eq!(ext_for("noext", "image/webp"), "webp");
-    assert_eq!(ext_for("noext", "application/x-unknown"), "bin");
-    assert_eq!(ext_for("bad.<script>", "image/png"), "png");
-}
-
 // ---- 脏索引安全回归（issue #17 阶段 1：场景 1-3 + 符号链接 + 隔离）----
 
 /// 场景 1：relPath = "library.json" 通过旧 `!contains("..")` 检查，可删除
@@ -95,9 +37,12 @@ fn delete_refuses_poisoned_index_self_target() {
         &library,
         &json!({ "assets": by_id([entry("la-1", "library.json")]), "groups": by_id([]) }),
     );
-    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
         .expect_err("脏条目应拒绝删除");
-    assert!(err.contains("资产不存在"), "隔离条目应不可达：{err}");
+    assert!(
+        matches!(err, LibraryError::NotFound { .. }),
+        "隔离条目应为缺失类别：{err}"
+    );
     assert!(
         fs::metadata(library.join("library.json")).is_ok(),
         "索引自身不得被删除"
@@ -116,9 +61,12 @@ fn delete_refuses_absolute_rel_path_outside_library() {
         &library,
         &json!({ "assets": by_id([entry("la-1", victim.to_str().unwrap())]), "groups": by_id([]) }),
     );
-    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
         .expect_err("绝对路径应拒绝");
-    assert!(err.contains("资产不存在"), "隔离条目应不可达：{err}");
+    assert!(
+        err.to_string().contains("资产不存在"),
+        "隔离条目应不可达：{err}"
+    );
     assert_eq!(fs::read(&victim).expect("受害者文件必须幸存"), b"VICTIM");
     cleanup(&root);
 }
@@ -133,9 +81,12 @@ fn delete_refuses_relative_name_outside_assets() {
         &library,
         &json!({ "assets": by_id([entry("la-1", "settings.json")]), "groups": by_id([]) }),
     );
-    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
         .expect_err("assets/ 外相对名应拒绝");
-    assert!(err.contains("资产不存在"), "隔离条目应不可达：{err}");
+    assert!(
+        err.to_string().contains("资产不存在"),
+        "隔离条目应不可达：{err}"
+    );
     assert_eq!(
         fs::read(library.join("settings.json")).expect("库内非资产文件必须幸存"),
         b"{}"
@@ -162,9 +113,12 @@ fn delete_refuses_symlinked_parent_component() {
         &library,
         &json!({ "assets": by_id([entry("la-1", "assets/sub/g.png")]), "groups": by_id([]) }),
     );
-    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
         .expect_err("符号链接中间组件应拒绝");
-    assert!(err.contains("符号链接"), "意外诊断：{err}");
+    assert!(
+        matches!(err, LibraryError::Refused { .. }),
+        "符号链接应为保护性拒绝类别：{err}"
+    );
     assert_eq!(
         fs::read(outside.join("g.png")).expect("链外目标文件必须幸存"),
         b"G"
@@ -181,9 +135,9 @@ fn delete_refuses_non_file_target() {
         &library,
         &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
-    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+    let err = crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
         .expect_err("非普通文件目标应拒绝");
-    assert!(err.contains("不是普通文件"), "意外诊断：{err}");
+    assert!(err.to_string().contains("不是普通文件"), "意外诊断：{err}");
     assert!(
         fs::metadata(library.join("assets").join("la-1.png")).is_ok(),
         "目标目录必须幸存"
@@ -200,7 +154,7 @@ fn delete_treats_missing_parent_dir_as_already_deleted() {
         &library,
         &json!({ "assets": by_id([entry("la-1", "assets/characters/a.png")]), "groups": by_id([]) }),
     );
-    crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+    crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
         .expect("缺失父目录应按已删除幂等成功");
     let raw = fs::read_to_string(library.join("library.json")).expect("读回索引");
     assert!(!raw.contains("la-1"), "索引条目应被移除：{raw}");
@@ -216,7 +170,8 @@ fn delete_removes_media_updates_index_and_is_idempotent_on_missing_file() {
         &library,
         &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
-    crate::library_journal::delete_asset_transacted(&cap(&library), "la-1").expect("删除应成功");
+    crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
+        .expect("删除应成功");
     assert!(
         fs::metadata(library.join("assets").join("la-1.png")).is_err(),
         "媒体文件应被删除"
@@ -228,7 +183,7 @@ fn delete_removes_media_updates_index_and_is_idempotent_on_missing_file() {
         &library,
         &json!({ "assets": by_id([entry("la-1", "assets/la-1.png")]), "groups": by_id([]) }),
     );
-    crate::library_journal::delete_asset_transacted(&cap(&library), "la-1")
+    crate::library_journal::delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
         .expect("缺失媒体应幂等成功");
     cleanup(&root);
 }
@@ -294,7 +249,7 @@ fn read_index_enforces_size_cap() {
         &json!({ "assets": by_id([]), "groups": by_id([]), "pad": pad }),
     );
     let err = crate::library_fs::read_index_capped(&cap(&library)).expect_err("超限索引应拒绝");
-    assert!(err.contains("上限"), "意外诊断：{err}");
+    assert!(err.to_string().contains("上限"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -314,16 +269,21 @@ fn read_index_missing_falls_back_to_default() {
     cleanup(&root);
 }
 
-/// 非对象根（标量/数组）显式拒绝而非 panic（评审修复：serde_json 字符串
-/// 索引在非对象根上 panic 会让全部库命令不可用）。
+/// #137：非对象根按损坏视图提示，原字节保留，后续导入可备份后替换。
 #[test]
-fn read_index_rejects_non_object_root() {
+fn read_index_preserves_non_object_root_with_warning() {
     let (library, root) = temp_fixture();
     for raw in ["[1,2,3]", "42", "\"text\""] {
         fs::write(library.join("library.json"), raw).expect("写非对象根索引");
-        let err =
-            crate::library_fs::read_index_capped(&cap(&library)).expect_err("非对象根应显式拒绝");
-        assert!(err.contains("对象"), "意外诊断：{err}");
+        let (index, warnings, suspended) =
+            crate::library_fs::read_index_capped(&cap(&library)).unwrap();
+        assert_eq!(index, crate::library_fs::default_index());
+        assert!(!warnings.is_empty());
+        assert!(!suspended);
+        assert_eq!(
+            fs::read_to_string(library.join("library.json")).unwrap(),
+            raw
+        );
     }
     cleanup(&root);
 }
@@ -376,9 +336,16 @@ fn put_rejects_when_serialized_index_would_exceed_cap() {
     );
     write_index_raw(&library, &seed);
     // 导入条目用同款长名，把候选索引推过写上限
-    let err = put_asset_with(&cap(&library), &long_name, "image/png", "other", b"A")
-        .expect_err("超限候选索引应拒绝写入");
-    assert!(err.contains("上限"), "意外诊断：{err}");
+    let err = put_asset_with(
+        &cap(&library),
+        &long_name,
+        "image/png",
+        "other",
+        b"A",
+        &mut |_| {},
+    )
+    .expect_err("超限候选索引应拒绝写入");
+    assert!(err.to_string().contains("上限"), "意外诊断：{err}");
     let files = fs::read_dir(library.join("assets"))
         .expect("读资产目录")
         .count();
@@ -409,7 +376,7 @@ fn delete_round_trips_large_compact_index_within_cap() {
         raw_len <= crate::library_fs::INDEX_MAX_BYTES,
         "种子索引应可通过读取上限：{raw_len}"
     );
-    crate::library_journal::delete_asset_transacted(&cap(&library), "la-0")
+    crate::library_journal::delete_asset_transacted(&cap(&library), "la-0", &mut |_| {})
         .expect("删除应成功（写回不得因编码膨胀被卡死）");
     assert!(
         fs::metadata(library.join("assets").join("la-0.png")).is_err(),
@@ -480,8 +447,15 @@ fn assets_root_tolerates_concurrent_first_use() {
 #[test]
 fn put_writes_media_and_appends_entry() {
     let (library, root) = temp_fixture();
-    let e = put_asset_with(&cap(&library), "立绘.png", "image/png", "character", b"PNG")
-        .expect("导入应成功");
+    let e = put_asset_with(
+        &cap(&library),
+        "立绘.png",
+        "image/png",
+        "character",
+        b"PNG",
+        &mut |_| {},
+    )
+    .expect("导入应成功");
     // id 为防碰撞生成器产物（la 前缀，毫秒+进程内计数；评审修复 PR #33 第
     // 十二轮——旧 {毫秒}-{大小} 方案同毫秒同大小即碰撞）
     let id = e["id"].as_str().unwrap_or_default();
@@ -511,9 +485,16 @@ fn put_writes_media_and_appends_entry() {
 #[test]
 fn put_rejects_non_canonical_mime() {
     let (library, root) = temp_fixture();
-    let err = put_asset_with(&cap(&library), "a.png", "not a mime", "other", b"A")
-        .expect_err("非法 mime 应拒绝");
-    assert!(err.contains("mime"), "意外诊断：{err}");
+    let err = put_asset_with(
+        &cap(&library),
+        "a.png",
+        "not a mime",
+        "other",
+        b"A",
+        &mut |_| {},
+    )
+    .expect_err("非法 mime 应拒绝");
+    assert!(err.to_string().contains("mime"), "意外诊断：{err}");
     let files = fs::read_dir(library.join("assets"))
         .expect("读资产目录")
         .count();
@@ -541,7 +522,9 @@ fn read_index_rejects_when_normalized_form_exceeds_cap() {
     );
     let err =
         crate::library_fs::read_index_capped(&cap(&library)).expect_err("规范化表示超限应拒绝读取");
-    assert!(err.contains("上限"), "意外诊断：{err}");
+    // 大小上限族为独立类别（issue #144）：读取侧规范化表示超限可按类型区分
+    assert!(matches!(err, LibraryError::Limit { .. }), "实际错误：{err}");
+    assert!(err.to_string().contains("上限"), "意外诊断：{err}");
     cleanup(&root);
 }
 
@@ -656,10 +639,15 @@ fn migration_suspended_blocks_mutations_preserving_disk() {
     }));
     write_index_raw(&library, &json!({ "assets": entries, "groups": [] }));
     let before = fs::read(library.join("library.json")).expect("读原始索引字节");
-    let err = update_meta_with(&cap(&library), "la-0", &json!({ "name": "改名" }))
-        .expect_err("迁移挂起态应阻断变更");
+    let err = update_meta_with(
+        &cap(&library),
+        "la-0",
+        &json!({ "name": "改名" }),
+        &mut |_| {},
+    )
+    .expect_err("迁移挂起态应阻断变更");
     assert!(
-        err.contains("上限") || err.contains("迁移"),
+        err.to_string().contains("上限") || err.to_string().contains("迁移"),
         "意外诊断：{err}"
     );
     let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
@@ -686,3 +674,63 @@ fn unique_library_id_retries_on_collision_with_current_by_id() {
     assert_eq!(id, "fresh", "碰撞应重试直到未占用");
     assert_eq!(calls, 3);
 }
+
+/// [issue #148](https://github.com/hailingu/PlotWeave/issues/148)：库列表
+/// 顺带清扫 `library/` 与 `library/assets/` 内崩溃遗留的孤儿临时文件
+/// （归属可辨 + 超龄 + 普通文件）；进行中写入的新鲜临时文件保留，
+/// 清扫 fail-soft 永不阻断列表。
+#[test]
+fn list_sweeps_orphan_temp_files_in_library_and_assets() {
+    let (library, root) = temp_fixture();
+    write_index_raw(
+        &library,
+        &json!({ "assets": { "byId": {} }, "groups": { "byId": {} } }),
+    );
+    let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 60 * 60);
+    let plant = |dir: &Path, name: &str| {
+        let path = dir.join(name);
+        fs::write(&path, b"x").expect("写临时条目");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("打开临时条目")
+            .set_modified(aged)
+            .expect("回拨 mtime");
+    };
+    let assets = library.join("assets");
+    // 合法目标（移除）：索引、损坏备份（64 位摘要名）、资产媒体——资产
+    // 目标兼容旧 la-{ms}-{size} id 方案的存量命名
+    let backup_tmp = format!(".library-corrupt-{}.bak.p-18f-3.tmp", "ab".repeat(32));
+    plant(&library, ".library.json.p-18f-0.tmp");
+    plant(&library, &backup_tmp);
+    plant(&assets, ".a.png.p-18f-1.tmp");
+    plant(&assets, ".la-1779000000000-12345.png.p-18f-6.tmp");
+    // 非法目标（保留，PR #217 第二轮评审）：合成 id 救不回非法目标名——
+    // 非控制文件、摘要名非法、资产 id 含点
+    plant(&library, ".evil.json.p-18f-4.tmp");
+    plant(&library, ".library-corrupt-zz.bak.p-18f-5.tmp");
+    plant(&assets, ".x.tar.gz.p-18f-7.tmp");
+    let fresh = assets.join(".b.png.p-18f-2.tmp");
+    fs::write(&fresh, b"writing").expect("写进行中临时文件");
+    let (index, _warnings) = list_assets_with(&cap(&library), &mut |_| {}).expect("列出资产");
+    assert!(index["assets"]["byId"].is_object());
+    for gone in [
+        library.join(".library.json.p-18f-0.tmp"),
+        library.join(&backup_tmp),
+        assets.join(".a.png.p-18f-1.tmp"),
+        assets.join(".la-1779000000000-12345.png.p-18f-6.tmp"),
+    ] {
+        assert!(!gone.exists(), "超龄归属临时文件应被清理：{gone:?}");
+    }
+    for kept in [
+        library.join(".evil.json.p-18f-4.tmp"),
+        library.join(".library-corrupt-zz.bak.p-18f-5.tmp"),
+        assets.join(".x.tar.gz.p-18f-7.tmp"),
+        fresh,
+    ] {
+        assert!(kept.exists(), "外来/进行中条目不得被清理：{kept:?}");
+    }
+    cleanup(&root);
+}
+
+mod durability;

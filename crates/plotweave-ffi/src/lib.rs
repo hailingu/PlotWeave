@@ -27,7 +27,8 @@
 //! 支持的操作（载荷经桥接边界由 `dispatch` 逐字段校验）：`listProjects`
 //! /`createProject`/`loadProject`/`saveProject`/`deleteProject`
 //! /`loadAiSession`/`saveAiSession`/`verifyProjectAssets`
-//! /`copyProjectAssets`。
+//! /`copyProjectAssets`。`saveProject` 的可选 `expectExisting` 布尔值与
+//! Tauri 保存契约一致：为真时已删除的副本不可被迟到保存重新创建。
 
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
@@ -152,23 +153,49 @@ fn dispatch(root: &CapDir, request: &str) -> Result<String, String> {
             .ok_or_else(|| format!("缺少 {key} 字段"))
     };
     match op {
-        "listProjects" => ok_json(core_store::list_project_metas(root)?),
-        "createProject" => ok_json(core_store::create_project_in(root, &id_field("name")?)?),
-        "loadProject" => ok_json(core_store::load_project_file(root, &id_field("id")?)?),
+        "listProjects" => {
+            ok_json(core_store::list_project_metas(root).map_err(core_store::to_ipc_text)?)
+        }
+        "createProject" => ok_json(
+            core_store::create_project_in(root, &id_field("name")?)
+                .map_err(core_store::to_ipc_text)?,
+        ),
+        "loadProject" => ok_json(
+            core_store::load_project_file(root, &id_field("id")?)
+                .map_err(core_store::error::load_project_ipc_text)?,
+        ),
         "saveProject" => {
             let doc: core_store::ProjectFile =
                 serde_json::from_value(object.get("doc").cloned().ok_or("缺少 doc 字段")?)
                     .map_err(|e| format!("doc 不是合法项目信封：{e}"))?;
-            ok_json(core_store::persist_project(root, &id_field("id")?, doc)?)
+            let expect_existing = match object.get("expectExisting") {
+                None => false,
+                Some(serde_json::Value::Bool(value)) => *value,
+                _ => return Err("expectExisting 必须是布尔值".into()),
+            };
+            ok_json(
+                core_store::persist_project_expect_existing(
+                    root,
+                    &id_field("id")?,
+                    doc,
+                    expect_existing,
+                )
+                .map_err(core_store::to_ipc_text)?,
+            )
         }
         "deleteProject" => {
-            core_store::delete_project_files(root, &id_field("id")?)?;
+            core_store::delete_project_files(root, &id_field("id")?)
+                .map_err(core_store::to_ipc_text)?;
             ok_json(serde_json::Value::Null)
         }
-        "loadAiSession" => ok_json(core_store::load_ai_session_file(root, &id_field("id")?)?),
+        "loadAiSession" => ok_json(
+            core_store::load_ai_session_file(root, &id_field("id")?)
+                .map_err(core_store::to_ipc_text)?,
+        ),
         "saveAiSession" => {
             let session = object.get("session").cloned().ok_or("缺少 session 字段")?;
-            core_store::save_ai_session_file(root, &id_field("id")?, &session)?;
+            core_store::save_ai_session_file(root, &id_field("id")?, &session)
+                .map_err(core_store::to_ipc_text)?;
             ok_json(serde_json::Value::Null)
         }
         "verifyProjectAssets" => {
@@ -178,7 +205,8 @@ fn dispatch(root: &CapDir, request: &str) -> Result<String, String> {
             ok_json(core_store::unverifiable_asset_keys(root, &id, &assets))
         }
         "copyProjectAssets" => {
-            core_store::copy_assets_tree(root, &id_field("fromId")?, &id_field("toId")?)?;
+            core_store::copy_assets_tree(root, &id_field("fromId")?, &id_field("toId")?)
+                .map_err(core_store::to_ipc_text)?;
             ok_json(serde_json::Value::Null)
         }
         #[cfg(test)]

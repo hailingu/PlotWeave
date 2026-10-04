@@ -12,7 +12,7 @@ interface ErrorBoundaryState {
  * 应用级错误边界：渲染崩溃时显示错误与重载入口，而不是无声黑屏。
  * 错误同时打 console（开发期 devtools 可见），不隐瞒失败。
  */
-export default class ErrorBoundary extends Component<
+export class ErrorBoundary extends Component<
   ErrorBoundaryProps,
   ErrorBoundaryState
 > {

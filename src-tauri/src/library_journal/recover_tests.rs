@@ -1,103 +1,50 @@
 //! 库删除恢复回归测试（issue #25）：中断恢复四分支、只读态、硬链接残留、
-//! 上限守卫；索引/Record 适配类用例见 recover_index_tests.rs。
+//! 上限守卫；索引/Record 适配类用例见 recover_index_tests.rs，indexUncertain
+//! 闩锁收敛类用例见 recover_uncertain_tests.rs。
 
+use super::recover::CleanupKind;
 use super::*;
 use crate::library::put_asset_with;
-use crate::store::new_id;
-use cap_std::ambient_authority;
-use cap_std::fs::Dir as CapDir;
+use crate::library_fixture::*;
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub(crate) fn cap(p: &Path) -> CapDir {
-    CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
-}
-
-pub(crate) fn temp_fixture() -> (PathBuf, PathBuf) {
-    let root = std::env::temp_dir().join(format!("pw-journal-test-{}", new_id()));
-    fs::create_dir_all(root.join("library").join("assets")).expect("创建临时库目录");
-    (root.join("library"), root)
-}
-
-pub(crate) fn cleanup(root: &Path) {
-    let _ = fs::remove_dir_all(root);
-}
-
-/// 最小合法索引条目（目标 Record 形状，含 §7.2 必填 source/ISO createdAt；
-/// relPath 按需投毒）。
-pub(crate) fn entry(id: &str, rel: &str) -> Value {
-    json!({
-        "id": id,
-        "name": "x",
-        "kind": "other",
-        "mime": "image/png",
-        "relPath": rel,
-        "source": "upload",
-        "createdAt": "2026-01-01T00:00:00.000Z",
-        "tags": [],
-    })
-}
-
-/// 把最小条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
-pub(crate) fn by_id(entries: impl IntoIterator<Item = Value>) -> Value {
-    let mut m = serde_json::Map::new();
-    for e in entries {
-        m.insert(e["id"].as_str().unwrap().to_string(), e);
+/// 替换测试事务条目，同时保留对象日志内已迁移的累计计数/字节量级。
+pub(crate) fn replace_journal_entries(library: &Path, entries: Value) {
+    let mut journal = match fs::read_to_string(library.join(JOURNAL_FILE_NAME)) {
+        Ok(text) => serde_json::from_str::<Value>(&text).expect("日志 JSON"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!([]),
+        Err(error) => panic!("读日志失败：{error}"),
+    };
+    if journal.is_object() {
+        journal["entries"] = entries;
+    } else {
+        journal = entries;
     }
-    json!({ "byId": m })
+    write_journal_raw(library, journal);
 }
 
-pub(crate) fn write_index_raw(library: &Path, index: &Value) {
-    fs::write(
-        library.join("library.json"),
-        serde_json::to_string(index).expect("序列化"),
-    )
-    .expect("写索引");
-}
-
-pub(crate) fn write_journal_raw(library: &Path, entries: Value) {
-    fs::write(
-        library.join(JOURNAL_FILE_NAME),
-        serde_json::to_string(&entries).expect("序列化"),
-    )
-    .expect("写日志");
-}
-
-pub(crate) fn file_identity(p: &Path) -> (u64, u64) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let m = fs::metadata(p).expect("读文件元数据");
-        (m.dev(), m.ino())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = p;
-        (0, 0)
-    }
-}
-
-pub(crate) fn journal_entry_json(
-    id: &str,
-    asset_id: &str,
-    rel: &str,
-    trash: &str,
-    dev: u64,
-    ino: u64,
-) -> Value {
-    json!({
-        "id": id,
-        "assetId": asset_id,
-        "relPath": rel,
-        "identity": { "dev": dev, "ino": ino },
-        "trashName": trash,
-    })
-}
-
-pub(crate) fn read_journal_raw(library: &Path) -> Value {
-    serde_json::from_str(&fs::read_to_string(library.join(JOURNAL_FILE_NAME)).expect("读回日志"))
-        .expect("日志 JSON")
+/// 构造 n 条「索引已去项 + 隔离项身份一致」的已完成条目：每个条目在
+/// .trash 有真实文件，身份与磁盘一致（issue #359 验收构造；上限 500 条）。
+pub(crate) fn foldable_journal(library: &Path, n: usize) {
+    fs::create_dir_all(library.join("assets").join(".trash")).expect("建隔离目录");
+    let entries: Vec<Value> = (0..n)
+        .map(|i| {
+            let name = format!("assets/.trash/x-{i}");
+            fs::write(library.join(&name), b"X").expect("写隔离项");
+            let (dev, ino) = file_identity(&library.join(&name));
+            journal_entry_json(
+                &format!("x-{i}"),
+                &format!("la-gone-{i}"),
+                &format!("assets/la-{i}.png"),
+                &name,
+                dev,
+                ino,
+            )
+        })
+        .collect();
+    replace_journal_entries(library, json!(entries));
 }
 
 /// 中断恢复①：日志已写、隔离未发生（媒体仍在原位且身份一致）→ 清除
@@ -221,39 +168,69 @@ fn malformed_journal_blocks_library_writes() {
         "应携带只读警告：{:?}",
         recovery.warnings
     );
-    let err = delete_asset_transacted(&cap(&library), "la-1").expect_err("删除应被暂停");
-    assert!(err.contains("暂停"), "意外诊断：{err}");
-    let err = put_asset_with(&cap(&library), "a.png", "image/png", "other", b"A")
-        .expect_err("导入应被暂停");
-    assert!(err.contains("暂停"), "意外诊断：{err}");
+    let err =
+        delete_asset_transacted(&cap(&library), "la-1", &mut |_| {}).expect_err("删除应被暂停");
+    assert!(err.to_string().contains("暂停"), "意外诊断：{err}");
+    let err = put_asset_with(
+        &cap(&library),
+        "a.png",
+        "image/png",
+        "other",
+        b"A",
+        &mut |_| {},
+    )
+    .expect_err("导入应被暂停");
+    assert!(err.to_string().contains("暂停"), "意外诊断：{err}");
     cleanup(&root);
 }
 
-/// 日志路径越界（relPath 不在 assets/ 基准内）同样进入只读态。
+/// 日志异型家族共用同一不变量：恢复入口不失败并进入只读告警态。
+/// 覆盖 relPath 越界（不在 assets/ 基准内）、重复 transaction id、
+/// relPath 含 `..` 词法、trashName 嵌套子段（须为 assets/.trash/ 单一
+/// 子项）与超限日志（受限读取截断后解析失败，不物化超大文件）；
+/// 后四类为历次评审修复引入的触发形态。
 #[test]
-fn journal_entry_with_escaping_path_blocks_writes() {
-    let (library, root) = temp_fixture();
-    write_journal_raw(
-        &library,
-        json!([{
-            "id": "t-1", "assetId": "la-1", "relPath": "settings.json",
-            "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/t-x",
-        }]),
-    );
-    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
-    assert!(recovery.read_only, "越界路径应只读告警态");
-    cleanup(&root);
-}
-
-/// 重复 transaction id → 只读告警态。
-#[test]
-fn journal_with_duplicate_ids_blocks_writes() {
-    let (library, root) = temp_fixture();
-    let e = journal_entry_json("t-1", "la-1", "assets/la-1.png", "assets/.trash/t-a", 1, 1);
-    write_journal_raw(&library, json!([e, e]));
-    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
-    assert!(recovery.read_only, "重复 id 应只读告警态");
-    cleanup(&root);
+fn malformed_journal_variants_enter_read_only_mode() {
+    let duplicate = {
+        let e = journal_entry_json("t-1", "la-1", "assets/la-1.png", "assets/.trash/t-a", 1, 1);
+        json!([e, e]).to_string()
+    };
+    let pad = "a".repeat(crate::library_fs::INDEX_MAX_BYTES + 1);
+    let variants: [(&str, String); 5] = [
+        (
+            "relPath 越界",
+            json!([{
+                "id": "t-1", "assetId": "la-1", "relPath": "settings.json",
+                "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/t-x",
+            }])
+            .to_string(),
+        ),
+        ("重复 transaction id", duplicate),
+        (
+            "relPath 含 .. 词法",
+            json!([{
+                "id": "t-1", "assetId": "la-1", "relPath": "assets/../library.json",
+                "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/t-x",
+            }])
+            .to_string(),
+        ),
+        (
+            "trashName 嵌套子段",
+            json!([{
+                "id": "t-1", "assetId": "la-1", "relPath": "assets/la-1.png",
+                "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/sub/t-x",
+            }])
+            .to_string(),
+        ),
+        ("超限日志", format!("[\"{pad}\"]")),
+    ];
+    for (label, raw) in variants {
+        let (library, root) = temp_fixture();
+        fs::write(library.join(JOURNAL_FILE_NAME), raw).expect("写异型日志");
+        let recovery = recover(&cap(&library)).expect("恢复入口不失败");
+        assert!(recovery.read_only, "{label} 应只读告警态");
+        cleanup(&root);
+    }
 }
 
 /// 清理分支三态判别（评审修复）：隔离项身份不符时保留现场与日志——
@@ -293,8 +270,8 @@ fn recover_retains_journal_on_trash_identity_mismatch() {
         recovery
             .cleanup_pending
             .iter()
-            .any(|p| p.contains("身份不符")),
-        "应报告 cleanupPending：{:?}",
+            .any(|p| p.kind == CleanupKind::Evidence),
+        "身份不符应报告 evidence 类 cleanupPending：{:?}",
         recovery.cleanup_pending
     );
     assert!(
@@ -304,52 +281,10 @@ fn recover_retains_journal_on_trash_identity_mismatch() {
     cleanup(&root);
 }
 
-/// 日志 relPath 含 `..` 词法（评审修复）：进入只读态而非恢复整体失败。
-#[test]
-fn journal_entry_with_traversal_lexeme_blocks_writes() {
-    let (library, root) = temp_fixture();
-    write_journal_raw(
-        &library,
-        json!([{
-            "id": "t-1", "assetId": "la-1", "relPath": "assets/../library.json",
-            "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/t-x",
-        }]),
-    );
-    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
-    assert!(recovery.read_only, "越界词法应只读告警态");
-    cleanup(&root);
-}
-
-/// trashName 含嵌套子段（评审修复）：必须是 assets/.trash/ 单一子项。
-#[test]
-fn journal_entry_with_nested_trash_name_blocks_writes() {
-    let (library, root) = temp_fixture();
-    write_journal_raw(
-        &library,
-        json!([{
-            "id": "t-1", "assetId": "la-1", "relPath": "assets/la-1.png",
-            "identity": { "dev": 1, "ino": 1 }, "trashName": "assets/.trash/sub/t-x",
-        }]),
-    );
-    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
-    assert!(recovery.read_only, "嵌套 trash 名应只读告警态");
-    cleanup(&root);
-}
-
-/// 超限日志（评审修复）：受限读取在上限处截断后解析失败 → 只读态，
-/// 不物化超大文件。
-#[test]
-fn oversized_journal_blocks_writes() {
-    let (library, root) = temp_fixture();
-    let pad = "a".repeat(crate::library_fs::INDEX_MAX_BYTES + 1);
-    fs::write(library.join(JOURNAL_FILE_NAME), format!("[\"{pad}\"]")).expect("写超限日志");
-    let recovery = recover(&cap(&library)).expect("恢复入口不失败");
-    assert!(recovery.read_only, "超限日志应只读告警态");
-    cleanup(&root);
-}
-
 /// 隔离项缺失但媒体回到原位（脏数据）：复查原路径身份后重新隔离
-/// （评审修复：此前 Missing 直接清日志，遗漏该状态）。
+/// （评审修复：此前 Missing 直接清日志，遗漏该状态）；重隔离后身份核验
+/// 一致但清理原语不可用 → 折叠退役（issue #359）：日志退场、计数归档、
+/// cleanupPending 折叠为单条 routine 摘要，隔离项字节保留。
 #[test]
 fn recover_requarantines_media_returned_to_original_path() {
     let (library, root) = temp_fixture();
@@ -382,17 +317,35 @@ fn recover_requarantines_media_returned_to_original_path() {
         .collect();
     assert_eq!(quarantined.len(), 1);
     assert_eq!(fs::read(quarantined[0].path()).expect("内容"), b"PNG");
-    // 受支持平台均无身份绑定删除原语：按契约保留隔离项与日志并报告
-    // cleanupPending（评审修复：Linux 分支伪装修复路径的断言残留）
+    // 受支持平台均无身份绑定删除原语：重隔离项身份核验一致后折叠退役
+    // （issue #359），隔离项与字节保留为证据
     assert_eq!(
-        read_journal_raw(&library).as_array().expect("日志").len(),
+        read_journal_raw(&library),
+        json!([]),
+        "已核验的重隔离项应折叠退场"
+    );
+    assert_eq!(
+        recovery.cleanup_pending.len(),
         1,
-        "清理不可用应保留日志"
+        "折叠为单条摘要：{:?}",
+        recovery.cleanup_pending
     );
-    assert!(
-        !recovery.cleanup_pending.is_empty(),
-        "应报告 cleanupPending"
+    assert_eq!(
+        recovery.cleanup_pending[0].kind,
+        CleanupKind::Routine,
+        "仅能力保留的待释放项归 routine（可给清理指引，issue #229）"
     );
+    assert!(recovery.warnings.is_empty());
+    assert!(recovery.conflicted.is_empty());
+    assert!(!recovery.read_only);
+    let repeated = recover(&cap(&library)).expect("再次恢复应成功");
+    assert_eq!(
+        repeated.cleanup_pending, recovery.cleanup_pending,
+        "归档计数驱动的摘要应跨恢复一致"
+    );
+    assert!(repeated.warnings.is_empty());
+    assert_eq!(read_journal_raw(&library), json!([]));
+    assert_eq!(fs::read(quarantined[0].path()).expect("保留内容"), b"PNG");
     cleanup(&root);
 }
 
@@ -485,15 +438,17 @@ fn delete_rejected_when_journal_near_cap() {
         })
         .collect();
     write_journal_raw(&library, json!(pad));
-    let err = delete_asset_transacted(&cap(&library), "la-1").expect_err("接近上限应拒绝新事务");
-    assert!(err.contains("接近上限"), "意外诊断：{err}");
+    let err = delete_asset_transacted(&cap(&library), "la-1", &mut |_| {})
+        .expect_err("接近上限应拒绝新事务");
+    assert!(err.to_string().contains("接近上限"), "意外诊断：{err}");
     // 索引未动：删除被拒绝且媒体原样
     assert!(fs::metadata(library.join("assets").join("la-1.png")).is_ok());
     cleanup(&root);
 }
 
-/// 重隔离的新映射先于 rename 落盘（评审修复）：恢复后日志 trashName 与
-/// 隔离区实际文件一致，中断不会孤儿化新隔离项。
+/// 重隔离的新映射先于 rename 落盘（评审修复）：rename 前日志已耐久记录
+/// 新隔离名，中断不会孤儿化新隔离项；本路径终点为折叠退役（issue #359）
+/// ——收敛后日志退场，重隔离的媒体字节保留在隔离区为证据。
 #[test]
 fn recover_requarantine_persists_mapping_before_rename() {
     let (library, root) = temp_fixture();
@@ -517,15 +472,21 @@ fn recover_requarantine_persists_mapping_before_rename() {
     );
     let recovery = recover(&cap(&library)).expect("恢复应成功");
     let _ = recovery;
-    // 日志 trashName 与隔离区实际文件一致
-    let journal = read_journal_raw(&library);
-    let arr = journal.as_array().expect("日志数组");
-    assert_eq!(arr.len(), 1, "非清理平台保留一条日志");
-    let recorded = arr[0]["trashName"].as_str().expect("trashName").to_string();
-    let leaf = recorded.rsplit('/').next().expect("隔离名");
-    assert!(
-        fs::metadata(library.join("assets").join(".trash").join(leaf)).is_ok(),
-        "日志记录的隔离名应指向实际文件：{recorded}"
+    // 收敛终点：折叠退役（日志退场），重隔离的媒体字节留在隔离区
+    assert_eq!(
+        read_journal_raw(&library),
+        json!([]),
+        "重隔离后身份核验一致应折叠退场（issue #359）"
+    );
+    let quarantined: Vec<_> = fs::read_dir(library.join("assets").join(".trash"))
+        .expect("读隔离目录")
+        .map(|e| e.expect("目录项"))
+        .collect();
+    assert_eq!(quarantined.len(), 1, "重隔离媒体应恰好一项");
+    assert_eq!(
+        fs::read(quarantined[0].path()).expect("媒体字节"),
+        b"PNG",
+        "重隔离的媒体字节保留在隔离名下"
     );
     cleanup(&root);
 }
@@ -605,4 +566,34 @@ fn recover_cleans_hard_link_residue_same_identity() {
         b"PNG"
     );
     cleanup(&root);
+}
+
+/// issue #229 契约：cleanupPending 条目序列化为结构化 `{ kind, message }`——
+/// 前端按机器码 kind 分类（routine 才可给 .trash 清理指引），不经中文文案
+/// 前缀推导；展示措辞/本地化调整不改变分类。折叠摘要（issue #359）额外
+/// 携带可选 `count`（该条目代表的累计保留数）与可选 `bytes`（issue #427：
+/// 隔离区合计字节量级，量级未知时缺省），普通/证据条目不序列化这两个
+/// 字段——旧前端忽略新增字段仍按单条展示，形状向后兼容。
+#[test]
+fn cleanup_pending_serializes_machine_kind_alongside_message() {
+    let recovery = Recovery {
+        cleanup_pending: vec![
+            CleanupPendingItem::routine("媒体已隔离待清理：assets/la-1.png"),
+            CleanupPendingItem::routine_counted(
+                500,
+                Some(62_914_560),
+                "隔离区累计保留 500 个已核验清理项，合计 60.0 MiB（可人工清理 assets/.trash；整体移除后计数自动归零）",
+            ),
+            CleanupPendingItem::evidence("隔离项保留（身份不符或被占用）：la-4 / t-y"),
+        ],
+        ..Recovery::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&recovery.cleanup_pending).expect("序列化"),
+        json!([
+            { "kind": "routine", "message": "媒体已隔离待清理：assets/la-1.png" },
+            { "kind": "routine", "message": "隔离区累计保留 500 个已核验清理项，合计 60.0 MiB（可人工清理 assets/.trash；整体移除后计数自动归零）", "count": 500, "bytes": 62914560 },
+            { "kind": "evidence", "message": "隔离项保留（身份不符或被占用）：la-4 / t-y" }
+        ])
+    );
 }

@@ -7,11 +7,14 @@
  *
  * 域拆分（issue #39）：seeds（演示种子）、memory（内存回退）、saveChain
  * （§3.1 保存链与删除墓碑）、tauri（命令域）；本文件保留环境分派、
- * 复制命名规则与统一门面。环境分派与命令调用经 src/platform/（P2 宿主
+ * 复制命名规则与统一门面。环境分派与 typed IPC 宿主调用（P2 宿主
  * 接口收敛）：内存回退仅限纯浏览器预览，Swift 原生宿主与 Tauri 同走
  * 命令域（宿主传输未接通时可见失败，不落内存模式）。
  */
 import type { ProjectContent } from './model/content'
+import { IPC_COMMANDS } from './ipc/commands'
+import { ipcInvoke } from './ipc/invoke'
+import { isBrowserPreviewHost } from './platform/hostEnvironment'
 import {
   memoryCreate,
   memoryDelete,
@@ -27,8 +30,6 @@ import {
 } from './projectStore/saveChain'
 import { tauriCreate, tauriList, tauriLoad } from './projectStore/tauri'
 import type { ProjectSummary } from './home/projects'
-import { isBrowserPreviewHost } from './platform/hostEnvironment'
-import { hostInvoke } from './platform/hostCommands'
 import {
   deleteAiSession,
   loadAiSession,
@@ -36,7 +37,7 @@ import {
   onAiSessionSaveFailed,
   saveAiSession,
 } from './aiSessionStore'
-import type { AiSession } from './editor/ai/session'
+import type { AiSession } from './ai/session'
 
 export type { ProjectContent }
 
@@ -58,18 +59,18 @@ function duplicateName(source: string, taken: ReadonlySet<string>): string {
   }
 }
 
-/** 统一门面：内存回退仅限纯浏览器预览（P2 平台收敛），其余宿主走命令域。 */
+/** 统一门面：两种环境同签名。 */
 export const projectStore = {
   list: (): Promise<ProjectSummary[]> =>
-    isBrowserPreviewHost() ? Promise.resolve(memoryList()) : tauriList(),
+    !isBrowserPreviewHost() ? tauriList() : Promise.resolve(memoryList()),
 
   create: (name: string): Promise<ProjectSummary> =>
-    isBrowserPreviewHost()
-      ? Promise.resolve(memoryCreate(name))
-      : tauriCreate(name),
+    !isBrowserPreviewHost()
+      ? tauriCreate(name)
+      : Promise.resolve(memoryCreate(name)),
 
   load: (id: string): Promise<ProjectContent> =>
-    isBrowserPreviewHost() ? memoryLoad(id) : tauriLoad(id),
+    !isBrowserPreviewHost() ? tauriLoad(id) : memoryLoad(id),
 
   /** 订阅项目文档保存落定（issue #101）：链上保存成功（含失败登记后的后台
    * 重试成功）时通知，首页据此在导航读取之后再刷新摘要；保存失败不通知。 */
@@ -80,6 +81,8 @@ export const projectStore = {
       await enqueueSave(id, doc)
       return
     }
+    // 注：expectExisting（副本后续保存）经 saveExpectExisting 入口，
+    // 普通保存保持默认语义
     // 内存回退不经保存链：落定通知由门面补发，两环境行为不分叉（issue #101）
     await memorySave(id, doc)
     notifyProjectSaved(id)
@@ -122,9 +125,19 @@ export const projectStore = {
     const meta = await projectStore.create(name)
     try {
       if (!isBrowserPreviewHost()) {
-        await hostInvoke('copy_project_assets', { fromId: id, toId: meta.id })
+        await ipcInvoke(IPC_COMMANDS.copyProjectAssets, {
+          fromId: id,
+          toId: meta.id,
+        })
       }
-      await projectStore.save(meta.id, { ...doc, name, createdAt: undefined })
+      // 副本后续保存要求目标仍在（PR #224 评审）：copy 释放锁后被排队
+      // 的删除可能移走目标——expectExisting 使该保存按「项目不存在」拒绝
+      // 并落入下方清理分支，不复活用户删除的副本
+      if (!isBrowserPreviewHost()) {
+        await enqueueSave(meta.id, { ...doc, name, createdAt: undefined }, true)
+      } else {
+        await projectStore.save(meta.id, { ...doc, name, createdAt: undefined })
+      }
     } catch (err) {
       console.warn('[projectStore] 复制项目失败，清理已建副本', err)
       // 清理完成后再抛：调用方看到失败时首页不会遗留空「副本」卡片；
@@ -143,14 +156,5 @@ export const projectStore = {
       throw err
     }
     return { ...meta, sceneCount: meta.sceneCount }
-  },
-
-  /** 静默吞掉持久化错误：画布交互不因落盘失败中断，仅控制台留痕。 */
-  saveQuiet: async (id: string, doc: ProjectContent): Promise<void> => {
-    try {
-      await projectStore.save(id, doc)
-    } catch (err) {
-      console.warn('[projectStore] 保存失败', err)
-    }
   },
 }

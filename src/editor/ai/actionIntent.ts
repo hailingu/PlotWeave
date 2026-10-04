@@ -97,11 +97,6 @@ export function expectsActionPreview(text: string): boolean {
   )
 }
 
-/** 输入已含动作动词时无需改写判定：目标含糊仍属修改意图（如「再丰富点」）。 */
-export function hasActionVerb(text: string): boolean {
-  return matches(CHANGE, text)
-}
-
 /** 无动作动词的含糊输入才需要改写调用判定（每轮至多一次）。讨论/否定
  * 片段不否决改写（PR #92 评审）：否定辖域（「不要解释」vs「不要修改」）
  * 与「特别」这类偶发子串，片段匹配无法判别而改写调用可以；明确暂不操
@@ -132,21 +127,22 @@ const PREVIEW_PROMISE_BEFORE =
 const NEGATION = /(?:不会|不能|无法|没有|无从|并不|并非|不了)/
 
 /** 紧邻展示动词的间隙按包含判定（含裸「不」结尾，如「预览不展示」）。 */
-function negatesVerbGap(gap: string): boolean {
-  return NEGATION.test(gap) || gap.endsWith('不')
+function negatesVerbGap(gap: string | undefined): boolean {
+  return gap !== undefined && (NEGATION.test(gap) || gap.endsWith('不'))
 }
 
 /** 「预览」之前的宽间隙只查紧贴名词的末尾窗口；远处的否定（「不会丢
  * 失原对白，」）不作用于预览谓词。 */
-function negatesNounGap(gap: string): boolean {
-  return NEGATION.test(gap.slice(-3))
+function negatesNounGap(gap: string | undefined): boolean {
+  // 间隙捕获组未参与匹配（undefined）不含否定标记（issue #230）
+  return gap !== undefined && NEGATION.test(gap.slice(-3))
 }
 
 /** 遍历全部候选（PR #92 评审第五轮）：首个候选被否定后继续扫描，同一
  * 正文内存在未被否定的承诺即建立交付期待，不因首匹配短路漏检。各间隙
  * 按谓词紧邻类型选择否定判定（动词间隙包含判定、名词宽间隙只查末尾
  * 窗口）。 */
-type GapChecks = Array<[number, (gap: string) => boolean]>
+type GapChecks = Array<[number, (gap: string | undefined) => boolean]>
 
 function claimsAnyMatch(
   text: string,

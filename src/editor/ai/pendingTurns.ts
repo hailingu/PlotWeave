@@ -10,7 +10,7 @@
  * 迟到响应不写入其他项目。busy 门闸保证每项目至多一轮在途，注册表
  * 槽位为单盒子。
  */
-import type { ThreadEntry } from './session'
+import type { ThreadEntry } from '../../ai/session'
 
 /** 一轮模型回合的落定结果：成功条目或失败原因，二选一。 */
 export interface TurnResult {
@@ -21,6 +21,8 @@ export interface TurnResult {
 /** 在途回合容器：promise 落定后持有结果；由注册表跨卸载转交给认领方。 */
 export interface TurnBox {
   readonly promise: Promise<TurnResult>
+  /** 取消钩子（issue #154）：认领方调用以停止旧轮（置位其取消信号）。 */
+  readonly canceller?: () => void
 }
 
 const boxes = new Map<string, TurnBox>()

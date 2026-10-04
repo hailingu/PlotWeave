@@ -19,9 +19,11 @@ export interface LayoutEdge {
   id: string
   source: string
   target: string
-  sourceHandle?: string | null
-  className?: string
-  type?: string
+  // xyflow Edge 库形状适配（issue #231）：库类型可选成员显式含
+  // undefined，本地边形状参数同款声明以保持接受库值
+  sourceHandle?: string | null | undefined
+  className?: string | undefined
+  type?: string | undefined
 }
 
 /** 节点包围盒尺寸（像素）。 */
@@ -253,7 +255,10 @@ function orderLayers(
           parents.length
         )
       }
-      const ordered = [...grouped[l]]
+      const layer = grouped[l]
+      // 层下标由 layers = grouped.length 守卫；防御性跳过不改变排序结果
+      if (layer === undefined) continue
+      const ordered = [...layer]
       ordered.sort((a, b) => {
         const diff = bary(a) - bary(b)
         if (diff !== 0) return diff
@@ -262,7 +267,7 @@ function orderLayers(
         return compareCodeUnits(a, b)
       })
       grouped[l] = ordered
-      grouped[l].forEach((id, i) => indexOf.set(id, i))
+      ordered.forEach((id, i) => indexOf.set(id, i))
     }
   }
   return grouped
@@ -313,11 +318,16 @@ function layoutComponent(
   const layerOf = assignLayers(members, preds)
   const maxLayer = Math.max(0, ...layerOf.values())
   const grouped: string[][] = Array.from({ length: maxLayer + 1 }, () => [])
-  for (const id of members) grouped[layerOf.get(id)!].push(id)
+  // 层值由 assignLayers 限界（≤ maxLayer = grouped.length - 1）；?. 消解
+  // 索引读取的缺失分支（issue #230），不可达
+  for (const id of members) grouped[layerOf.get(id)!]?.push(id)
   for (const group of grouped) {
+    // origin 对每个节点 id 都有值（computeAutoLayout 以全量节点构建，
+    // members ⊆ 节点 id）：非空断言即 Map 完整性不变量的表达（issue #165
+    // 评审基线：XYPosition 本就是 {x,y}，不再叠双重断言逃逸类型）
     group.sort((a, b) => {
-      const pa = origin.get(a)! as unknown as { x: number; y: number }
-      const pb = origin.get(b)! as unknown as { x: number; y: number }
+      const pa = origin.get(a)!
+      const pb = origin.get(b)!
       return pa.y - pb.y || pa.x - pb.x || (a < b ? -1 : 1)
     })
   }
@@ -332,7 +342,9 @@ function layoutComponent(
         minId: acc.minId < id ? acc.minId : id,
       }
     },
-    { minY: Infinity, minX: Infinity, minId: members[0] },
+    // 首元素初值兜底只消解下标读取的缺失分支（issue #230）：空成员集
+    // 时 reduce 体不执行，key.minId 为 '' 且不可达比较路径
+    { minY: Infinity, minX: Infinity, minId: members[0] ?? '' },
   )
   return { pos, boxH, key }
 }

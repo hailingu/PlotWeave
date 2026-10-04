@@ -19,6 +19,8 @@ export interface ToolSpec {
   }
 }
 
+/** OpenAI 兼容 tool_call 的最小形状（arguments 为未解析的 JSON 字符串，
+ * 解析与分流见 toolCallsToCommands）。 */
 export interface ToolCall {
   id: string
   type: 'function'
@@ -50,6 +52,33 @@ export const AI_TOOLS: ToolSpec[] = [
       name: 'get_node',
       description: '读取单个节点的完整字段（id/type/data）',
       parameters: obj({ nodeId: str('节点 id') }, ['nodeId']),
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_nodes',
+      description:
+        '按 id/名称/提示词/选项/台词检索全部节点（含画布摘要因体积预算未列出的条目），' +
+        '命中条目附其关联连线；摘要被节选后按用户提到的名称定位目标或查连线用此工具。' +
+        '结果分页：多命中按节点翻页、单节点命中按该节点连线翻页，截断标记给出下一页 offset；单节点续页还必须原样带回 cursor，连线集合变化时要求从 offset=0 重新枚举；' +
+        '查询串恰为某节点 id 时直接进入该节点的连线分页视图（不受 id 子串碰撞影响）；' +
+        '查询串形如 "id:<前缀>#<序号>~<ID指纹>" 时按原始 ID 定位候选并分段返回完整 id' +
+        '（offset=段号，按序拼接；画布增删后仍定位原节点或明确失效）；旧的无指纹序号句柄不再接受。' +
+        '无 # 后缀时按唯一前缀匹配；超长 id 的连线续页使用 "node:<前缀>#<序号>~<ID指纹>" 句柄',
+      parameters: obj(
+        {
+          query: str('检索关键词（节点名称/文案/id 片段）'),
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            description:
+              '分页偏移（多命中=节点序，单命中=该节点连线序；默认 0）',
+          },
+          cursor: str('单节点连线续页游标；只在截断提示给出时原样带回'),
+        },
+        ['query'],
+      ),
     },
   },
   {
@@ -173,12 +202,15 @@ export const AI_TOOLS: ToolSpec[] = [
   },
 ]
 
+/** 读工具名集合：就地执行回喂（不进预览/命令通道）。 */
 export const READ_TOOL_NAMES = new Set([
   'get_graph_snapshot',
   'get_node',
+  'find_nodes',
   'get_settings_snapshot',
   'get_document',
 ])
+/** 写工具名集合：映射为 AiCommand 走「整批预览 → 确认 → 执行」通道。 */
 export const WRITE_TOOL_NAMES = new Set([
   'create_node',
   'delete_node',
@@ -264,6 +296,15 @@ const WRITE_MAPPERS: Record<
   }),
 }
 
+/** 写工具注册表自有键查找（issue #258）：原型成员名不得命中继承属性充当工具。 */
+function writeMapperOf(
+  name: string,
+): ((args: Record<string, unknown>) => AiCommand) | undefined {
+  return Object.prototype.hasOwnProperty.call(WRITE_MAPPERS, name)
+    ? WRITE_MAPPERS[name]
+    : undefined
+}
+
 /** batch 内单条命令归一：模型常把工具名当 op 写进批次
  * （update_node_spec）——在此归一为命令词表。 */
 function normalizeBatchCommand(cmd: unknown): AiCommand {
@@ -280,6 +321,40 @@ function normalizeBatchCommand(cmd: unknown): AiCommand {
   return cmd as AiCommand
 }
 
+/**
+ * provider 回复 tool_calls 的信任边界形状守卫（issue #127，所有者裁决）：
+ * 外壳畸形（非数组 / 成员非对象 / 缺 function 对象 / name、id 非字符串 /
+ * arguments 在场而非字符串）属 provider 协议故障，不是模型可修正的生成
+ * 错误——不进纠错回喂，由调用方以结构化诊断直接中止本轮。arguments
+ * 缺省被下游 \`|| '{}'\` 容忍，不计形状错误；type 字段消费侧不使用，
+ * 不校验。外壳合法后，arguments 字符串内容坏 JSON、未知工具名等仍走
+ * toolCallsToCommands 的内容级 errors 通道（纠错回喂）。
+ */
+export function toolCallsShapeDiagnostic(calls: unknown): string | null {
+  if (calls === undefined || calls === null) return null
+  if (!Array.isArray(calls)) return 'tool_calls 不是数组'
+  for (let i = 0; i < calls.length; i += 1) {
+    const c = calls[i]
+    if (typeof c !== 'object' || c === null || Array.isArray(c))
+      return `tool_calls 第 ${i + 1} 项不是对象`
+    if (typeof (c as { id?: unknown }).id !== 'string')
+      return `tool_calls 第 ${i + 1} 项的 id 不是字符串`
+    const fn = (c as { function?: unknown }).function
+    if (typeof fn !== 'object' || fn === null || Array.isArray(fn))
+      return `tool_calls 第 ${i + 1} 项缺 function 对象`
+    const { arguments: args, name } = fn as {
+      name?: unknown
+      arguments?: unknown
+    }
+    if (typeof name !== 'string' || name === '')
+      return `tool_calls 第 ${i + 1} 项的 function.name 不是非空字符串`
+    if (args !== undefined && typeof args !== 'string')
+      return `tool_calls 第 ${i + 1} 项的 function.arguments 不是字符串`
+  }
+  return null
+}
+
+/** 一次读工具调用的解析结果：就地执行后按 id 回喂 role:'tool' 消息。 */
 export interface ReadRequest {
   /** tool_call id，回喂 role:'tool' 消息时透传。 */
   id: string
@@ -287,6 +362,7 @@ export interface ReadRequest {
   args: Record<string, unknown>
 }
 
+/** tool_calls 解析产出：写命令、读请求与解析失败文案三路分流。 */
 export interface ToolCallParse {
   commands: AiCommand[]
   readRequests: ReadRequest[]
@@ -322,7 +398,7 @@ export function toolCallsToCommands(calls: ToolCall[]): ToolCallParse {
       readRequests.push({ id: c.id, name, args })
       continue
     }
-    const mapper = WRITE_MAPPERS[name]
+    const mapper = writeMapperOf(name)
     if (mapper) {
       commands.push(mapper(args))
       continue

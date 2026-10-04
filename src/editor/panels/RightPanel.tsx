@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react'
-import SegmentedControl from './SegmentedControl'
-import PanelResizer from './PanelResizer'
+import { SegmentedControl } from './SegmentedControl'
+import { PanelResizer } from './PanelResizer'
 import {
   type BatchValidation,
   type AiCommand,
@@ -8,9 +8,10 @@ import {
 } from '../ai/commands'
 import { type ProjectSettings } from '../settings'
 import { resolveCharacterName, resolveLocationName } from '../settings'
-import AiThread, { AiSettingsButton } from './AiThread'
+import { AiThread, AiSettingsButton } from './AiThread'
+import type { AiCommitIdentity } from '../ai/commitIdentity'
 import type { CanvasNode } from '../nodes/types'
-import type { AiSession } from '../ai/session'
+import type { AiSession } from '../../ai/session'
 
 /** 右栏分段（docs/ui-design.md §3.4）：检查器 = 选中节点的字段视图；✦AI = 对话面板。 */
 export type RightTab = 'inspector' | 'ai'
@@ -131,49 +132,84 @@ function inspectorRows(
   }
 }
 
-type RightAiPaneProps = Pick<
-  RightPanelProps,
-  | 'tab'
-  | 'projectId'
-  | 'onOpenSettings'
-  | 'canvasDigest'
-  | 'aiRevision'
-  | 'onValidateAi'
-  | 'onValidateCommands'
-  | 'onReadNode'
-  | 'onReadSettings'
-  | 'onReadDocument'
-  | 'onApplyAiBatch'
-  | 'whenCanvasCommitted'
-  | 'aiSession'
-  | 'aiSessionError'
-  | 'aiSessionRetryable'
-  | 'onSaveAiSession'
-  | 'aiSessionLoadFailed'
->
+/**
+ * ✦AI 能力域聚合（issue #401）：右栏 AI 分段消费的全部输入——项目键、
+ * 设置入口、画布摘要、提交身份、校验/读工具/落地回调与会话快照及其
+ * 保存通道——在此单点声明，由装配层一次捆绑、`RightPanel` 整体透传。
+ * 会话字段在聚合内去 `ai` 前缀（`ai.session` 而非 `ai.aiSession`）。
+ */
+export interface RightPanelAiProps {
+  /** 项目 id：AI 在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
+  readonly projectId: string
+  /** 打开设置页（§8.2 BYOK 配置入口）。 */
+  // 可显式 undefined = 未接线（issue #231）
+  readonly onOpenSettings?: (() => void) | undefined
+  /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt，并作为读工具返回。 */
+  readonly canvasDigest?: string
+  /** AI 执行卡的提交身份（§12.2 / issue #139）：批次计数必带、画布确认
+   * 等待器可选（嵌套形状禁止「有等待器无计数」的误配）；省略 = 隔离装配。 */
+  readonly commitIdentity?: AiCommitIdentity
+  /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
+  readonly onValidateAi?: (text: string) => BatchValidation | null
+  /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
+  readonly onValidateCommands?: (
+    commands: AiCommand[],
+  ) => BatchValidation | null
+  /** 读工具 get_node：返回节点 JSON 文本，节点不存在返回 null。 */
+  readonly onReadNode?: (nodeId: string) => string | null
+  /** 读工具 get_settings_snapshot（issue 44）：返回设定集清单 JSON 文本。 */
+  readonly onReadSettings?: () => string
+  /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON，不存在返回 null。 */
+  readonly onReadDocument?: (documentId: string) => string | null
+  /** 读工具 find_nodes（issue #275 评审）：按名称检索全部节点与关联连线。 */
+  readonly onFindNodes?: (
+    query: string,
+    offset?: number,
+    cursor?: string,
+  ) => string
+  /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
+  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
+  /** 当前项目恢复的 AI 会话与其独立保存通道。 */
+  // 可显式 undefined = 无恢复快照（issue #231）
+  readonly session?: AiSession | undefined
+  readonly sessionError?: string | null
+  /** 会话读取失败时阻止 AI 发送和执行，画布仍可使用。 */
+  // 可显式 undefined = 会话读取未失败（issue #231）
+  readonly sessionLoadFailed?: boolean | undefined
+  /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
+  readonly sessionRetryable?: boolean
+  readonly onSaveSession?: (session: AiSession) => Promise<void>
+}
 
 /** 右栏 AI 分段（RightPanel 拆分，issue #99）：常驻挂载（hidden 切换不
- * 卸载会话容器，issue 58），props 自面板契约透传。 */
-function RightAiPane(props: RightAiPaneProps) {
+ * 卸载会话容器，issue 58），ai 聚合（issue #401）在此解包映射为
+ * AiThread 的面板契约名（session → initialSession 等）。 */
+function RightAiPane({
+  hidden,
+  ai,
+}: {
+  readonly hidden: boolean
+  readonly ai: RightPanelAiProps
+}) {
   return (
     <AiPane
-      hidden={props.tab !== 'ai'}
-      loadFailed={props.aiSessionLoadFailed}
-      projectId={props.projectId}
-      onOpenSettings={props.onOpenSettings}
-      canvasDigest={props.canvasDigest}
-      aiRevision={props.aiRevision}
-      onValidateAi={props.onValidateAi}
-      onValidateCommands={props.onValidateCommands}
-      onReadNode={props.onReadNode}
-      onReadSettings={props.onReadSettings}
-      onReadDocument={props.onReadDocument}
-      onApplyAiBatch={props.onApplyAiBatch}
-      whenCanvasCommitted={props.whenCanvasCommitted}
-      initialSession={props.aiSession}
-      initialSessionError={props.aiSessionError}
-      initialSessionRetryable={props.aiSessionRetryable}
-      onSaveSession={props.onSaveAiSession}
+      hidden={hidden}
+      loadFailed={ai.sessionLoadFailed}
+      projectId={ai.projectId}
+      onOpenSettings={ai.onOpenSettings}
+      canvasDigest={ai.canvasDigest}
+      commitIdentity={ai.commitIdentity}
+      onValidateAi={ai.onValidateAi}
+      onValidateCommands={ai.onValidateCommands}
+      onReadNode={ai.onReadNode}
+      onFindNodes={ai.onFindNodes}
+      onReadSettings={ai.onReadSettings}
+      onReadDocument={ai.onReadDocument}
+      onApplyAiBatch={ai.onApplyAiBatch}
+      initialSession={ai.session}
+      initialSessionError={ai.sessionError}
+      initialSessionRetryable={ai.sessionRetryable}
+      onSaveSession={ai.onSaveSession}
     />
   )
 }
@@ -206,7 +242,10 @@ function InspectorBody({
 function AiSessionContent({
   loadFailed,
   ...props
-}: ComponentProps<typeof AiThread> & { readonly loadFailed?: boolean }) {
+}: ComponentProps<typeof AiThread> & {
+  // 可显式 undefined = 会话读取未失败（issue #231）
+  readonly loadFailed?: boolean | undefined
+}) {
   if (loadFailed) {
     return (
       <>
@@ -229,44 +268,16 @@ interface RightPanelProps {
   readonly onResize: (width: number) => void
   readonly tab: RightTab
   readonly onTabChange: (tab: RightTab) => void
-  /** 项目 id：AI 在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
-  readonly projectId: string
   /** 画布当前选中节点；无选中时检查器显示空态。 */
-  readonly selectedNode?: CanvasNode
+  // 可显式 undefined = 无选中（issue #231）
+  readonly selectedNode?: CanvasNode | undefined
   /** 选中索引卡的 attach 下挂分镜数（§7.2 派生，检查器展示用）。 */
   readonly attachedShotCount?: number
   /** 项目设定集：检查器解析实体引用（§5）。 */
   readonly settings: ProjectSettings
-  /** 打开设置页（§8.2 BYOK 配置入口）。 */
-  readonly onOpenSettings?: () => void
-  /** 画布上下文快照（§6「了解当前画布」）：附到 system prompt，并作为读工具返回。 */
-  readonly canvasDigest?: string
-  /** 画布批次计数（§12.2 提交身份）：执行后 +1 记录到卡片，恢复时对账。 */
-  readonly aiRevision?: number
-  /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
-  readonly onValidateAi?: (text: string) => BatchValidation | null
-  /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
-  readonly onValidateCommands?: (
-    commands: AiCommand[],
-  ) => BatchValidation | null
-  /** 读工具 get_node：返回节点 JSON 文本，节点不存在返回 null。 */
-  readonly onReadNode?: (nodeId: string) => string | null
-  /** 读工具 get_settings_snapshot（issue 44）：返回设定集清单 JSON 文本。 */
-  readonly onReadSettings?: () => string
-  /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON，不存在返回 null。 */
-  readonly onReadDocument?: (documentId: string) => string | null
-  /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
-  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
-  /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
-  readonly whenCanvasCommitted?: () => Promise<void>
-  /** 当前项目恢复的 AI 会话与其独立保存通道。 */
-  readonly aiSession?: AiSession
-  readonly aiSessionError?: string | null
-  /** 会话读取失败时阻止 AI 发送和执行，画布仍可使用。 */
-  readonly aiSessionLoadFailed?: boolean
-  /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
-  readonly aiSessionRetryable?: boolean
-  readonly onSaveAiSession?: (session: AiSession) => Promise<void>
+  /** ✦AI 能力域聚合（issue #401）：AI 分段的全部输入单点声明，
+   * 见 RightPanelAiProps；引用稳定性由装配层保障（EditorLayout）。 */
+  readonly ai: RightPanelAiProps
 }
 
 /**
@@ -285,7 +296,8 @@ function AiPane({
   hidden,
   ...thread
 }: ComponentProps<typeof AiThread> & {
-  readonly loadFailed?: boolean
+  // 可显式 undefined = 会话读取未失败（issue #231）
+  readonly loadFailed?: boolean | undefined
   readonly hidden: boolean
 }) {
   return (
@@ -295,7 +307,9 @@ function AiPane({
   )
 }
 
-export default function RightPanel(props: RightPanelProps) {
+/** 右侧面板（§3.4：检查器 / ✦AI 分段）：检查器显示选中节点的只读摘要，
+ * AI 页承载会话；宽度经 PanelResizer 调整。 */
+export function RightPanel(props: RightPanelProps) {
   const selectedNode = props.selectedNode
   const rows = selectedNode
     ? inspectorRows(selectedNode, props.attachedShotCount ?? 0, props.settings)
@@ -305,12 +319,14 @@ export default function RightPanel(props: RightPanelProps) {
     <aside
       className={`pw-panel pw-panel-right${props.open ? '' : ' pw-panel-closed'}`}
       style={{ width: props.open ? props.width : 0 }}
+      aria-label={props.tab === 'ai' ? '✦ AI' : '检查器'}
       aria-hidden={!props.open}
     >
       {props.open && (
         <PanelResizer
           direction={-1}
-          startWidth={props.width}
+          label="调整右栏宽度"
+          width={props.width}
           onResize={props.onResize}
         />
       )}
@@ -333,7 +349,7 @@ export default function RightPanel(props: RightPanelProps) {
               </div>
             ))}
           {/* 常驻挂载语义见 AiPane（issue 58）：hidden 切换不卸载会话容器 */}
-          <RightAiPane {...props} />
+          <RightAiPane hidden={props.tab !== 'ai'} ai={props.ai} />
         </div>
       </div>
     </aside>

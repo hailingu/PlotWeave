@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { llmChat, type AssistantMessage, type ChatMessage } from './chat'
-import { runAgentLoop, type BatchValidators } from './agentLoop'
+import {
+  runAgentLoop,
+  TurnCancelledError,
+  type BatchValidators,
+} from './agentLoop'
 import type { BatchValidation, ValidatedCommand } from './commands'
 import type { ProviderConfig } from '../../settings/types'
 import type { ToolCall } from './tools'
@@ -194,6 +198,44 @@ describe('runAgentLoop 写批次重试预算与终止（issue 41）', () => {
     expect(toolMsg?.content).toContain('节点不存在：n9')
     expect(toolMsg?.content).toContain('端点不存在：a → b')
   })
+
+  it('批次级整体错误（index=-1）回喂不编序号：不得出现「第 0 条」（issue #150）', async () => {
+    const commands = vi
+      .fn<NonNullable<BatchValidators['commands']>>()
+      .mockReturnValueOnce({
+        ok: false,
+        items: [],
+        commands: [],
+        issues: [{ index: -1, message: '批次不是命令数组' }],
+        hasDeletes: false,
+      })
+      .mockReturnValueOnce(okOf())
+    llmChatMock
+      .mockResolvedValueOnce(
+        reply({ content: '{"action":true,"query":"修改画布"}' }),
+      )
+      .mockResolvedValueOnce(reply({ tool_calls: [batchCall(BAD_BEAT_BATCH)] }))
+      .mockResolvedValueOnce(
+        reply({
+          content: '已修正为数组',
+          tool_calls: [batchCall(GOOD_BEAT_BATCH)],
+        }),
+      )
+
+    const result = await run(
+      [{ role: 'user', content: '改画布' }],
+      validators({ commands }),
+    )
+
+    expect(result.validation?.ok).toBe(true)
+    const feedback = llmChatMock.mock.calls
+      .map((c) => c[2])
+      .flat()
+      .map((m) => m.content)
+      .join('\n')
+    expect(feedback).toContain('批次不是命令数组')
+    expect(feedback).not.toContain('第 0 条')
+  })
 })
 
 describe('runAgentLoop 围栏通道与修正指令（issue 41）', () => {
@@ -297,5 +339,210 @@ describe('runAgentLoop 读工具循环（既有行为保持）', () => {
     const toolMsg = llmChatMock.mock.calls[2][2].find((m) => m.role === 'tool')
     expect(toolMsg?.content).toBe('SNAP')
     expect(result).toMatchObject({ prose: '画布为空。', validation: null })
+  })
+
+  it('同轮多个 find_nodes 回喂共享字符预算，超额结果用明确诊断代替（PR #294 评审）', async () => {
+    llmChatMock
+      .mockResolvedValueOnce(reply({ content: '{"action":false}' }))
+      .mockResolvedValueOnce(
+        reply({
+          tool_calls: [
+            {
+              id: 'f1',
+              type: 'function',
+              function: {
+                name: 'find_nodes',
+                arguments: '{"query":"甲"}',
+              },
+            },
+            {
+              id: 'f2',
+              type: 'function',
+              function: {
+                name: 'find_nodes',
+                arguments: '{"query":"乙"}',
+              },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(reply({ content: '继续缩小查询。' }))
+
+    await runAgentLoop(
+      PROVIDER,
+      'm',
+      [{ role: 'user', content: '查找节点' }],
+      (_name, args) => String(args.query).repeat(20_000),
+      validators({}),
+    )
+
+    const feedback = llmChatMock.mock.calls[2][2].filter(
+      (m) => m.role === 'tool',
+    )
+    expect(feedback).toHaveLength(2)
+    expect(feedback[0]?.content).toBe('甲'.repeat(20_000))
+    expect(feedback[1]?.content).toContain('读取预算')
+    expect(feedback[1]?.content).not.toContain('乙'.repeat(100))
+  })
+
+  it('跨读取轮次的 find_nodes 回喂沿用同一预算', async () => {
+    const findCall = (id: string, query: string) => ({
+      id,
+      type: 'function' as const,
+      function: { name: 'find_nodes', arguments: JSON.stringify({ query }) },
+    })
+    llmChatMock
+      .mockResolvedValueOnce(reply({ content: '{"action":false}' }))
+      .mockResolvedValueOnce(reply({ tool_calls: [findCall('f1', '甲')] }))
+      .mockResolvedValueOnce(reply({ tool_calls: [findCall('f2', '乙')] }))
+      .mockResolvedValueOnce(reply({ content: '继续缩小查询。' }))
+
+    await runAgentLoop(
+      PROVIDER,
+      'm',
+      [{ role: 'user', content: '查找节点' }],
+      (_name, args) => String(args.query).repeat(20_000),
+      validators({}),
+    )
+
+    const feedback = llmChatMock.mock.calls[3][2].filter(
+      (m) => m.role === 'tool',
+    )
+    expect(feedback).toHaveLength(2)
+    expect(feedback[0]?.content.length).toBe(20_000)
+    expect(feedback[1]?.content.length).toBeLessThan(1_000)
+    expect(feedback[1]?.content).toContain('读取预算')
+  })
+})
+
+describe('runAgentLoop 形状错误不进纠错（#127 所有者裁决）', () => {
+  it('tool_calls 外壳畸形：结构化诊断中止本轮，零重试、零回喂', async () => {
+    llmChatMock.mockResolvedValueOnce(
+      reply({
+        content: '我先看看画布',
+        tool_calls: [{ id: 'c', type: 'function' }],
+      } as unknown as Partial<AssistantMessage>),
+    )
+    const messages: ChatMessage[] = [{ role: 'user', content: '创建节点' }]
+    const result = await run(messages, validators({}))
+
+    expect(llmChatMock).toHaveBeenCalledTimes(1)
+    expect(result.validation).toBeNull()
+    expect(result.toolErrors).toEqual([])
+    expect(result.completionError ?? '').toContain('结构非法')
+    expect(result.prose).toBe('我先看看画布')
+  })
+
+  it('tool_calls 非数组 / function:null / arguments 非字符串同款中止', async () => {
+    const malformed: unknown[] = [
+      { id: 'c' },
+      [{ id: 'c', type: 'function', function: null }],
+      [
+        {
+          id: 'c',
+          type: 'function',
+          function: { name: 'batch', arguments: {} },
+        },
+      ],
+    ]
+    for (const toolCalls of malformed) {
+      llmChatMock.mockReset()
+      llmChatMock.mockResolvedValueOnce(
+        reply({
+          content: null,
+          tool_calls: toolCalls,
+        } as unknown as Partial<AssistantMessage>),
+      )
+      const result = await run(
+        [{ role: 'user', content: '创建节点' }],
+        validators({}),
+      )
+      expect(llmChatMock).toHaveBeenCalledTimes(1)
+      expect(result.completionError ?? '').toContain('结构非法')
+    }
+  })
+
+  it('内容错误（坏 JSON 参数）仍走既有纠错回喂，不受形状中止影响', async () => {
+    llmChatMock
+      .mockResolvedValueOnce(
+        reply({
+          tool_calls: [
+            {
+              id: 'w1',
+              type: 'function',
+              function: { name: 'batch', arguments: '{bad' },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        reply({ content: '已修正', tool_calls: [batchCall(GOOD_BEAT_BATCH)] }),
+      )
+    const commands = vi
+      .fn<NonNullable<BatchValidators['commands']>>()
+      .mockReturnValue(okOf())
+
+    const result = await run(
+      [{ role: 'user', content: '创建节点' }],
+      validators({ commands }),
+    )
+
+    expect(llmChatMock).toHaveBeenCalledTimes(2)
+    expect(result.validation?.ok).toBe(true)
+    // 外壳合法、内容非法：按纠错通道回喂（tool 应答携带解析诊断），模型重试后通过
+    const second = llmChatMock.mock.calls[1][2]
+    const toolMsg = second.find((m) => m.role === 'tool')
+    expect(toolMsg?.content).toContain('参数不是有效对象')
+  })
+})
+
+describe('runAgentLoop 取消（issue #154）', () => {
+  it('取消信号：停止后续循环，抛出可判别的 TurnCancelledError', async () => {
+    let round = 0
+    llmChatMock.mockImplementation(() => {
+      round += 1
+      // 第 1 次 = 改写判定；第 2 次 = 回合第 1 轮（纯读）；第 3 次起取消生效
+      if (round <= 2)
+        return Promise.resolve(
+          reply({
+            tool_calls: [
+              {
+                id: 'r1',
+                type: 'function',
+                function: { name: 'get_graph_snapshot', arguments: '{}' },
+              },
+            ],
+          }),
+        )
+      return Promise.resolve(reply({ content: '画布概览。' }))
+    })
+    const signal = { isCancelled: () => round >= 3 }
+
+    await expect(
+      runAgentLoop(
+        PROVIDER,
+        'm',
+        [{ role: 'user', content: '看看画布再改' }],
+        () => 'SNAP',
+        validators({}),
+        signal,
+      ),
+    ).rejects.toThrowError(TurnCancelledError)
+    // 改写 + 第 1 轮已发；第 1 轮落定后、消费其产出前命中取消检查点（在途
+    // 请求不被中止），循环终止，第 2 轮不再发起
+    expect(llmChatMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('未提供取消信号时循环行为不变', async () => {
+    llmChatMock.mockResolvedValue(reply({ content: '建议先立冲突。' }))
+    const result = await runAgentLoop(
+      PROVIDER,
+      'm',
+      [{ role: 'user', content: '怎么写？' }],
+      () => 'SNAP',
+      validators({}),
+    )
+    expect(result.prose).toBe('建议先立冲突。')
+    expect(result.validation).toBeNull()
   })
 })

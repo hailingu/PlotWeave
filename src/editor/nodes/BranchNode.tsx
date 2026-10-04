@@ -1,8 +1,8 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { branchOptionHandle } from '../graphRules'
-import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
-import NodeSettingsGear from './settings/NodeSettingsGear'
+import { NodeSettingsPanel, EditableName } from './settings/NodeSettingsPanel'
+import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import type { BranchFlowNode } from './types'
 
 /**
@@ -12,11 +12,7 @@ import type { BranchFlowNode } from './types'
  * 「＋ 添加选项」由 ⚙️ 设置面板承载（§4.3）。外观跟随画布：
  * 浅色画布为纸面变体，深色画布为虚线暗框。
  */
-export default function BranchNode({
-  id,
-  data,
-  selected,
-}: NodeProps<BranchFlowNode>) {
+export function BranchNode({ id, data, selected }: NodeProps<BranchFlowNode>) {
   const { openSettingsId, toggleSettings, patchNode } = useNodeEdit()
   const settingsOpen = openSettingsId === id
 

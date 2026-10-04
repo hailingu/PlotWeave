@@ -1,7 +1,7 @@
 /**
  * 编辑器防抖落盘（EditorView 拆出的持久化域，docs/ui-design.md §3/§10.2）：
- * 会话文档随状态变化防抖保存，失败即横幅提示并自动重试。视口本身无重渲染，
- * onMoveEnd 更新 ref 后经 markDirty 显式标脏换入最新文档——纯平移/缩放也
+ * 会话文档随状态变化防抖保存，失败即横幅提示并自动重试。视口完成后，
+ * onMoveEnd 发布响应式视口与同步 ref，再经 markDirty 换入最新文档——纯平移/缩放也
  * 落盘，卸载冲刷与后续内容保存拿到的都是最新视口（不落 stale 值）。
  */
 import { useCallback, useRef, useState } from 'react'
@@ -21,7 +21,7 @@ export interface EditorPersistence {
   saveError: string | null
   /** 显式标脏：供无重渲染的 transient 变更换入最新文档。 */
   markDirty: (doc: ProjectContent) => void
-  /** 视口落定：更新 ref 并按最新视口标脏（§3 视口随文档持久化）。 */
+  /** 视口落定：发布完成值并按最新视口标脏（§3 视口随文档持久化）。 */
   onMoveEnd: (event: unknown, viewport: Viewport) => void
   /** 画布文档确认落盘的等待器（AI 执行回执的持久化时序闸门）：
    * 仅在**注册之后开始**的保存成功落定后兑现——在途的旧保存捕获的是
@@ -129,7 +129,7 @@ export function useEditorPersistence(
 
   const onMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
-      doc.viewportRef.current = viewport
+      doc.updateViewport(viewport)
       markDirty(buildSessionDoc(project, doc, viewport))
     },
     [doc, markDirty, project],

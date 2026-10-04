@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Edge } from '@xyflow/react'
-import { buildGraphDigest } from './graphDigest'
+import { GRAPH_DIGEST_MAX_CHARS, buildGraphDigest } from './graphDigest'
 import type { CanvasNode, DialogueLine } from '../nodes/types'
 
 /** 构造最小节点（只带被测字段）。 */
@@ -201,4 +201,199 @@ describe('buildGraphDigest 旁白/动作摘要（issue 73）', () => {
       expect(digest).not.toContain('动作与旁白')
     },
   )
+})
+
+describe('buildGraphDigest 连线端点查找（issue #276：索引一次，随边数线性）', () => {
+  const emptyResolvers = {
+    characters: [],
+    locations: [],
+    characterName: () => null,
+    locationName: () => null,
+  }
+
+  /** 场景链：N 个场景、N-1 条 sequence 边；节点 `id` 为计数访问器。 */
+  function chain(n: number): {
+    nodes: CanvasNode[]
+    edges: Edge[]
+    idReads: () => number
+  } {
+    let reads = 0
+    const nodes = Array.from({ length: n }, (_, i) => {
+      const id = `s${i}`
+      return node({
+        get id() {
+          reads += 1
+          return id
+        },
+        type: 'scene',
+        position: { x: i, y: 0 },
+        data: {
+          name: `场${i}`,
+          sceneNo: i + 1,
+          interior: true,
+          time: '日',
+          synopsis: '',
+          characterIds: [],
+        },
+      })
+    })
+    const edges: Edge[] = Array.from({ length: n - 1 }, (_, i) => ({
+      id: `e${i}`,
+      source: `s${i}`,
+      target: `s${i + 1}`,
+    }))
+    return { nodes, edges, idReads: () => reads }
+  }
+
+  it('节点 id 访问量随 N+E 线性增长，不随 N×E 增长（确定性访问量）', () => {
+    const small = chain(100)
+    buildGraphDigest(small.nodes, small.edges, emptyResolvers)
+    const large = chain(400)
+    buildGraphDigest(large.nodes, large.edges, emptyResolvers)
+    // 每节点固定次数（行文本 + 各索引构造）：O(N×E) 实现下 400 节点
+    // 的读数量级为 8 万，线性实现为 N 的小常数倍
+    expect(large.idReads()).toBeLessThanOrEqual(8 * 400)
+    // 4 倍输入 → 读次数不超过约 4 倍（允许常数项）
+    expect(large.idReads()).toBeLessThanOrEqual(4 * small.idReads() + 16)
+  })
+
+  it('重复 id：端点标签沿用首个匹配节点（既有 find 语义）', () => {
+    const dup: CanvasNode[] = [
+      node({
+        id: 'x',
+        type: 'beat',
+        position: { x: 0, y: 0 },
+        data: { name: '先到', tone: '' },
+      }),
+      node({
+        id: 'x',
+        type: 'beat',
+        position: { x: 0, y: 0 },
+        data: { name: '后到', tone: '' },
+      }),
+      node({
+        id: 'y',
+        type: 'beat',
+        position: { x: 0, y: 0 },
+        data: { name: '终点', tone: '' },
+      }),
+    ]
+    const digest = buildGraphDigest(
+      dup,
+      [{ id: 'e', source: 'x', target: 'y' }],
+      emptyResolvers,
+    )
+    expect(digest).toContain('sequence: x → y（节拍·先到 → 节拍·终点）')
+    expect(digest).not.toContain('节拍·后到 → ')
+  })
+
+  it('缺失端点：标签为 ?，不抛错', () => {
+    const digest = buildGraphDigest(
+      [],
+      [{ id: 'e', source: 'ghost', target: 'nobody' }],
+      emptyResolvers,
+    )
+    expect(digest).toContain('sequence: ghost → nobody（? → ?）')
+  })
+})
+
+describe('摘要总量预算与节选降级（issue #275：每轮画布摘要不再无界）', () => {
+  const resolvers = (
+    characters = 0,
+    locations = 0,
+  ): Parameters<typeof buildGraphDigest>[2] => ({
+    characters: Array.from({ length: characters }, (_, i) => ({
+      id: `c${i + 1}`,
+      name: `角色${i + 1}`,
+    })),
+    locations: Array.from({ length: locations }, (_, i) => ({
+      id: `l${i + 1}`,
+      name: `地点${i + 1}`,
+    })),
+    characterName: (id) => `角色${id.slice(1)}`,
+    locationName: (id) => `地点${id.slice(1)}`,
+  })
+
+  /** issue #275 病态夹具：N 个 40 字梗概场景 + N-1 条剧情流边。 */
+  function bigCanvas(n: number): { nodes: CanvasNode[]; edges: Edge[] } {
+    const nodes: CanvasNode[] = Array.from({ length: n }, (_, i) =>
+      node({
+        id: `s${i + 1}`,
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        data: {
+          name: `场${i + 1}`,
+          sceneNo: i + 1,
+          interior: true,
+          time: '夜',
+          synopsis: '雨'.repeat(40),
+          characterIds: [],
+        },
+      }),
+    )
+    const edges: Edge[] = nodes.slice(1).map((target, i) => ({
+      id: `e${i + 1}`,
+      source: `s${i + 1}`,
+      target: target.id,
+      className: 'pw-edge-sequence',
+    }))
+    return { nodes, edges }
+  }
+
+  it('病态大画布（1200 节点/1199 边）被总量预算钉住，不再无界灌入上下文', () => {
+    const { nodes, edges } = bigCanvas(1200)
+    const digest = buildGraphDigest(nodes, edges, resolvers())
+    expect(digest.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
+  })
+
+  it('数量超限的节选可识别：计数标记声明未列出量，已列条目保留稳定 id', () => {
+    const { nodes, edges } = bigCanvas(1200)
+    const digest = buildGraphDigest(nodes, edges, resolvers())
+    // 首个节点完整在列（稳定 id 保留，get_node 可按 id 补读）
+    expect(digest).toContain('- s1 场01·场1')
+    // 未列出量有明确计数，不无提示删除
+    expect(digest).toMatch(/另有 \d+ 个节点未列出/)
+    expect(digest).toMatch(/另有 \d+ 条连线未列出/)
+    expect(digest).toContain('get_node')
+    // 被节选条目有可发现的补读路径（issue #275 评审）：标记指向 find_nodes
+    expect(digest).toContain('find_nodes')
+  })
+
+  it('设定集清单同样按上限节选并带计数标记', () => {
+    const digest = buildGraphDigest([], [], resolvers(300, 300))
+    expect(digest).toContain('- 角色 c1 角色1')
+    expect(digest).toMatch(/另有 \d+ 个角色未列出/)
+    expect(digest).toMatch(/另有 \d+ 个地点未列出/)
+    expect(digest).toContain('get_settings_snapshot')
+  })
+
+  it('预算内的画布不产生节选标记（既有行为不变）', () => {
+    const { nodes, edges } = bigCanvas(8)
+    const digest = buildGraphDigest(nodes, edges, resolvers(3, 3))
+    expect(digest).not.toContain('未列出')
+    expect(digest).not.toContain('已截断')
+    expect(digest).toContain('- s8 场08·场8')
+  })
+
+  it('条数在上限内但拼接超总量时按字符硬上限截断并带截断标记', () => {
+    const long: CanvasNode[] = Array.from({ length: 96 }, (_, i) =>
+      node({
+        id: `s${i + 1}`,
+        type: 'scene',
+        position: { x: 0, y: 0 },
+        data: {
+          name: `巨${'名'.repeat(500)}${i + 1}`,
+          sceneNo: i + 1,
+          interior: true,
+          time: '',
+          synopsis: '',
+          characterIds: [],
+        },
+      }),
+    )
+    const digest = buildGraphDigest(long, [], resolvers())
+    expect(digest.length).toBeLessThanOrEqual(GRAPH_DIGEST_MAX_CHARS)
+    expect(digest).toMatch(/已截断约 \d+ 字符/)
+    expect(digest).toContain('get_node')
+  })
 })

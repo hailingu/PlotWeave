@@ -239,6 +239,153 @@ describe('项目删除与保存协调', () => {
   })
 })
 
+// 与墓碑期「吸收」分支不同：本组走 enqueueDelete 链落定时读取
+// pendingRetryDocs 的留存登记（retained 分支，PR #292 评审 5288638812
+// 迁移自门面层删除的用例）——事件顺序是删除开始前/排队期间已存在失败
+// 登记，而非墓碑期间新吸收的保存；独立成组以符合套件回调 80 代码行上限。
+describe('项目删除与保存协调：留存登记分支（PR #292 评审迁移）', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('删除失败（项目仍在）：墓碑前已登记重试的文档回吐重存（留存登记分支）', async () => {
+    const id = 'delete-failure-retained-retry-test'
+    let failedOnce = false
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'delete_project') throw new Error('资产目录只读')
+      if (command === 'save_project' && !failedOnce) {
+        failedOnce = true
+        throw new Error('磁盘已满')
+      }
+      return undefined
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      // 删除开始前：一次失败保存已把最新文档登记进重试
+      await expect(enqueueSave(id, DOC)).rejects.toThrow('磁盘已满')
+      const deleting = enqueueDelete(id).catch(() => undefined)
+      await deleting
+
+      // 回吐按登记身份重存——不重存则删除失败后最新编辑既没落盘也无重试
+      await vi.waitFor(() => expect(savedNames()).toEqual(['项目', '项目']))
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('删除失败（项目仍在）：墓碑排队期间在途保存失败的登记回吐重存（留存登记分支）', async () => {
+    const id = 'delete-failure-retained-inflight-test'
+    let rejectFirstSave: ((err: Error) => void) | null = null
+    invoke.mockImplementation((command: string) => {
+      if (command === 'delete_project') {
+        return Promise.reject(new Error('资产目录只读'))
+      }
+      if (rejectFirstSave === null) {
+        // 首笔保存在删除排队期间落定失败：失败即登记，随后被删除链读取留存
+        return new Promise<void>((_resolve, reject) => {
+          rejectFirstSave = reject
+        })
+      }
+      return Promise.resolve()
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      const saving = enqueueSave(id, DOC).catch(() => undefined)
+      await vi.waitFor(() => expect(rejectFirstSave).not.toBeNull())
+      const deleting = enqueueDelete(id).catch(() => undefined)
+      ;(rejectFirstSave as unknown as (err: Error) => void)(
+        new Error('磁盘已满'),
+      )
+      await saving
+      await deleting
+
+      // 首笔失败一次、登记被回吐重存一次：不重存则该编辑永远无人重试
+      await vi.waitFor(() => expect(savedNames()).toEqual(['项目', '项目']))
+    } finally {
+      error.mockRestore()
+    }
+  })
+})
+
+// 成功删除对既有重试登记的清除（PR #292 评审迁移自门面层删除的用例）：
+// 事件顺序是「保存失败已登记重试 → 删除成功 → 重试定时器到点」——与墓碑
+// 吸收分支及上方留存登记的失败回吐分支均不同；若墓碑不再清除登记/定时器，
+// 已删项目会被后台保存重新创建且既有用例不失败。
+describe('项目删除与保存协调：删除成功清除重试登记（PR #292 评审迁移）', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('删除成功后重试定时器到点不复活已删项目', async () => {
+    const id = 'delete-success-clears-retry-test'
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'save_project') throw new Error('只读')
+      return undefined
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      // 删除开始前：一次失败保存已登记重试并排定 5s 后台定时器
+      await expect(enqueueSave(id, DOC)).rejects.toThrow('只读')
+      await enqueueDelete(id)
+      // 重试周期（含余量）推进到点：登记与定时器应已随墓碑清除
+      await vi.advanceTimersByTimeAsync(20000)
+      expect(savedNames()).toEqual(['项目'])
+    } finally {
+      vi.useRealTimers()
+      error.mockRestore()
+    }
+  })
+})
+
+// 陈旧登记不回放（PR #292 评审迁移自门面层删除的用例）：事件顺序是
+// 「旧稿 A 失败登记 → 新稿 B 成功清除登记 → 删除失败」——enqueueDelete
+// 须读取链落定时的当前登记（开场捕获值会把已被取代的 A 重放到已成功
+// 落盘的 B 之后，覆盖用户新内容）。
+describe('项目删除与保存协调：陈旧登记不回放（PR #292 评审迁移）', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('删除失败：已被后续成功保存取代的登记不回放（陈旧稿不得覆盖新内容）', async () => {
+    const id = 'delete-failure-stale-retry-test'
+    const docA: ProjectContent = { ...DOC, name: '旧A' }
+    const docB: ProjectContent = { ...DOC, name: '新B' }
+    let failA = true
+    let releaseB: (() => void) | null = null
+    invoke.mockImplementation((command: string) => {
+      if (command === 'delete_project') {
+        return Promise.reject(new Error('资产目录只读'))
+      }
+      if (failA) {
+        failA = false
+        return Promise.reject(new Error('磁盘已满'))
+      }
+      // B 在途挂起：删除入队（开场）时 A 的登记仍在，B 落定后才清除——
+      // 这是区分「开场捕获」与「链落定时读取」的唯一事件窗口
+      return new Promise<void>((resolve) => {
+        releaseB = resolve
+      })
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      await expect(enqueueSave(id, docA)).rejects.toThrow('磁盘已满')
+      const savingB = enqueueSave(id, docB).catch(() => undefined)
+      await vi.waitFor(() => expect(releaseB).not.toBeNull())
+      const deleting = enqueueDelete(id).catch(() => undefined)
+      ;(releaseB as unknown as () => void)()
+      await savingB
+      await deleting
+
+      // B 成功已清除 A 的登记：删除失败不得把 A 重放到已落盘的 B 之后。
+      // 经一个宏任务让潜在的重放链落账后再做终态断言（waitFor 会在重放
+      // 到账前早过，测不出回归）
+      await deleting
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(savedNames()).toEqual(['旧A', '新B'])
+    } finally {
+      error.mockRestore()
+    }
+  })
+})
+
 describe('退出冲刷：就绪探针与立即重存（issue #119）', () => {
   afterEach(() => vi.clearAllMocks())
 

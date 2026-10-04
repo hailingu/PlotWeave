@@ -9,6 +9,8 @@
  */
 import { useState } from 'react'
 
+/** 内联改名组件（交互语义见模块头）：双击（节点名）或单击（工具栏项目名）
+ * 进入编辑，Enter/失焦提交、Esc 取消，空值不提交。 */
 export function EditableName({
   value,
   onChange,

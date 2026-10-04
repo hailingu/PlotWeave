@@ -147,8 +147,9 @@ export interface AiGraphSnapshot {
   edges: Array<{
     source: string
     target: string
-    sourceHandle?: string | null
-    type?: string
+    // 快照构建自 xyflow 运行态边（可选成员显式含 undefined，issue #231）
+    sourceHandle?: string | null | undefined
+    type?: string | undefined
   }>
   /** 项目资产索引（id → MIME）：shot.refs 引用位的资产存在性与用途匹配校验
    * （§7.1/§11.3 的批命令对等）。空索引 = 无资产，引用位一律拒绝。 */
@@ -165,7 +166,14 @@ export interface AiGraphSnapshot {
 export interface AiEntitySnapshot {
   characters: ReadonlyArray<{ id: string; name: string }>
   locations: ReadonlyArray<{ id: string; name: string }>
-  documents?: ReadonlyArray<{ id: string; title: string; bodyLength?: number }>
+  // 可显式 undefined = 无文档桶（issue #231）；bodyLength 同款
+  documents?:
+    | ReadonlyArray<{
+        id: string
+        title: string
+        bodyLength?: number | undefined
+      }>
+    | undefined
 }
 
 /** 预览卡的单行条目（§6：逐项列出受影响节点与变更类型；issue 44 增实体条目）。 */
@@ -184,11 +192,29 @@ export interface PreviewItem {
   key: string
 }
 
+/** 批次校验问题：index 指向来源命令（0 基），批次级整体错误用
+ * BATCH_LEVEL_ISSUE_INDEX 哨兵；人读文案经 batchIssueText 生成。 */
 export interface BatchIssue {
+  /** 所属命令序号（0 基）；BATCH_LEVEL_ISSUE_INDEX（-1）= 批次级整体
+   * 错误（如「批次不是命令数组」），不属于任何一条命令、不编「第 N 条」。 */
   index: number
   message: string
 }
 
+/** 批次级整体错误的 index 哨兵：诊断针对整批而非某条命令。 */
+export const BATCH_LEVEL_ISSUE_INDEX = -1
+
+/** 校验问题的人读文案（issue #150，回喂模型与预览卡共用）：命令级带
+ * 「第 N 条」序号（N 从 1 起），批次级只显示消息本身——index+1 会把
+ * 整体错误渲染成「第 0 条」。 */
+export function batchIssueText(issue: BatchIssue): string {
+  return issue.index === BATCH_LEVEL_ISSUE_INDEX
+    ? issue.message
+    : `第 ${issue.index + 1} 条：${issue.message}`
+}
+
+/** 批次校验结果（§6/§12）：ok=false 时 commands 恒为空（原子性），
+ * issues 供回喂模型纠错；预览条目与待执行命令同源于一次折叠。 */
 export interface BatchValidation {
   /** false = 整批拒绝（原子性：不允许只执行一半）。 */
   ok: boolean

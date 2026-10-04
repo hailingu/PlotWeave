@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import ExportDialog from './ExportDialog'
+import { ExportDialog } from './ExportDialog'
 import { buildScriptExport, type ScriptExportModel } from './exportScript'
 import { buildCanvasNode } from './nodeFactory'
 import { EMPTY_SETTINGS } from './settings'
@@ -56,6 +56,7 @@ function setup(
   const view = render(
     <ExportDialog
       projectName="雨夜"
+      json='{"schemaVersion":1}'
       model={props.model ?? model()}
       onClose={onClose}
     />,
@@ -121,12 +122,35 @@ describe('ExportDialog（无故事内容，review #81）', () => {
   )
 })
 
+describe('ExportDialog（含分支项目的告知，issue #361）', () => {
+  it('既有叙事又有分支时，默认（大纲关）明示分支未包含；开启大纲后提示随态更新', () => {
+    const draft = generatedModel(['scene', 'branch'])
+    expect(draft.summary.branches).toBe(1)
+    setup({ model: draft })
+    expect(screen.getByText(/处分支未包含在正文中/)).toBeTruthy()
+    expect(preview()).toBe(draft.plain)
+    fireEvent.click(outlineToggle())
+    expect(
+      screen.getByText('正文 = 场景 + 对白；创作大纲与分镜卡为附录'),
+    ).toBeTruthy()
+    expect(preview()).toBe(draft.outline)
+  })
+
+  it('线性单结局项目（无分支）默认提示不出现分支告知（issue #361 不回归）', () => {
+    const draft = generatedModel(['scene', 'dialogue'])
+    expect(draft.summary.branches).toBe(0)
+    setup({ model: draft })
+    expect(screen.getByText('正文 = 场景 + 对白；分镜卡见附录')).toBeTruthy()
+  })
+})
+
 describe('ExportDialog（内容可用性变化，review #81）', () => {
   it('新增内容、开启大纲、清空和恢复正文后，提示始终跟随当前模型', () => {
     const { rerender, onClose } = setup({ model: generatedModel([]) })
     rerender(
       <ExportDialog
         projectName="雨夜"
+        json='{"schemaVersion":1}'
         model={generatedModel(['beat'])}
         onClose={onClose}
       />,
@@ -136,6 +160,7 @@ describe('ExportDialog（内容可用性变化，review #81）', () => {
     rerender(
       <ExportDialog
         projectName="雨夜"
+        json='{"schemaVersion":1}'
         model={generatedModel([])}
         onClose={onClose}
       />,
@@ -145,6 +170,7 @@ describe('ExportDialog（内容可用性变化，review #81）', () => {
     rerender(
       <ExportDialog
         projectName="雨夜"
+        json='{"schemaVersion":1}'
         model={generatedModel(['scene'])}
         onClose={onClose}
       />,
@@ -269,6 +295,7 @@ describe('ExportDialog（复制与文本生命周期，review #81）', () => {
     rerender(
       <ExportDialog
         projectName="雨夜"
+        json='{"schemaVersion":1}'
         model={model({ plain: '# 新正文' })}
         onClose={onClose}
       />,
@@ -289,6 +316,7 @@ describe('ExportDialog（复制与文本生命周期，review #81）', () => {
     rerender(
       <ExportDialog
         projectName="雨夜"
+        json='{"schemaVersion":1}'
         model={model({ plain: '# 新正文' })}
         onClose={onClose}
       />,
@@ -418,6 +446,60 @@ describe('ExportDialog（复制回执与关闭）', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '关闭' }))
     expect(onClose).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('ExportDialog（模态键盘边界，issue #263）', () => {
+  /** 弹窗内可聚焦控件按 DOM 序：✕ 关闭、大纲开关、复制全文、下载 .md。 */
+  const firstFocusable = () => screen.getByRole('button', { name: '关闭' })
+  const lastFocusable = () => screen.getByRole('button', { name: '下载 .md' })
+  const dialogEl = () => screen.getByRole('dialog', { name: '导出剧本' })
+  /** 弹窗外追加一个背景控件并聚焦，模拟焦点逸出（键盘隔离断言入口）。 */
+  function focusedOutside(tag = 'button') {
+    const outside = document.createElement(tag)
+    outside.textContent = '背景控件'
+    document.body.appendChild(outside)
+    act(() => {
+      outside.focus()
+    })
+    return outside
+  }
+
+  it('打开即把焦点移入弹窗首控件', () => {
+    setup()
+    expect(dialogEl().contains(document.activeElement)).toBe(true)
+    expect(document.activeElement).toBe(firstFocusable())
+  })
+
+  it('Tab 在弹窗内首尾环绕：末控件 Tab 回首控件，首控件 Shift+Tab 回末控件', () => {
+    setup()
+    act(() => {
+      lastFocusable().focus()
+    })
+    fireEvent.keyDown(lastFocusable(), { key: 'Tab' })
+    expect(document.activeElement).toBe(firstFocusable())
+    fireEvent.keyDown(firstFocusable(), { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(lastFocusable())
+  })
+
+  it.each([
+    ['Tab', false],
+    ['Shift+Tab', true],
+  ] as const)('焦点逸出到背景元素后，%s 把焦点拉回弹窗内', (_, shiftKey) => {
+    setup()
+    const outside = focusedOutside()
+    fireEvent.keyDown(outside, { key: 'Tab', shiftKey })
+    expect(dialogEl().contains(document.activeElement)).toBe(true)
+    outside.remove()
+  })
+
+  it('卸载（任一关闭路径）后焦点归还打开时的触发元素', () => {
+    const trigger = focusedOutside('button')
+    const { unmount } = setup()
+    expect(dialogEl().contains(document.activeElement)).toBe(true)
+    unmount()
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
   })
 })
 

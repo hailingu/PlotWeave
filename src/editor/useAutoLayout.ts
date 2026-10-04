@@ -78,12 +78,12 @@ export function useAutoLayout(deps: AutoLayoutDeps) {
     apply(after)
     // setNodes 是 React 状态：React Flow 内部仓库在提交后才有新位置，
     // fitView 经下一帧调度读到的才是排布后的包围盒
-    window.requestAnimationFrame(() =>
-      fitView({
+    window.requestAnimationFrame(() => {
+      void fitView({
         ...FIT_OPTIONS,
         duration: prefersReducedMotion() ? 0 : FIT_DURATION_MS,
-      }),
-    )
+      })
+    })
   }, [compute, edgesRef, fitView, nodesRef, onError, pushHistory, setNodes])
 
   return { onAutoLayout }

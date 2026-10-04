@@ -13,13 +13,15 @@
 export interface ProviderConfig {
   id: string
   label: string
-  /** OpenAI 兼容 Base URL（不含 /chat/completions）。 */
+  /** OpenAI 兼容 Base URL（不含 /chat/completions）；远程须 HTTPS，HTTP 仅限回环。 */
   baseUrl: string
   enabled: boolean
   /** 该 provider 下可选的模型 id 列表（用户维护）。 */
   models: string[]
-  /** API key 密文（`pw1:` envelope；缺省 = 未配置）。 */
-  keyEnc?: string
+  /** API key 密文（`pw1:`/`pw2:` envelope；缺省 = 未配置）。 */
+  /** 凭据密文；可显式 undefined = 未配置/已清除（removeKey 以
+   * { keyEnc: undefined } 清除，issue #231 合法清除通道）。 */
+  keyEnc?: string | undefined
 }
 
 /** 应用设置（settings.json 结构）。 */
@@ -76,10 +78,12 @@ function strArrayOf(v: unknown): string[] {
     : []
 }
 
-/** stored 条目里读取可透传的 keyEnc envelope（非 pw1: 前缀丢弃）。 */
+/** stored 条目里读取可透传的 keyEnc envelope（`pw1:`/`pw2:` 前缀外
+ * 丢弃；v2 = 迭代派生 + provider AAD 绑定，issue #392）。 */
 function keyEncOf(found: unknown): string | undefined {
   const v = (found as { keyEnc?: unknown } | null)?.keyEnc
-  return typeof v === 'string' && v.startsWith('pw1:') ? v : undefined
+  if (typeof v !== 'string') return undefined
+  return v.startsWith('pw1:') || v.startsWith('pw2:') ? v : undefined
 }
 
 /** 内置 provider 与存量配置合并：存量缺席时补回内置默认（S3776 拆分）。 */
@@ -192,8 +196,8 @@ export interface ChatModelOption {
 
 /**
  * 三层过滤的可用模型枚举（§6 模型选择器）：模型在 provider 清单中 →
- * provider 启用且 Base URL 就绪；第三层（API key 已配置）依赖钥匙串
- * 异步查询，由调用方按 providerId 叠加置灰。
+ * provider 启用且 Base URL 就绪；第三层（API key 已配置）由调用方按
+ * provider 的 `keyEnc` 密文是否在场同步判定（不查钥匙串），叠加置灰。
  */
 export function listChatModels(settings: AppSettings): ChatModelOption[] {
   const out: ChatModelOption[] = []

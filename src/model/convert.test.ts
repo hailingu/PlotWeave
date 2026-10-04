@@ -1,7 +1,8 @@
 /**
  * 会话文档 ⇄ ProjectDocument 入口契约测试：serializeProject 落盘形态
  * （四分区拆分、运行态剥离、设定集键化、缺省字段处理）与 parseProject
- * 往返一致/拒绝边界（版本判型、孤儿边隔离、悬空引用标记），以及
+ * 往返一致/拒绝边界（版本判型、孤儿边隔离、悬空引用标记）及输入所有权
+ * 契约（归一化就地改写输入对象，issue #102），以及
  * layout.size/zIndex 的双向往返。各归一化阶段的专项用例见
  * convert.{containers,nodes,edges,settings,assets,legacy}.test.ts。
  */
@@ -9,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { parseProject, serializeProject } from './convert'
 import type { ProjectContent } from './content'
 import { CURRENT_SCHEMA_VERSION, type ProjectDocument } from './document'
-import type { CanvasNode } from '../editor/nodes/types'
+import type { SessionNode } from './session'
 import { NOW, mkContent } from './convertFixtures'
 
 describe('serializeProject（会话文档 → ProjectDocument 落盘格式）', () => {
@@ -152,6 +153,22 @@ describe('serializeProject（会话文档 → ProjectDocument 落盘格式）', 
     expect(round.content.assets?.byId['a-1']).toEqual(doc.assets.byId['a-1'])
     const again = serializeProject(round.content, 'p-1', NOW)
     expect(again.assets.byId['a-1']).toEqual(doc.assets.byId['a-1'])
+  })
+})
+
+describe('项目修改时间的加载与保存（#501）', () => {
+  // 加载若丢掉文档修改时间，JSON 导出只能重新盖戳，无法语义往返。
+  it('修改时间透传进会话；再次保存仍以保存时刻盖戳（#501）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.project.updatedAt = '2026-08-27T12:00:00.000Z'
+    const restored = parseProject(doc)
+    expect(restored.warnings).toEqual([])
+    expect(restored.content).toHaveProperty(
+      'updatedAt',
+      '2026-08-27T12:00:00.000Z',
+    )
+    const saved = serializeProject(restored.content, 'p-1', NOW)
+    expect(saved.project.updatedAt).toBe('2026-08-28T12:00:00.000Z')
   })
 })
 
@@ -578,7 +595,7 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
         position: { x: 0, y: 0 },
         selected: false,
         data: { name: `节拍 ${id}`, tone: 't' },
-      }) as unknown as CanvasNode
+      }) as unknown as SessionNode
     const content: ProjectContent = {
       name: 'x',
       nodes: [beat('a'), beat('a\u0000b'), beat('b\u0000c'), beat('c')],
@@ -858,6 +875,86 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
   })
 })
 
+/** v1 键 id 漂移夹具（issue #102 行为审计同款）：settings.characters 键
+ * c1 的内嵌 id 为 wrong，返回调用方持有的嵌套成员引用，供就地改写断言。 */
+function docWithDriftedCharacterId(): {
+  doc: Record<string, unknown>
+  member: Record<string, unknown>
+} {
+  const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as Record<
+    string,
+    unknown
+  >
+  const characters = (doc.settings as Record<string, unknown>)
+    .characters as Record<string, Record<string, unknown>>
+  const member: Record<string, unknown> = {
+    id: 'wrong',
+    name: '角色',
+    gradient: 'linear-gradient(red, blue)',
+  }
+  characters.c1 = member
+  return { doc, member }
+}
+
+describe('parseProject 输入所有权契约（issue #102：归一化就地改写输入）', () => {
+  it('v1：键 id 漂移修复就地改写调用方嵌套对象；repaired 仍按未改动原始快照判定', () => {
+    const { doc, member } = docWithDriftedCharacterId()
+    const before = structuredClone(doc)
+    const round = parseProject(doc)
+    // 嵌套引用的内嵌 id 以记录键为准就地改写：调用方持有的对象不再保持原样
+    expect(member.id).toBe('c1')
+    expect(doc).not.toEqual(before)
+    // repaired 的比较基准是入口内部的调用前快照，不因输入被就地改写而失真
+    expect(round.repaired).toBe(true)
+    // 警告按语义断言：须引用受影响的记录键（夹具数据标识符，非措辞）
+    expect(round.warnings.some((w) => w.includes('c1'))).toBe(true)
+    // 归一化结果不回归：会话设定集含改写后的条目
+    expect(round.content.settings.characters.map((c) => c.id)).toContain('c1')
+  })
+
+  it('v0：迁移前预归一化同样就地改写——调用方持有的节点引用被补默认 position', () => {
+    const v0 = {
+      schemaVersion: 0,
+      project: {
+        id: 'p-old',
+        name: '旧剧',
+        createdAt: '',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      graph: {
+        nodes: [
+          // position 缺失：预归一化就地补 (0,0)，否则迁移器解引用
+          // n.position.x 时单个损坏旧节点令整档迁移崩溃
+          {
+            id: 's1',
+            type: 'scene',
+            data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' },
+          },
+        ],
+        edges: [],
+      },
+      settings: { characters: [], locations: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const node = v0.graph.nodes[0] as Record<string, unknown>
+    const round = parseProject(v0)
+    expect(round.migrated).toBe(true)
+    expect(node.position).toEqual({ x: 0, y: 0 })
+    expect(round.warnings.some((w) => w.includes('position'))).toBe(true)
+    expect(round.content.nodes.some((n) => n.id === 's1')).toBe(true)
+  })
+
+  it('契约补救路径：克隆后传入则原始档保持未改动，解析结果不受影响', () => {
+    const { doc } = docWithDriftedCharacterId()
+    const before = structuredClone(doc)
+    const round = parseProject(structuredClone(doc))
+    expect(doc).toEqual(before)
+    expect(round.repaired).toBe(true)
+    expect(round.content.settings.characters.map((c) => c.id)).toContain('c1')
+  })
+})
+
 describe('layout.size / layout.zIndex 往返（§4.1 可选布局字段，§9.3 命令边界同域）', () => {
   it('合法 size 与 zIndex：会话 ⇄ 落盘双向保留；未携带的节点不落可选字段', () => {
     const content = mkContent()
@@ -1082,5 +1179,65 @@ describe('同版本文档扩展字段的分层边界（issue #100，§11）', ()
       NOW,
     ) as unknown as Record<string, unknown>
     expect((again.graph as Record<string, unknown>).futureGraphNote).toBe(1)
+  })
+})
+
+describe('信封形状判型警告（issue #338 评审，§11 第 0 步「均记录警告」）', () => {
+  const shapeWarning = (warnings: string[]) =>
+    warnings.some((w) => w.includes('信封形状判型'))
+
+  it('v1 形状判型（versionless 标记）：交付会话前记录判型警告', () => {
+    // Rust 判型在异型版本键/缺失版本号时按 v1 形状交付并打 versionless
+    // 标记（IPC 顶层额外键）——修复不得静默，警告须解释保存时的补盖
+    const doc = {
+      ...serializeProject(mkContent(), 'p-1', NOW),
+      versionless: true,
+    }
+    const round = parseProject(doc)
+    expect(shapeWarning(round.warnings)).toBe(true)
+  })
+
+  it('v0 形状判型（versionless 标记）：迁移交付同样记录判型警告', () => {
+    const v0 = {
+      versionless: true,
+      schemaVersion: 0,
+      project: {
+        id: 'p-old',
+        name: '旧剧',
+        createdAt: '',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      graph: { nodes: [], edges: [] },
+      settings: { characters: [], locations: [], props: [], documents: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0)
+    expect(round.migrated).toBe(true)
+    expect(shapeWarning(round.warnings)).toBe(true)
+  })
+
+  it('显式版本号（无标记）：不产生判型警告', () => {
+    expect(
+      shapeWarning(
+        parseProject(serializeProject(mkContent(), 'p-1', NOW)).warnings,
+      ),
+    ).toBe(false)
+    const v0Explicit = {
+      schemaVersion: 0,
+      project: {
+        id: 'p-old',
+        name: '旧剧',
+        createdAt: '',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      graph: { nodes: [], edges: [] },
+      settings: { characters: [], locations: [], props: [], documents: [] },
+      episodeTitles: {},
+      assets: { byId: {} },
+    }
+    const round = parseProject(v0Explicit)
+    expect(round.migrated).toBe(true)
+    expect(shapeWarning(round.warnings)).toBe(false)
   })
 })

@@ -3,13 +3,10 @@
  * 落盘边界施加条数容量（issue #64）：调用方与进程内快照持全量落盘形态
  * （设置页重挂载种子、保存失败保留、退出冲刷重试），写入主文件或浏览器
  * 内存回退等价物时才裁剪到容量内。 */
-import {
-  diskSessionOf,
-  normalizeAiSession,
-  type AiSession,
-} from './editor/ai/session'
+import { diskSessionOf, normalizeAiSession, type AiSession } from './ai/session'
+import { IPC_COMMANDS } from './ipc/commands'
+import { ipcInvoke } from './ipc/invoke'
 import { isBrowserPreviewHost } from './platform/hostEnvironment'
-import { hostInvoke } from './platform/hostCommands'
 import {
   enqueueProjectWrite,
   onProjectWriteReplayFailure,
@@ -64,9 +61,7 @@ onProjectWriteReplayFailure((id, err) => {
   )
 })
 
-/** 读取唯一主文件；缺失为空历史，损坏条目隔离，I/O 错误交给界面提示。
- * 内存回退仅限纯浏览器预览（P2 平台收敛）：Swift 宿主走命令传输，
- * 未接通时可见失败，不得以空历史伪装成功。 */
+/** 读取唯一主文件；缺失为空历史，损坏条目隔离，I/O 错误交给界面提示。 */
 export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
   if (isBrowserPreviewHost()) {
     return {
@@ -74,8 +69,8 @@ export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
       repairError: null,
     }
   }
-  const result = await hostInvoke<{ session: unknown; corrupt: boolean }>(
-    'load_ai_session',
+  const result = await ipcInvoke<{ session: unknown; corrupt: boolean }>(
+    IPC_COMMANDS.loadAiSession,
     { id },
   )
   const { session, repaired } = normalizeAiSession(result.session)
@@ -96,14 +91,17 @@ export async function saveAiSession(
   session: AiSession,
 ): Promise<void> {
   if (isBrowserPreviewHost()) {
-    // 浏览器内存回退是主文件的等价物：与命令路径同容量语义。
+    // 浏览器内存回退是主文件的等价物：与 Tauri 路径同容量语义。
     memorySessions.set(id, diskSessionOf(session))
     return
   }
   const pending = { session }
   pendingSessions.set(id, pending)
   const write = enqueueProjectWrite(id, async () => {
-    await hostInvoke('save_ai_session', { id, session: diskSessionOf(session) })
+    await ipcInvoke(IPC_COMMANDS.saveAiSession, {
+      id,
+      session: diskSessionOf(session),
+    })
     if (pendingSessions.get(id) === pending) {
       pendingSessions.delete(id)
       savedListeners.forEach((listener) => listener(id))

@@ -18,6 +18,8 @@ export interface BranchEdgeData extends Record<string, unknown> {
   order?: number
 }
 
+/** 分支连线的 React Flow 类型别名：Edge 泛型钉住 BranchEdgeData 与
+ * 'branch' 判别，消费点不重复展开。 */
 export type BranchFlowEdge = Edge<BranchEdgeData, 'branch'>
 
 /**
@@ -26,7 +28,7 @@ export type BranchFlowEdge = Edge<BranchEdgeData, 'branch'>
  * 源缺失/非分支/悬空句柄（指向已删选项）回退空串，胶囊隐藏。
  * 渐变以各边独立 id 的 linearGradient 定义，引用品牌色语义令牌。
  */
-export default function BranchEdge({
+export function BranchEdge({
   id,
   source,
   sourceX,
@@ -63,10 +65,12 @@ export default function BranchEdge({
           <stop offset="1" stopColor="var(--accent)" />
         </linearGradient>
       </defs>
+      {/* xyflow 库 props（issue #231）：markerEnd 可显式 undefined（无端点
+          标记 = 缺省），条件展开而非传入以匹配库类型 */}
       <BaseEdge
         id={id}
         path={path}
-        markerEnd={markerEnd}
+        {...(markerEnd !== undefined && { markerEnd })}
         style={{ stroke: `url(#${gradientId})`, strokeWidth: 1.5 }}
       />
       {optionLabel && (

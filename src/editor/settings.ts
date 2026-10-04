@@ -3,54 +3,32 @@
  * 节点只存实体 id、渲染时经 settings 解析——改设定集一处，
  * 全部节点引用同时生效；实体被删时节点按「失效引用」展示（§4.3），
  * 不自动清除（§8.2.3），撤销删除即恢复。
+ *
+ * 类型所有权（issue #353 方向一）：实体/桶类型、空集常量与归一化由
+ * 磁盘格式所有者 src/model/settings.ts 单点定义，本模块再导出保持编辑器
+ * 消费面稳定，并保留 UI 专属的创建（调色板/默认值）与解析（头像/名称）
+ * 助手。
  */
+import { newEntityId } from '../model/settings'
+import type {
+  CharacterEntity,
+  DocumentEntity,
+  LocationEntity,
+  ProjectSettings,
+} from '../model/settings'
 
-/** 角色实体：项目内设定集条目。 */
-export interface CharacterEntity {
-  id: string
-  name: string
-  /** 头像渐变（新增时从调色板轮转取用）。 */
-  gradient: string
-  /** 一句小传（可选）。 */
-  bio?: string
-}
+export {
+  EMPTY_SETTINGS,
+  newEntityId,
+  normalizeSettings,
+  type CharacterEntity,
+  type DocumentEntity,
+  type LocationEntity,
+  type PropEntity,
+  type ProjectSettings,
+} from '../model/settings'
 
-/** 地点实体：对应索引卡的地点引用。 */
-export interface LocationEntity {
-  id: string
-  name: string
-  note?: string
-}
-
-/** 道具实体：契约桶（数据模型 §6）。首版 UI 未开放道具编辑，
- * 会话仅透传保真——漏带即保存丢实体。 */
-export interface PropEntity {
-  id: string
-  name: string
-  description?: string
-}
-
-/** 设定文档实体：长篇自由文本（人物小传/世界观/术语表，数据模型 §6）。
- * 首版 UI 未开放编辑，会话仅透传保真——漏带即保存丢文档。 */
-export interface DocumentEntity {
-  id: string
-  title: string
-  body: string
-  /** 关联的 Character / Location 条目：kind + id 显式成对（§6）。 */
-  relatedIds: Array<{ kind: 'character' | 'location'; id: string }>
-}
-
-/** 项目设定集：随 ProjectDocument 持久化。props/documents 首版只透传不编辑。 */
-export interface ProjectSettings {
-  characters: CharacterEntity[]
-  locations: LocationEntity[]
-  props?: PropEntity[]
-  documents?: DocumentEntity[]
-}
-
-export const EMPTY_SETTINGS: ProjectSettings = { characters: [], locations: [] }
-
-/** 新增角色/地点的默认头像渐变调色板（轮转取用）。 */
+/** 新增角色的默认头像渐变调色板（由实体 id 确定性派生取用）。 */
 const AVATAR_GRADIENTS = [
   'linear-gradient(135deg,#e0176e,#7f6cf0)',
   'linear-gradient(135deg,#00b3d8,#5e5ce6)',
@@ -60,18 +38,32 @@ const AVATAR_GRADIENTS = [
   'linear-gradient(135deg,#64d2ff,#30d158)',
 ]
 
-let paletteCursor = 0
-
-/** 新实体 id：类型前缀 + 时间戳 36 进制 + 随机尾（同毫秒防碰撞）。
- * 前缀随桶扩展（ch/loc/prop/doc），调用方按域选用。 */
-export function newEntityId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
+/**
+ * 角色 id → 头像渐变（issue #395）：以 id 的确定性散列取调色板下标——
+ * 工厂不持有跨调用共享游标，同一 id（撤销/重做重放或任意重放路径）
+ * 恒得同一渐变，「新增角色」命令幂等可重放；条目分布由 id 的随机尾
+ * 保证。id 首选散列（Java 风格 31 乘子）冲突只影响取相邻条目，无正确
+ * 性含义。
+ */
+export function avatarGradientOf(id: string): string {
+  let hash = 0
+  for (let i = 0; i < id.length; i++) {
+    // Math.imul 每轮按 int32 截断累积值，加数 ≤ 0x10FFFF，和恒在精确
+    // 整数范围内，无需显式位截断
+    hash = Math.imul(hash, 31) + (id.codePointAt(i) ?? 0)
+  }
+  // 调色板为模块级非空常量；?? 兜底只消解模运算下标的缺失分支（不可达）
+  return (
+    AVATAR_GRADIENTS[Math.abs(hash) % AVATAR_GRADIENTS.length] ??
+    AVATAR_GRADIENTS[0] ??
+    ''
+  )
 }
 
-/** 新建角色实体（名字去空白；渐变从调色板轮转）。 */
+/** 新建角色实体（名字去空白；渐变由 id 确定性派生，issue #395）。 */
 export function createCharacter(name: string): CharacterEntity {
-  const gradient = AVATAR_GRADIENTS[paletteCursor++ % AVATAR_GRADIENTS.length]
-  return { id: newEntityId('ch'), name: name.trim(), gradient }
+  const id = newEntityId('ch')
+  return { id, name: name.trim(), gradient: avatarGradientOf(id) }
 }
 
 /** 新建地点实体。 */
@@ -119,17 +111,4 @@ export function resolveLocationName(
   id: string,
 ): string | null {
   return settings.locations.find((l) => l.id === id)?.name ?? null
-}
-
-/** 项目文档缺省合并：旧文件无 settings 或字段缺失时补空集（向后兼容）。
- * props/documents 为契约透传桶：存在即原样保留（漏带即保存/迁移回写丢失）。 */
-export function normalizeSettings(raw: unknown): ProjectSettings {
-  if (typeof raw !== 'object' || raw === null) return { ...EMPTY_SETTINGS }
-  const obj = raw as Partial<ProjectSettings>
-  return {
-    characters: Array.isArray(obj.characters) ? obj.characters : [],
-    locations: Array.isArray(obj.locations) ? obj.locations : [],
-    ...(Array.isArray(obj.props) ? { props: obj.props } : {}),
-    ...(Array.isArray(obj.documents) ? { documents: obj.documents } : {}),
-  }
 }

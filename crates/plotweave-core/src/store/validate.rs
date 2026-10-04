@@ -6,6 +6,7 @@
 use cap_std::fs::Dir as CapDir;
 
 use crate::isotime::{is_canonical_utc_timestamp, is_valid_iso8601, now_iso};
+use crate::store::error::StoreError;
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
 use crate::store::persist::{asset_stat, open_dir_bound};
@@ -213,48 +214,64 @@ pub fn verify_asset_real_path(
     root: &CapDir,
     id: &str,
     rel_path: &str,
-) -> Result<cap_std::fs::File, String> {
-    let root_md = root
-        .symlink_metadata(id)
-        .map_err(|_| format!("项目资产根不存在，资产文件不存在：{rel_path}"))?;
+) -> Result<cap_std::fs::File, StoreError> {
+    // 历史行为：资产根元数据读取的任何失败（含权限等 I/O 错误）一律按
+    // 「资产文件不存在」上报——无底层来源可保留，语义保持不变
+    let root_md = root.symlink_metadata(id).map_err(|_| {
+        StoreError::missing(format!("项目资产根不存在，资产文件不存在：{rel_path}"))
+    })?;
     if root_md.file_type().is_symlink() {
-        return Err(format!("项目资产根是符号链接，拒绝校验资产：{rel_path}"));
+        return Err(StoreError::refused(format!(
+            "项目资产根是符号链接，拒绝校验资产：{rel_path}"
+        )));
     }
     if !root_md.is_dir() {
-        return Err(format!("项目资产根不是目录，资产文件不存在：{rel_path}"));
+        return Err(StoreError::refused(format!(
+            "项目资产根不是目录，资产文件不存在：{rel_path}"
+        )));
     }
     let mut dir = open_dir_bound(root, id, &root_md, "项目资产根")?;
     let comps: Vec<&str> = rel_path.split('/').collect();
     let Some((last, parents)) = comps.split_last() else {
-        return Err(format!("资产路径为空：{rel_path}"));
+        return Err(StoreError::refused(format!("资产路径为空：{rel_path}")));
     };
     for comp in parents {
         let md = asset_stat(&dir, comp, rel_path)?;
         if md.file_type().is_symlink() {
-            return Err(format!("资产路径含符号链接：{rel_path}"));
+            return Err(StoreError::refused(format!(
+                "资产路径含符号链接：{rel_path}"
+            )));
         }
         if !md.is_dir() {
-            return Err(format!("资产路径的中间组件不是目录：{rel_path}"));
+            return Err(StoreError::refused(format!(
+                "资产路径的中间组件不是目录：{rel_path}"
+            )));
         }
         dir = open_dir_bound(&dir, comp, &md, "资产中间目录")?;
     }
     let md = asset_stat(&dir, last, rel_path)?;
     if md.file_type().is_symlink() {
-        return Err(format!("资产路径含符号链接：{rel_path}"));
+        return Err(StoreError::refused(format!(
+            "资产路径含符号链接：{rel_path}"
+        )));
     }
     if !md.is_file() {
-        return Err(format!("资产路径不是普通文件：{rel_path}"));
+        return Err(StoreError::refused(format!(
+            "资产路径不是普通文件：{rel_path}"
+        )));
     }
     let file = dir
         .open(last)
-        .map_err(|e| format!("打开资产文件失败（{rel_path}）：{e}"))?;
+        .map_err(|e| StoreError::io(format!("打开资产文件失败（{rel_path}）"), e))?;
     #[cfg(unix)]
     {
         let fm = file
             .metadata()
-            .map_err(|e| format!("读取资产句柄元数据失败（{rel_path}）：{e}"))?;
+            .map_err(|e| StoreError::io(format!("读取资产句柄元数据失败（{rel_path}）"), e))?;
         if asset_identity(&fm) != asset_identity(&md) {
-            return Err(format!("资产文件在校验期间被替换：{rel_path}"));
+            return Err(StoreError::refused(format!(
+                "资产文件在校验期间被替换：{rel_path}"
+            )));
         }
     }
     Ok(file)
@@ -263,11 +280,11 @@ pub fn verify_asset_real_path(
 /// 或字段形状缺失的条目交给 prepare_save 的信封诊断，此处跳过避免重复误报。
 /// 返回已验证资产的打开句柄——调用方持有至保存完成后释放，期间实体不可
 /// 被替换为未验证目标（句柄绑定见 verify_asset_real_path）。
-pub fn verify_save_asset_files(
+pub(crate) fn verify_save_asset_files(
     root: &CapDir,
     id: &str,
     assets: &serde_json::Value,
-) -> Result<Vec<cap_std::fs::File>, String> {
+) -> Result<Vec<cap_std::fs::File>, StoreError> {
     let mut handles = Vec::new();
     let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
         return Ok(handles);
@@ -280,7 +297,7 @@ pub fn verify_save_asset_files(
             continue;
         }
         let handle =
-            verify_asset_real_path(root, id, rel).map_err(|e| format!("资产 {key}：{e}"))?;
+            verify_asset_real_path(root, id, rel).map_err(|e| e.prefixed(format!("资产 {key}")))?;
         handles.push(handle);
     }
     Ok(handles)
@@ -306,37 +323,39 @@ pub fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Val
     }
     bad
 }
-/// 加载侧资产复验命令：调用方回传刚加载文档的资产索引（避免二次读盘），
-/// 返回不可验证键，交前端归一化层隔离——否则下一次保存会被保存边界
-/// 拒收，防抖静默吞错后用户编辑永不落盘。加载本身保持只读；复验相对
-/// projects_dir 的受信根锚定句柄执行。
 /// save_project 的信封校验与规范化（§10.5）：在创建临时文件、生成保存时间
 /// 或更新索引之前完成——任一校验失败整次拒绝，不得静默剥离。全部通过后
 /// 以受信路径参数覆盖 id，并由 Rust 为本次尝试只取一次系统时间无条件盖戳
 /// updatedAt（不信任旧值、未来值或前端时钟）。
-pub fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, String> {
+pub(crate) fn prepare_save(id: &str, doc: &ProjectFile) -> Result<ProjectFile, StoreError> {
     if doc.schema_version != CURRENT_SCHEMA_VERSION {
-        return Err(format!(
+        return Err(StoreError::invalid(format!(
             "文档版本不受支持（schemaVersion {}），拒绝保存",
             doc.schema_version
-        ));
+        )));
     }
-    let name = sanitize_name(&doc.project.name)?;
+    let name = sanitize_name(&doc.project.name).map_err(StoreError::invalid)?;
     if let Some(d) = &doc.project.description {
         if !d.is_string() {
-            return Err("project.description 非字符串，拒绝保存".into());
+            return Err(StoreError::invalid(
+                "project.description 非字符串，拒绝保存",
+            ));
         }
     }
     if !is_valid_iso8601(&doc.project.created_at) {
-        return Err("project.createdAt 不是可解析的 ISO 8601 时间戳".into());
+        return Err(StoreError::invalid(
+            "project.createdAt 不是可解析的 ISO 8601 时间戳",
+        ));
     }
     if !is_valid_iso8601(&doc.project.updated_at) {
-        return Err("project.updatedAt 不是可解析的 ISO 8601 时间戳".into());
+        return Err(StoreError::invalid(
+            "project.updatedAt 不是可解析的 ISO 8601 时间戳",
+        ));
     }
-    validate_save_graph(&doc.graph)?;
-    validate_save_settings(&doc.settings)?;
-    validate_save_episode_titles(&doc.episode_titles)?;
-    validate_save_assets(&doc.assets)?;
+    validate_save_graph(&doc.graph).map_err(StoreError::invalid)?;
+    validate_save_settings(&doc.settings).map_err(StoreError::invalid)?;
+    validate_save_episode_titles(&doc.episode_titles).map_err(StoreError::invalid)?;
+    validate_save_assets(&doc.assets).map_err(StoreError::invalid)?;
     Ok(ProjectFile {
         schema_version: doc.schema_version,
         versionless: false,

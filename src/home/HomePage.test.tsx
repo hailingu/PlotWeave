@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import HomePage from './HomePage'
+import { HomePage } from './HomePage'
 import type { OpenProjectError } from './OpenErrorBanner'
 import type { ProjectSummary } from './projects'
 
@@ -23,6 +23,7 @@ function setup(
   projects: ProjectSummary[] = [mk()],
   loading = false,
   openError: OpenProjectError | null = null,
+  loadError: string | null = null,
 ) {
   const spies = {
     onOpenProject: vi.fn(),
@@ -30,12 +31,14 @@ function setup(
     onRenameProject: vi.fn(),
     onDuplicateProject: vi.fn(),
     onDeleteProject: vi.fn(),
+    onRetryLoad: vi.fn(),
   }
   render(
     <HomePage
       projects={projects}
       loading={loading}
       openError={openError}
+      loadError={loadError}
       {...spies}
     />,
   )
@@ -47,6 +50,33 @@ describe('HomePage 列表与搜索', () => {
     const spies = setup()
     fireEvent.click(screen.getByRole('button', { name: '打开项目 都市奇缘' }))
     expect(spies.onOpenProject).toHaveBeenCalledWith('p1')
+  })
+
+  it('损坏占位卡（issue #123）：显示占位名与诊断，不显示统计与时间，点击仍走打开入口', () => {
+    const spies = setup([
+      mk(),
+      mk({
+        id: 'p-bad',
+        name: '无法读取的项目',
+        sceneCount: 0,
+        updatedAt: '1970-01-01T00:00:00.000Z',
+        error: '项目文件损坏：无法判别文档信封（已保留原文件）',
+      }),
+    ])
+    expect(screen.getByText('无法读取的项目')).toBeTruthy()
+    expect(
+      screen.getByText('项目文件损坏：无法判别文档信封（已保留原文件）'),
+    ).toBeTruthy()
+    // 损坏卡无统计语义（不渲染「0 场」）也不渲染相对时间（epoch 会让
+    // 正常变体显示「1 月 1 日」——损坏变体整体隐藏时间行）
+    expect(screen.queryByText('0 场')).toBeNull()
+    expect(screen.queryByText('1 月 1 日')).toBeNull()
+    expect(screen.getByText('刚刚')).toBeTruthy() // 正常卡时间照常
+    // 点击占位卡仍走打开入口：load_project 失败由 #98 横幅呈现完整诊断
+    fireEvent.click(
+      screen.getByRole('button', { name: '项目损坏 无法读取的项目' }),
+    )
+    expect(spies.onOpenProject).toHaveBeenCalledWith('p-bad')
   })
 
   it('搜索框内存过滤；无匹配时显示提示', () => {
@@ -86,6 +116,39 @@ describe('HomePage 列表与搜索', () => {
     fireEvent.click(screen.getByRole('button', { name: '＋ 新建项目' }))
     fireEvent.click(screen.getByRole('button', { name: '＋ 新剧' }))
     expect(spies.onCreateProject).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('HomePage 列表读取失败错误态（issue #133）', () => {
+  it('无已知列表时显示错误态与重试，不显示首次使用引导', () => {
+    const spies = setup([], false, null, '读取设置目录失败：权限不足')
+    expect(
+      screen.queryByRole('button', { name: '＋ 创建你的第一部短剧' }),
+    ).toBeNull()
+    expect(screen.getByText(/项目列表加载失败/)).toBeTruthy()
+    expect(screen.getByText(/权限不足/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(spies.onRetryLoad).toHaveBeenCalledTimes(1)
+    // 工具栏新建仍可用：错误态不拦截创建入口
+    expect(screen.getByRole('button', { name: '＋ 新建项目' })).toBeTruthy()
+  })
+
+  it('已有列表时刷新失败：卡片保留并显示诊断横幅与重试', () => {
+    const spies = setup([mk()], false, null, '读取设置目录失败：权限不足')
+    expect(
+      screen.getByRole('button', { name: '打开项目 都市奇缘' }),
+    ).toBeTruthy()
+    expect(screen.getByText(/刷新失败/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(spies.onRetryLoad).toHaveBeenCalledTimes(1)
+  })
+
+  it('无错误时空态与网格行为不变', () => {
+    setup([])
+    expect(
+      screen.getByRole('button', { name: '＋ 创建你的第一部短剧' }),
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
   })
 })
 
@@ -208,5 +271,53 @@ describe('HomePage 删除流程', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(spies.onDeleteProject).not.toHaveBeenCalled()
     expect(screen.queryByRole('dialog', { name: '删除项目' })).toBeNull()
+  })
+})
+
+describe('项目变更失败横幅（issue #132）', () => {
+  it('id 目标经当前列表解析名称点名；重试触发回调', () => {
+    const onRetryMutation = vi.fn()
+    render(
+      <HomePage
+        projects={[mk()]}
+        mutationError={{ action: 'delete', targetId: 'p1', detail: '只读目录' }}
+        onRetryMutation={onRetryMutation}
+        onOpenProject={vi.fn()}
+        onCreateProject={vi.fn()}
+        onRenameProject={vi.fn()}
+        onDuplicateProject={vi.fn()}
+        onDeleteProject={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/删除「都市奇缘」失败：只读目录/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(onRetryMutation).toHaveBeenCalledTimes(1)
+  })
+
+  it('名称目标（重命名的新名）直接点名；无横幅时不渲染', () => {
+    const { rerender } = render(
+      <HomePage
+        projects={[mk()]}
+        mutationError={{ action: 'rename', targetName: '新名', detail: 'io' }}
+        onRetryMutation={vi.fn()}
+        onOpenProject={vi.fn()}
+        onCreateProject={vi.fn()}
+        onRenameProject={vi.fn()}
+        onDuplicateProject={vi.fn()}
+        onDeleteProject={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/重命名「新名」失败：io/)).toBeTruthy()
+    rerender(
+      <HomePage
+        projects={[mk()]}
+        onOpenProject={vi.fn()}
+        onCreateProject={vi.fn()}
+        onRenameProject={vi.fn()}
+        onDuplicateProject={vi.fn()}
+        onDeleteProject={vi.fn()}
+      />,
+    )
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

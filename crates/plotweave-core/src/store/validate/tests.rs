@@ -7,6 +7,32 @@ use serde_json::json;
 use std::fs;
 
 #[test]
+fn episode_titles_accept_frontend_canonical_set() {
+    // issue #122 共享边界夹具：前端规范裁剪（trimTitleWhitespace，
+    // src/model/titleWhitespace.ts，集合 ⊇ Rust White_Space）产出的标题
+    // 必须全部通过保存边界——两端夹具字面量一致，规则漂移时两侧同步失败
+    for canonical in ["标题", "剧 名", "全角"] {
+        let mut doc = valid_save_doc();
+        doc.episode_titles = json!({ "1": canonical });
+        prepare_save("p-1", &doc)
+            .unwrap_or_else(|e| panic!("前端规范标题必须可保存：{canonical}，{e}"));
+    }
+}
+
+#[test]
+fn episode_titles_reject_unnormalized_nel_edges() {
+    // 保存边界只验证不修复（§10.5）：U+0085 在 Rust White_Space 集合内，
+    // 未归一化的载荷仍整次拒绝——canonical 化责任归前端（issue #122）
+    let mut doc = valid_save_doc();
+    doc.episode_titles = json!({ "1": "\u{85}标题" });
+    let err = prepare_save("p-1", &doc).unwrap_err();
+    assert!(
+        matches!(err, StoreError::InvalidInput { ref detail } if detail.contains("去空白")),
+        "意外诊断：{err}"
+    );
+}
+
+#[test]
 fn save_rejects_missing_settings_buckets() {
     // 缺桶落盘后下次加载被归一化为空 Record，既有 characters/locations/
     // props/documents 永久丢失——持久化信任边界（§10.5）要求四桶齐备且
@@ -17,7 +43,10 @@ fn save_rejects_missing_settings_buckets() {
     let mut doc = valid_save_doc();
     doc.settings = json!({ "characters": {}, "locations": {}, "props": {} });
     let err = prepare_save("p-1", &doc).unwrap_err();
-    assert!(err.contains("documents"), "错误应指名缺失的桶：{err}");
+    assert!(
+        matches!(err, StoreError::InvalidInput { ref detail } if detail.contains("documents")),
+        "错误应指名缺失的桶：{err}"
+    );
     // 四桶齐备才放行
     assert!(prepare_save("p-1", &valid_save_doc()).is_ok());
 }
@@ -244,7 +273,10 @@ fn prepare_save_rejects_non_string_description() {
     let mut doc = valid_save_doc();
     doc.project.description = Some(json!(42));
     let err = prepare_save("p-1", &doc).unwrap_err();
-    assert!(err.contains("description"), "意外诊断：{err}");
+    assert!(
+        matches!(err, StoreError::InvalidInput { ref detail } if detail.contains("description")),
+        "意外诊断：{err}"
+    );
 }
 
 #[test]
@@ -256,7 +288,10 @@ fn save_ipc_explicit_null_description_preserved_and_rejected() {
     let file: ProjectFile = serde_json::from_value(payload).expect("反序列化");
     assert_eq!(file.project.description, Some(serde_json::Value::Null));
     let err = prepare_save("p-1", &file).unwrap_err();
-    assert!(err.contains("description"), "意外诊断：{err}");
+    assert!(
+        matches!(err, StoreError::InvalidInput { ref detail } if detail.contains("description")),
+        "意外诊断：{err}"
+    );
 }
 
 #[test]
@@ -274,7 +309,10 @@ fn verify_asset_real_path_rejects_missing_file_and_missing_root() {
     let projects = temp_projects_dir();
     fs::create_dir_all(projects.join("p-1").join("assets")).expect("创建资产目录");
     let err = verify_asset_real_path(&cap(&projects), "p-1", "assets/gone.png").unwrap_err();
-    assert!(err.contains("资产文件不存在"), "意外诊断：{err}");
+    assert!(
+        matches!(err, StoreError::NotFound { ref detail } if detail.contains("资产文件不存在")),
+        "意外诊断：{err}"
+    );
     // 项目资产根本身缺失同样拒存（该项目从未落过资产文件）
     assert!(verify_asset_real_path(&cap(&projects), "p-2", "assets/a1.png").is_err());
     cleanup_temp(&projects);
@@ -290,7 +328,10 @@ fn verify_asset_real_path_rejects_symlink_escape() {
     fs::write(&outside, b"secret").expect("写入根外文件");
     std::os::unix::fs::symlink(&outside, assets.join("link.png")).expect("建立符号链接");
     let err = verify_asset_real_path(&cap(&projects), "p-1", "assets/link.png").unwrap_err();
-    assert!(err.contains("符号链接"), "意外诊断：{err}");
+    assert!(
+        matches!(err, StoreError::Refused { ref detail } if detail.contains("符号链接")),
+        "意外诊断：{err}"
+    );
     cleanup_temp(&projects);
 }
 
@@ -317,7 +358,15 @@ fn verify_save_asset_files_prefixes_asset_key_and_skips_lexical_invalid() {
 
     let doc_assets = json!({ "byId": { "a1": { "relPath": "assets/a1.png" } } });
     let err = verify_save_asset_files(&cap(&projects), "p-1", &doc_assets).unwrap_err();
-    assert!(err.contains("资产 a1"), "诊断缺资产键：{err}");
+    assert!(
+        matches!(err, StoreError::Contextual { .. }),
+        "包装应保留来源链：{err:?}"
+    );
+    assert!(
+        matches!(err.root(), StoreError::NotFound { .. }),
+        "根因应为缺失类别：{err:?}"
+    );
+    assert!(err.to_string().contains("资产 a1"), "诊断缺资产键：{err}");
     cleanup_temp(&projects);
 }
 

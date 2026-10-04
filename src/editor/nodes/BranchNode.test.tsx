@@ -9,7 +9,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import { BRANCH_OPTION_HANDLE_PREFIX } from '../graphRules'
-import BranchNode from './BranchNode'
+import { BranchNode } from './BranchNode'
 import type { BranchFlowNode } from './types'
 
 vi.mock('@xyflow/react', async (importOriginal) => {

@@ -54,19 +54,23 @@ describe('listChatModels（§6 模型选择器：三层过滤的枚举）', () =
     ).toEqual(new Set(['openai']))
   })
 
-  it('keyEnc 密文随 provider 透传；非 pw1 envelope 的值丢弃', () => {
+  it('keyEnc 密文随 provider 透传；非 envelope 前缀的值丢弃', () => {
+    // pw2（v2：迭代派生 + provider AAD 绑定，issue #392）与存量 pw1
+    // 均透传——升级后前端不得丢弃新前缀密文
     const s = normalizeSettings({
       providers: [
-        { id: 'openai', keyEnc: 'pw1:0123:abcd' },
-        { id: 'volcengine-ark', keyEnc: 'plaintext-key' },
+        { id: 'openai', keyEnc: 'pw2:600000:openai:0123:abcd' },
+        { id: 'volcengine-ark', keyEnc: 'pw1:0123:abcd' },
+        { id: 'my-relay', keyEnc: 'plaintext-key' },
       ],
     })
     expect(s.providers.find((p) => p.id === 'openai')?.keyEnc).toBe(
+      'pw2:600000:openai:0123:abcd',
+    )
+    expect(s.providers.find((p) => p.id === 'volcengine-ark')?.keyEnc).toBe(
       'pw1:0123:abcd',
     )
-    expect(
-      s.providers.find((p) => p.id === 'volcengine-ark')?.keyEnc,
-    ).toBeUndefined()
+    expect(s.providers.find((p) => p.id === 'my-relay')?.keyEnc).toBeUndefined()
     expect(listChatModels(s).every((o) => !o.key.includes('keyEnc'))).toBe(true)
   })
 })

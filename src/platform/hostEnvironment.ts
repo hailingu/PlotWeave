@@ -12,14 +12,13 @@
  * 探测读调用时刻的全局 window、不缓存——与被取代的各处实时判定同语义。
  */
 
+import { isTauriRuntime } from '../ipc/runtime'
+
 /** 宿主类别。 */
 export type HostKind = 'tauri' | 'swift' | 'browser'
 
 /** 宿主探测窗口的最小形状（测试可传字面量对象驱动）。 */
-export interface HostProbeWindow {
-  __TAURI_INTERNALS__?: unknown
-  __pwNativeHost?: unknown
-}
+export type HostProbeWindow = Record<string, unknown>
 
 /** 原生外壳注入的宿主标记载荷（kind 字面量即契约全部）。 */
 export interface NativeHostMarker {
@@ -37,8 +36,11 @@ function isSwiftMarker(value: unknown): value is NativeHostMarker {
 /** 识别宿主类别：优先级 tauri > swift > browser；无窗口按纯浏览器。 */
 export function detectHostKind(probe?: HostProbeWindow): HostKind {
   const w: HostProbeWindow =
-    probe ?? (typeof window === 'undefined' ? {} : (window as HostProbeWindow))
-  if (w.__TAURI_INTERNALS__ !== undefined) return 'tauri'
+    probe ??
+    (typeof window === 'undefined'
+      ? {}
+      : (window as unknown as HostProbeWindow))
+  if (isTauriRuntime(w)) return 'tauri'
   if (isSwiftMarker(w.__pwNativeHost)) return 'swift'
   return 'browser'
 }

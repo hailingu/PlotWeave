@@ -17,6 +17,7 @@ interface RenameDialogProps {
   readonly onConfirm: (name: string) => void
 }
 
+/** 重命名对话框（§3.2）：Enter 提交 / Esc 取消，输入初值为当前项目名。 */
 export function RenameDialog({
   currentName,
   onCancel,
@@ -90,6 +91,8 @@ interface ConfirmDeleteDialogProps {
   readonly onConfirm: () => void
 }
 
+/** 不可逆操作的确认对话框（§3.2）：title/message 泛化承载——首页删项目
+ * 与资产库删资产共用；原生 confirm 在 Tauri WKWebView 不可用（见模块头）。 */
 export function ConfirmDeleteDialog({
   title,
   message,

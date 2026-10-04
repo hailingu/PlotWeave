@@ -10,7 +10,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useAiSessionPersistence } from './useAiSessionPersistence'
-import { persistedEntries, type AiSession, type ThreadEntry } from './session'
+import {
+  persistedEntries,
+  type AiSession,
+  type ThreadEntry,
+} from '../../ai/session'
 
 const entry = (id: number, text: string): ThreadEntry => ({
   id,

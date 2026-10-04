@@ -48,11 +48,11 @@ describe('projectAssets 内存回退：mediaUrl', () => {
       'reference',
     )
     const asset = await projectAssets.importFromLibrary('p-1', lib.id)
-    const url = await projectAssets.mediaUrl('p-1', asset)
+    const url = await projectAssets.mediaUrl('p-1', asset.id)
     expect(url.startsWith('blob:')).toBe(true)
-    await expect(
-      projectAssets.mediaUrl('p-1', { ...asset, id: 'pa-gone' }),
-    ).rejects.toThrow(/不在本会话内存/)
+    await expect(projectAssets.mediaUrl('p-1', 'pa-gone')).rejects.toThrow(
+      /不在本会话内存/,
+    )
   })
 
   it('源库资产删除后项目媒体 URL 仍解析（拷贝语义 §7.3，issue #8）', async () => {
@@ -63,7 +63,7 @@ describe('projectAssets 内存回退：mediaUrl', () => {
     )
     const asset = await projectAssets.importFromLibrary('p-1', lib.id)
     await libraryStore.remove(lib.id)
-    await expect(projectAssets.mediaUrl('p-1', asset)).resolves.toMatch(
+    await expect(projectAssets.mediaUrl('p-1', asset.id)).resolves.toMatch(
       /^blob:/,
     )
   })

@@ -43,10 +43,12 @@ pub struct ProjectInfo {
 pub struct ProjectFile {
     #[serde(rename = "schemaVersion")]
     pub schema_version: u32,
-    /// 信封判型发现文件缺 schemaVersion（按形状判为 v1，§11 第 0 步）：
-    /// IPC 标记由前端 repaired 检测消费（载荷额外键使规范化比较必然不等，
-    /// 触发回写补盖版本号）——否则文件永久无版本，违反 §10.5/§11.1 收敛
-    /// 契约；持久化输出恒为 false（保存必盖显式版本）。
+    /// 信封形状判型标记（§11 第 0 步）：文件缺 schemaVersion 或版本字段为
+    /// 无法表达受支持/未来版本的异型值（issue #338）时按唯一信封形状判型
+    /// 交付，v1/v0 两族判型产物都打本标记。前端 repaired 检测消费（载荷
+    /// 额外键使规范化比较必然不等，触发回写补盖版本号——否则脏版本键长留
+    /// 磁盘，违反 §10.5/§11.1 收敛契约），并据以记录判型警告（「均记录
+    /// 警告」，issue #338 评审）；持久化输出恒为 false（保存必盖显式版本）。
     #[serde(default, skip_serializing_if = "is_false")]
     pub versionless: bool,
     pub project: ProjectInfo,
@@ -65,6 +67,12 @@ pub struct ProjectMeta {
     pub updated_at: String,
     pub scene_count: u64,
     pub ending_count: u64,
+    /// 损坏占位诊断（issue #123）：文件存在但不可读或信封不可判型时的
+    /// 简短文案。Some = 首页损坏占位卡（名称/统计/时间均为缺省，仅供
+    /// 定位与诊断，点击打开走 load_project 的失败横幅）；正常项目 None
+    /// 且序列化省略键（wire 形状不变）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
 }
 /// 项目名约束：非空、去空白后 ≤ 64 字符。
 pub fn sanitize_name(raw: &str) -> Result<String, String> {
@@ -117,13 +125,13 @@ pub fn new_id_with_prefix(prefix: &str) -> String {
 fn is_false(v: &bool) -> bool {
     !*v
 }
-pub fn empty_assets() -> serde_json::Value {
+pub(crate) fn empty_assets() -> serde_json::Value {
     json!({ "byId": {} })
 }
 /// 新建空项目（空画布 v1 信封），返回其摘要。
 /// 新建项目的初始 v1 文档：settings 四桶齐备（§10.5 保存边界同域）——
 /// 新建文档必须无需归一化修复即可通过 create → load → save 原始链路。
-pub fn new_project_file(id: &str, name: String, now: String) -> ProjectFile {
+pub(crate) fn new_project_file(id: &str, name: String, now: String) -> ProjectFile {
     ProjectFile {
         schema_version: 1,
         versionless: false,

@@ -2,9 +2,11 @@
 
 本文记录已关闭 issue 对设计正文的影响，供查阅实现状态与历史决策；不新增产品范围或工程门禁。
 
-核对日期：2026-09-09。范围为当时 GitHub 上全部 18 个已关闭 issue 的正文和关闭讨论（不含 PR）；代码依据为本地已合并基线 [`0ce89317e0a37e15c1610e6b2415394011072dd2`](https://github.com/hailingu/PlotWeave/commit/0ce89317e0a37e15c1610e6b2415394011072dd2)。工作区中进行中的 #44 AI 设定工具修改不纳入完成状态。本表“已实现”指已合入 `dev`，不等于已发布到 `main`。
+**覆盖截止点与维护方式（[issue #397](https://github.com/hailingu/PlotWeave/issues/397)）**：本表是 2026-09-09 的一次性核对快照，覆盖当时已关闭的 issue，合并依据上界为 PR #114；此后关闭的 issue 不在本表范围内，也不追溯补齐。这些 issue 的现状与设计结论以 GitHub issue/PR 记录、`docs/data-model/` 各主题正文及其文内「已实现／规划中」标注为准。维护触发条件：按需追加——一次变更按 `AGENTS.md` 执行流程第 7 步更新设计正文时，在同一次变更中为对应 issue 追加一行（关闭结论、正文位置、合并依据）；无设计正文影响的 issue 不追加。
 
-配套正文：[数据模型设计](data-model.md)、[UI 设计规格](ui-design.md)。表内“模型”“UI”的章节号分别指这两份文档。
+核对日期：2026-09-09。核对范围为下表所列已关闭 issue 的正文和关闭讨论（不含 PR）；代码依据为本地已合并基线 [`0ce89317e0a37e15c1610e6b2415394011072dd2`](https://github.com/hailingu/PlotWeave/commit/0ce89317e0a37e15c1610e6b2415394011072dd2)。工作区中进行中的 #44 AI 设定工具修改不纳入完成状态。本表“已实现”指已合入 `dev`，不等于已发布到 `main`。
+
+配套正文：[数据模型主题索引](data-model/README.md)、[UI 设计规格](ui-design.md)。表内“模型”的历史章节号可经[迁移对照](data-model.md)进入现行主题正文；“UI”的章节号仍指 UI 设计规格。以下历史结论与合并依据保持原记录口径。
 
 ## 逐项对照
 
@@ -45,3 +47,7 @@
 本次按 issue 关闭讨论、合并 PR 与上述代码基线交叉核对实现状态，检查正文中的当前/历史/目标标记、IPC 注册名和章节交叉引用。只修改 Markdown，没有修改业务代码、工程门禁或未关闭 issue 的设计范围。
 
 按 `AGENTS.md` 的文档路由执行结构化审阅；没有配置文档自动化检查，不新增逐字匹配正文的测试。另以 `git diff --check` 检查补丁空白错误。本次未运行源码测试、构建或 SonarQube，也未提交或推送；各 issue 中历史测试结果属于对应 PR，不能作为本次运行结果。
+
+## SwiftUI 分支导入 dev（2026-10-04）
+
+本地 `dev` 合并进 `codex/swiftui-react-flow` 时保留现行数据模型主题拆分与旧章节兼容入口，原生迁移职责同步到[总体分层](data-model/overview.md#二总体分层)、[持久化](data-model/persistence.md#十本地存储体系)和[UI §12](ui-design.md#十二macos-原生外壳改造进行中)。实现归属、FFI 保存存在性、IPC 收敛与门禁范围见[P2 合并同步](swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)，原生启动及路由验证见[开发工作流](development/workflow.md#原生画布演示与验证)。本次是既有阶段与 `dev` 的兼容性同步，P2 后续业务链路和原生视觉验收仍待续。

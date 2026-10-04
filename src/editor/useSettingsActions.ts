@@ -124,7 +124,9 @@ function documentActions(settings: ProjectSettings, patchSettings: Patch) {
       })
     },
     deleteDocument: (id: string) => {
-      if (!settings.documents) return
+      // 缺失目标（含桶缺省）零派发（PR #298 评审）：与 updateDocument 同族
+      // 守卫——过期 id 不得替换 settings 对象或入栈空操作命令
+      if (!settings.documents?.some((d) => d.id === id)) return
       patchSettings(settings, {
         ...settings,
         documents: settings.documents.filter((d) => d.id !== id),

@@ -4,6 +4,7 @@ import {
   type EdgeKind,
   type EndpointPair,
   hasAttachHost,
+  isDuplicateEdge,
   removedOptionHandles,
   SCENE_SHOT_HANDLE,
   wouldCreateCycle,
@@ -80,8 +81,9 @@ const isIntrinsicOptionIndex = (idx: unknown): idx is number =>
 
 /** 折叠校验的虚拟边：端点 + 源端口/连线类型（与 AiGraphSnapshot.edges 同形）。 */
 type VirtualEdge = EndpointPair & {
-  sourceHandle?: string | null
-  type?: string
+  // 快照边可选成员显式含 undefined（xyflow 运行态，issue #231）
+  sourceHandle?: string | null | undefined
+  type?: string | undefined
 }
 
 /** 折叠校验的虚拟图状态：随每条命令演进的最终态投影。
@@ -400,10 +402,12 @@ function foldDelete(
   st.exists.delete(id)
   for (const [ref, owner] of st.refOwner)
     if (owner === id) st.refOwner.delete(ref)
-  st.virtualEdges.forEach((e) => {
-    if (e.source === id) e.source = `__deleted__:${id}`
-    if (e.target === id) e.target = `__deleted__:${id}`
-  })
+  // 虚拟删除与执行同口径（issue #128）：simDelete 会移除被删节点的全部
+  // 关联边，折叠态若只改写幽灵端点而保留边，hasAttachHost/成环检测仍按
+  // 旧拓扑判定——删除宿主后重连分镜、删除中间节点后连线都会被误拒
+  st.virtualEdges = st.virtualEdges.filter(
+    (e) => e.source !== id && e.target !== id,
+  )
   st.items.push({
     kind: 'delete',
     danger: true,
@@ -440,13 +444,16 @@ function edgePortOf(
     }
     const options = st.branchOptions.get(src)
     const idx = cmd.optionIndex
-    const idxValid =
-      isIntrinsicOptionIndex(idx) && idx < (options?.length ?? -1)
-    if (!idxValid || options === undefined) {
-      const pair = `${st.labels.get(src) ?? src} → ${st.labels.get(dst) ?? dst}`
-      return `optionIndex 必须是 0～${(options?.length ?? 1) - 1} 的整数：${pair}`
+    // 命中提取消解下标读取的缺失分支（issue #230）：option 同时承担
+    // 「options 存在且 idx 落界」的判定，与原 idxValid 语义等价
+    if (isIntrinsicOptionIndex(idx)) {
+      const option = options?.[idx]
+      if (option !== undefined) {
+        return { handle: branchOptionHandle(option.id), optionIndex: idx }
+      }
     }
-    return { handle: branchOptionHandle(options[idx].id), optionIndex: idx }
+    const pair = `${st.labels.get(src) ?? src} → ${st.labels.get(dst) ?? dst}`
+    return `optionIndex 必须是 0～${(options?.length ?? 1) - 1} 的整数：${pair}`
   }
   if (kind === 'attach') {
     if (st.types.get(src) !== 'scene' || st.types.get(dst) !== 'shot') {
@@ -497,13 +504,14 @@ function foldConnectEdge(
   const placementIssue = connectPlacementIssue(st, kind, src, dst, pairLabel)
   if (placementIssue) return st.fail(index, placementIssue)
   const handle = port.handle
+  // 重复连线判定复用共享谓词（issue #153）——与交互侧 useConnectionRules
+  // 及加载归一化同口径；各自诊断/修复策略（此处拒绝本批命令）保留
   if (
-    st.virtualEdges.some(
-      (e) =>
-        e.source === src &&
-        e.target === dst &&
-        (e.sourceHandle ?? null) === handle,
-    )
+    isDuplicateEdge(st.virtualEdges, {
+      source: src,
+      target: dst,
+      sourceHandle: handle,
+    })
   ) {
     return st.fail(index, `重复连线：${pairLabel}`)
   }
@@ -611,6 +619,19 @@ const FOLDERS: Record<
   upsert_document: foldUpsertDocument,
 }
 
+/** 注册表自有键查找（issue #258）：`__proto__`/`constructor` 等原型成员名是模型可
+ * 产出的合法字符串，索引读会命中继承属性，不得视为已注册。 */
+function folderOf(
+  op: unknown,
+):
+  | ((st: FoldState, cmd: Record<string, unknown>, index: number) => void)
+  | undefined {
+  return typeof op === 'string' &&
+    Object.prototype.hasOwnProperty.call(FOLDERS, op)
+    ? FOLDERS[op]
+    : undefined
+}
+
 /** 阶段 A：全量形状校验（validateAiBatch 拆出，S3776）——一次收集、一次
  * 回喂。被 delete_node 点名过的 token 归属可变（快照类型过期）：仅这些
  * token 的 update 降级为全局键判定，类型专属检查让位阶段 B；无关 update
@@ -623,7 +644,7 @@ function collectShapeIssues(st: FoldState, commands: unknown[]): void {
       continue
     }
     const cmd = raw as Record<string, unknown>
-    const folder = FOLDERS[cmd.op as string]
+    const folder = folderOf(cmd.op)
     if (!folder) {
       st.fail(index, `未知操作：${String(cmd.op)}`)
       continue
@@ -633,6 +654,8 @@ function collectShapeIssues(st: FoldState, commands: unknown[]): void {
   }
 }
 
+/** AI 批命令的整批校验入口（两阶段契约见模块头）：输入原始命令数组与
+ * 画布快照，输出预览条目、问题清单与（全合法时的）待执行命令。 */
 export function validateAiBatch(
   rawCommands: unknown,
   graph: AiGraphSnapshot,
@@ -692,7 +715,11 @@ export function validateAiBatch(
   if (st.issues.length === 0) {
     for (const [index, raw] of commands.entries()) {
       const cmd = raw as Record<string, unknown>
-      FOLDERS[cmd.op as string](st, cmd, index)
+      // 未知 op 已被阶段 A 形状校验整批拒绝（issue #230）：显式存在性
+      // 守卫替代不可达的 undefined 调用，命中即折叠
+      const folder = folderOf(cmd.op)
+      if (folder === undefined) break
+      folder(st, cmd, index)
       if (st.issues.length > 0) break
     }
   }

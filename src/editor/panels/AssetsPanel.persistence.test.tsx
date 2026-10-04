@@ -13,7 +13,7 @@ import {
 } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { invoke } from '@tauri-apps/api/core'
-import AssetsPanel from './AssetsPanel'
+import { AssetsPanel } from './AssetsPanel'
 import { libraryStore, type LibraryAsset } from '../../library/libraryStore'
 
 vi.hoisted(() => {

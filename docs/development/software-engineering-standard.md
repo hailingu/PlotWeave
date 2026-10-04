@@ -5,7 +5,7 @@ repository. Read this file together with every matching language standard.
 Like the root `AGENTS.md`, this file is written in English for agent
 interoperability.
 
-**Last reviewed**: 2026-09-03
+**Last reviewed**: 2026-10-02
 
 ## Purpose And Precedence
 
@@ -22,27 +22,50 @@ choosing one rule over another.
 ## Size And Complexity Guardrails
 
 Size is a review signal, not a substitute for judging cohesion. Crossing a
-review threshold requires an explicit decomposition review. The repository's
+review threshold requires an explicit decomposition review. The file-level
 hard caps in the root [`AGENTS.md`](../../AGENTS.md) (800 physical lines for
-maintained source files, 1800 for test files, 80 for executable units) remain
-mandatory; the review thresholds below trigger earlier, discussion-only
-attention.
+maintained source files, 1800 for test files) remain mandatory and are
+automatically enforced. The 80-code-line executable-unit cap — comments
+excluded — is a non-mandatory, review-enforced standard (issue
+[#468](https://github.com/hailingu/PlotWeave/issues/468) owner decision):
+no automated check measures it, none will be created, and a review finding
+over it requires a fix, scoped to units the reviewed change introduces or
+materially changes as specified below. The review thresholds below trigger
+earlier, discussion-only attention.
 
-| Unit | Decomposition-review threshold | Hard limit (per AGENTS.md) |
+| Unit | Decomposition-review threshold | Cap (per AGENTS.md) |
 | --- | --- | --- |
-| Maintained production source file | More than 600 physical lines | 800 physical lines |
-| Maintained test source file | More than 1,000 physical lines | 1,800 physical lines |
-| Function, method, closure, hook, component, or equivalent executable unit | More than 60 physical lines | 80 physical lines |
+| Maintained production source file | More than 600 physical lines | 800 physical lines (automated) |
+| Maintained test source file | More than 1,000 physical lines | 1,800 physical lines (automated) |
+| Function, method, closure, hook, component, or equivalent executable unit | More than 60 code lines | 80 code lines (comments excluded; review-enforced, not automated) |
 | Cyclomatic complexity, when measured by configured tooling | More than 10 | N/A — record and decompose |
 | Executable nesting depth | More than 4 levels | 6 levels |
+
+File caps are enforced by `npm run check:size`, the shared static gate, and
+CI (issue [#432](https://github.com/hailingu/PlotWeave/issues/432)). The
+[File Size Guard](file-size-guard.md) defines source discovery, the bounded
+grandfather baseline, diagnostics, and verification matrix. Executable-unit
+caps, including closures, are non-mandatory, review-enforced standards
+(issue [#468](https://github.com/hailingu/PlotWeave/issues/468) owner
+decision, 2026-10-02): no automated check measures them and no dedicated
+detection tool will be created. When review identifies an executable unit
+above 80 code lines in code the reviewed change introduces or materially
+changes, the finding requires a fix in that change — extract helpers,
+subcomponents, or fixtures until the unit complies — and cannot be
+discharged by an engineering-exception entry under
+[Incremental Adoption And Exceptions](#incremental-adoption-and-exceptions);
+an over-limit unit outside the change's scope follows that section's
+debt-recording rule instead of an out-of-scope refactor.
 
 Apply the guardrails as follows:
 
 - Count a file's complete physical span, including comments and documentation,
   because that is the amount a reviewer must navigate. Count an executable
   unit's span from its declaration or signature through the end of its
-  implementation body; preceding annotations and documentation comments are
-  outside the limit.
+  implementation body: comment lines — documentation or inline, anywhere in
+  the span — are excluded from the unit-level counts (owner decision,
+  2026-09-16) and blank lines still count; the file-level caps remain
+  complete physical spans.
 - Treat every measurement as point-in-time evidence for the inspected source
   revision. Re-run the review when an affected change crosses a threshold; do
   not continuously rewrite historical evidence after unrelated edits.
@@ -104,10 +127,54 @@ Apply the guardrails as follows:
   relative import graph of non-test `src` modules from the TypeScript AST and
   asserts that both the compile-time graph (type-only imports included) and
   the runtime graph (after type erasure) stay acyclic. Routing a cycle through
-  an `import type` edge is a violation, not a loophole.
+  an `import type` edge is a violation, not a loophole. The Rust backend
+  carries the counterpart acyclicity guard (`src-tauri/src/module_graph.rs`,
+  issue #399), so the invariant is cross-language; see
+  [rust-standard.md](rust-standard.md) "Module Boundary Guards".
+- The shell must not depend on runtime values of `editor/**` internals
+  (issue #399): `shellEditorRuntimeViolations` in `src/moduleGraph.test.ts`
+  flags any runtime edge from a non-editor module into `editor/**` and fails
+  closed on non-static dynamic imports, mirroring the model-side purity
+  guards in the opposite direction. Persisted contracts shared by the shell
+  and the editor — the AI session schema (`src/ai/session.ts`) — live in a
+  dedicated leaf module; its type-only reference to the AI batch command
+  contract (`editor/ai/commands.ts`, the issue #39 contract layer) is a
+  recorded boundary (compile-time erased, no runtime coupling). Registered
+  carve-outs, each requiring an ownership disposition or tracking issue for
+  any new entry: the composition root `App.tsx` (mounting the editor UI is
+  its job) and the demo-seed path `projectStore/seeds.ts` (sample-canvas
+  content and handle policy are editor-owned; extraction to model-shaped
+  seeds is follow-up material recorded with the issue #399 disposition).
+- Tauri IPC command names have a single frontend source of truth:
+  `src/ipc/commands.ts` (issue #394). Call sites go through the typed entry
+  `ipcInvoke` (`src/ipc/invoke.ts`), whose `cmd` parameter is narrowed to the
+  `IPC_COMMANDS` value union — a misspelled literal, an aliased import, or a
+  literal routed through a variable is rejected at compile time (PR #416
+  review 5339899090). `src/ipc/invoke.ts` is the only maintained module
+  allowed to import or re-export `@tauri-apps/api/core`; every binding shape
+  (alias, destructuring, `Promise.all`, `.then`, `export { invoke as … } from`,
+  `export * from`) must write that specifier, so the guard's
+  specifier-exclusivity assertion cannot be bypassed (review 5340648995). A
+  computed
+  (non-static) dynamic import specifier cannot be statically ruled out from
+  loading the core module and fails closed, mirroring the module-graph
+  guard's posture for unresolvable dynamic imports (review 5340318886). The contract
+  guard (`src/ipc/commands.test.ts`) parses the `generate_handler!`
+  registration list and asserts bidirectional consistency — no constant
+  without a registration, no registration without a frontend consumer, no
+  duplicate values, and no string literal in invoke-call position. Renaming
+  or removing a command must update both sides in the same change; a silent
+  one-sided edit fails the compiler or the guard.
 - Cross-module calls must use the owning module's public API. Do not import its
   internal persistence models, framework objects, mutable state, or private
   helpers.
+- Tauri runtime detection has one frontend source of truth:
+  `isTauriRuntime()` in `src/ipc/runtime.ts` (issue [#473](https://github.com/hailingu/PlotWeave/issues/473)).
+  This SDK-free leaf checks IPC bridge property presence and safely returns
+  false without `window`; consumers retain their existing snapshot or call-time
+  checks. `src/ipc/runtimeBoundary.test.ts` parses maintained modules with the
+  TypeScript AST and rejects sentinel identifiers or literals outside that leaf,
+  excluding comments and test fixtures.
 - Translate external request, response, database, and provider types at the
   boundary. Do not let them become the repository-wide domain model by
   convenience.
@@ -119,6 +186,9 @@ Apply the guardrails as follows:
 - Start with the simplest direct design that preserves the required boundary.
   Introduce an abstraction only for demonstrated variation, independent
   lifecycle, external I/O, reusable policy, or a necessary test seam.
+- Follow the [duplication policy and measured baseline](duplication-policy.md)
+  (issue #504) when adding or extracting repeated implementations; distinguish
+  source CPD metrics from approximate test-scaffolding similarity.
 - Interfaces, protocols, and traits belong at the boundary that consumes the
   behavior. Do not create one interface per concrete type or a factory for a
   single direct construction path without an identified variation.
@@ -211,15 +281,24 @@ the stated problem and forces, not by matching a class diagram mechanically.
 
 ## Incremental Adoption And Exceptions
 
-New code must comply immediately. Existing code is assessed when it is
-materially changed. Do not expand an unrelated task solely to remediate an old
-threshold unless the approved scope includes that refactor; record the observed
-debt, its affected path or symbol, and the reason it remains out of scope in
-the pull request that touched the unit.
+New code must comply immediately with the mandatory guardrails — the automated
+file caps. The executable-unit cap instead follows its review-enforced SHOULD
+semantics stated above: a new unit should comply from creation, and a review
+finding on it requires a fix in that change. Existing code is assessed when it
+is materially changed. Do not expand an unrelated task solely to remediate an
+old threshold unless the approved scope includes that refactor; record the
+observed debt, its affected path or symbol, and the reason it remains out of
+scope in the pull request that touched the unit.
 
-The hard limits in the root `AGENTS.md` (800/1800/80, with grandfathering at
-the recorded count) cannot be waived here. For any other guardrail in this
-standard, an engineering exception must be recorded in the pull request that
+The file-level hard limits in the root `AGENTS.md` (800/1800, with
+grandfathering at the recorded count) cannot be waived here. The 80-code-line
+executable-unit cap is governed by issue
+[#468](https://github.com/hailingu/PlotWeave/issues/468): it is
+review-enforced, so a review finding over it — on a unit the change
+introduces or materially changes — requires a fix, not an exception record;
+an unrelated pre-existing over-limit unit is recorded debt under the
+paragraph above, not an exception. For any other guardrail in this standard, an engineering exception
+must be recorded in the pull request that
 introduces or retains the exceptional unit, with: the exact rule and affected
 path or symbol; the measured value or structural condition; why the unit
 remains cohesive or why compliance is unsafe now; the risks of retaining it;

@@ -13,6 +13,7 @@ import {
   type EntityTokenScope,
 } from './entityFields'
 import { plainObject } from './patchShape'
+import { DOCUMENT_BODY_MAX_CHARS, textBudgetIssue } from './textBudget'
 
 /**
  * AI 设定实体命令（upsert_character / upsert_location）与设定文档命令
@@ -43,7 +44,7 @@ export interface EntityFoldHost {
   /** 既有文档 id → 标题与正文字数（issue 56）：upsert_document 的 entityId
    * 解析、预览标签与 body 全文替换的字数信号消费；文档不建虚拟投影
    * （无批内 ref 可指向文档）。 */
-  documents: Map<string, { title: string; bodyLength?: number }>
+  documents: Map<string, { title: string; bodyLength?: number | undefined }>
   /** 本批新建的虚拟投影 id：仅可经声明的 ref 别名解析，不得作为引用
    * token 直接命中桶位（执行层只解析别名表，直接放行会落盘悬空绑定）。
    * 显式集合而非前缀判断——持久化 id 可能与虚拟 id 同形。 */
@@ -90,7 +91,7 @@ function reasonOf(cmd: Record<string, unknown>): string {
 }
 
 /** fields 值形状检查：name 与本种类可选字段（character.bio / location.note）
- * 在场时须为字符串。 */
+ * 在场时须为字符串且不超过自由文本体积预算（issue #170）。 */
 function appendShapeIssues(
   issues: string[],
   kind: EntityKind,
@@ -102,6 +103,10 @@ function appendShapeIssues(
   const optional = fields[optionalKey]
   if (optional !== undefined && typeof optional !== 'string') {
     issues.push(`${optionalKey} 须为字符串`)
+  }
+  for (const key of ['name', optionalKey]) {
+    const budget = textBudgetIssue(key, fields[key])
+    if (budget !== null) issues.push(budget)
   }
 }
 
@@ -225,7 +230,9 @@ function foldCreateEntity(
   const normalized = normalizeEntityFields(kind, fields)
   const label = ENTITY_KIND_LABELS[kind]
   const virtualId = virtualEntityIdOf(st, index)
-  bucketOf(st, kind).set(virtualId, normalized.name)
+  // create 模式已由 entityFieldsIssue 保证 name 为非空字符串；?? 兜底仅
+  // 满足索引读取的缺失分支（issue #230），不可达
+  bucketOf(st, kind).set(virtualId, normalized.name ?? '')
   st.virtualEntityIds.add(virtualId)
   if (refName !== '') st.entityRefs.set(refName, { kind, id: virtualId })
   st.items.push({
@@ -338,6 +345,7 @@ export function documentFieldsIssue(
     issues.push('title 须为字符串')
   if (fields.body !== undefined && typeof fields.body !== 'string')
     issues.push('body 须为字符串')
+  appendDocumentBudgetIssues(issues, fields)
   appendRelatedIdsIssues(issues, fields.relatedIds)
   const title = typeof fields.title === 'string' ? fields.title.trim() : ''
   if (mode === 'create' && title === '')
@@ -350,7 +358,25 @@ export function documentFieldsIssue(
   return issues.length > 0 ? `文档字段错误：${issues.join('；')}` : null
 }
 
-/** relatedIds 条目形状检查（阶段 A）：数组且每项为 {kind, id} 完整对。 */
+/** 文档字段的体积预算检查（documentFieldsIssue 拆出，S3776；issue #170）：
+ * title 按普通自由文本域；body 定位长篇正文，适用分级后的文档预算——
+ * 超限整批拒绝，不截断。 */
+function appendDocumentBudgetIssues(
+  issues: string[],
+  fields: Record<string, unknown>,
+): void {
+  const titleBudget = textBudgetIssue('title', fields.title)
+  if (titleBudget !== null) issues.push(titleBudget)
+  const bodyBudget = textBudgetIssue(
+    'body',
+    fields.body,
+    DOCUMENT_BODY_MAX_CHARS,
+  )
+  if (bodyBudget !== null) issues.push(bodyBudget)
+}
+
+/** relatedIds 条目形状检查（阶段 A）：数组且每项为 {kind, id} 完整对；
+ * 成员未知自有键整批拒绝（issue #140，与 AI 命令列表成员同一政策）。 */
 function appendRelatedIdsIssues(issues: string[], related: unknown): void {
   if (related === undefined) return
   if (!Array.isArray(related)) {
@@ -367,6 +393,14 @@ function appendRelatedIdsIssues(issues: string[], related: unknown): void {
       issues.push(`relatedIds[${i}].kind 须为 character 或 location`)
     } else if (typeof id !== 'string' || id.trim() === '') {
       issues.push(`relatedIds[${i}].id 须为非空白字符串`)
+    }
+    const unknown = Object.keys(item as Record<string, unknown>).filter(
+      (k) => k !== 'kind' && k !== 'id',
+    )
+    if (unknown.length > 0) {
+      issues.push(
+        `relatedIds[${i}] 含未知字段：${unknown.join('、')}（成员允许：kind、id）`,
+      )
     }
   })
 }

@@ -13,14 +13,18 @@
   --text-primary: #1d1d1f;
   --text-secondary: #8e8e93;
 
-  /* 品牌与状态（浅色下加深以满足对比度） */
+  /* 品牌与状态（浅色端相对深色端加深收敛对比度差距：默认外观白字对渐变
+   * 青端实测浅/深 2.488:1 / 1.765:1，仍低于 4.5:1 参考——issue #351 登记，
+   * more 下按 §2.6 翻黑达标） */
   --accent: #e0176e;
   --accent-alt: #00b3d8;
   --danger: #d70015;
   --brand-gradient: linear-gradient(120deg, var(--accent-alt), var(--accent));
 
-  /* 填充与描边 */
+  /* 填充与描边（tertiary 比 quaternary 更实一档，组件悬停提亮用，
+   * issue #265） */
   --fill-quaternary: rgba(0, 0, 0, 0.06);
+  --fill-tertiary: rgba(0, 0, 0, 0.1);
   --border-hairline: rgba(0, 0, 0, 0.12);
 
   /* 画布：网点与 sequence 连线（§4.4 中性灰贝塞尔） */
@@ -30,6 +34,17 @@
   /* 关键操作按钮：浅色 = 深底浅字，深色 = 浅底深字 */
   --control-primary-bg: #1d1d1f;
   --control-primary-fg: #ffffff;
+
+  /* 海报悬浮菜单钮配对令牌（issue #261，§3.2 悬停 ⋯ 与右键同源）：浮于
+   * 海报内容层之上的窗口层控件，前景走 --text-primary，背景/描边配对随
+   * 外观切换——此前背景恒白而前景随外观，暗色下 hover 对比度仅 1.12:1。
+   * 浅色基线与修复前字面量逐位相同（视觉零变化）；暗色面与 --surface-card
+   * 深色变体同源，白系描边承载与恒深底海报（织线兜底 #1a1a1e / 损坏占位
+   * #232326）的分离。半透明面在任意明暗海报上的对比度按纯黑/纯白最劣
+   * 合成 ≥ 4.5:1（homeTokens.test.ts 最劣合成用例钉住）。 */
+  --poster-menu-bg: rgba(255, 255, 255, 0.82);
+  --poster-menu-bg-hover: #ffffff;
+  --poster-menu-border: transparent;
 
   /* 节点家族材质（§4.1，issue #107）：内容层恒定令牌，浅/深外观不切换——
    * 纸面 = 编剧侧案头物件，石板 = 生成侧监视器质感，是「形态即语义」的
@@ -85,9 +100,26 @@
   --on-saturated: #ffffff;
   --on-brand: #ffffff;
 
-  /* 连线选项胶囊底：基线走品牌渐变；more 下按 §2.6「背景近实色」收敛为
+  /* 危险动作前景（issue #240）：danger 实底上的确认/删除文本（AI 批次删除
+   * 确认按钮、设定集/资产条目删除悬停），与 on-brand 分立的危险语义。恒定
+   * 白与重构前逐位相同（视觉零变化）；承载面是饱和动作色（浅 #d70015 /
+   * 深 #ff6961），浅色下白字 ≈ 5.4:1，深色下 ≈ 2.8:1——后者作为已知边界
+   * 记录（issue #240 明示不宣称对比度违约），不在 more 对比度契约内。 */
+  --on-danger: #ffffff;
+
+  /* 错误横幅配色（issue #318）：App 退出冲刷横幅与编辑器保存/导入/生成
+   * 失败横幅共用（.pw-error-banner），经语义令牌进入 sheetTokens 全表
+   * 契约与配对契约（fg/bg 四环境 ≥ 4.5:1，≈10.5:1）。双外观恒定——取值
+   * 与既有字面色逐位一致（视觉零变化），横幅不随外观/对比度变体切换是
+   * 保留的视觉边界；配色变更需另按设计决策确认。 */
+  --error-banner-bg: #5c1d1d;
+  --error-banner-fg: #ffe3e3;
+
+  /* 品牌渐变胶囊底（branch 连线选项胶囊、大纲集选中胶囊；issue #240 起
+   * 面板侧复用）：基线走品牌渐变；more 下按 §2.6「背景近实色」收敛为
    * 实色 accent——渐变内部中段因 sRGB 伽马凸性对黑字会跌到 ~3.7:1（两端
-   * 达标不代表内部达标，见 nodeTokens.test.ts 渐变采样用例）。 */
+   * 达标不代表内部达标，见 nodeTokens.test.ts 渐变采样用例与
+   * panelsTokens.test.ts 配对采样用例）。 */
   --edge-label-bg: var(--brand-gradient);
 
   /* 失效引用角标斜纹（§4.3） */
@@ -107,8 +139,6 @@
   --branch-frame: rgba(0, 0, 0, 0.3); /* 虚线「未定」框 */
   --branch-opt-bg: rgba(0, 0, 0, 0.05);
   --branch-opt-text: #3a3a3c;
-  --branch-addopt-border: rgba(0, 0, 0, 0.22);
-  --branch-dim: var(--text-secondary);
 
   /* 圆角（§2.5） */
   --radius-sm: 4px;
@@ -135,6 +165,7 @@
     --danger: #ff6961;
 
     --fill-quaternary: rgba(255, 255, 255, 0.1);
+    --fill-tertiary: rgba(255, 255, 255, 0.16);
     --border-hairline: rgba(255, 255, 255, 0.14);
 
     --canvas-dot: rgba(255, 255, 255, 0.1);
@@ -142,14 +173,17 @@
     --control-primary-bg: #f2f2f7;
     --control-primary-fg: #1d1d1f;
 
+    /* 海报悬浮菜单钮（issue #261）：深色面 + 白系描边，hover 实色提亮 */
+    --poster-menu-bg: rgba(38, 38, 44, 0.94);
+    --poster-menu-bg-hover: #3a3a40;
+    --poster-menu-border: rgba(255, 255, 255, 0.14);
+
     /* 分支家族跟随画布外观切到深色画布变体（issue #107） */
     --branch-bg: transparent;
     --branch-text: #f5f5f7;
     --branch-frame: rgba(235, 235, 245, 0.35);
     --branch-opt-bg: rgba(255, 255, 255, 0.08);
     --branch-opt-text: rgba(245, 245, 247, 0.92);
-    --branch-addopt-border: rgba(235, 235, 245, 0.3);
-    --branch-dim: rgba(235, 235, 245, 0.45);
 
     color-scheme: dark;
   }
@@ -162,6 +196,7 @@
     --material-sidebar: var(--surface-window);
     --text-secondary: #48484d;
     --fill-quaternary: rgba(0, 0, 0, 0.12);
+    --fill-tertiary: rgba(0, 0, 0, 0.18);
     --border-hairline: rgba(0, 0, 0, 0.35);
     --canvas-dot: rgba(0, 0, 0, 0.2);
 
@@ -179,20 +214,27 @@
     --on-brand: #000000; /* 黑在渐变两端与徽标色上均 ≥ 4.5:1（最紧 4.52:1） */
     --edge-label-bg: var(--accent); /* 实色底：黑字浅 4.55 / 深 5.77:1 */
     --branch-frame: rgba(0, 0, 0, 0.6);
-    --branch-addopt-border: rgba(0, 0, 0, 0.55);
+
+    /* 海报悬浮菜单钮（issue #261）：§2.6 背景近实色 + 明确描边（hover
+     * 值本身已实色，不重声明） */
+    --poster-menu-bg: #ffffff;
+    --poster-menu-border: rgba(0, 0, 0, 0.35);
   }
 
   @media (prefers-color-scheme: dark) {
     :root {
       --text-secondary: #d2d2d7;
       --fill-quaternary: rgba(255, 255, 255, 0.18);
+      --fill-tertiary: rgba(255, 255, 255, 0.26);
       --border-hairline: rgba(255, 255, 255, 0.4);
       --canvas-dot: rgba(255, 255, 255, 0.22);
 
       /* 分支族跟随画布外观：仅分支令牌随外观分块升档（石板已在上方外块处理） */
       --branch-frame: rgba(235, 235, 245, 0.7);
-      --branch-addopt-border: rgba(235, 235, 245, 0.65);
-      --branch-dim: rgba(235, 235, 245, 0.6);
+
+      /* 海报悬浮菜单钮（issue #261）：近实色 + 描边随外观分块加强 */
+      --poster-menu-bg: #26262c;
+      --poster-menu-border: rgba(255, 255, 255, 0.4);
     }
   }
 }
@@ -204,6 +246,9 @@
     --surface-card: #ffffff;
     --material-titlebar: #f8f8fa;
     --material-sidebar: #f0f0f5;
+
+    /* 海报悬浮菜单钮（issue #261）：半透明面退化为实色（hover 值已实色） */
+    --poster-menu-bg: #ffffff;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -211,6 +256,8 @@
       --surface-card: #26262c;
       --material-titlebar: #1c1c20;
       --material-sidebar: #1a1a1f;
+
+      --poster-menu-bg: #26262c;
     }
   }
 

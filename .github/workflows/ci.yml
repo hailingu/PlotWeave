@@ -1,0 +1,110 @@
+# PR 检查（issue #228）：面向 dev / main 的持续集成——版本化路由检查
+#（AGENTS.md Scope Routing）在 GitHub 上有独立、绑定提交 SHA 的记录，
+# 不再只依赖调用者本机环境。工具版本复用 .nvmrc / rust-toolchain.toml。
+# SonarQube 扫描保留在本机门禁（scripts/sonar-quality-gate.sh）——Sonar
+# 服务在本机，GitHub 托管 runner 不可达；CI 不重复扫描也不削弱本地
+# 门禁（覆盖率与 Sonar 证据由本地门禁日志保留）。
+name: ci
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Scope Routing「src/** 与根前端清单」+「.githooks/scripts/sonar 配置」行
+  frontend:
+    name: frontend（src/** 与 scripts 行）
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: format:check（src 行）
+        run: npm run format:check
+      - name: lint 零警告（src 行；与本地门禁同口径）
+        run: npm run lint -- --max-warnings=0
+      - name: 严格索引类型检查（src 行，issues #230/#231；与本地门禁同口径）
+        run: npm run typecheck:strict
+      - name: 维护源码文件规模（issue #432；含 Rust 与 scripts）
+        run: npm run check:size
+      - name: build（src 行）
+        run: npm run build
+      - name: test（src 行）
+        run: npm test
+      - name: scripts/.githooks 行
+        run: npm test -- scripts
+
+  # Scope Routing「src-tauri/**」行（工作目录 src-tauri）
+  rust:
+    name: rust（src-tauri/**）
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      # 元守卫使用 Node 校验版本化 JSON 基线，复用仓库钉版工具链。
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # rustup 按 rust-toolchain.toml 自动解析并安装钉版工具链（1.95.0 +
+      # rustfmt/clippy/llvm-tools 组件）——单一事实源在 rust-toolchain.toml，
+      # 不在此重复（macos-15 runner 预装 rustup）
+      - name: 安装钉版 Rust 工具链（rust-toolchain.toml）
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+            crates
+      # 原生宿主共享的内核与 C ABI 独立成 workspace；迁出后仍运行路由检查。
+      - name: crates cargo fmt --check
+        working-directory: crates
+        run: cargo fmt --check
+      - name: crates cargo clippy --all-targets -- -D warnings
+        working-directory: crates
+        run: cargo clippy --all-targets -- -D warnings
+      - name: crates cargo test
+        working-directory: crates
+        run: cargo test
+      - name: cargo fmt --check
+        working-directory: src-tauri
+        run: cargo fmt --check
+      - name: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+      # 模块图守卫元检查（issues #471/#495）：cargo test 后 lib 目标已热；
+      # 核对版本化注册名称与实际通过结果，拒绝挂载丢失及 ignored 用例。
+      # 串行挂在本任务，不进 frontend 任务的并行 vitest 套件（冷 cargo 构建
+      # 会饿死兄弟子进程测试）。
+      - name: 模块图守卫元检查（issue #471）
+        run: sh scripts/check-rust-module-graph-guard.sh
+
+  # SwiftUI 的既定 Xcode 26.6 / macOS 26 SDK 与其它任务分别固定。
+  native:
+    name: native（native/**）
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: 验证 P1 钉版 Xcode
+        run: test "$(xcodebuild -version | head -n 1)" = "Xcode 26.6"
+      - name: build:native-canvas
+        run: npm run build:native-canvas
+      - name: Swift 与 WKWebView 回归
+        run: xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test

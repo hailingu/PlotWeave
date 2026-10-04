@@ -3,7 +3,7 @@
  * 句柄的同步改写、匿名端口句柄剥离、孤儿边判定、重复节点/边 id 重发、
  * 剧情流成环与 attach 宿主唯一隔离、逻辑重复边隔离。
  */
-import { branchOptionIdOf, SCENE_SHOT_HANDLE } from '../editor/graphRules'
+import { branchOptionIdOf, SCENE_SHOT_HANDLE } from './graphSemantics'
 import { isPlainObject } from './jsonGuards'
 import { uid } from '../uid'
 import type { BranchEdge, BranchSpec, StoryEdge, StoryNode } from './document'

@@ -7,7 +7,7 @@ import {
 } from 'react'
 import { PW_ENTITY_MIME, type EntityDragPayload } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
-import SettingsDetailForm from './SettingsDetailForm'
+import { SettingsDetailForm } from './SettingsDetailForm'
 import type { DocumentEntity, ProjectSettings } from '../settings'
 import type { SettingsActions } from './settingsActions'
 
@@ -258,7 +258,7 @@ function DocumentRow({
 }
 
 /** 设定集分段内容：角色 / 地点 / 文档三桶（issue 56 增文档，issue 95 增详情编辑）。 */
-export default function SettingsList({
+export function SettingsList({
   settings,
   actions,
   onOpenDocument,

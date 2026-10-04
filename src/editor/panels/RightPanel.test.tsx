@@ -2,7 +2,8 @@
 /**
  * 编辑器右栏组件测试：检查器五类节点的只读字段派生（含失效引用）、
  * ✦AI 会话的引导态/模型选择、纯文本问答、读工具就地回喂循环、
- * 写工具 → 预览卡 → 执行/两步删除确认/忽略/失败回执、围栏批次回退。
+ * 写工具 → 预览卡 → 执行/两步删除确认/忽略（含校验失败卡，issue #151）/
+ * 失败回执、围栏批次回退。
  * llmChat 打桩（不触 IPC），settingsStore.load 打桩喂配置。
  */
 import {
@@ -23,12 +24,12 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react'
-import RightPanel from './RightPanel'
+import { RightPanel, type RightPanelAiProps } from './RightPanel'
 import { llmChat, type AssistantMessage } from '../ai/chat'
 import type { ChatMessage } from '../ai/chat'
 import type { BatchValidation, ValidatedCommand } from '../ai/commands'
 import { nodeFieldTableText } from '../ai/nodeFields'
-import { normalizeAiSession, type AiSession } from '../ai/session'
+import { normalizeAiSession, type AiSession } from '../../ai/session'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import type { ProjectSettings } from '../settings'
@@ -88,7 +89,14 @@ const APP_NO_KEY = {
   defaultChat: null,
 } as unknown as AppSettings
 
-function setup(over: Partial<Parameters<typeof RightPanel>[0]> = {}) {
+/** 右栏 props 装配（issue #401）：布局/检查器字段平铺，AI 字段收进
+ * `ai` 聚合；over 的 `ai` 覆盖测试指定的聚合成员。 */
+type RightPanelOver = Partial<Omit<Parameters<typeof RightPanel>[0], 'ai'>> & {
+  readonly ai?: Partial<RightPanelAiProps>
+}
+
+function setup(over: RightPanelOver = {}) {
+  const { ai: aiOver, ...rest } = over
   const spies = {
     onResize: vi.fn(),
     onTabChange: vi.fn(),
@@ -104,10 +112,19 @@ function setup(over: Partial<Parameters<typeof RightPanel>[0]> = {}) {
       width={320}
       tab="inspector"
       settings={SETTINGS}
-      projectId="p-right-panel"
-      canvasDigest="SNAPSHOT"
-      {...spies}
-      {...over}
+      onResize={spies.onResize}
+      onTabChange={spies.onTabChange}
+      ai={{
+        projectId: 'p-right-panel',
+        canvasDigest: 'SNAPSHOT',
+        onOpenSettings: spies.onOpenSettings,
+        onValidateAi: spies.onValidateAi,
+        onValidateCommands: spies.onValidateCommands,
+        onReadNode: spies.onReadNode,
+        onApplyAiBatch: spies.onApplyAiBatch,
+        ...aiOver,
+      }}
+      {...rest}
     />,
   )
   return spies
@@ -157,7 +174,7 @@ describe('RightPanel 检查器', () => {
         width={320}
         tab="inspector"
         settings={SETTINGS}
-        projectId="p-right-panel"
+        ai={{ projectId: 'p-right-panel' }}
         onResize={vi.fn()}
         onTabChange={vi.fn()}
         selectedNode={mk('dialogue', {
@@ -211,10 +228,7 @@ describe('RightPanel 检查器', () => {
 })
 
 /** 切到 AI 分段并等配置加载完。 */
-async function toAiTab(
-  app: AppSettings,
-  over: Partial<Parameters<typeof RightPanel>[0]> = {},
-) {
+async function toAiTab(app: AppSettings, over: RightPanelOver = {}) {
   vi.spyOn(settingsStore, 'load').mockResolvedValue(app)
   const spies = setup({ tab: 'ai', ...over })
   await screen.findByLabelText('AI 对话输入')
@@ -342,10 +356,9 @@ describe('RightPanel ✦AI 会话历史保持', () => {
       width: 320,
       tab: 'ai' as const,
       settings: SETTINGS,
-      projectId: 'p-right-panel',
       onResize: vi.fn(),
       onTabChange: vi.fn(),
-      canvasDigest: 'SNAPSHOT',
+      ai: { projectId: 'p-right-panel', canvasDigest: 'SNAPSHOT' },
     }
     const view = render(<RightPanel {...props} />)
     await screen.findByLabelText('AI 对话输入')
@@ -376,10 +389,9 @@ describe('RightPanel ✦AI 面板高度链（issue 58）', () => {
         width: 320,
         tab: 'ai' as const,
         settings: SETTINGS,
-        projectId: 'p-right-panel',
         onResize: vi.fn(),
         onTabChange: vi.fn(),
-        canvasDigest: 'SNAPSHOT',
+        ai: { projectId: 'p-right-panel', canvasDigest: 'SNAPSHOT' },
       }
       const view = render(<RightPanel {...props} />)
       await screen.findByLabelText('AI 对话输入')
@@ -453,8 +465,8 @@ describe('RightPanel ✦AI 改动预览卡', () => {
       expect.objectContaining({ op: 'create_node' }),
     ])
     expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
-    // 当前会话内执行的卡才宣称 ⌘Z 整批撤销；回执作为持久历史不携带该宣称
-    expect(screen.getAllByText(/⌘Z 可整批撤销/)).toHaveLength(1)
+    // 执行卡提示不承诺 ⌘Z 当前可撤销（issue #347）；回执详测见独立套件
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
   })
 
   it('含删除批次：执行按钮两步武装确认', async () => {
@@ -518,6 +530,42 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     ).toBe(true)
   })
 
+  it('校验失败的预览卡可忽略：卡片消失、不执行、处置落盘且会话其余条目保留（issue #151）', async () => {
+    const saved: AiSession[] = []
+    const onSaveSession = vi.fn(async (session: AiSession) => {
+      saved.push(session)
+    })
+    const spies = await toAiTab(APP_WITH_KEY, {
+      ai: { onSaveSession },
+    })
+    spies.onValidateCommands.mockReturnValue(
+      validationOf({ ok: false, issues: [{ index: 0, message: '不能自环' }] }),
+    )
+    llmChatMock.mockResolvedValue(batchReply())
+    send('加')
+    expect(await screen.findByText('第 1 条：不能自环')).toBeTruthy()
+    // 失败卡仍不可执行（校验闭环不变），但忽略不再被校验状态禁用
+    expect(
+      (screen.getByRole('button', { name: '✓ 执行改动' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '忽略' }))
+    expect(screen.queryByLabelText('AI 改动预览')).toBeNull()
+    expect(spies.onApplyAiBatch).not.toHaveBeenCalled()
+    // 处置持久化：最后一次落盘会话中该卡为 dismissed；清空的是单卡处置，
+    // 会话其余条目（用户提问等）保留——不是整段会话丢失
+    await waitFor(() =>
+      expect(
+        saved[saved.length - 1].entries.find((e) => e.card)?.card?.status,
+      ).toBe('dismissed'),
+    )
+    expect(
+      saved[saved.length - 1].entries.some(
+        (e) => e.kind === 'msg' && e.role === 'user',
+      ),
+    ).toBe(true)
+  })
+
   it('围栏批次回退：无工具服务走 ```json 文本协议，围栏文本不上屏', async () => {
     const spies = await toAiTab(APP_WITH_KEY)
     spies.onValidateAi.mockReturnValue(validationOf())
@@ -546,9 +594,10 @@ describe('RightPanel ✦AI 执行回执落盘时序', () => {
       saved.push(session)
     })
     const spies = await toAiTab(APP_WITH_KEY, {
-      whenCanvasCommitted,
-      aiRevision: 4,
-      onSaveAiSession: onSaveSession,
+      ai: {
+        commitIdentity: { aiRevision: 4, whenCanvasCommitted },
+        onSaveSession,
+      },
     })
     spies.onValidateCommands.mockReturnValue(validationOf())
     llmChatMock.mockResolvedValue(batchReply())
@@ -584,6 +633,30 @@ describe('RightPanel ✦AI 执行回执落盘时序', () => {
       ).toBe(true)
     })
   })
+
+  it('无提交身份的隔离装配：执行成功立即 executed，卡片不携带对账运行时标注', async () => {
+    // issue #139 保留的隔离测试能力：省略 commitIdentity（无画布确认等待器
+    // 也无批次计数）时执行不进入未确认态——不标注 uncommitted、不记录
+    // aiRevisionAfter，落盘即最终事实。
+    const saved: AiSession[] = []
+    const onSaveSession = vi.fn(async (session: AiSession) => {
+      saved.push(session)
+    })
+    const spies = await toAiTab(APP_WITH_KEY, {
+      ai: { onSaveSession },
+    })
+    spies.onValidateCommands.mockReturnValue(validationOf())
+    llmChatMock.mockResolvedValue(batchReply())
+    send('加一场戏')
+    await screen.findByText('✦ 改动预览 · 1 项')
+    fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
+    expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
+    await waitFor(() => expect(saved.length).toBeGreaterThan(0))
+    const card = saved[saved.length - 1].entries.find((e) => e.card)?.card
+    expect(card?.status).toBe('executed')
+    expect(card).not.toHaveProperty('uncommitted')
+    expect(card).not.toHaveProperty('aiRevisionAfter')
+  })
 })
 
 describe('RightPanel ✦AI 回执关联剔除', () => {
@@ -600,9 +673,10 @@ describe('RightPanel ✦AI 回执关联剔除', () => {
       saved.push(session)
     })
     const spies = await toAiTab(APP_WITH_KEY, {
-      whenCanvasCommitted,
-      aiRevision: 2,
-      onSaveAiSession: onSaveSession,
+      ai: {
+        commitIdentity: { aiRevision: 2, whenCanvasCommitted },
+        onSaveSession,
+      },
     })
     spies.onValidateCommands.mockReturnValue(validationOf())
     llmChatMock.mockResolvedValue(batchReply())
@@ -663,9 +737,11 @@ describe('RightPanel ✦AI 执行卡落盘对账', () => {
   it('画布计数未达执行后计数：批次未落盘，恢复为可再次执行的待执行卡', async () => {
     const validate = vi.fn(() => validationOf())
     await toAiTab(APP_WITH_KEY, {
-      aiSession: uncommittedSession(),
-      aiRevision: 4,
-      onValidateCommands: validate,
+      ai: {
+        session: uncommittedSession(),
+        commitIdentity: { aiRevision: 4 },
+        onValidateCommands: validate,
+      },
     })
     expect(validate).toHaveBeenCalled()
     expect(screen.getByRole('button', { name: '✓ 执行改动' })).toBeTruthy()
@@ -674,8 +750,10 @@ describe('RightPanel ✦AI 执行卡落盘对账', () => {
 
   it('画布计数已达执行后计数：批次已随画布落盘，恢复为不可再执行的历史卡', async () => {
     await toAiTab(APP_WITH_KEY, {
-      aiSession: uncommittedSession(),
-      aiRevision: 5,
+      ai: {
+        session: uncommittedSession(),
+        commitIdentity: { aiRevision: 5 },
+      },
     })
     expect(screen.getByText(/历史改动/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: '✓ 执行改动' })).toBeNull()
@@ -686,17 +764,19 @@ describe('RightPanel ✦AI 执行卡落盘对账', () => {
 describe('RightPanel ✦AI 恢复卡重校验', () => {
   it('恢复的已执行卡标注为历史改动，不宣称当前撤销栈可整批撤销', async () => {
     await toAiTab(APP_WITH_KEY, {
-      aiSession: {
-        schemaVersion: 1,
-        entries: [
-          {
-            id: 1,
-            kind: 'msg',
-            role: 'assistant',
-            text: '先前的改动。',
-            card: { v: validationOf(), status: 'executed' },
-          },
-        ],
+      ai: {
+        session: {
+          schemaVersion: 1,
+          entries: [
+            {
+              id: 1,
+              kind: 'msg',
+              role: 'assistant',
+              text: '先前的改动。',
+              card: { v: validationOf(), status: 'executed' },
+            },
+          ],
+        },
       },
     })
     expect(screen.getByText(/已执行/)).toBeTruthy()
@@ -715,19 +795,21 @@ describe('RightPanel ✦AI 恢复卡重校验', () => {
     })
     const validate = vi.fn(() => currentPreview)
     await toAiTab(APP_WITH_KEY, {
-      aiSession: {
-        schemaVersion: 1,
-        entries: [
-          {
-            id: 1,
-            kind: 'msg',
-            role: 'assistant',
-            text: '已恢复的改动。',
-            card: { v: stalePreview, status: 'pending' },
-          },
-        ],
+      ai: {
+        session: {
+          schemaVersion: 1,
+          entries: [
+            {
+              id: 1,
+              kind: 'msg',
+              role: 'assistant',
+              text: '已恢复的改动。',
+              card: { v: stalePreview, status: 'pending' },
+            },
+          ],
+        },
+        onValidateCommands: validate,
       },
-      onValidateCommands: validate,
     })
 
     expect(validate).toHaveBeenCalledWith([deleteCommand])
@@ -748,9 +830,11 @@ describe('RightPanel ✦AI 会话保存错误', () => {
   it('带保存错误进入面板时首帧即重试落盘，成功后提示消除', async () => {
     const onSaveSession = vi.fn(() => Promise.resolve())
     await toAiTab(APP_WITH_KEY, {
-      aiSession: sessionOf('已恢复的历史'),
-      aiSessionError: 'Error: 磁盘已满',
-      onSaveAiSession: onSaveSession,
+      ai: {
+        session: sessionOf('已恢复的历史'),
+        sessionError: 'Error: 磁盘已满',
+        onSaveSession,
+      },
     })
 
     expect(onSaveSession).toHaveBeenCalledWith(sessionOf('已恢复的历史'))
@@ -762,8 +846,7 @@ describe('RightPanel ✦AI 会话保存错误', () => {
   it('无错误时挂载不重复保存初始会话', async () => {
     const onSaveSession = vi.fn().mockResolvedValue(undefined)
     await toAiTab(APP_WITH_KEY, {
-      aiSession: sessionOf('已恢复的历史'),
-      onSaveAiSession: onSaveSession,
+      ai: { session: sessionOf('已恢复的历史'), onSaveSession },
     })
     expect(onSaveSession).not.toHaveBeenCalled()
   })
@@ -771,10 +854,12 @@ describe('RightPanel ✦AI 会话保存错误', () => {
   it('读取失败的空回退会话禁止挂载落盘（原文件可能可恢复）', async () => {
     const onSaveSession = vi.fn().mockResolvedValue(undefined)
     await toAiTab(APP_WITH_KEY, {
-      aiSession: { schemaVersion: 1, entries: [] },
-      aiSessionError: 'Error: 会话文件损坏',
-      aiSessionRetryable: false,
-      onSaveAiSession: onSaveSession,
+      ai: {
+        session: { schemaVersion: 1, entries: [] },
+        sessionError: 'Error: 会话文件损坏',
+        sessionRetryable: false,
+        onSaveSession,
+      },
     })
     expect(onSaveSession).not.toHaveBeenCalled()
     expect(screen.getByText(/聊天记录保存失败/)).toBeTruthy()
@@ -787,15 +872,19 @@ describe('RightPanel ✦AI 会话保存错误', () => {
       width: 320,
       tab: 'ai' as const,
       settings: SETTINGS,
-      projectId: 'p-right-panel',
       onResize: vi.fn(),
       onTabChange: vi.fn(),
-      canvasDigest: 'SNAPSHOT',
+      ai: { projectId: 'p-right-panel', canvasDigest: 'SNAPSHOT' },
     }
     const view = render(<RightPanel {...props} />)
     await screen.findByLabelText('AI 对话输入')
 
-    view.rerender(<RightPanel {...props} aiSessionError="Error: 磁盘已满" />)
+    view.rerender(
+      <RightPanel
+        {...props}
+        ai={{ ...props.ai, sessionError: 'Error: 磁盘已满' }}
+      />,
+    )
 
     expect(await screen.findByText(/聊天记录保存失败/)).toBeTruthy()
     expect(screen.getByText(/磁盘已满/)).toBeTruthy()
@@ -811,18 +900,20 @@ describe('RightPanel ✦AI 恢复条目重定基', () => {
     })
     llmChatMock.mockResolvedValue(reply({ content: '收到。' }))
     await toAiTab(APP_WITH_KEY, {
-      aiSession: {
-        schemaVersion: 1,
-        entries: [
-          {
-            id: Number.MAX_SAFE_INTEGER,
-            kind: 'msg' as const,
-            role: 'user' as const,
-            text: '旧消息',
-          },
-        ],
+      ai: {
+        session: {
+          schemaVersion: 1,
+          entries: [
+            {
+              id: Number.MAX_SAFE_INTEGER,
+              kind: 'msg' as const,
+              role: 'user' as const,
+              text: '旧消息',
+            },
+          ],
+        },
+        onSaveSession,
       },
-      onSaveAiSession: onSaveSession,
     })
     send('新消息')
     expect(await screen.findByText('收到。')).toBeTruthy()
@@ -956,24 +1047,26 @@ describe('RightPanel ✦AI 重试耗尽（issue 41）', () => {
 describe('RightPanel 会话读取失败', () => {
   it('读取失败时没有发送和执行入口，不调用模型或保存，检查器仍可用', async () => {
     vi.spyOn(settingsStore, 'load').mockResolvedValue(APP_WITH_KEY)
-    const onSaveAiSession = vi.fn().mockResolvedValue(undefined)
+    const onSaveSession = vi.fn().mockResolvedValue(undefined)
     const spies = setup({
       tab: 'ai',
-      aiSessionLoadFailed: true,
-      aiSession: {
-        schemaVersion: 1,
-        entries: [
-          {
-            id: 1,
-            kind: 'msg',
-            role: 'assistant',
-            text: '待执行',
-            card: { v: validationOf(), status: 'pending' },
-          },
-        ],
+      ai: {
+        sessionLoadFailed: true,
+        session: {
+          schemaVersion: 1,
+          entries: [
+            {
+              id: 1,
+              kind: 'msg',
+              role: 'assistant',
+              text: '待执行',
+              card: { v: validationOf(), status: 'pending' },
+            },
+          ],
+        },
+        sessionError: '读取文件失败',
+        onSaveSession,
       },
-      aiSessionError: '读取文件失败',
-      onSaveAiSession,
     })
     expect(screen.queryByLabelText('AI 对话输入')).toBeNull()
     expect(screen.queryByRole('button', { name: /执行/ })).toBeNull()
@@ -981,6 +1074,48 @@ describe('RightPanel 会话读取失败', () => {
     fireEvent.click(screen.getByRole('button', { name: '检查器' }))
     expect(spies.onTabChange).toHaveBeenCalledWith('inspector')
     expect(llmChatMock).not.toHaveBeenCalled()
-    expect(onSaveAiSession).not.toHaveBeenCalled()
+    expect(onSaveSession).not.toHaveBeenCalled()
+  })
+})
+
+/** issue #347 执行卡回执语义：已执行卡提示只陈述「曾执行成功」，不承诺
+ * ⌘Z 当前可整批撤销——撤销/重做或后续编辑都会改变栈顶，撤销不回写卡片。
+ * 独立有界套件：既有改动预览卡 describe 闭包超限受 grandfathering 保护，
+ * 不得增长（AGENTS.md 尺寸上限）。 */
+describe('RightPanel ✦AI 执行卡回执语义（issue #347）', () => {
+  it('当前会话执行卡提示为纯回执，无 ⌘Z 撤销宣称', async () => {
+    const spies = await toAiTab(APP_WITH_KEY)
+    spies.onValidateCommands.mockReturnValue(validationOf())
+    llmChatMock.mockResolvedValue(batchReply())
+    send('加一场戏')
+    expect(await screen.findByText('✦ 改动预览 · 1 项')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
+    expect(await screen.findByText(/✓ 已执行 1 项改动/)).toBeTruthy()
+    // 精确匹配卡片提示，区别于回执 note「✓ 已执行 1 项改动。」
+    expect(screen.getAllByText('✓ 已执行')).toHaveLength(1)
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
+  })
+
+  it('恢复会话剥除旧版回执的 ⌘Z 宣称，非回执 note 逐字保留', async () => {
+    await toAiTab(APP_WITH_KEY, {
+      ai: {
+        session: {
+          schemaVersion: 1,
+          entries: [
+            { id: 1, kind: 'note', text: '✓ 已执行 2 项改动，⌘Z 可整批撤销。' },
+            {
+              id: 2,
+              kind: 'note',
+              text: '✓ 已执行 2 项改动，用户继续手动调整。',
+            },
+          ],
+        },
+      },
+    })
+    expect(screen.getByText('✓ 已执行 2 项改动。')).toBeTruthy()
+    expect(
+      screen.getByText('✓ 已执行 2 项改动，用户继续手动调整。'),
+    ).toBeTruthy()
+    expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
   })
 })

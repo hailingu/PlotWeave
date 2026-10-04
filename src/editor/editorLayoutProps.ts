@@ -1,7 +1,9 @@
 /**
  * 编辑器装配层与布局层的共享契约：EditorWindow 组装各域 hook 后按域分组
- * 下传，EditorLayout 与区域子组件各自解构所需字段。独立成模块，避免
- * EditorLayout 与区域子组件之间形成类型循环依赖。
+ * 下传，EditorLayout 解构所需字段。区域子组件（EditorCanvasRegion、
+ * EditorOverlays）不再接收本接口，各自以收窄接口声明真实消费的输入
+ * （issue #103/#104）。独立成模块，避免 EditorLayout 与区域子组件之间
+ * 形成类型循环依赖。
  */
 import type { RefObject } from 'react'
 import type { useCommandHistory } from './history'
@@ -11,21 +13,29 @@ import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
 import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPanels } from './useEditorPanels'
 import type { EditorPersistence } from './useEditorPersistence'
-import type { AiSession } from './ai/session'
+import type { AiCommitIdentity } from './ai/commitIdentity'
+import type { AiSession } from '../ai/session'
 
 /** 命令栈 hook 的返回值（撤销/重做可用态与入口）。 */
 export type CommandHistory = ReturnType<typeof useCommandHistory>
 
-/** EditorLayout 及其区域子组件的完整输入，由 EditorWindow 一次装配下传。 */
+/** EditorLayout 的完整输入，由 EditorWindow 一次装配下传；区域子组件
+ * 另以各自的收窄接口接收所需域（issue #103/#104）。 */
 export interface EditorLayoutProps {
   /** 打开的项目：名称用于标题栏与导出文件名，视口决定首开 fitView。 */
   readonly project: EditorProjectContent
   readonly onBackHome: () => void
   readonly onRenameProject: (name: string) => void
-  readonly onOpenSettings?: () => void
+  // 可显式 undefined = 未接线（issue #231）
+  readonly onOpenSettings?: (() => void) | undefined
   /** 画布容器：新节点落点中心换算与拖放命中读它。 */
   readonly canvasRef: RefObject<HTMLDivElement>
   readonly doc: EditorDocument
+  /** AI 执行卡的提交身份（§12.2 / issue #139）：装配层把 doc.aiRevision 与
+   * persistence.whenCanvasCommitted 捆成单一嵌套对象——批次计数必带、画布
+   * 确认等待器可选，类型层禁止「有等待器无计数」的误配（缺身份的未确认卡
+   * 落盘后无法与画布对账，重开可能重复应用）。 */
+  readonly commitIdentity: AiCommitIdentity
   readonly panels: EditorPanels
   readonly persistence: EditorPersistence
   readonly history: CommandHistory

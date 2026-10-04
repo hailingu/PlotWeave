@@ -24,7 +24,7 @@ function openErrorText(
 /** 打开失败警示横幅（issue #98；自 HomePage 拆出以守祖父化组件行数，
  * PR #110 评审）：role=alert 即时播报；非阻塞，停留至下一次打开尝试
  * 或新建成功，不拦截首页任何操作（docs/ui-design.md §3.2）。 */
-export default function OpenErrorBanner({
+export function OpenErrorBanner({
   error,
   projects,
 }: {

@@ -33,9 +33,10 @@ export function outlineSplicePlan(
   const spineRows = (group?.rows ?? []).filter(
     (r) => r.id !== draggedId && r.level < 3,
   )
-  for (let i = spineRows.length - 1; i >= 0; i--) {
-    const plan = planSpliceIntoSpine(edges, draggedId, spineRows[i].id, 'after')
-    if (plan) return { plan, anchorId: spineRows[i].id }
+  // 逆序值迭代取代下标读取（issue #230）：语义与原逆向下标循环一致
+  for (const row of [...spineRows].reverse()) {
+    const plan = planSpliceIntoSpine(edges, draggedId, row.id, 'after')
+    if (plan) return { plan, anchorId: row.id }
   }
   return null
 }

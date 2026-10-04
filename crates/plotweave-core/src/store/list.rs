@@ -1,6 +1,6 @@
-//! 列表读取与多版本封套解析（数据模型 §11 第 0 步）：信封判型（显式
-//! 版本家族一致性 / 无版本形状判型）、旧扁平 v0 包装、宽容提取与
-//! 列表摘要派生（graph 统计、排序、占位名）。
+//! 列表读取与多版本封套解析（数据模型 §11 第 0 步）：信封判型（数值版本
+//! 主张家族一致性 / 主张缺失或异型时的形状判型）、旧扁平 v0 包装、宽容
+//! 提取与列表摘要派生（graph 统计、排序、占位名）。
 
 use std::collections::HashSet;
 
@@ -8,7 +8,10 @@ use cap_std::fs::Dir as CapDir;
 use serde_json::json;
 
 use crate::isotime::{iso8601_to_epoch_millis, iso_from_ms};
-use crate::store::persist::read_verified_file;
+use crate::store::error::StoreError;
+use crate::store::persist::{
+    is_project_temp_target, projects_op_lock, read_verified_file, sweep_orphan_temp_files,
+};
 use crate::store::types::{empty_assets, validate_id, ProjectFile, ProjectInfo, ProjectMeta};
 /// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
 /// 场景数（分支剧情的叶子场景即结局）。attach 下挂边（索引卡 → 分镜卡，
@@ -66,6 +69,33 @@ pub(crate) fn read_meta(id: &str, file: &ProjectFile) -> ProjectMeta {
         updated_at: file.project.updated_at.clone(),
         scene_count,
         ending_count,
+        diagnostic: None,
+    }
+}
+/// 损坏占位摘要（issue #123）：文件存在但不可读或不可解析时不再静默
+/// 跳过——name 留空（展示文案归前端损坏卡变体），updated_at 缺省使其
+/// 排序列表末尾，统计为 0，诊断随 IPC 交付。
+fn broken_meta(id: &str, reason: String) -> ProjectMeta {
+    ProjectMeta {
+        id: id.to_string(),
+        name: String::new(),
+        updated_at: String::new(),
+        scene_count: 0,
+        ending_count: 0,
+        diagnostic: Some(reason),
+    }
+}
+/// 读取失败能否作为损坏占位呈现（issue #123）：底层 I/O 失败（权限/
+/// 磁盘故障等，非 NotFound）是用户可定位的项目文件状态 → 占位并附
+/// 诊断；信任链保护性拒绝（符号链接/异型条目/读取前替换）与并发删除
+/// （NotFound）不是——前者是外部/攻击形态（§10.2 维持不可见），后者
+/// 的文件已不存在。返回 None 即维持静默跳过。
+fn read_failure_diagnostic(e: &StoreError) -> Option<String> {
+    match e.root() {
+        StoreError::Io { source, .. } if source.kind() != std::io::ErrorKind::NotFound => {
+            Some(format!("项目文件不可读：{e}"))
+        }
+        _ => None,
     }
 }
 /// 旧扁平格式（无 schemaVersion）→ v0 信封：节点/边上移 graph，
@@ -110,19 +140,27 @@ fn wrap_legacy(id: &str, v: &serde_json::Value) -> ProjectFile {
 fn sort_metas_by_recency(metas: &mut [ProjectMeta]) {
     metas.sort_by_key(|m| std::cmp::Reverse(iso8601_to_epoch_millis(&m.updated_at)));
 }
-/// 列出全部项目，按更新时间新→旧排序。扫描相对受信根锚定句柄执行。
 /// list_projects 的可测内核（给定已验证的 projects 根句柄）。目录扫描逐条
-/// 跳过符号链接/异型项/坏文件（单条坏数据不阻断列表），扫描与读取全程
-/// 句柄相对——projects/ 路径名被并发整体替换也不会列出替换树的条目；
-/// 读取走 read_verified_file 的身份绑定，校验通过后被并发替换为符号链接
+/// 跳过符号链接/异型项（单条坏数据不阻断列表），JSON 损坏或信封不可判型
+/// 的项目以损坏占位摘要返回而非静默消失（issue #123）——用户能定位文件、
+/// 点击打开仍得到 load_project 的完整诊断；底层 I/O 读取失败同款占位，
+/// 信任链拒绝与并发删除（NotFound）仍跳过。扫描与读取全程句柄相对——
+/// projects/ 路径名被并发整体替换也不会列出替换树的条目；读取走
+/// read_verified_file 的身份绑定，校验通过后被并发替换为符号链接
 /// 或另一文件时读到的仍是校验时的同一实体，否则跳过该条目。
-pub fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, String> {
+pub fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, StoreError> {
+    // 崩溃遗留孤儿临时文件清扫（issue #148，§10.2 资源回收边界）：持
+    // projects 操作锁与项目文档原子写串行（PR #217 第三轮评审）——挂起
+    // 恢复/时钟前跳使进行中写入的临时文件显得超龄时，清扫也不会插入
+    // 排他创建与 rename 之间；fail-soft 不阻断列表
+    let _op = projects_op_lock();
+    sweep_orphan_temp_files(root, "项目目录", is_project_temp_target);
     let mut metas: Vec<ProjectMeta> = Vec::new();
     for entry in root
         .entries()
-        .map_err(|e| format!("读取项目目录失败：{e}"))?
+        .map_err(|e| StoreError::io("读取项目目录失败", e))?
     {
-        let entry = entry.map_err(|e| format!("遍历项目目录失败：{e}"))?;
+        let entry = entry.map_err(|e| StoreError::io("遍历项目目录失败", e))?;
         let file_name = entry.file_name();
         let Some(name) = file_name.to_str() else {
             continue;
@@ -134,12 +172,17 @@ pub fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, String> {
             continue;
         }
         // §10.2 目录扫描：校验 + 打开 + 读取绑定同一实体，绝不跟随替换
-        let Ok(text) = read_verified_file(root, name) else {
-            continue;
+        let meta = match read_verified_file(root, name) {
+            Ok(text) => match parse_file(id, &text) {
+                Ok(file) => read_meta(id, &file),
+                Err(e) => broken_meta(id, format!("项目文件损坏：{e}")),
+            },
+            Err(e) => match read_failure_diagnostic(&e) {
+                Some(reason) => broken_meta(id, reason),
+                None => continue,
+            },
         };
-        if let Ok(file) = parse_file(id, &text) {
-            metas.push(read_meta(id, &file));
-        }
+        metas.push(meta);
     }
     sort_metas_by_recency(&mut metas);
     Ok(metas)
@@ -192,62 +235,103 @@ fn parse_v1_envelope(value: &serde_json::Value) -> ProjectFile {
             .unwrap_or(serde_json::Value::Null),
     }
 }
-/// 显式 schemaVersion 的家族一致性校验与解析（§11 第 0 步）：0 属旧扁平
-/// 家族、≥1 属 v1 家族，版本号与信封形状两族矛盾即拒绝并保留原文件——
-/// 否则 v1 StoryNode 会被送进旧版迁移器，且每次 v0 加载都被视为已迁移
-/// 并回写，可能摧毁节点字段；显式 0 且保持扁平形状时包装为 v0 信封。
+/// 规范十进制整数字符串判定（§11 第 0 步字符串条款）：可选负号 + 无前导
+/// 零的 ASCII 数字串。命中即构成带内版本主张——字符串不是信封契约的版本
+/// 载体，主张一律拒绝而非按形状降级；非规范数字串（"01"/"1.0"/" 1" 等）
+/// 与 null/布尔/容器同属无法表达受支持/未来版本的异型值，走形状判型。
+fn is_canonical_integer_string(s: &str) -> bool {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    let bytes = digits.as_bytes();
+    if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    bytes.len() == 1 || bytes[0] != b'0'
+}
+/// 显式 schemaVersion 键的判型（§11 第 0 步）：按值是否构成版本主张分派——
+/// 数值主张定族：0 属旧扁平家族、≥1 属 v1 家族，版本号与信封形状两族矛盾
+/// 即拒绝并保留原文件——否则 v1 StoryNode 会被送进旧版迁移器，且每次 v0
+/// 加载都被视为已迁移并回写，可能摧毁节点字段；显式 0 且保持扁平形状时
+/// 包装为 v0 信封。number 但非法（负数/小数/越界）直接拒绝，不得按形状
+/// 降级；规范整数字符串主张非契约载体，一律拒绝（未来串按形状降级会在
+/// 回写中丢失升级判据）；其余无法表达受支持/未来版本的异型值（null/布尔/
+/// 容器/非规范数字串）不构成主张，与缺失版本号同款按唯一信封形状判型
+/// （issue #338）。
 fn parse_explicit_envelope(
     id: &str,
     value: serde_json::Value,
     v1_keys: usize,
     legacy_keys: usize,
-) -> Result<ProjectFile, String> {
-    let Some(version) = value.get("schemaVersion").and_then(|sv| sv.as_u64()) else {
-        return Err("schemaVersion 不是非负整数，无法判别文档信封（已保留原文件）".into());
-    };
-    if version == 0 {
-        if v1_keys > 0 {
-            return Err(
-                "文档信封自相矛盾：schemaVersion 0 却携带 v1 专属键（已保留原文件）".into(),
-            );
+    has_legacy_list: bool,
+) -> Result<ProjectFile, StoreError> {
+    match value.get("schemaVersion") {
+        Some(serde_json::Value::Number(n)) => {
+            let Some(version) = n.as_u64() else {
+                return Err(StoreError::CorruptEnvelope(
+                    "schemaVersion 是非法数值（负数/小数/越界），无法判别文档信封（已保留原文件）",
+                ));
+            };
+            if version == 0 {
+                if v1_keys > 0 {
+                    return Err(StoreError::CorruptEnvelope(
+                        "文档信封自相矛盾：schemaVersion 0 却携带 v1 专属键（已保留原文件）",
+                    ));
+                }
+                return Ok(wrap_legacy(id, &value));
+            }
+            if legacy_keys > 0 {
+                return Err(StoreError::CorruptEnvelope(
+                    "文档信封自相矛盾：schemaVersion ≥ 1 却携带旧扁平特征键（已保留原文件）",
+                ));
+            }
+            if version > u64::from(u32::MAX) {
+                // 超出 u32 的版本号无法无损载入信封：截断回退会把未来文档当作当前
+                // v1 交付，保存时按 v1 回写并丢弃未知字段——拒绝加载并保留原文件
+                return Err(StoreError::CorruptEnvelope(
+                    "schemaVersion 超出可表示范围（疑似未来版本），拒绝加载并保留原文件",
+                ));
+            }
+            Ok(parse_v1_envelope(&value))
         }
-        return Ok(wrap_legacy(id, &value));
+        Some(serde_json::Value::String(s)) if is_canonical_integer_string(s) => {
+            Err(StoreError::CorruptEnvelope(
+                "schemaVersion 是规范整数字符串而非数值版本号（已保留原文件）",
+            ))
+        }
+        _ => classify_versionless(id, value, v1_keys, legacy_keys, has_legacy_list),
     }
-    if legacy_keys > 0 {
-        return Err(
-            "文档信封自相矛盾：schemaVersion ≥ 1 却携带旧扁平特征键（已保留原文件）".into(),
-        );
-    }
-    if version > u64::from(u32::MAX) {
-        // 超出 u32 的版本号无法无损载入信封：截断回退会把未来文档当作当前
-        // v1 交付，保存时按 v1 回写并丢弃未知字段——拒绝加载并保留原文件
-        return Err("schemaVersion 超出可表示范围（疑似未来版本），拒绝加载并保留原文件".into());
-    }
-    Ok(parse_v1_envelope(&value))
 }
-/// 无版本号信封的形状判型（§11 第 0 步）：v1 专属键（project/graph/assets）
-/// 独占时赋予待修复的有效版本 1；旧扁平特征键（≥2 个且含 nodes/edges）独占
-/// 时包装为 v0 信封；混合或两组特征均不足的损坏文档拒绝加载并保留原文件——
-/// 绝不把保持 v1 形状的文档误包装成空 v0 图后回写摧毁原画布。
+/// 无版本主张信封的形状判型（§11 第 0 步，键缺失与异型版本值共用）：
+/// v1 专属键（project/graph/assets）独占时赋予待修复的有效版本 1；旧扁平
+/// 特征键（≥2 个且含 nodes/edges）独占时包装为 v0 信封；混合或两组特征均
+/// 不足的损坏文档拒绝加载并保留原文件——绝不把保持 v1 形状的文档误包装成
+/// 空 v0 图后回写摧毁原画布。两族判型产物都打 versionless 标记：形状判型
+/// 的文档本就缺有效版本主张，前端据此记录判型警告（评审修复，§11 第 0 步
+/// 「均记录警告」，issue #338）——v0 迁移回写本身即落定，标记只承载警告。
 fn classify_versionless(
     id: &str,
     value: serde_json::Value,
     v1_keys: usize,
     legacy_keys: usize,
     has_legacy_list: bool,
-) -> Result<ProjectFile, String> {
+) -> Result<ProjectFile, StoreError> {
     if v1_keys > 0 && legacy_keys == 0 {
         let mut file = parse_v1_envelope(&value);
         file.versionless = true;
         return Ok(file);
     }
     if v1_keys == 0 && legacy_keys >= 2 && has_legacy_list {
-        return Ok(wrap_legacy(id, &value));
+        let mut file = wrap_legacy(id, &value);
+        file.versionless = true;
+        return Ok(file);
     }
-    Err("无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）".into())
+    Err(StoreError::CorruptEnvelope(
+        "无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）",
+    ))
 }
-/// 解析项目文件（§11 第 0 步信封判型）：显式 `schemaVersion` 定族并经
-/// 家族一致性校验（parse_explicit_envelope），缺失时按顶层键形状特征判型
+/// 解析项目文件（§11 第 0 步信封判型）：显式 `schemaVersion` 按值构成的主张
+/// 判型——数值定族并经家族一致性校验（parse_explicit_envelope），非法数值/
+/// 规范整数字符串拒绝；版本主张缺失（键缺失）或无法表达受支持/未来版本的
+/// 异型值（null/布尔/容器/非规范数字串）按顶层键形状特征判型
 /// （classify_versionless）；两族矛盾或不可判型一律拒绝并保留原文件。
 /// 缺失/异型的 project 元数据（id/时间戳等）以空串**原样透传**，不在读取
 /// 侧预合成——预合成会让前端 repaired 检测看不见缺陷（载荷已是修好的
@@ -255,8 +339,8 @@ fn classify_versionless(
 /// 未动过的项目顶到最近列表顶端。修复与落盘归前端 §11.1 第 2 步
 /// （受信 id 覆盖、时间戳回退链，随 repaired 标志回写）；列表排序把
 /// 不可解析时间戳稳定排最后（sort_metas_by_recency）。
-pub(crate) fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+pub(crate) fn parse_file(id: &str, text: &str) -> Result<ProjectFile, StoreError> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(StoreError::CorruptJson)?;
     let v1_keys = ["project", "graph", "assets"]
         .iter()
         .filter(|k| value.get(*k).is_some())
@@ -267,7 +351,7 @@ pub(crate) fn parse_file(id: &str, text: &str) -> Result<ProjectFile, String> {
         .count();
     let has_legacy_list = value.get("nodes").is_some() || value.get("edges").is_some();
     Ok(match value.get("schemaVersion") {
-        Some(_) => parse_explicit_envelope(id, value, v1_keys, legacy_keys)?,
+        Some(_) => parse_explicit_envelope(id, value, v1_keys, legacy_keys, has_legacy_list)?,
         None => classify_versionless(id, value, v1_keys, legacy_keys, has_legacy_list)?,
     })
 }

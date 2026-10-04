@@ -82,6 +82,13 @@
   background: var(--fill-quaternary);
 }
 
+/* 键盘调宽入口的可见焦点（issue #264），样式口径同 React Flow 控件 */
+.pw-panel-resizer:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--fill-quaternary);
+}
+
 /* ---- 分段控件（原生 fieldset，重置 UA 边框/外距） ---- */
 .pw-seg {
   display: flex;
@@ -184,18 +191,6 @@
   flex-direction: column;
   gap: 1px;
   min-width: 0;
-}
-
-.pw-settings-item-name {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.pw-settings-item-note {
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-secondary);
 }
 
 /* ---- 资产库（§8.1 六分类） ---- */
@@ -303,8 +298,8 @@
 }
 
 .pw-outline-ep-btn.on {
-  color: #fff;
-  background: var(--brand-gradient);
+  color: var(--on-brand);
+  background: var(--edge-label-bg);
 }
 
 .pw-outline-ep-count {
@@ -420,7 +415,7 @@
 /* 删除类批次：确认按钮 danger 色，执行是显式动作（§6 不设自动执行） */
 .pw-ai-btn.primary.danger {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 /* ---- ✦AI 对话（§6：气泡、引导卡、输入区） ---- */
@@ -502,6 +497,21 @@
   opacity: 0.5;
 }
 
+/* 在途回合取消按钮（issue #154）：busy 时替代输入框；danger 语义 */
+.pw-ai-cancel {
+  border: none;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  background: var(--fill-quaternary);
+  color: var(--danger, var(--text-primary));
+  cursor: pointer;
+}
+
+.pw-ai-cancel:hover {
+  background: var(--fill-tertiary);
+}
+
 .pw-ai-ctx {
   font-size: 10.5px;
   color: var(--text-secondary);
@@ -536,7 +546,7 @@
 
 .pw-settings-x:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 .pw-settings-add {
@@ -655,131 +665,4 @@
 /* 会话读取失败态的设置入口行（issue #87）：错误提示与按钮的间距 */
 .pw-ai-error-actions {
   margin: 12px 4px 0;
-}
-
-/* ---- 资产库真实实现（§8.1：分类计数 → 类别内导入/缩略/改名/标签/删除） ---- */
-.pw-assets-row-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.pw-assets-open {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: none;
-  background: none;
-  border-radius: var(--radius-sm);
-  padding: 4px 6px;
-  font-size: 12px;
-  color: var(--text-primary);
-  cursor: pointer;
-  text-align: left;
-}
-
-.pw-assets-open:hover {
-  background: var(--fill-quaternary);
-}
-
-.pw-assets-import {
-  flex: none;
-  border: 1px dashed var(--border-hairline);
-  border-radius: var(--radius-sm);
-  background: none;
-  padding: 2px 8px;
-  font-size: 11.5px;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.pw-assets-import:hover {
-  color: var(--text-primary);
-  border-color: var(--accent-alt);
-}
-
-.pw-assets-import:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.pw-assets-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 6px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.pw-assets-back {
-  border: none;
-  background: none;
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  cursor: pointer;
-  padding: 2px 4px;
-}
-
-.pw-assets-back:hover {
-  color: var(--text-primary);
-}
-
-.pw-asset {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 6px;
-  border-radius: var(--radius-md);
-}
-
-.pw-asset:hover {
-  background: var(--fill-quaternary);
-}
-
-.pw-asset:hover .pw-settings-x {
-  opacity: 1;
-}
-
-.pw-asset-thumb {
-  flex: none;
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-hairline);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  background: var(--fill-quaternary);
-  color: var(--text-secondary);
-}
-
-.pw-asset-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.pw-asset-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.pw-asset-tags {
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 2px 6px;
-  font-size: 10.5px;
-  background: var(--fill-quaternary);
-  color: var(--text-secondary);
-}
-
-.pw-assets-error {
-  color: var(--danger);
 }

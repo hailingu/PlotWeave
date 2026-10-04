@@ -20,11 +20,12 @@ use crate::store::{
 };
 
 use super::ensure_project_control;
+use super::error::AssetsError;
 
 /// 项目资产 id 的持久化契约（与保存边界 `validate_save_assets` 同域，
 /// 评审修复）：非空白不透明字符串——`bad]`/Unicode/超长 id 是合法持久化
 /// 资产，此前经 project_asset_path 可显示，迁移后不得被库 id 白名单
-/// 永久拒绝。协议侧 URL 分段与 hex 编码细节归 library/media.rs。
+/// 永久拒绝。协议侧 URL 分段与 hex 编码细节归 media_protocol.rs。
 fn validate_project_asset_id(id: &str) -> Result<(), String> {
     if id.trim().is_empty() {
         return Err(format!("非法项目资产 id：{id}"));
@@ -43,7 +44,9 @@ fn validate_project_asset_id(id: &str) -> Result<(), String> {
 ///   即按不存在拒绝，别名永不复活媒体。
 ///
 /// 生命周期随应用实例：撤销等未落盘条目的残留没有请求方，不影响正确性；
-/// 应用退出自然销毁。
+/// 应用退出自然销毁。中毒后行为（issue #145）：可验证恢复——纯内存建议性
+/// 登记（文档为权威并 opportunistic 清除），map 单项 infallible 操作不会
+/// 留下结构损坏，经 `crate::lock::recover_guard` 恢复，不传播 panic。
 pub(crate) struct PendingProjectAssets {
     entries: Mutex<HashMap<(String, String), (String, String)>>,
     aliases: Mutex<HashMap<(String, String), String>>,
@@ -60,7 +63,7 @@ impl PendingProjectAssets {
     /// 登记会话新增项目资产（导入/生成内核落盘成功后调用）：value 为刚
     /// 落盘媒体的 relPath 与规范 mime，解析时仍按同域词法/mime 校验兜底。
     fn register(&self, project_id: &str, asset_id: &str, rel_path: String, mime: String) {
-        self.entries.lock().expect("项目媒体登记表被污染").insert(
+        crate::lock::recover_guard(self.entries.lock(), "项目媒体登记表").insert(
             (project_id.to_string(), asset_id.to_string()),
             (rel_path, mime),
         );
@@ -69,7 +72,7 @@ impl PendingProjectAssets {
     /// 登记加载归一化空白键重发别名（仅空白键映射，见
     /// [`register_reissued_asset_alias`]）。
     fn register_alias(&self, project_id: &str, blank_key: &str, fresh_id: &str) {
-        self.aliases.lock().expect("项目媒体登记表被污染").insert(
+        crate::lock::recover_guard(self.aliases.lock(), "项目媒体登记表").insert(
             (project_id.to_string(), fresh_id.to_string()),
             blank_key.to_string(),
         );
@@ -77,18 +80,14 @@ impl PendingProjectAssets {
 
     /// 查询重发别名（不消费）：盘上条目缺失时别名同样不得复活媒体。
     fn alias_disk_key(&self, project_id: &str, fresh_id: &str) -> Option<String> {
-        self.aliases
-            .lock()
-            .expect("项目媒体登记表被污染")
+        crate::lock::recover_guard(self.aliases.lock(), "项目媒体登记表")
             .get(&(project_id.to_string(), fresh_id.to_string()))
             .cloned()
     }
 
     /// 取走登记项（仅文档权威命中时调用，清理已完成使命的条目）。
     fn take(&self, project_id: &str, asset_id: &str) -> Option<(String, String)> {
-        self.entries
-            .lock()
-            .expect("项目媒体登记表被污染")
+        crate::lock::recover_guard(self.entries.lock(), "项目媒体登记表")
             .remove(&(project_id.to_string(), asset_id.to_string()))
     }
 
@@ -96,9 +95,7 @@ impl PendingProjectAssets {
     /// （get_asset_media_url）与随后的协议媒体请求是两次独立解析，命中即
     /// 取走会让后者在文档落盘前 404。
     fn peek(&self, project_id: &str, asset_id: &str) -> Option<(String, String)> {
-        self.entries
-            .lock()
-            .expect("项目媒体登记表被污染")
+        crate::lock::recover_guard(self.entries.lock(), "项目媒体登记表")
             .get(&(project_id.to_string(), asset_id.to_string()))
             .cloned()
     }
@@ -106,13 +103,9 @@ impl PendingProjectAssets {
     /// 清空某项目的全部登记项与别名（项目控制文件缺失/异型时调用——已删
     /// 项目的登记项/别名不得让其媒体经回退路径复活）。
     fn drain_project(&self, project_id: &str) {
-        self.entries
-            .lock()
-            .expect("项目媒体登记表被污染")
+        crate::lock::recover_guard(self.entries.lock(), "项目媒体登记表")
             .retain(|(pid, _), _| pid != project_id);
-        self.aliases
-            .lock()
-            .expect("项目媒体登记表被污染")
+        crate::lock::recover_guard(self.aliases.lock(), "项目媒体登记表")
             .retain(|(pid, _), _| pid != project_id);
     }
 }
@@ -151,10 +144,13 @@ fn checked_media_fields(
     asset_id: &str,
     rel: Option<&str>,
     mime: Option<&str>,
-) -> Result<(String, String), String> {
-    let rel = rel.ok_or_else(|| format!("资产 {asset_id} 的 relPath 缺失"))?;
+) -> Result<(String, String), AssetsError> {
+    let rel =
+        rel.ok_or_else(|| AssetsError::invalid(format!("资产 {asset_id} 的 relPath 缺失")))?;
     if !is_valid_active_asset_rel_path(rel) {
-        return Err(format!("资产 {asset_id} 的 relPath 非法：{rel}"));
+        return Err(AssetsError::invalid(format!(
+            "资产 {asset_id} 的 relPath 非法：{rel}"
+        )));
     }
     let mime = mime
         .filter(|m| is_canonical_mime(m))
@@ -174,14 +170,14 @@ pub(crate) fn resolve_project_media_entry(
     project_id: &str,
     asset_id: &str,
     pending: &PendingProjectAssets,
-) -> Result<(String, String), String> {
-    validate_id(project_id)?;
-    validate_project_asset_id(asset_id)?;
+) -> Result<(String, String), AssetsError> {
+    validate_id(project_id).map_err(AssetsError::invalid)?;
+    validate_project_asset_id(asset_id).map_err(AssetsError::invalid)?;
     if let Err(err) = ensure_project_control(projects, project_id) {
         pending.drain_project(project_id);
         return Err(err);
     }
-    let doc = load_project_file(projects, project_id)?;
+    let doc = load_project_file(projects, project_id).map_err(AssetsError::Store)?;
     if let Some(entry) = doc.assets.get("byId").and_then(|by_id| by_id.get(asset_id)) {
         let resolved = checked_media_fields(
             asset_id,
@@ -212,7 +208,7 @@ pub(crate) fn resolve_project_media_entry(
             );
         }
     }
-    Err(format!("资产不存在：{asset_id}"))
+    Err(AssetsError::missing(format!("资产不存在：{asset_id}")))
 }
 
 /// 项目媒体句柄打开（pwmedia 项目 scope，issue #31）：[`resolve_project_media_entry`]
@@ -225,9 +221,9 @@ pub(crate) fn open_project_media_with(
     project_id: &str,
     asset_id: &str,
     pending: &PendingProjectAssets,
-) -> Result<(String, cap_std::fs::File), String> {
+) -> Result<(String, cap_std::fs::File), AssetsError> {
     let (rel, mime) = resolve_project_media_entry(projects, project_id, asset_id, pending)?;
-    let file = verify_asset_real_path(projects, project_id, &rel)?;
+    let file = verify_asset_real_path(projects, project_id, &rel).map_err(AssetsError::Store)?;
     Ok((mime, file))
 }
 

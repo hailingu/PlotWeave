@@ -15,16 +15,16 @@ use cap_std::fs::Dir as CapDir;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
+use crate::assets::error::AssetsError;
 use crate::isotime::{is_canonical_utc_timestamp, now_iso};
-use crate::library::ext_for;
-use crate::library_fs::{assets_root, atomic_write_with, library_root, open_parent_dir};
-#[cfg(unix)]
-use crate::store::asset_identity;
+use crate::library_fs::{atomic_write_with, library_root, open_library_asset};
+use crate::media_format::{ext_for, ext_for_mime};
 use crate::store::{
-    asset_stat, is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound, projects_dir,
+    is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound, projects_dir, to_ipc_text,
     validate_id, verify_asset_real_path,
 };
 
+pub(crate) mod error;
 pub(crate) mod project_media;
 
 /// 新资产 id：`pa-{ms:x}-{seq:x}`（复用 store 的毫秒 + 进程内计数不碰撞内核）。
@@ -37,15 +37,14 @@ fn new_asset_id() -> String {
 /// 大小上限 + 脏条目隔离，坏数据绝不进入拷贝流程）：返回 (relPath, 规范化
 /// mime, 文件名组件)。条目缺失/条目形状非法均为显式错误。删除日志只读
 /// 告警态用不落盘读取（评审修复，PR #33 第七轮：导入是读取路径照常服务，
-/// 但不得把迁移结果写回 library.json）。
+/// 但不得把迁移结果写回 library.json）。恢复结果由冲突检查共享，不再重复恢复。
 fn find_library_entry(
     library: &CapDir,
     library_asset_id: &str,
-) -> Result<(String, String, String), String> {
-    let recovery = crate::library_journal::recover(library)?;
+    recovery: &crate::library_journal::Recovery,
+) -> Result<(String, String, String), AssetsError> {
     let read_only = recovery.read_only;
-    // 迁移/恢复诊断进结构化本机日志（评审修复，PR #33 第十一轮）：导入响应
-    // 无法携带 warnings，丢弃会让迁移落盘后的诊断永久丢失
+    // 恢复结果已报告给操作边界，随后经事件通知前端；本机日志继续保留明细
     for w in &recovery.warnings {
         eprintln!("[library] 项目导入伴随迁移/恢复诊断：{w}");
     }
@@ -65,88 +64,57 @@ fn find_library_entry(
         .and_then(|a| a.get("byId"))
         .and_then(Value::as_object)
         .and_then(|m| m.get(library_asset_id))
-        .ok_or_else(|| format!("库资产不存在：{library_asset_id}"))?;
+        .ok_or_else(|| AssetsError::missing(format!("库资产不存在：{library_asset_id}")))?;
     let rel_path = entry
         .get("relPath")
         .and_then(Value::as_str)
         .filter(|p| is_valid_asset_rel_path(p))
-        .ok_or_else(|| format!("库资产 {library_asset_id} 的 relPath 非法，拒绝导入"))?;
-    let mime_raw = entry
-        .get("mime")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("库资产 {library_asset_id} 的 mime 缺失，拒绝导入"))?;
+        .ok_or_else(|| {
+            AssetsError::invalid(format!(
+                "库资产 {library_asset_id} 的 relPath 非法，拒绝导入"
+            ))
+        })?;
+    let mime_raw = entry.get("mime").and_then(Value::as_str).ok_or_else(|| {
+        AssetsError::invalid(format!("库资产 {library_asset_id} 的 mime 缺失，拒绝导入"))
+    })?;
     let mime = mime_raw.trim().to_ascii_lowercase();
     if !is_canonical_mime(&mime) {
-        return Err(format!("库资产 {library_asset_id} 的 mime 非法，拒绝导入"));
+        return Err(AssetsError::invalid(format!(
+            "库资产 {library_asset_id} 的 mime 非法，拒绝导入"
+        )));
     }
-    let name = rel_path
-        .rsplit('/')
-        .next()
-        .ok_or_else(|| format!("库资产 {library_asset_id} 的 relPath 非法，拒绝导入"))?;
+    let name = rel_path.rsplit('/').next().ok_or_else(|| {
+        AssetsError::invalid(format!(
+            "库资产 {library_asset_id} 的 relPath 非法，拒绝导入"
+        ))
+    })?;
     Ok((rel_path.to_string(), mime, name.to_string()))
-}
-
-/// 打开库媒体文件（经 `library/assets/` 专用根句柄逐组件 no-follow 解析，
-/// 父目录链走 library_fs::open_parent_dir 共享内核）：终点必须是普通文件
-/// 且打开句柄按 (dev, ino) 与归类实体一致（Unix）——校验与打开之间被替换
-/// 即拒绝。导入拷贝与 pwmedia 媒体读取共用（issue #26 评审修复：媒体
-/// 读取侧同样不得跟随最终组件符号链接）。
-pub(crate) fn open_library_asset(
-    library: &CapDir,
-    rel_path: &str,
-) -> Result<cap_std::fs::File, String> {
-    let suffix = rel_path
-        .strip_prefix("assets/")
-        .ok_or_else(|| format!("库资产 relPath 越出 assets/：{rel_path}"))?;
-    let assets = assets_root(library)?;
-    let Some((parent, last)) = open_parent_dir(&assets, suffix)? else {
-        // 中间目录缺失：终点媒体必然不存在，导入侧为显式错误（坏数据绝不
-        // 进入拷贝流程；删除侧才按幂等处理，语义分野见 library_fs）
-        return Err(format!("资产文件不存在：{rel_path}"));
-    };
-    let md = asset_stat(&parent, &last, rel_path)?;
-    if md.file_type().is_symlink() {
-        return Err(format!("库资产路径含符号链接：{rel_path}"));
-    }
-    if !md.is_file() {
-        return Err(format!("库资产路径不是普通文件：{rel_path}"));
-    }
-    let file = parent
-        .open(&last)
-        .map_err(|e| format!("打开库资产文件失败（{rel_path}）：{e}"))?;
-    #[cfg(unix)]
-    {
-        let fm = file
-            .metadata()
-            .map_err(|e| format!("读取库资产句柄元数据失败（{rel_path}）：{e}"))?;
-        if asset_identity(&fm) != asset_identity(&md) {
-            return Err(format!("库资产文件在校验期间被替换：{rel_path}"));
-        }
-    }
-    Ok(file)
 }
 
 /// 确保子目录存在并返回身份绑定的打开句柄：缺失即创建（排他语义由后续
 /// 归类 + open_dir_bound 保证），现存必须是非符号链接的真实目录。
-fn ensure_child_dir(parent: &CapDir, name: &str, label: &str) -> Result<CapDir, String> {
+fn ensure_child_dir(parent: &CapDir, name: &str, label: &str) -> Result<CapDir, AssetsError> {
     // 总是尝试创建、容忍 AlreadyExists：先查再建留有竞态窗口——两个并发
     // 首次落盘同时观察到目录缺失时，其一的 create_dir 会撞上另一者刚建的
-    // 目录；该作业的付费生成结果不应因此丢弃。归类校验照常兜底。
+    // 目录；该作业的付费生成结果不应因此丢弃。归类校验照常兜底。本次真实
+    // 创建的条目同步宿主（issue #309）：失败拆除重建，重试重新创建并同步。
     if let Err(e) = parent.create_dir(name) {
         if e.kind() != std::io::ErrorKind::AlreadyExists {
-            return Err(format!("创建{label}失败：{e}"));
+            return Err(AssetsError::io(format!("创建{label}失败"), e));
         }
+    } else {
+        crate::store::sync_new_child_dir_host(parent, name).map_err(AssetsError::Store)?;
     }
     let md = parent
         .symlink_metadata(name)
-        .map_err(|e| format!("读取{label}元数据失败：{e}"))?;
+        .map_err(|e| AssetsError::io(format!("读取{label}元数据失败"), e))?;
     if md.file_type().is_symlink() {
-        return Err(format!("{label}是符号链接，拒绝写入"));
+        return Err(AssetsError::refused(format!("{label}是符号链接，拒绝写入")));
     }
     if !md.is_dir() {
-        return Err(format!("{label}不是目录，拒绝写入"));
+        return Err(AssetsError::refused(format!("{label}不是目录，拒绝写入")));
     }
-    open_dir_bound(parent, name, &md, label)
+    open_dir_bound(parent, name, &md, label).map_err(AssetsError::Store)
 }
 
 /// 流式拷贝进目标目录（原子落盘，与 store::atomic_write 同构）。
@@ -154,29 +122,30 @@ fn copy_into_dir(
     src: &mut cap_std::fs::File,
     dir: &CapDir,
     final_name: &str,
-) -> Result<(), String> {
+) -> Result<(), AssetsError> {
     let mut src = src;
     atomic_write_with(dir, final_name, |dst| {
         std::io::copy(&mut src, dst).map(|_| ())
     })
+    .map_err(AssetsError::Library)
 }
 
 /// 项目控制文件存在性归类校验：不存在/符号链接/非普通文件均拒绝——
 /// 不替不存在的项目建资产目录（导入与生成媒体落盘共用）。
-fn ensure_project_control(projects: &CapDir, id: &str) -> Result<(), String> {
-    validate_id(id)?;
+fn ensure_project_control(projects: &CapDir, id: &str) -> Result<(), AssetsError> {
+    validate_id(id).map_err(AssetsError::invalid)?;
     let control = format!("{id}.json");
     match projects.symlink_metadata(&control) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("项目不存在：{id}"));
+            return Err(AssetsError::missing(format!("项目不存在：{id}")));
         }
-        Err(e) => return Err(format!("读取项目文件元数据失败：{e}")),
+        Err(e) => return Err(AssetsError::io("读取项目文件元数据失败", e)),
         Ok(md) => {
             if md.file_type().is_symlink() {
-                return Err("项目文件是符号链接，拒绝写入资产".into());
+                return Err(AssetsError::refused("项目文件是符号链接，拒绝写入资产"));
             }
             if !md.is_file() {
-                return Err("项目文件不是普通文件，拒绝写入资产".into());
+                return Err(AssetsError::refused("项目文件不是普通文件，拒绝写入资产"));
             }
         }
     }
@@ -186,18 +155,23 @@ fn ensure_project_control(projects: &CapDir, id: &str) -> Result<(), String> {
 /// 库资产 → 项目资产的导入内核（给定已验证的 projects 与 library 根句柄）：
 /// 项目控制文件必须存在且通过归类校验（不替不存在的项目建资产目录）；
 /// 库条目形状校验 → 源文件身份绑定打开 → 目标目录确保 → 原子拷贝落盘 →
-/// 返回项目级 AssetRef（新 id、source=upload、规范 UTC createdAt）。
+/// 返回项目级 AssetRef（新 id、source=upload、规范 UTC createdAt）。控制
+/// 校验与资产提交经 projects 操作锁与项目删除串行（PR #224 第二轮评审：
+/// 删除持锁期间不得越过校验重建已删目录，锁序为 library→projects 单向，
+/// 本锁在调用方可能持有的库锁之后取得）。
 pub(crate) fn import_asset_from_library(
     projects: &CapDir,
     library: &CapDir,
     id: &str,
     library_asset_id: &str,
     pending: &project_media::PendingProjectAssets,
-) -> Result<Value, String> {
+    report: &mut dyn FnMut(&crate::library_journal::Recovery),
+) -> Result<Value, AssetsError> {
+    let _op = crate::store::projects_op_lock();
     ensure_project_control(projects, id)?;
     // §7.2：冲突期条目不得为导入/收藏提供复制源
-    crate::library_journal::ensure_importable(library, library_asset_id)?;
-    let (rel_path, mime, name) = find_library_entry(library, library_asset_id)?;
+    let recovery = crate::library_journal::ensure_importable(library, library_asset_id, report)?;
+    let (rel_path, mime, name) = find_library_entry(library, library_asset_id, &recovery)?;
     let mut src = open_library_asset(library, &rel_path)?;
     let project_dir = ensure_child_dir(projects, id, "项目资产根")?;
     let assets_dir = ensure_child_dir(&project_dir, "assets", "项目资产目录")?;
@@ -222,29 +196,26 @@ pub(crate) fn import_asset_from_library(
     }))
 }
 
-/// 生成媒体 MIME → 文件名扩展（生成产物没有源文件名，只按 MIME 映射；
-/// 调用方已按字节魔数定型 MIME，未知值兜底 bin）。
-fn ext_for_mime(mime: &str) -> &'static str {
-    match mime {
-        "image/png" => "png",
-        "image/jpeg" => "jpg",
-        "image/webp" => "webp",
-        "image/gif" => "gif",
-        _ => "bin",
-    }
-}
-
 /// 生成媒体落盘内核（docs/data-model.md §13 outputs 槽位的媒体侧）：
 /// 字节经原子写入进项目 `assets/`，返回 `source=generated` 的项目级
 /// AssetRef（新 id、规范 UTC createdAt）。项目控制文件必须存在且通过
-/// 归类校验（不替不存在的项目建资产目录）。
+/// 归类校验（不替不存在的项目建资产目录）。控制校验与资产提交经
+/// projects 操作锁与项目删除串行（PR #224 第二轮评审，同导入内核）。
 pub(crate) fn write_generated_asset(
     projects: &CapDir,
     id: &str,
     bytes: &[u8],
     mime: &str,
     pending: &project_media::PendingProjectAssets,
-) -> Result<Value, String> {
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value, AssetsError> {
+    let _op = crate::store::projects_op_lock();
+    // 拿到锁后复验取消（PR #224 第四轮评审）：锁等待期间用户可取消——
+    // 前端已丢弃响应，此处继续写盘只会留下不可达资产（≤32 MiB）。旧
+    // check-to-write 窗口极小，操作锁把它放大到整个并发项目操作时长。
+    if cancelled() {
+        return Err(AssetsError::refused("已取消"));
+    }
     ensure_project_control(projects, id)?;
     let project_dir = ensure_child_dir(projects, id, "项目资产根")?;
     let assets_dir = ensure_child_dir(&project_dir, "assets", "项目资产目录")?;
@@ -315,46 +286,69 @@ pub(crate) fn validate_project_asset_with(
     root: &CapDir,
     id: &str,
     asset: &Value,
-) -> Result<Value, String> {
-    let normalized = validate_asset_ref(asset)?;
+) -> Result<Value, AssetsError> {
+    let normalized = validate_asset_ref(asset).map_err(AssetsError::invalid)?;
     let rel_path = normalized
         .get("relPath")
         .and_then(Value::as_str)
-        .ok_or("资产 relPath 缺失")?;
+        .ok_or_else(|| AssetsError::invalid("资产 relPath 缺失"))?;
     let asset_id = normalized
         .get("id")
         .and_then(Value::as_str)
-        .ok_or("资产 id 缺失")?;
-    verify_asset_real_path(root, id, rel_path).map_err(|e| format!("资产 {asset_id}：{e}"))?;
+        .ok_or_else(|| AssetsError::invalid("资产 id 缺失"))?;
+    verify_asset_real_path(root, id, rel_path)
+        .map_err(|e| AssetsError::Store(e).prefixed(format!("资产 {asset_id}")))?;
     Ok(normalized)
 }
 
 /// 库资产导入命令（§7.3 库资产进入项目 = 拷贝）：返回新 AssetRef 交前端
 /// 并入会话资产索引与引用位绑定。
 #[tauri::command]
-pub fn import_project_asset_from_library(
+pub async fn import_project_asset_from_library(
     app: AppHandle,
     id: String,
     library_asset_id: String,
 ) -> Result<Value, String> {
-    let projects = projects_dir(&app)?;
-    let library = library_root(&app)?;
-    // 库操作互斥锁（issue #25 评审修复）：导入的恢复 + 读取 + 拷贝全链路
-    // 与删除串行——import 在删除写入索引前恢复并把媒体移回原位，删除随后
-    // 提交去项索引会把已恢复的媒体孤儿化
-    let _op = crate::library_journal::library_op_lock();
-    let _file_lock = crate::library_journal::library_file_lock(&library)?;
-    let pending = app.state::<project_media::PendingProjectAssets>();
-    import_asset_from_library(&projects, &library, &id, &library_asset_id, &pending)
+    crate::blocking::run("import_project_asset_from_library", move || {
+        let projects = projects_dir(&app).map_err(to_ipc_text)?;
+        let library = library_root(&app).map_err(|e| e.to_string())?;
+        // 库操作互斥锁（issue #25 评审修复）：导入的恢复 + 读取 + 拷贝全链路
+        // 与删除串行——import 在删除写入索引前恢复并把媒体移回原位，删除随后
+        // 提交去项索引会把已恢复的媒体孤儿化
+        let pending = app.state::<project_media::PendingProjectAssets>();
+        crate::library::diagnostics::with_recovery_snapshot(
+            &library,
+            |library, report| {
+                import_asset_from_library(
+                    &projects,
+                    library,
+                    &id,
+                    &library_asset_id,
+                    &pending,
+                    report,
+                )
+            },
+            |snapshot| crate::library::diagnostics::publish_recovery(&app, snapshot),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// set_asset 调度前的强制预检命令（§9.3）：形状 + 实路径复验，返回规范化
 /// AssetRef（分发器必须使用返回值而非调用方原值）。
 #[tauri::command]
-pub fn validate_project_asset(app: AppHandle, id: String, asset: Value) -> Result<Value, String> {
-    validate_id(&id)?;
-    let root = projects_dir(&app)?;
-    validate_project_asset_with(&root, &id, &asset)
+pub async fn validate_project_asset(
+    app: AppHandle,
+    id: String,
+    asset: Value,
+) -> Result<Value, String> {
+    crate::blocking::run("validate_project_asset", move || {
+        validate_id(&id)?;
+        let root = projects_dir(&app).map_err(to_ipc_text)?;
+        validate_project_asset_with(&root, &id, &asset).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[cfg(test)]

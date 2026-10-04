@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { IPC_COMMANDS } from '../ipc/commands'
 import type {
   HostCommandTransport,
   HostCommandUnavailableError,
@@ -27,7 +28,9 @@ describe('hostInvoke 宿主路由', () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     vi.doMock('@tauri-apps/api/core', () => ({ invoke }))
     const { hostInvoke } = await load()
-    await expect(hostInvoke('list_projects', { id: 'p1' })).resolves.toEqual({
+    await expect(
+      hostInvoke(IPC_COMMANDS.listProjects, { id: 'p1' }),
+    ).resolves.toEqual({
       cmd: 'list_projects',
       args: { id: 'p1' },
     })
@@ -38,7 +41,7 @@ describe('hostInvoke 宿主路由', () => {
     vi.stubGlobal('window', {})
     vi.doMock('@tauri-apps/api/core', () => ({ invoke }))
     const { hostInvoke } = await load()
-    await expect(hostInvoke('save_prefs', {})).resolves.toEqual({
+    await expect(hostInvoke(IPC_COMMANDS.savePrefs, {})).resolves.toEqual({
       cmd: 'save_prefs',
       args: {},
     })
@@ -49,7 +52,7 @@ describe('hostInvoke 宿主路由', () => {
     vi.stubGlobal('window', { __pwNativeHost: { kind: 'swift' } })
     const { hostInvoke, HostCommandUnavailableError: Err } = await load()
     const err: HostCommandUnavailableError = await hostInvoke(
-      'load_prefs',
+      IPC_COMMANDS.loadPrefs,
     ).then(
       () => {
         throw new Error('swift 宿主不得成功')
@@ -69,13 +72,15 @@ describe('hostInvoke 宿主路由', () => {
     // 可控测试传输按 HostCommandTransport 断言调用记录；实现体无需读参
     const fake = vi.fn(async () => 'fake-ok')
     setHostCommandTransportForTests(fake as unknown as HostCommandTransport)
-    await expect(hostInvoke('anything', { x: 1 })).resolves.toBe('fake-ok')
-    expect(fake).toHaveBeenCalledWith('anything', { x: 1 })
+    await expect(hostInvoke(IPC_COMMANDS.loadPrefs, { x: 1 })).resolves.toBe(
+      'fake-ok',
+    )
+    expect(fake).toHaveBeenCalledWith('load_prefs', { x: 1 })
     setHostCommandTransportForTests(null)
-    await expect(hostInvoke('anything')).resolves.toEqual({
-      cmd: 'anything',
+    await expect(hostInvoke(IPC_COMMANDS.loadPrefs)).resolves.toEqual({
+      cmd: 'load_prefs',
       args: undefined,
     })
-    expect(invoke).toHaveBeenCalledWith('anything')
+    expect(invoke).toHaveBeenCalledWith('load_prefs')
   })
 })

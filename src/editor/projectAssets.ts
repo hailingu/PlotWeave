@@ -1,6 +1,6 @@
 /**
  * 项目资产门面（数据模型 §7.1/§7.3/§9.3）。
- * 原生宿主经 src/platform 命令传输走 Rust 命令（P2 收敛；Swift 宿主传输
+ * 原生宿主经 typed IPC 宿主传输走 Rust 命令（P2 收敛；Swift 宿主传输
  * 待接通，未接通时可见失败）：导入 = 库文件拷贝进项目 assets/（句柄链
  * no-follow 落盘）并生成项目级 AssetRef，入会话索引前再过
  * validate_project_asset 预检（§9.3 set_asset 强制）；媒体 URL 经
@@ -14,8 +14,9 @@
  */
 import type { AssetRef } from '../model/document'
 import { libraryStore } from '../library/libraryStore'
+import { IPC_COMMANDS, type IpcCommandName } from '../ipc/commands'
+import { ipcInvoke } from '../ipc/invoke'
 import { isBrowserPreviewHost } from '../platform/hostEnvironment'
-import { hostInvoke } from '../platform/hostCommands'
 import { uid } from '../uid'
 
 /** 内存回退：项目资产 id → 导入时建立的独立 object URL（URL store 钉住
@@ -80,14 +81,14 @@ async function tauriImport(
   libraryAssetId: string,
 ): Promise<AssetRef> {
   const imported = normalizeAssetRef(
-    await hostInvoke<RawAssetRef>('import_project_asset_from_library', {
+    await ipcInvoke<RawAssetRef>(IPC_COMMANDS.importProjectAssetFromLibrary, {
       id: projectId,
       libraryAssetId,
     }),
   )
   // §9.3：入索引前过 Rust 预检，使用预检返回的规范化条目
   return normalizeAssetRef(
-    await hostInvoke<RawAssetRef>('validate_project_asset', {
+    await ipcInvoke<RawAssetRef>(IPC_COMMANDS.validateProjectAsset, {
       id: projectId,
       asset: imported,
     }),
@@ -123,59 +124,58 @@ async function memoryImport(
  * 绝对路径不出 Rust，前端不再拼接。 */
 async function tauriMediaUrl(
   projectId: string,
-  asset: AssetRef,
+  assetId: string,
 ): Promise<string> {
-  return hostInvoke<string>('get_asset_media_url', {
+  return ipcInvoke<string>(IPC_COMMANDS.getAssetMediaUrl, {
     scope: { kind: 'project', projectId },
-    assetId: asset.id,
+    assetId,
   })
 }
 
-/** 命令直调助手（原生宿主；P2 起为平台宿主传输的兼容别名，签名不变，
- * imagegen 域既有调用与测试继续生效）：生成命令等新增 Rust 管线的复用入口。 */
+/** IPC 直调助手（生成命令等新增 Rust 管线的复用入口）：委托类型化入口
+ * ipcInvoke 并同等收窄 cmd（IpcCommandName）——保留本导出以维持
+ * imagegen 域的既有 mock 面，语义与直接调用 ipcInvoke 完全一致。 */
 export function tauriInvoke<T>(
-  cmd: string,
+  cmd: IpcCommandName,
   args: Record<string, unknown>,
 ): Promise<T> {
-  return hostInvoke<T>(cmd, args)
+  return ipcInvoke<T>(cmd, args)
 }
 
-/** 统一门面：内存回退仅限纯浏览器预览（P2 平台收敛）。 */
+/** 统一门面：两种环境同签名。 */
 export const projectAssets = {
   /** 库资产拷贝进项目（§7.3）：返回项目级 AssetRef（新 id）。 */
   importFromLibrary: (
     projectId: string,
     libraryAssetId: string,
   ): Promise<AssetRef> =>
-    isBrowserPreviewHost()
-      ? memoryImport(projectId, libraryAssetId)
-      : tauriImport(projectId, libraryAssetId),
+    !isBrowserPreviewHost()
+      ? tauriImport(projectId, libraryAssetId)
+      : memoryImport(projectId, libraryAssetId),
 
-  /** 媒体 URL：原生宿主走 pwmedia opaque URL（scope + assetId，issue #31）；
+  /** 媒体 URL：Tauri 走 pwmedia opaque URL（scope + assetId，issue #31）；
    * 内存回退返回导入时建立的独立 object URL（源库删除不影响）——重载后
-   * 映射丢失即拒绝（预览不落盘，属预期）。 */
-  mediaUrl: (projectId: string, asset: AssetRef): Promise<string> => {
-    if (isBrowserPreviewHost()) {
-      const url = memoryUrls.get(asset.id)
-      if (!url) {
-        return Promise.reject(
-          new Error(
-            `资产 ${asset.id} 的媒体不在本会话内存中（浏览器预览不落盘）`,
-          ),
-        )
-      }
-      return Promise.resolve(url)
+   * 映射丢失即拒绝（预览不落盘，属预期）。入参只取 assetId（解析内核即
+   * scope + id）：调用方 effect 依赖得以精确到 id，同 id 的资产对象身份
+   * 变化（无关编辑致索引重建）不重取不闪（issue #131）。 */
+  mediaUrl: (projectId: string, assetId: string): Promise<string> => {
+    if (!isBrowserPreviewHost()) return tauriMediaUrl(projectId, assetId)
+    const url = memoryUrls.get(assetId)
+    if (!url) {
+      return Promise.reject(
+        new Error(`资产 ${assetId} 的媒体不在本会话内存中（浏览器预览不落盘）`),
+      )
     }
-    return tauriMediaUrl(projectId, asset)
+    return Promise.resolve(url)
   },
 
   /** 复验既有项目资产的落盘状态（§9.3 实路径复验同域）：撤销后重做的
    * 防线（issue #10）——撤销窗口内文件被外部删改则拒绝，避免失效条目
-   * 重做入脏、save_project 全量拒绝卡死自动保存。 原生宿主走 Rust
+   * 重做入脏、save_project 全量拒绝卡死自动保存。Tauri 走 Rust
    * validate_project_asset；浏览器预览内存态无盘上文件，恒通过。 */
   revalidate: (projectId: string, asset: AssetRef): Promise<void> => {
     if (isBrowserPreviewHost()) return Promise.resolve()
-    return hostInvoke<RawAssetRef>('validate_project_asset', {
+    return tauriInvoke<RawAssetRef>(IPC_COMMANDS.validateProjectAsset, {
       id: projectId,
       asset,
     }).then((raw) => {

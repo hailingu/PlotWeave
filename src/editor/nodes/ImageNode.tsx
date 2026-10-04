@@ -1,15 +1,19 @@
-import { useEffect, useState } from 'react'
 import { type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { useImageJobs } from '../imagegen/context'
-import { projectAssets } from '../projectAssets'
-import NodeSettingsPanel from './settings/NodeSettingsPanel'
-import NodeSettingsGear from './settings/NodeSettingsGear'
+import { useAssetMedia } from './useAssetMedia'
+import { NodeSettingsPanel } from './settings/NodeSettingsPanel'
+import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import type { AssetRef } from '../../model/document'
 import type { ImageFlowNode } from './types'
 
 /** 产物图像：项目资产门面解析媒体 URL 懒渲染；解析失败显示可读占位
- * （资产条目在而媒体不可读属异常态——不静默空白，保留可诊断线索）。 */
+ * （资产条目在而媒体不可读属异常态——不静默空白，保留可诊断线索）。
+ * 换绑即清旧预览（issue #131）：读取在途不以旧资产的图冒充当前产物。
+ * 清理时点（PR #197 评审）：调用方以 asset.id 作 key 重挂载本组件——
+ * 初始态（无图）随首帧提交，不依赖晚于绘制的 passive effect（其会让
+ * 旧 url 多画一帧冒充新产物）；effect 内清空仅兜底 projectId 原位变化
+ * 等无重挂载路径。 */
 function OutputImage({
   projectId,
   asset,
@@ -17,23 +21,7 @@ function OutputImage({
   readonly projectId: string
   readonly asset: AssetRef
 }) {
-  const [url, setUrl] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
-  useEffect(() => {
-    let alive = true
-    setFailed(false)
-    projectAssets
-      .mediaUrl(projectId, asset)
-      .then((u) => {
-        if (alive) setUrl(u)
-      })
-      .catch(() => {
-        if (alive) setFailed(true)
-      })
-    return () => {
-      alive = false
-    }
-  }, [projectId, asset])
+  const { url, failed, reportFailure } = useAssetMedia(projectId, asset.id)
   if (failed)
     return (
       <span className="pw-image-empty">
@@ -46,7 +34,7 @@ function OutputImage({
       className="pw-image-out-img"
       src={url}
       alt={asset.relPath}
-      onError={() => setFailed(true)}
+      onError={reportFailure}
     />
   )
 }
@@ -66,11 +54,7 @@ function outputPlaceholder(
  * ⚙️）→ Prompt 预览 → 产物区（生成图像 / 生成中 / 空态 / 悬空引用占位）。
  * 不参与任何连线（自由摆放），无 Handle。
  */
-export default function ImageNode({
-  id,
-  data,
-  selected,
-}: NodeProps<ImageFlowNode>) {
+export function ImageNode({ id, data, selected }: NodeProps<ImageFlowNode>) {
   const { projectId, openSettingsId, toggleSettings, assets } = useNodeEdit()
   const { jobOf } = useImageJobs()
   const job = jobOf(id)
@@ -111,7 +95,7 @@ export default function ImageNode({
       </p>
       <div className="pw-image-out">
         {asset !== undefined ? (
-          <OutputImage projectId={projectId} asset={asset} />
+          <OutputImage key={asset.id} projectId={projectId} asset={asset} />
         ) : (
           <span className="pw-image-empty">
             {outputPlaceholder(primary, job?.status === 'running')}

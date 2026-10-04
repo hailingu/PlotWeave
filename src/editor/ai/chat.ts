@@ -6,9 +6,13 @@
  * 原文（content + 可选 tool_calls），写调用映射为预览卡命令、读调用就地回喂。
  */
 import type { ProviderConfig } from '../../settings/types'
+import { IPC_COMMANDS } from '../../ipc/commands'
 import { hostInvoke } from '../../platform/hostCommands'
 import type { ToolSpec } from './tools'
 
+/** OpenAI 兼容对话消息（模块头：经 Rust llm_chat 代理的非流式通道）：
+ * 覆盖 system/user/assistant/tool 四种角色，tool 回喂与 tool_calls 透传
+ * 字段按 tool-calling 循环需要保留。 */
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
@@ -18,6 +22,8 @@ export interface ChatMessage {
   tool_calls?: unknown
 }
 
+/** llmChat 的返回形态：assistant 原文（content 可空 + 可选 tool_calls），
+ * 写调用映射与读调用回喂都由上层循环消费。 */
 export interface AssistantMessage {
   role: 'assistant'
   content: string | null
@@ -28,15 +34,14 @@ export interface AssistantMessage {
   }>
 }
 
-/** 发送一轮对话，返回 assistant message（含可选 tool_calls）；
- * 命令经平台宿主传输（P2 收敛），Swift 宿主未接通时同样可见失败。 */
+/** 发送一轮对话，返回 assistant message（含可选 tool_calls）。 */
 export async function llmChat(
   provider: ProviderConfig,
   model: string,
   messages: ChatMessage[],
   tools?: ToolSpec[],
 ): Promise<AssistantMessage> {
-  return hostInvoke<AssistantMessage>('llm_chat', {
+  return hostInvoke<AssistantMessage>(IPC_COMMANDS.llmChat, {
     providerId: provider.id,
     baseUrl: provider.baseUrl,
     model,

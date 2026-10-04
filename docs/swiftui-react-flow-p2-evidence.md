@@ -71,3 +71,35 @@
 - 未运行 SonarQube 门禁：提交时随钩子执行。
 
 **下一步**：P2 第 3 项——打开夹具项目 → 编辑 → 防抖保存 → 关闭冲刷 → 重开恢复的端到端链路（Swift 侧接 FFI 传输，写入失败先加回归测试再实现恢复）。
+
+## dev 合并兼容性同步（2026-10-04）
+
+本节记录将当前本地 `dev` 合并进 `codex/swiftui-react-flow` 时的实现归属；上方 P2-1/P2-2 的日期、命令和测试数量保留为历史证据，不用旧结果代替本次验证。未接通的原生业务能力与 P2 后续项保持原边界。
+
+- **宿主与命令传输**：`src/platform/hostEnvironment.ts` 保留 tauri > swift > browser 优先级以及仅纯浏览器可内存回退的约束，Tauri IPC 哨兵由 `src/ipc/runtime.ts` 的 `isTauriRuntime` 单独判断。`src/ipc/invoke.ts` 统一 SDK 动态绑定、命令传输、Swift 的 `PW_HOST_COMMAND_UNAVAILABLE` 与可控测试传输；`src/platform/hostCommands.ts` 以兼容名 `hostInvoke` 再导出该入口。store 门面采用 `IPC_COMMANDS` 和 `ipcInvoke`，保留 `dev` 的结构化诊断与 Swift 的明确失败语义。
+- **画布目录**：演示源码迁至 `src/editor/nativeCanvas/`，避免 shell 运行时反向依赖 editor；独立 HTML、原生构建命令和资源目录保持原合同，不放宽模块图守卫。
+- **保存存在性**：FFI 的 `saveProject` 支持可选布尔字段 `expectExisting`。缺省 `false` 允许初次保存；为 `true` 时调用 `persist_project_expect_existing`，在操作锁内确认原项目仍存在，删除后的迟到保存返回 ERROR 且不重建项目。非布尔值在 FFI 边界拒绝。保存的 NotFound 错误不携带 `[project_not_found]` 前缀，该稳定码仍仅属于加载入口。回归 `expect_existing_save_cannot_recreate_deleted_project` 覆盖已有项目保存、删除后拒绝、非法类型和缺省新建；Rust 侧已观察先红后绿，命令和全量结果随本次合并记录。
+- **跨域回归夹具**：core 的 `test-support` feature 仅由 Tauri 的 dev-dependency 启用，生产 dependency 不启用；core 自身 `cfg(test)` 也提供故障夹具。共享操作锁与注入可经宿主适配再导出，以保留 `store::integration_tests::import_waits_for_delete_and_never_recreates_deleted_project` 和 `store::blocking_tests::slow_save_keeps_runtime_and_media_reads_responsive` 的跨域约束。
+- **门禁范围**：维护源码大小枚举增加 `crates/` 与 `native/`，保留 800/1800 及索引/工作树各自受限语义。Rust 覆盖率执行 Tauri 与 crates 两个 workspace，将同一源文件/行合并去重后交给原 80% 下限；SonarQube 纳入 core/ffi 两个源目录与两份 manifest。CI 增加 crates 的路由检查与原生 job：frontend/Rust 使用 `macos-15`，native 使用 `macos-26`，先验证默认 Xcode 为 P1 钉版 `26.6`，再按原生路由构建画布并执行 `xcodebuild test`。2026-10-04 核对的[官方 runner 镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)列有默认 Xcode 26.6。该设置尚须合并对应 PR 的实际 CI 结果，不能用本地测试代替；迁出源码不缩小门禁覆盖面。
+
+### 合并门禁与覆盖率状态矩阵
+
+覆盖率与 Sonar 输入分类由门禁脚本拥有，入口为 `scripts/rust-coverage.sh`、`scripts/sonar-quality-gate.sh` 与 CI 路由；迁移不得通过改变源目录而缩小检查范围。
+
+| 前置状态 | 动作／时序 | 可观察结果 | 跨转换不变量及所有者 | 对应验证／缺口 |
+| --- | --- | --- | --- | --- |
+| 两 workspace 含重复的共享源文件/行 | 分别生成 Tauri 与 crates LCOV，再合并 | Tauri、core、FFI 均进入报告；同一 SF+行只占一次分母，任一报告命中即计覆盖 | 覆盖率脚本：源码迁出不能变成未测量，重复测量不得扭曲整体覆盖率 | `scripts/rust-coverage.test.ts` 共享行合并回归通过 |
+| 任一 workspace 命令失败，或报告缺失／损坏 | 生成后验证每份报告，再进入合并与扫描 | 非零退出并阻断门禁 | 覆盖率脚本与 Sonar 门禁：有效片段不得掩盖另一份失败，低于 80% 不放行 | 新 workspace 失败回归及既有 Sonar malformed / below-floor 回归；完整 gate 结果待执行记录 |
+| 历史被推树只有 Tauri manifest；迁移后树同时含 crates manifest | 现行脚本按被检树存在的 manifest 选择 workspace（issue #405） | 旧树仅测 Tauri，迁移后强制生成及验证双报告 | 覆盖率脚本：当前门禁适用历史树，但不可遗漏历史树实际存在的 workspace | `scripts/rust-coverage.test.ts` 历史树回归先红后绿，3 项跨 workspace 回归通过 |
+| 故障注入仅在 `cfg(test)`／`test-support` 可用 | 对实际模块归属做 Sonar 源／测试分类 | 故障夹具作为测试输入分析，不计产品统计 | Sonar 测试范围：测试专用能力不计入产品，业务源码不靠排除豁免 | `scripts/sonar-test-scope.test.ts` 夹具语义回归先红后绿，相关组合共 10 测试通过 |
+| 提交钩子向测试进程传入外层 `GIT_INDEX_FILE` | 标记测试在独立内层仓库暂存改动 | 内层树发生变化，外层索引字节保持不变 | Git 测试夹具：每次子 Git 操作只作用于该夹具，不能污染真实合并索引 | `gate-tree-marker.test.ts` 换树回归先红后绿，标记／夹具组合 32 测试通过 |
+
+各门禁串行失败即停止，不涉及异步请求乱序或运行中业务恢复；报告重新生成的重试仍须验证被检树中实际存在的全部 workspace。真实 Swift FFI 请求与原生保存/退出的状态矩阵继续属于 P2 后续项，本次未接通。
+
+本次前端兼容性验证（仓库根目录，Node 24.18.0）：直接 IPC 调用在 Swift 宿主错误成功、Tauri 哨兵存在但值为 `undefined` 时被 Swift 标记覆盖的两项回归先红后绿；`npm test -- src` 通过 183 文件 / 2629 测试，`npm run format:check`、`npm run lint`、`npm run typecheck:strict`、`npm run build` 与 `npm run build:native-canvas` 通过。演示迁目录后维持资源输出 `native/macos/App/WebCanvas`；模块图、宿主/IPC 与演示画布的 16 文件 / 139 测试聚焦回归通过。
+
+文件规模守卫兼容性验证：10 个新增 roots/上限/索引/排除用例先红后绿，`npm test -- scripts/check-file-size.test.ts` 90 测试全绿；状态与不变量矩阵及分层验证记录见[File Size Guard](development/file-size-guard.md#native-shell-merge-state-and-invariant-matrix)。该报告仅覆盖已执行的前端与文件规模检查，不替代整个合并门禁。
+
+本次原生路由已执行 XCTest，16 测试通过。Rust 两 workspace 的 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 与 `cargo test` 全部通过：core 130、FFI 单元 3、ABI 集成 6；Tauri 库 535，cleanup 集成 3、media leaf 集成 2 及 native/invoke 响应性夹具通过。模块图守卫元检查 150/150 通过，包含 core/FFI 的生产根无环与有限见证审计。FFI 复制到同项目按 dev 既有目的目录拒绝合同返回 ERROR，复制到独立项目成功，不放宽存储校验。
+
+最终前端路由 `npm run format:check && npm run lint && npm run check:size && npm run typecheck:strict && npm run build && npm test` 全部通过，整仓 198 文件 / 2942 测试；hooks/scripts 路由 `npm run check:size && npm test -- scripts` 通过 15 文件 / 313 测试；`.github` 的 Prettier 检查通过。新鲜覆盖率及 SonarQube 在合并提交创建时由版本化 Git 钩子重新执行并记录，结论以该次门禁输出及待物化记录为准；本节的测试记录不替代提交门禁。Swift FFI 尚未链接、新宿主真实保存/退出和视觉目验仍未验证，不因分支合并视为完成。

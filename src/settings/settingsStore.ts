@@ -1,24 +1,25 @@
 /**
  * 设置与 API key 加密的前端门面（docs/ui-design.md §8.2 修订）。
- * 原生宿主经 src/platform 命令传输走 Rust 命令（settings.json 落盘；key
+ * 原生宿主经 typed IPC 宿主传输走 Rust 命令（settings.json 落盘；key
  * 由 Rust 加密后返回密文 envelope，随 provider 配置落盘，明文不回前端；
  * Swift 宿主传输待 P2 后续接通，未接通时可见失败）；内存回退仅限纯
  * 浏览器预览（P2 平台收敛）。
  */
 import { defaultSettings, normalizeSettings, type AppSettings } from './types'
+import { IPC_COMMANDS } from '../ipc/commands'
+import { ipcInvoke } from '../ipc/invoke'
 import { isBrowserPreviewHost } from '../platform/hostEnvironment'
-import { hostInvoke } from '../platform/hostCommands'
 
 /** 浏览器回退的内存设置。 */
 let memorySettings: AppSettings | null = null
 
 async function tauriLoad(): Promise<AppSettings> {
-  const raw = await hostInvoke<unknown>('load_prefs')
+  const raw = await ipcInvoke<unknown>(IPC_COMMANDS.loadPrefs)
   return normalizeSettings(raw)
 }
 
 async function tauriSave(settings: AppSettings): Promise<void> {
-  await hostInvoke('save_prefs', { prefs: settings })
+  await ipcInvoke(IPC_COMMANDS.savePrefs, { prefs: settings })
 }
 
 /** 统一门面。 */
@@ -54,13 +55,13 @@ export const settingsStore = {
     key: string,
   ): Promise<AppSettings> => {
     let keyEnc: string
-    if (isBrowserPreviewHost()) {
-      keyEnc = `pw1:preview:${btoa(String.fromCodePoint(...new TextEncoder().encode(key)))}`
-    } else {
-      keyEnc = await hostInvoke<string>('set_provider_key', {
+    if (!isBrowserPreviewHost()) {
+      keyEnc = await ipcInvoke<string>(IPC_COMMANDS.setProviderKey, {
         providerId,
         key,
       })
+    } else {
+      keyEnc = `pw1:preview:${btoa(String.fromCodePoint(...new TextEncoder().encode(key)))}`
     }
     return {
       ...settings,

@@ -9,7 +9,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import type { ProjectSettings } from '../settings'
-import DialogueNode from './DialogueNode'
+import { DialogueNode } from './DialogueNode'
 import type { DialogueFlowNode, DialogueLine } from './types'
 
 vi.mock('@xyflow/react', async (importOriginal) => {

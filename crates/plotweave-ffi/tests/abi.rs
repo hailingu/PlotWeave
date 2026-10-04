@@ -174,13 +174,24 @@ fn ai_session_and_asset_ops_roundtrip() {
     ));
     assert!(keys.contains("[]"), "空资产索引复验为空清单：{keys}");
 
-    let copied = fx.call_ok(&format!(
-        "{{\"op\":\"copyProjectAssets\",\"fromId\":\"{id}\",\"toId\":\"{id}\"}}"
-    ));
-    assert!(
-        copied.contains("ok"),
-        "同源自拷贝按 no-op/报错语义处理：{copied}"
+    // dev 复制契约：已有目标项目目录不能被覆盖，源与目标相同亦须拒绝。
+    let (status, _) = fx.call(
+        &serde_json::json!({
+            "op":"copyProjectAssets", "fromId":id, "toId":id,
+        })
+        .to_string(),
     );
+    assert_eq!(status, plotweave_ffi::PW_STATUS_ERROR);
+    let created_copy = fx.call_ok(r#"{"op":"createProject","name":"会话副本"}"#);
+    let copy_id = json_path(&created_copy, &["ok", "id"]);
+    let copied = fx.call_ok(
+        &serde_json::json!({
+            "op":"copyProjectAssets", "fromId":id, "toId":copy_id,
+        })
+        .to_string(),
+    );
+    let response: serde_json::Value = serde_json::from_str(&copied).unwrap();
+    assert_eq!(response["ok"], serde_json::Value::Null);
 }
 
 #[test]
@@ -235,4 +246,28 @@ fn json_path(json: &str, path: &[&str]) -> String {
         serde_json::Value::String(text) => text,
         other => other.to_string(),
     }
+}
+
+/// dev 保存存在性契约也经 FFI 生效：副本删除后不得因迟到保存复活，
+/// 普通保存仍保持允许首次新建的语义，非法存在性参数在边界拒绝。
+#[test]
+fn expect_existing_save_cannot_recreate_deleted_project() {
+    let fx = Fixture::new("expect-existing");
+    let created = fx.call_ok(r#"{"op":"createProject","name":"副本"}"#);
+    let id = json_path(&created, &["ok", "id"]);
+    let loaded = fx.call_ok(&serde_json::json!({"op":"loadProject", "id":id}).to_string());
+    let doc: serde_json::Value = serde_json::from_str(&loaded).unwrap();
+    let mut save =
+        serde_json::json!({"op":"saveProject", "id":id, "doc":doc["ok"], "expectExisting":true});
+    fx.call_ok(&save.to_string());
+    fx.call_ok(&serde_json::json!({"op":"deleteProject", "id":id}).to_string());
+    let (status, _) = fx.call(&save.to_string());
+    assert_eq!(status, plotweave_ffi::PW_STATUS_ERROR);
+    assert!(!fx.root.join("projects").join(format!("{id}.json")).exists());
+    save["expectExisting"] = serde_json::json!("true");
+    let (status, _) = fx.call(&save.to_string());
+    assert_eq!(status, plotweave_ffi::PW_STATUS_ERROR);
+    save.as_object_mut().unwrap().remove("expectExisting");
+    fx.call_ok(&save.to_string());
+    assert!(fx.root.join("projects").join(format!("{id}.json")).exists());
 }

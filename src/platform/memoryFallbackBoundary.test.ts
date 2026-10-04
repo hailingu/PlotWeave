@@ -60,7 +60,9 @@ describe('Swift 宿主：存储门面可见失败，不落内存模式', () => {
 
   it('projectAssets.mediaUrl 拒绝（不得走内存 object URL 路径）', async () => {
     const { projectAssets } = await import('../editor/projectAssets')
-    await expect(projectAssets.mediaUrl('p1', assetRef)).rejects.toMatchObject({
+    await expect(
+      projectAssets.mediaUrl('p1', assetRef.id),
+    ).rejects.toMatchObject({
       code: 'PW_HOST_COMMAND_UNAVAILABLE',
     })
   })
@@ -90,7 +92,7 @@ describe('纯浏览器预览：内存回退保持现状', () => {
 
   it('projectAssets.mediaUrl 走内存路径（回退诊断，而非宿主错误码）', async () => {
     const { projectAssets } = await import('../editor/projectAssets')
-    await expect(projectAssets.mediaUrl('p1', assetRef)).rejects.toThrow(
+    await expect(projectAssets.mediaUrl('p1', assetRef.id)).rejects.toThrow(
       '浏览器预览不落盘',
     )
   })

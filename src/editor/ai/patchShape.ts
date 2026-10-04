@@ -4,6 +4,7 @@ import {
   type EntityKind,
   type EntityTokenScope,
 } from './entityFields'
+import { textBudgetIssue } from './textBudget'
 
 /**
  * AI 入站 data/patch 的值形状校验与列表项归一化（信任边界，§9.3/§11.3
@@ -13,8 +14,35 @@ import {
  * 加载归一化来不及兜底）与列表项的入站归一化（旧契约形态升级 + 稳定 id）。
  */
 
+/** 普通对象判别：排除 null 与数组——AI 入站的字段对象必须逐键校验，
+ * 数组/标量冒充字段对象会被白名单检查误解为「无未知键」而放行。 */
 export function plainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** 列表成员的合法自有键（issue #140）：与 nodeFields.ts 各 itemObject schema
+ * 的 additionalProperties:false 同口径（新增成员字段须同步两处）。AI 入站
+ * 通道按未知自有键整批拒绝——错误可定位且整批零变更；文档加载层的前向
+ * 兼容保真（未知字段随成员原样保留，data-model.md 成员级归一化政策）是
+ * 另一层，不受此收紧影响。JSON 自有的 __proto__ 键同样落入未知键。 */
+const LINE_MEMBER_KEYS = [
+  'id',
+  'kind',
+  'text',
+  'speaker',
+  'side',
+  'vo',
+] as const
+const OPTION_MEMBER_KEYS = ['id', 'label'] as const
+const REF_MEMBER_KEYS = ['id', 'kind', 'assetId', 'label'] as const
+
+/** 成员未知自有键清单（issue #140）；无未知键返回 null。 */
+const unknownMemberKeys = (
+  item: Record<string, unknown>,
+  allowed: readonly string[],
+): string[] | null => {
+  const unknown = Object.keys(item).filter((k) => !allowed.includes(k))
+  return unknown.length > 0 ? unknown : null
 }
 
 /** 结构化引用的实体解析（issue 44）：快照未携带设定集时不校验（旧夹具兼容）；
@@ -117,17 +145,26 @@ export function branchOptionsError(options: unknown[]): string | null {
     (o) =>
       typeof o !== 'string' && (!plainObject(o) || typeof o.label !== 'string'),
   )
-  return bad
-    ? '分支 options 含异型成员（须为字符串或带字符串 label 的对象）'
-    : null
+  if (bad) return '分支 options 含异型成员（须为字符串或带字符串 label 的对象）'
+  // 成员未知自有键（issue #140）：对象成员只允许 id/label，字符串成员
+  // 由归一化升级、无未知键可言
+  for (const [i, o] of options.entries()) {
+    if (typeof o === 'string') continue
+    const unknown = unknownMemberKeys(
+      o as Record<string, unknown>,
+      OPTION_MEMBER_KEYS,
+    )
+    if (unknown)
+      return `options[${i}] 含未知字段：${unknown.join('、')}（选项成员允许：${OPTION_MEMBER_KEYS.join('、')}）`
+  }
+  // 选项文案的体积预算（issue #170）：字符串形态与对象 label 同域
+  for (const [i, o] of options.entries()) {
+    const label = typeof o === 'string' ? o : (o as { label: string }).label
+    const budget = textBudgetIssue(`options[${i}]`, label)
+    if (budget !== null) return budget
+  }
+  return null
 }
-
-/** options 覆盖的按位简写形态判定（评审 5169767128）：成员全为字符串或
- * 无 id 对象时，normalizeNodeFields 按位继承旧表 id（重命名语义，修复
- * 世界同构）——经此覆盖解析的投影存活是必然的；显式 id 成员是绝对绑定。 */
-export const isPositionalOptions = (raw: unknown): boolean =>
-  Array.isArray(raw) &&
-  raw.every((m) => typeof m === 'string' || (plainObject(m) && !('id' in m)))
 
 /** shot.refs 成员的引用位联合 + 资产目标校验（§4.2 ShotRef 的信任边界对等，
  * §7.1/§11.3）：与加载侧 isShotRefShape 同口径——双字段**键在场**即非法
@@ -145,13 +182,20 @@ function shotRefMemberIssue(
   if (r.kind !== 'character' && r.kind !== 'location' && r.kind !== 'audio') {
     return `kind 未知（${String(r.kind)}）`
   }
+  // 成员未知自有键（issue #140）：引用位联合之外的字段不得随成员进文档
+  const unknown = unknownMemberKeys(r, REF_MEMBER_KEYS)
+  if (unknown)
+    return `含未知字段：${unknown.join('、')}（引用位成员允许：${REF_MEMBER_KEYS.join('、')}）`
   if ('assetId' in r && 'label' in r)
     return 'assetId 与 label 并存（引用位与自由位互斥）'
   const hasAsset = typeof r.assetId === 'string' && r.assetId.trim() !== ''
   const hasLabel = typeof r.label === 'string'
   if (hasAsset === hasLabel)
     return 'assetId 非空白字符串 / label 字符串须恰居其一'
-  if (!hasAsset) return null
+  if (!hasAsset) {
+    // 自由文案位的体积预算（issue #170）
+    return textBudgetIssue('label', r.label)
+  }
   const mime = assets.get(r.assetId as string)
   if (mime === undefined) {
     return `资产 ${r.assetId as string} 不存在（引用位只按本项目资产索引解析）`
@@ -171,8 +215,13 @@ function scalarShapeIssues(
 ): string[] {
   const issues: string[] = []
   const str = (f: string) => {
-    if (fields[f] !== undefined && typeof fields[f] !== 'string')
+    if (fields[f] !== undefined && typeof fields[f] !== 'string') {
       issues.push(`${f} 须为字符串`)
+      return
+    }
+    // 自由文本体积预算（issue #170）：超限拒绝，不截断
+    const budget = textBudgetIssue(f, fields[f])
+    if (budget !== null) issues.push(budget)
   }
   // 数值编号域（§9.3 命令边界）：正安全整数——放行 1.5/0/-2 这类值会被
   // 下次加载的归一化静默重编号/删除分集，接受的 AI 输出重开即变样
@@ -275,6 +324,25 @@ function dialogueLinesIssues(
     ]
   }
   const issues: string[] = []
+  // 台词文本的体积预算（issue #170）：逐行点名下标，超限拒绝不截断
+  lines.forEach((l, i) => {
+    const budget = textBudgetIssue(
+      `lines[${i}].text`,
+      (l as { text: unknown }).text,
+    )
+    if (budget !== null) issues.push(budget)
+  })
+  // 成员未知自有键（issue #140）：形状全过后逐项点名（下标 + 键名可定位）
+  lines.forEach((l, i) => {
+    const unknown = unknownMemberKeys(
+      l as Record<string, unknown>,
+      LINE_MEMBER_KEYS,
+    )
+    if (unknown)
+      issues.push(
+        `lines[${i}] 含未知字段：${unknown.join('、')}（行成员允许：${LINE_MEMBER_KEYS.join('、')}）`,
+      )
+  })
   lines.forEach((l, i) => {
     if (!plainObject(l) || typeof l.speaker !== 'string') return
     // 缺省 kind 与 normalizeNodeFields 的判别缺省同口径视为 line：

@@ -107,17 +107,20 @@
   flex-direction: column;
 }
 
-/* 悬停浮现的项目菜单按钮（§3.2 右键/悬停菜单同源入口） */
+/* 悬停浮现的项目菜单按钮（§3.2 右键/悬停菜单同源入口）。背景/描边经
+ * poster-menu 配对令牌随外观切换（issue #261：此前背景恒白而前景随外观，
+ * 暗色下不可辨认）；padding 2px 7px + 1px 描边与旧 3px 8px 无描边的
+ * 总尺寸一致，浅色基线几何不变。 */
 .project-menu-btn {
   position: absolute;
   top: 8px;
   right: 8px;
   z-index: 3;
-  border: none;
+  border: 1px solid var(--poster-menu-border);
   border-radius: var(--radius-md);
-  padding: 3px 8px;
+  padding: 2px 7px;
   font-size: 13px;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--poster-menu-bg);
   color: var(--text-primary);
   cursor: pointer;
   opacity: 0;
@@ -131,7 +134,7 @@
 }
 
 .project-menu-btn:hover {
-  background: #fff;
+  background: var(--poster-menu-bg-hover);
 }
 
 .project-poster {
@@ -155,6 +158,21 @@
 /* 织线兜底封面：恒深色底（内容层视觉，同 §4.1 片场族思路）。 */
 .project-poster--weave {
   background: #1a1a1e;
+}
+
+/* 损坏占位卡（issue #123）：文件存在但不可读/不可解析——深底 + 虚线框
+   与诊断文案替代统计行，降低对比呈现，不与正常海报竞争注意力。 */
+.project-poster--broken {
+  background: #232326;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+}
+
+.project-poster--broken .project-poster-name {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.project-poster--broken .project-poster-stats {
+  color: rgba(255, 176, 122, 0.92);
 }
 
 .weave-cover {

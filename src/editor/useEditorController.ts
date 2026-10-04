@@ -93,7 +93,7 @@ export function useEditorController(
     onError: setActionError,
   })
   const ai = useAiBridge({
-    nodes: doc.nodes,
+    contentNodes: doc.contentNodes,
     edges: doc.edges,
     settings: doc.settings,
     nodesRef: doc.nodesRef,
@@ -114,6 +114,10 @@ export function useEditorController(
     onCloseTransient: panels.closeTransient,
     onUndo: history.undo,
     onRedo: history.onRedo,
+    // 设定文档弹窗打开 = 模态编辑会话：全局撤销/重做挂起（issue #126）
+    modalEditingOpen: panels.editingDocId !== null,
+    // 剧本导出弹窗打开 = 键盘模态：撤销/重做/删除挂起（issue #263 评审）
+    exportDialogOpen: panels.exportOpen,
     selectedNodeIds: view.selectedNodeIds,
     selectedEdgeIds: view.selectedEdgeIds,
     onDeleteNodes: graph.deleteNodesByIds,

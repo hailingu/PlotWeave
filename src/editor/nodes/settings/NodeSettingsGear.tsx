@@ -6,7 +6,7 @@
  * 开合始终一致。点击阻止冒泡，避免触发画布拖动/画布级点击；
  * light 变体用于纸面节点，默认变体用于深色石板节点。
  */
-export default function NodeSettingsGear({
+export function NodeSettingsGear({
   ariaLabel,
   open,
   onToggle,

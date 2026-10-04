@@ -35,7 +35,10 @@ function keyedIdIssue(id: unknown): string {
   return '重复'
 }
 
-const KEYED_LIST_PREFIX: Record<string, string> = {
+/** 键控列表名联合（issue #230：前缀表按键收窄，索引读取免缺失兜底）。 */
+type KeyedListKey = 'lines' | 'options' | 'refs'
+
+const KEYED_LIST_PREFIX: Record<KeyedListKey, string> = {
   lines: 'line',
   options: 'opt',
   refs: 'ref',
@@ -64,7 +67,7 @@ function blankIdCounts(list: unknown[]): Map<string, number> {
  * 重发失效、按孤儿边隔离。 */
 function normalizeKeyedListIds(
   list: unknown[],
-  listKey: string,
+  listKey: KeyedListKey,
   nid: string,
   warnings: string[],
 ): Map<string, string> {

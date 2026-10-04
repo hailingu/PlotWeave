@@ -8,6 +8,7 @@
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <!-- 引导入口先装全局错误兜底再动态加载应用本体（issue #358 评审 5326220397） -->
+    <script type="module" src="/src/bootstrap.ts"></script>
   </body>
 </html>

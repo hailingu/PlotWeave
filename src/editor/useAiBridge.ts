@@ -6,7 +6,8 @@
  */
 import { useCallback, useMemo } from 'react'
 import type { Edge } from '@xyflow/react'
-import { buildGraphDigest } from './ai/graphDigest'
+import { buildGraphDigest, sceneLabel, shotLabel } from './ai/graphDigest'
+import { findNodesText } from './ai/nodeSearch'
 import { extractBatchJson } from './ai/batchText'
 import { settingsSnapshotText } from './ai/entityFields'
 import {
@@ -28,11 +29,13 @@ import type { NodeDataPatch } from './nodes/patch'
 import type { CanvasNode } from './nodes/types'
 import type { ProjectContent } from '../model/content'
 
-/** 节点人读标签：画布快照、改动预览与批次执行共用。 */
+/** 节点人读标签：画布快照、改动预览与批次执行共用。场景/分镜编号经
+ * graphDigest 的共享标签函数（issue #156）：与图摘要同口径补零，同一
+ * 节点在 AI 工作流各处呈现一致。 */
 export function nodeLabelOf(n: CanvasNode): string {
   switch (n.type) {
     case 'scene':
-      return `场${n.data.sceneNo}·${n.data.name}`
+      return sceneLabel(n.data.sceneNo, n.data.name)
     case 'dialogue':
       return `对白·${n.data.name}`
     case 'beat':
@@ -40,15 +43,16 @@ export function nodeLabelOf(n: CanvasNode): string {
     case 'branch':
       return `分支·${n.data.prompt}`
     case 'shot':
-      return `SHOT${n.data.shotNo}·${n.data.size}`
+      return shotLabel(n.data.shotNo, n.data.size)
     case 'image':
       return `图片·${n.data.prompt.slice(0, 12)}`
   }
 }
 
-/** AI 桥依赖：反应式画布用于 digest；ref 镜像供校验/读取/落地读取当前态。 */
+/** AI 桥依赖：内容稳定投影用于 digest（issue #157：拖拽过程帧不重建摘要）；
+ * ref 镜像供校验/读取/落地读取当前态。 */
 export interface AiBridgeDeps {
-  nodes: CanvasNode[]
+  contentNodes: CanvasNode[]
   edges: Edge[]
   settings: ProjectSettings
   nodesRef: { current: CanvasNode[] }
@@ -85,6 +89,9 @@ export interface AiBridge {
   readSettings: () => string
   /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON；不存在返回 null。 */
   readDocument: (documentId: string) => string | null
+  /** 读工具 find_nodes（issue #275 评审）：按名称/文案检索全部节点（含摘要
+   * 未列出条目）及其关联连线，节选后的可发现补读路径。 */
+  findNodes: (query: string, offset?: number, cursor?: string) => string
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
    * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）。 */
   applyAiBatch: (batch: ValidatedCommand[]) => string | null
@@ -180,12 +187,64 @@ function applyValidatedBatch(
   return null
 }
 
+/** 读工具回调装配（issue #315 自 useAiReadTools 拆出）：get_node /
+ * get_settings_snapshot / get_document / find_nodes 四个读工具全部经 ref
+ * 读「当前态」，回调身份只随镜像引用变化。 */
+interface AiEntityReadsDeps {
+  nodesRef: { current: CanvasNode[] }
+  edgesRef: { current: Edge[] }
+  settingsRef: { current: ProjectSettings }
+}
+
+function useAiEntityReads(deps: AiEntityReadsDeps) {
+  const { nodesRef, edgesRef, settingsRef } = deps
+
+  const readNode = useCallback(
+    (nodeId: string): string | null => {
+      const n = nodesRef.current.find((x) => x.id === nodeId)
+      return n ? JSON.stringify({ id: n.id, type: n.type, data: n.data }) : null
+    },
+    [nodesRef],
+  )
+
+  /** 读工具 get_settings_snapshot（issue 44）：清单文本由 entityFields 单点生成。 */
+  const readSettings = useCallback(
+    (): string => settingsSnapshotText(settingsRef.current),
+    [settingsRef],
+  )
+
+  const findNodes = useCallback(
+    (query: string, offset?: number, cursor?: string): string =>
+      findNodesText(nodesRef.current, edgesRef.current, query, offset, cursor),
+    [nodesRef, edgesRef],
+  )
+
+  /** 读工具 get_document（issue 56）：按需返回文档全文（正文不进快照，
+   * 只经此工具拉取）；不存在返回 null，由调用方给 not found 文案。 */
+  const readDocument = useCallback(
+    (documentId: string): string | null => {
+      const d = settingsRef.current.documents?.find((x) => x.id === documentId)
+      return d
+        ? JSON.stringify({
+            id: d.id,
+            title: d.title,
+            body: d.body,
+            relatedIds: d.relatedIds,
+          })
+        : null
+    },
+    [settingsRef],
+  )
+
+  return { readNode, readSettings, readDocument, findNodes }
+}
+
 /** 校验与读工具族（useAiBridge 拆出的回调子域）：反应式画布 → 快照 digest；
- * ref 镜像 → 整批校验快照与 get_node / get_settings_snapshot 读工具。
+ * ref 镜像 → 整批校验快照；读工具回调装配见 useAiEntityReads。
  * aiSnapshot 一并回传供落地重校验复用。 */
 /** useAiReadTools 的依赖：反应式画布状态 + ref 镜像（与 useAiBridge 同源）。 */
 interface AiReadToolsDeps {
-  nodes: CanvasNode[]
+  contentNodes: CanvasNode[]
   edges: Edge[]
   settings: ProjectSettings
   nodesRef: { current: CanvasNode[] }
@@ -195,18 +254,31 @@ interface AiReadToolsDeps {
 }
 
 function useAiReadTools(deps: AiReadToolsDeps) {
-  const { nodes, edges, settings, nodesRef, edgesRef, settingsRef, assetsRef } =
-    deps
+  const {
+    contentNodes,
+    edges,
+    settings,
+    nodesRef,
+    edgesRef,
+    settingsRef,
+    assetsRef,
+  } = deps
+  const { readNode, readSettings, readDocument, findNodes } = useAiEntityReads({
+    nodesRef,
+    edgesRef,
+    settingsRef,
+  })
 
+  // 摘要是纯内容派生（不含位置）：消费内容稳定投影，拖拽过程帧不重建
   const canvasDigest = useMemo(
     () =>
-      buildGraphDigest(nodes, edges, {
+      buildGraphDigest(contentNodes, edges, {
         characters: settings.characters,
         locations: settings.locations,
         characterName: (id) => resolveCharacterName(settings, id),
         locationName: (id) => resolveLocationName(settings, id),
       }),
-    [nodes, edges, settings],
+    [contentNodes, edges, settings],
   )
 
   /** AI 校验用的图快照（§12.2）：装配见 graphSnapshotOf。 */
@@ -230,37 +302,6 @@ function useAiReadTools(deps: AiReadToolsDeps) {
     [aiSnapshot],
   )
 
-  const readNode = useCallback(
-    (nodeId: string): string | null => {
-      const n = nodesRef.current.find((x) => x.id === nodeId)
-      return n ? JSON.stringify({ id: n.id, type: n.type, data: n.data }) : null
-    },
-    [nodesRef],
-  )
-
-  /** 读工具 get_settings_snapshot（issue 44）：清单文本由 entityFields 单点生成。 */
-  const readSettings = useCallback(
-    (): string => settingsSnapshotText(settingsRef.current),
-    [settingsRef],
-  )
-
-  /** 读工具 get_document（issue 56）：按需返回文档全文（正文不进快照，
-   * 只经此工具拉取）；不存在返回 null，由调用方给 not found 文案。 */
-  const readDocument = useCallback(
-    (documentId: string): string | null => {
-      const d = settingsRef.current.documents?.find((x) => x.id === documentId)
-      return d
-        ? JSON.stringify({
-            id: d.id,
-            title: d.title,
-            body: d.body,
-            relatedIds: d.relatedIds,
-          })
-        : null
-    },
-    [settingsRef],
-  )
-
   return {
     canvasDigest,
     aiSnapshot,
@@ -269,9 +310,12 @@ function useAiReadTools(deps: AiReadToolsDeps) {
     readNode,
     readSettings,
     readDocument,
+    findNodes,
   }
 }
 
+/** AI 通道与画布文档的桥接 hook：快照供给、批次执行与读工具就地回喂
+ * 在此装配；镜像 ref 读「当前值」语义见各依赖的注入注释。 */
 export function useAiBridge(deps: AiBridgeDeps): AiBridge {
   const {
     nodesRef,
@@ -294,6 +338,7 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     readNode,
     readSettings,
     readDocument,
+    findNodes,
   } = useAiReadTools(deps)
 
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
@@ -334,6 +379,7 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
     readNode,
     readSettings,
     readDocument,
+    findNodes,
     applyAiBatch,
   }
 }

@@ -6,10 +6,10 @@
 import { describe, expect, it } from 'vitest'
 import { parseProject, serializeProject } from './convert'
 import { NOW, mkContent } from './convertFixtures'
-import type { CanvasNode } from '../editor/nodes/types'
+import type { SessionNode } from './session'
 
 /** 图片节点样例（文生图首版）：prompt/model/size + outputs.primary 产物引用。 */
-function mkImageNode(over: Record<string, unknown> = {}): CanvasNode {
+function mkImageNode(over: Record<string, unknown> = {}): SessionNode {
   return {
     id: 'img1',
     type: 'image',
@@ -21,7 +21,7 @@ function mkImageNode(over: Record<string, unknown> = {}): CanvasNode {
       outputs: { primary: { assetId: 'pa-1' } },
       ...over,
     },
-  } as unknown as CanvasNode
+  } as unknown as SessionNode
 }
 
 /** 含图片节点 + 产物资产的会话文档（产物资产已入 assets.byId）。 */

@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::isotime::now_iso;
-use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir};
+use crate::store::error::StoreError;
+use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir, valid_save_doc};
 use std::fs;
 
 #[test]
@@ -21,7 +22,10 @@ fn persist_project_rejects_untrusted_id_before_any_join() {
     let doc = new_project_file("p-1", "剧".into(), now_iso());
     // 空资产索引下复验不设防：id 词法校验必须在任何路径拼接前拒绝
     let err = persist_project(&cap(&projects), "../evil", doc).unwrap_err();
-    assert!(err.contains("非法"), "意外诊断：{err}");
+    assert!(
+        matches!(err.root(), StoreError::InvalidInput { ref detail } if detail.contains("非法")),
+        "意外诊断：{err}"
+    );
     // 不得在 projects/ 之外创建任何文件
     assert!(
         fs::symlink_metadata(projects.parent().expect("临时根").join("evil.json")).is_err(),
@@ -58,7 +62,10 @@ fn persist_project_rejects_symlinked_target_without_following() {
     std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
     let doc = new_project_file("p-1", "剧".into(), now_iso());
     let err = persist_project(&cap(&projects), "p-1", doc).unwrap_err();
-    assert!(err.contains("符号链接"), "意外诊断：{err}");
+    assert!(
+        matches!(err.root(), StoreError::Refused { ref detail } if detail.contains("符号链接")),
+        "意外诊断：{err}"
+    );
     // 链接未被跟随或覆盖：根外文件原样保留，链接本身仍在
     assert_eq!(fs::read(&outside).expect("读根外文件"), b"{}".to_vec());
     assert!(fs::symlink_metadata(projects.join("p-1.json"))
@@ -74,7 +81,7 @@ fn load_project_file_rejects_path_like_id_before_any_join() {
     // 嵌套路径形态的 id：projects/ 内的资产/私有 JSON 不得经 load_project 读出
     let err = load_project_file(&cap(&projects), "p-1/assets/private").unwrap_err();
     assert!(
-        err.contains("非法") || err.contains("不存在"),
+        matches!(err.root(), StoreError::InvalidInput { ref detail } if detail.contains("非法")),
         "意外诊断：{err}"
     );
     cleanup_temp(&projects);
@@ -150,7 +157,10 @@ fn ai_session_save_requires_existing_project_record() {
     let session = serde_json::json!({ "schemaVersion": 1, "entries": [] });
     let err = save_ai_session_file(&cap(&projects), "p-1", &session)
         .expect_err("已删除项目不得被迟到会话保存重建");
-    assert!(err.contains("项目不存在"), "意外诊断：{err}");
+    assert!(
+        matches!(err.root(), StoreError::NotFound { ref detail } if detail.contains("项目不存在")),
+        "意外诊断：{err}"
+    );
     assert!(
         fs::symlink_metadata(projects.join("p-1")).is_err(),
         "拒绝保存不得创建项目会话目录"
@@ -194,7 +204,17 @@ fn delete_project_files_keeps_record_when_asset_tree_removal_fails() {
     let mut perms = fs::metadata(&assets).unwrap().permissions();
     perms.set_mode(0o755);
     let _ = fs::set_permissions(&assets, perms);
-    assert!(result.is_err(), "资产目录删除失败应显式报错");
+    let err = result.expect_err("资产目录删除失败应显式报错");
+    assert!(
+        matches!(err.root(), StoreError::Io { .. }),
+        "删除失败应为底层 I/O 类别：{err:?}"
+    );
+    // 展示边界契约（PR #179 评审修复）：条目名括注必须闭合，
+    // 文案与历史 format! 形态逐字一致
+    assert!(
+        err.to_string().starts_with("移除条目失败（\"a.png\"）："),
+        "实际文案：{err}"
+    );
     // 权威项目文件必须仍在：项目可发现、删除可重试，不留孤儿媒体树
     assert!(
         projects.join("p-1.json").exists(),
@@ -279,12 +299,12 @@ fn ai_session_rejects_symlinked_session_dir_for_read_and_write() {
         .err()
         .expect("读必须拒绝");
     assert!(
-        read_err.contains("项目会话目录是符号链接"),
+        matches!(read_err.root(), StoreError::Refused { ref detail } if detail.contains("项目会话目录是符号链接")),
         "意外诊断：{read_err}"
     );
     let write_err = save_ai_session_file(&cap(&projects), "p-1", &session).expect_err("写必须拒绝");
     assert!(
-        write_err.contains("项目会话目录是符号链接"),
+        matches!(write_err.root(), StoreError::Refused { ref detail } if detail.contains("项目会话目录是符号链接")),
         "意外诊断：{write_err}"
     );
     assert!(
@@ -305,9 +325,15 @@ fn ai_session_rejects_non_directory_session_path_for_read_and_write() {
     let read_err = load_ai_session_file(&cap(&projects), "p-1")
         .err()
         .expect("读必须拒绝");
-    assert!(read_err.contains("不是目录"), "意外诊断：{read_err}");
+    assert!(
+        matches!(read_err.root(), StoreError::Refused { ref detail } if detail.contains("不是目录")),
+        "意外诊断：{read_err}"
+    );
     let write_err = save_ai_session_file(&cap(&projects), "p-1", &session).expect_err("写必须拒绝");
-    assert!(write_err.contains("不是目录"), "意外诊断：{write_err}");
+    assert!(
+        matches!(write_err.root(), StoreError::Refused { ref detail } if detail.contains("不是目录")),
+        "意外诊断：{write_err}"
+    );
     assert_eq!(
         fs::read(projects.join("p-1")).expect("占位文件"),
         b"not a dir",
@@ -334,11 +360,280 @@ fn ai_session_save_rejects_invalid_envelope_before_touching_disk() {
     ];
     for (bad, diagnostic) in cases {
         let err = save_ai_session_file(&cap(&projects), "p-1", &bad).expect_err("信封非法必须拒绝");
-        assert!(err.contains(diagnostic), "意外诊断：{err}");
+        assert!(
+            matches!(err.root(), StoreError::InvalidInput { ref detail } if detail.contains(diagnostic)),
+            "意外诊断：{err}"
+        );
     }
     assert!(
         fs::symlink_metadata(projects.join("p-1")).is_err(),
         "拒绝保存不得创建项目会话目录"
+    );
+    cleanup_temp(&projects);
+}
+
+/// store 域错误分片（issue #144）：内核按失败类别区分且保留来源——
+/// 缺失为 NotFound、损坏为 CorruptJson（serde 来源经 source 链可取）、
+/// 信任链拒绝为 Refused、不可信输入为 InvalidInput；包装层保留阶段前缀。
+#[test]
+fn load_project_file_classifies_missing_as_not_found() {
+    let projects = temp_projects_dir();
+    let err = load_project_file(&cap(&projects), "p-1").unwrap_err();
+    assert!(
+        matches!(err.root(), StoreError::NotFound { ref detail } if detail == "项目不存在：p-1"),
+        "实际错误：{err:?}"
+    );
+    assert_eq!(err.to_string(), "项目不存在：p-1");
+    cleanup_temp(&projects);
+}
+
+#[test]
+fn load_project_file_classifies_corrupt_json_with_serde_source() {
+    let projects = temp_projects_dir();
+    fs::write(projects.join("p-1.json"), b"not json").expect("写损坏文件");
+    let err = load_project_file(&cap(&projects), "p-1").unwrap_err();
+    assert!(
+        err.to_string().starts_with("项目文件损坏："),
+        "实际文案：{err}"
+    );
+    assert!(
+        matches!(err.root(), StoreError::CorruptJson(_)),
+        "实际错误：{err:?}"
+    );
+    assert!(
+        std::error::Error::source(&err).is_some(),
+        "损坏来源应经 source 链保留"
+    );
+    cleanup_temp(&projects);
+}
+
+#[cfg(unix)]
+#[test]
+fn load_project_file_classifies_symlinked_file_as_refused() {
+    let projects = temp_projects_dir();
+    let outside = projects.parent().expect("临时根").join("evil.json");
+    fs::write(&outside, b"{}").expect("写根外文件");
+    std::os::unix::fs::symlink(&outside, projects.join("p-1.json")).expect("建符号链接");
+    let err = load_project_file(&cap(&projects), "p-1").unwrap_err();
+    assert!(
+        matches!(err.root(), StoreError::Refused { .. }),
+        "实际错误：{err:?}"
+    );
+    assert_eq!(
+        err.to_string(),
+        "拒绝读取项目文件：项目文件是符号链接，拒绝读取"
+    );
+    cleanup_temp(&projects);
+}
+
+/// PR #224 第二轮评审：delete_project_files 自身与 projects 操作锁
+/// 串行——持锁期间不得推进，释放后完成（幂等）。
+#[test]
+fn delete_project_files_serializes_with_projects_op_lock() {
+    let projects = temp_projects_dir();
+    persist_project(&cap(&projects), "p-1", valid_save_doc()).expect("建项目");
+    let gate = projects_op_lock();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let root = cap(&projects);
+    let worker = std::thread::spawn(move || {
+        done_tx
+            .send(delete_project_files(&root, "p-1"))
+            .expect("报告删除结果");
+    });
+    assert!(
+        done_rx
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "删除应与 projects 操作锁串行（持锁期间不得推进）"
+    );
+    drop(gate);
+    worker.join().expect("删除线程结束");
+    assert!(
+        done_rx.recv().expect("删除完成").is_ok(),
+        "持锁释放后删除应完成（幂等）"
+    );
+    cleanup_temp(&projects);
+}
+
+/// [PR #224 第六轮评审](https://github.com/hailingu/PlotWeave/pull/224)：
+/// 副本后续保存的 expectExisting 前置——copy 释放锁后被排队的删除移除
+/// 目标时，该保存不得复活控制文件。默认保存（false）保持既有语义
+///（迟到重试复活由前端墓碑吸收治理，Rust 不越权）。
+#[test]
+fn persist_project_expect_existing_refuses_deleted_target() {
+    let projects = temp_projects_dir();
+    let doc = valid_save_doc();
+    // 默认语义不变：目标缺失时保存可创建（既有项目权威写路径）
+    assert!(
+        persist_project(&cap(&projects), "p-new", valid_save_doc()).is_ok(),
+        "默认保存不要求目标存在（既有语义）"
+    );
+    // 副本路径：目标被删（控制文件+目录）后，expectExisting 保存按
+    // 「项目不存在」拒绝——锁内前置，先于 atomic_write
+    let err = persist_project_expect_existing(&cap(&projects), "p-gone", doc, true).unwrap_err();
+    assert!(
+        matches!(err.root(), StoreError::NotFound { ref detail } if detail.contains("项目不存在")),
+        "意外诊断：{err}"
+    );
+    assert!(!projects.join("p-gone.json").exists(), "不得复活已删目标");
+    cleanup_temp(&projects);
+}
+
+/// PR #224 第六轮评审：expectExisting=true 且目标存在时照常保存。
+#[test]
+fn persist_project_expect_existing_saves_when_target_present() {
+    let projects = temp_projects_dir();
+    persist_project(&cap(&projects), "p-1", valid_save_doc()).expect("先建项目");
+    persist_project_expect_existing(&cap(&projects), "p-1", valid_save_doc(), true)
+        .expect("目标存在时 expectExisting 保存照常");
+    cleanup_temp(&projects);
+}
+
+// ---- issue #267：主保存入口的逐阶段写盘故障回归 ----
+//
+// 复用 atomic_write 的既有故障注入 seam，把创建/写入/文件同步/rename/
+// 目录同步五个真实失败转换施加到主保存内核，断言回执类别、磁盘状态、
+// 临时文件所有权与重试收敛——读取真实产物与错误类别，不断言措辞之外
+// 的调用记录。写后资产复验失败路径需保存期间并发替换资产文件；主入口
+// 全程持 projects 操作锁，真实系统行为下同线程之外无法替换（本地并发
+// 攻击者替换树不在威胁模型），按 issue 口径不纳入并以本注释披露。
+
+use crate::store::persist::faults::{Injection, Stage};
+
+/// 主保存失败后的临时文件清扫断言：projects 根不得遗留 .tmp 条目
+///（失败清理只在取得临时文件所有权后生效，排他创建失败无可清理）。
+/// 单条目读取失败直接失败（PR #306 评审）：静默跳过会让扫描不完整时
+/// 漏报残留，回归测试虚假通过——测试助手同样 fail-closed。
+fn assert_no_temp_left(projects: &std::path::Path) {
+    let orphans: Vec<_> = fs::read_dir(projects)
+        .expect("扫描 projects 根")
+        .map(|e| e.expect("读取目录条目失败（不得静默跳过）"))
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(
+        orphans.is_empty(),
+        "失败保存不得遗留临时文件：{:?}",
+        orphans.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+    );
+}
+
+/// 提交前四阶段（创建/写入/文件同步/rename）注入失败：Err 上浮、磁盘
+/// 保持旧文档、无临时文件残留，重试收敛为新文档——注入以抵达阶段记录
+/// 自证（未命中注入时保存会照常成功，断言失败即暴露守卫失效）。
+#[test]
+fn save_pre_commit_stage_failures_keep_old_doc_and_retry_converges() {
+    let projects = temp_projects_dir();
+    let root = cap(&projects);
+    let mut old = valid_save_doc();
+    old.project.name = "改前".into();
+    persist_project(&root, "p-1", old).expect("预置旧文档");
+    let mut revised = valid_save_doc();
+    revised.project.name = "改后".into();
+    for stage in [Stage::Create, Stage::Write, Stage::FileSync, Stage::Rename] {
+        let inj = Injection::new(Some(stage), None);
+        let err = persist_project(&root, "p-1", revised.clone()).unwrap_err();
+        let stages = inj.stages();
+        drop(inj);
+        assert!(
+            stages.contains(&stage),
+            "注入阶段 {stage:?} 未抵达（守卫失效）：{stages:?}"
+        );
+        assert!(
+            matches!(err.root(), StoreError::Io { .. }),
+            "阶段 {stage:?} 失败应保留 I/O 诊断：{err}"
+        );
+        let on_disk = load_project_file(&root, "p-1").expect("旧文档可读");
+        assert_eq!(
+            on_disk.project.name, "改前",
+            "阶段 {stage:?} 在 rename 提交前失败，磁盘必须保持旧文档"
+        );
+        assert_no_temp_left(&projects);
+    }
+    // 注入撤除后重试收敛：无残留状态阻碍，一次成功即新文档
+    persist_project(&root, "p-1", revised).expect("重试保存");
+    assert_eq!(
+        load_project_file(&root, "p-1")
+            .expect("重试后可读")
+            .project
+            .name,
+        "改后"
+    );
+    cleanup_temp(&projects);
+}
+
+/// 提交后阶段失败（rename 成功后的 Unix 目录持久性屏障）：错误如实
+/// 返回、磁盘状态可说明（新文档已提交——「已提交仍报错」不只发生在
+/// 写后资产复验），重试幂等收敛；持久性屏障缺失不得粉饰为保存成功。
+#[cfg(unix)]
+#[test]
+fn save_directory_sync_failure_reports_error_with_new_doc_committed() {
+    let projects = temp_projects_dir();
+    let root = cap(&projects);
+    let mut old = valid_save_doc();
+    old.project.name = "改前".into();
+    persist_project(&root, "p-1", old).expect("预置旧文档");
+    let mut revised = valid_save_doc();
+    revised.project.name = "改后".into();
+    let inj = Injection::new(Some(Stage::DirectorySync), None);
+    let err = persist_project(&root, "p-1", revised.clone()).unwrap_err();
+    let stages = inj.stages();
+    drop(inj);
+    assert!(
+        stages.contains(&Stage::DirectorySync),
+        "目录屏障阶段未抵达（守卫失效）：{stages:?}"
+    );
+    assert!(
+        matches!(err.root(), StoreError::Io { ref context, .. } if context.contains("同步项目目录")),
+        "目录屏障失败应如实报错：{err}"
+    );
+    // rename 已成功：新文档已提交（与提交前失败的可观察状态相区分）
+    assert_eq!(
+        load_project_file(&root, "p-1")
+            .expect("已提交文档可读")
+            .project
+            .name,
+        "改后",
+        "目录屏障在 rename 之后失败，新文档应已在磁盘"
+    );
+    assert_no_temp_left(&projects);
+    // 重试幂等收敛：屏障重走成功，文档不变
+    persist_project(&root, "p-1", revised).expect("重试保存");
+    assert_eq!(
+        load_project_file(&root, "p-1")
+            .expect("重试后可读")
+            .project
+            .name,
+        "改后"
+    );
+    cleanup_temp(&projects);
+}
+
+/// [PR #224 第九轮评审](https://github.com/hailingu/PlotWeave/pull/224)：
+/// expectExisting 前置的元数据失败（非 NotFound，如权限错误）不得误判为
+/// 「项目不存在」——保留底层 I/O 诊断（可行动），不谎报契约状态。
+#[test]
+fn expect_existing_keeps_metadata_error_diagnostic() {
+    let projects = temp_projects_dir();
+    let root = cap(&projects);
+    persist_project(&root, "p-1", valid_save_doc()).expect("先建项目");
+    // 收权使 symlink_metadata 报 EACCES（非 NotFound）；句柄先开好——
+    // ambient 打开同样会被 0o000 拒绝
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&projects).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&projects, perms).expect("收权");
+    let err = persist_project_expect_existing(&root, "p-1", valid_save_doc(), true);
+    let mut perms = fs::metadata(&projects).unwrap().permissions();
+    perms.set_mode(0o755);
+    let _ = fs::set_permissions(&projects, perms);
+    let err = err.unwrap_err();
+    assert!(
+        matches!(err.root(), StoreError::Io { context, .. } if context.contains("元数据")),
+        "非 NotFound 的元数据失败应保留 I/O 诊断：{err}"
+    );
+    assert!(
+        !err.to_string().contains("项目不存在"),
+        "不得把存在性校验失败谎报为项目不存在：{err}"
     );
     cleanup_temp(&projects);
 }

@@ -73,10 +73,12 @@ describe('buildCanvasNode（节点工厂：默认字段 + 落点）', () => {
     const bareLines = noChar.data.lines as Array<{ speaker?: string }>
     expect(bareLines[0]).toMatchObject({
       kind: 'line',
-      speaker: undefined,
       side: 'left',
       text: '新台词…',
     })
+    // 无默认说话人 = 键缺省（issue #231 规范形：EOPT 下显式 undefined 不再
+    // 进入 DialogueLine 构造；归一化/序列化对缺省与 undefined 同层处理）
+    expect('speaker' in bareLines[0]).toBe(false)
   })
 
   it('节奏卡 / 分支 / 分镜卡默认字段；分镜镜号独立编号', () => {

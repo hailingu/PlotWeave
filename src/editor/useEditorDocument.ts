@@ -1,11 +1,12 @@
 /**
  * 编辑器文档状态（EditorView 拆出的状态域）：节点/连线/设定集/集标题/资产
  * 索引/集聚焦六个会话状态，外加命令栈与拖放读取「当前值」所需的镜像 ref
- * 与视口 ref（数据模型 §3 视口随文档持久化）。镜像在渲染期赋值：undo/redo
+ * 与已完成视口（数据模型 §3 视口随文档持久化）。内容镜像在渲染期赋值：undo/redo
  * 闭包必须在 setState updater 之外读到最新状态（StrictMode 下 updater 双调）。
  * 返回对象按字段 memo：状态不变时保持引用稳定，下游 useMemo/useCallback 有效。
  */
 import {
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -51,12 +52,67 @@ export interface EditorDocument {
   setFocusedEpisode: Dispatch<SetStateAction<number | null>>
   nodesRef: MutableRefObject<CanvasNode[]>
   edgesRef: MutableRefObject<Edge[]>
+  /** 内容稳定投影（issue #157）：仅当节点非位置/非会话内容变化时换引用——
+   * 拖拽过程帧（position/selected/dragging/measured 变化）保持引用稳定，
+   * 纯内容派生（AI 摘要、节拍兑现）据此跳过逐帧重算。条目仍是原节点对象。 */
+  contentNodes: CanvasNode[]
   /** 设定集镜像（issue 44）：AI 校验/落地读取「当前」实体注册表——
    * 预览到确认之间用户的设定集编辑经此被重校验发现。 */
   settingsRef: MutableRefObject<ProjectSettings>
   assetsRef: MutableRefObject<ProjectContent['assets']>
   episodeTitlesRef: MutableRefObject<Record<number, string>>
-  viewportRef: MutableRefObject<Viewport | undefined>
+  /** 最近完成的视口：导出实时预览订阅该值，不订阅动画过程帧。 */
+  viewport: Viewport | undefined
+  /** 发布完成视口并同步更新保存镜像，相同坐标保持引用稳定。 */
+  updateViewport: (viewport: Viewport) => void
+  /** 保存读取同步镜像；写入统一经过 updateViewport，避免预览与保存分离。 */
+  viewportRef: Readonly<MutableRefObject<Viewport | undefined>>
+}
+
+/** 节点会话态键（issue #157）：position/selected/dragging/measured 等
+ * 不属于业务内容——逐帧变化不构成 contentNodes 的内容差异。 */
+const SESSION_NODE_KEYS = new Set([
+  'position',
+  'selected',
+  'dragging',
+  'measured',
+  'className',
+  'zIndex',
+  'internals',
+  'width',
+  'height',
+])
+
+/** 两节点业务内容是否相同（issue #157）：同引用，或除会话态键外全部
+ * 自有键相等（data/meta 等真实内容以引用变化表达——补丁路径都产新引用）。 */
+function sameNodeContent(a: CanvasNode, b: CanvasNode): boolean {
+  if (a === b) return true
+  for (const k of Object.keys(a))
+    if (
+      !SESSION_NODE_KEYS.has(k) &&
+      a[k as keyof CanvasNode] !== b[k as keyof CanvasNode]
+    )
+      return false
+  for (const k of Object.keys(b))
+    if (!SESSION_NODE_KEYS.has(k) && !(k in a)) return false
+  return true
+}
+
+/** 内容稳定投影（issue #157）：数组引用仅在内容差异时更换，条目保持
+ * 当时的原节点对象（消费方不读会话态键）。 */
+function useContentNodes(nodes: CanvasNode[]): CanvasNode[] {
+  const ref = useRef(nodes)
+  if (
+    ref.current.length !== nodes.length ||
+    // 长度相等已由首条件保证；undefined 守卫消解下标读取的缺失分支
+    ref.current.some((n, i) => {
+      const next = nodes[i]
+      return next !== undefined && !sameNodeContent(n, next)
+    })
+  ) {
+    ref.current = nodes
+  }
+  return ref.current
 }
 
 /** 状态镜像 refs（useEditorDocument 拆分，issue #99）：命令的 undo/redo
@@ -82,7 +138,28 @@ function useDocumentMirrorRefs(
   return { nodesRef, edgesRef, settingsRef, assetsRef, episodeTitlesRef }
 }
 
-/** 从项目会话内容初始化文档状态，并建立镜像 ref 与视口 ref。 */
+/** 已完成视口的单一写入口：同步镜像保证同批卸载冲刷，状态驱动导出刷新。 */
+function useDocumentViewport(initialViewport: Viewport | undefined) {
+  const [viewport, setViewport] = useState(initialViewport)
+  const viewportRef = useRef(initialViewport)
+  const updateViewport = useCallback((next: Viewport) => {
+    const current = viewportRef.current
+    if (
+      current?.x === next.x &&
+      current.y === next.y &&
+      current.zoom === next.zoom
+    )
+      return
+    viewportRef.current = next
+    setViewport(next)
+  }, [])
+  return useMemo(
+    () => ({ viewport, viewportRef, updateViewport }),
+    [viewport, updateViewport],
+  )
+}
+
+/** 从项目会话内容初始化文档状态，建立内容镜像与已完成视口。 */
 export function useEditorDocument(
   project: EditorProjectContent,
 ): EditorDocument {
@@ -104,11 +181,9 @@ export function useEditorDocument(
 
   const { nodesRef, edgesRef, settingsRef, assetsRef, episodeTitlesRef } =
     useDocumentMirrorRefs(nodes, edges, settings, assets, episodeTitles)
+  const contentNodes = useContentNodes(nodes)
 
-  // 视口随文档持久化（数据模型 §3）：本身无重渲染，onMoveEnd 更新 ref 后
-  // 经 markDirty 显式标脏并换入最新文档——纯平移/缩放也会防抖落盘，
-  // 卸载冲刷与后续内容保存拿到的都是最新视口（不落 stale 值）。
-  const viewportRef = useRef<Viewport | undefined>(project.viewport)
+  const viewportState = useDocumentViewport(project.viewport)
 
   return useMemo(
     () => ({
@@ -130,10 +205,11 @@ export function useEditorDocument(
       setFocusedEpisode,
       nodesRef,
       edgesRef,
+      contentNodes,
       settingsRef,
       assetsRef,
       episodeTitlesRef,
-      viewportRef,
+      ...viewportState,
     }),
     [
       nodes,
@@ -155,9 +231,11 @@ export function useEditorDocument(
       // 以满足 exhaustive-deps（issue #99 拆分）。
       nodesRef,
       edgesRef,
+      contentNodes,
       settingsRef,
       assetsRef,
       episodeTitlesRef,
+      viewportState,
     ],
   )
 }

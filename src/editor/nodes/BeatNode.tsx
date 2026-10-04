@@ -1,7 +1,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
-import NodeSettingsPanel, { EditableName } from './settings/NodeSettingsPanel'
-import NodeSettingsGear from './settings/NodeSettingsGear'
+import { NodeSettingsPanel, EditableName } from './settings/NodeSettingsPanel'
+import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import type { BeatFlowNode } from './types'
 
 /**
@@ -10,11 +10,7 @@ import type { BeatFlowNode } from './types'
  * 兑现状态（§3.5）：未被场景承载 = 待兑现虚线态；兑现后 ✓ 徽标（派生，不落字段）。
  * 名称双击内联改名；⚙️ 打开设置面板（§4.3，编辑即命令）。
  */
-export default function BeatNode({
-  id,
-  data,
-  selected,
-}: NodeProps<BeatFlowNode>) {
+export function BeatNode({ id, data, selected }: NodeProps<BeatFlowNode>) {
   const { openSettingsId, toggleSettings, patchNode, beatFulfillmentOf } =
     useNodeEdit()
   const settingsOpen = openSettingsId === id

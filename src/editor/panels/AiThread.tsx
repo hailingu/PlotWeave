@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useRef,
   useState,
@@ -13,12 +14,13 @@ import {
 import { useSettingsSnapshot } from '../../settings/useSettingsSnapshot'
 import { listChatModels, type ChatModelOption } from '../../settings/types'
 import { cardResultEntry } from './aiThreadModel'
-import PreviewCard from './PreviewCard'
+import { PreviewCard } from './PreviewCard'
 import {
   stripExecutionRuntime,
   type AiSession,
   type ThreadEntry,
-} from '../ai/session'
+} from '../../ai/session'
+import type { AiCommitIdentity } from '../ai/commitIdentity'
 
 import { useAiSessionPersistence } from '../ai/useAiSessionPersistence'
 import { revalidatePendingCard, useAiTurn } from './aiThreadTurn'
@@ -86,9 +88,21 @@ function reconcilePendingCard(
   return { ...next, status: 'pending' }
 }
 
+/** 旧版执行回执 note 携带「⌘Z 可整批撤销」宣称（会话持久化引入至
+ * 8b9deb2 间落盘，issue #347 起废弃）：撤销栈不跨会话存活，恢复后该
+ * 宣称必然失真。按应用自身回执的精确历史格式剥除该从句，其余 note
+ * 文本逐字保留；恢复期契约修复，不影响 repaired 语义。 */
+function trimStaleUndoClaim(text: string): string {
+  return text.replace(
+    /^✓ 已执行 (\d+) 项改动，⌘Z 可整批撤销。$/,
+    '✓ 已执行 $1 项改动。',
+  )
+}
+
 /** 用当前画布重建原先合法卡片的预览，拒绝信任落盘的确认元数据；
  * 校验拒绝卡没有完整原始批次，不能把空命令或合法子集重新判成合法整批。
- * 历史执行卡标注 historical——撤销栈不跨会话存活，不得宣称可撤销。
+ * 历史执行卡标注 historical——恢复的执行卡显示「历史改动」区分于当前
+ * 会话回执；两类执行卡都不宣称 ⌘Z 当前可撤销（issue #347）。
  * 条目 id 重定基为 1..n 有界序列：落盘 id 不受信，防止自增越过
  * MAX_SAFE_INTEGER 产生重复 key 与下次加载被归一化丢弃的条目。 */
 function restoreThreadEntries(
@@ -99,6 +113,7 @@ function restoreThreadEntries(
 ): ThreadEntry[] {
   return (initialSession?.entries ?? []).map((entry, index) => {
     const based = { ...entry, id: index + 1 }
+    if (entry.kind === 'note') based.text = trimStaleUndoClaim(entry.text)
     if (based.card?.status === 'executed') {
       return { ...based, card: { ...based.card, historical: true } }
     }
@@ -140,33 +155,32 @@ function useCanvasCommitConfirmation(
   }, [thread, whenCanvasCommitted, setThread])
 }
 
-/** 执行结果写回所属卡片：失败可重试，成功清除旧诊断，未落盘时保留对账身份。 */
+/** 执行结果写回所属卡片：失败可重试，成功清除旧诊断并按提交身份分流——
+ * 带画布确认等待器即标注 uncommitted 并记录对账计数（嵌套形状保证计数
+ * 必在，未确认卡不可能没有 aiRevisionAfter 身份），否则立即 executed。 */
 function cardAfterExecution(
   card: NonNullable<ThreadEntry['card']>,
   err: string | null,
-  awaiting: boolean,
-  aiRevisionAfter: number | undefined,
+  identity: AiCommitIdentity | undefined,
 ): NonNullable<ThreadEntry['card']> {
   const next = stripExecutionRuntime(card)
   delete next.executionError
   if (err) return { ...next, status: 'pending', executionError: err }
+  if (identity?.whenCanvasCommitted === undefined)
+    return { ...next, status: 'executed' }
   return {
     ...next,
     status: 'executed',
-    ...(awaiting
-      ? {
-          uncommitted: true,
-          ...(aiRevisionAfter !== undefined ? { aiRevisionAfter } : {}),
-        }
-      : {}),
+    uncommitted: true,
+    aiRevisionAfter: identity.aiRevision + 1,
   }
 }
 
 /** 执行预览卡的线程变换（useAiThreadMessages 拆分，issue #99）：成功 →
- * 置状态并追加回执；失败 → 错误回执（批次未动）；成功但画布尚未确认落盘
- * 时标注 uncommitted 并记录执行后批次计数——持久化层据此降级为 pending，
- * 画布落盘确认后再写 executed。回执关联卡片 id（可能追加在会话尾部）：
- * 未确认落盘的执行按关联剔除回执。 */
+ * 置状态并追加回执；失败 → 错误回执（批次未动）；提交身份带画布确认
+ * 等待器时标注 uncommitted 并记录执行后批次计数——持久化层据此降级为
+ * pending，画布落盘确认后再写 executed。回执关联卡片 id（可能追加在
+ * 会话尾部）：未确认落盘的执行按关联剔除回执。 */
 function applyCardExecution(args: {
   readonly thread: ThreadEntry[]
   readonly setThread: Dispatch<SetStateAction<ThreadEntry[]>>
@@ -174,27 +188,21 @@ function applyCardExecution(args: {
   readonly entry: ThreadEntry
   readonly idx: number
   readonly nextId: () => number
-  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
-  readonly whenCanvasCommitted?: () => Promise<void>
-  readonly aiRevision?: number
+  readonly onApplyAiBatch?:
+    ((commands: ValidatedCommand[]) => string | null) | undefined
+  readonly identity?: AiCommitIdentity | undefined
 }): void {
   const { setThread, setArmedIdx, entry, idx, nextId } = args
   if (entry.card?.status !== 'pending' || !args.onApplyAiBatch) return
-  const aiRevisionAfter =
-    args.aiRevision === undefined ? undefined : args.aiRevision + 1
   const err = args.onApplyAiBatch(entry.card.v.commands)
   const receipt = {
     ...cardResultEntry(err, entry.card.v.commands.length, nextId),
     cardReceiptFor: entry.id,
   }
-  const awaiting = !err && args.whenCanvasCommitted !== undefined
   setThread((t) => [
     ...t.map((e, i) =>
       i === idx && e.card
-        ? {
-            ...e,
-            card: cardAfterExecution(e.card, err, awaiting, aiRevisionAfter),
-          }
+        ? { ...e, card: cardAfterExecution(e.card, err, args.identity) }
         : e,
     ),
     receipt,
@@ -205,21 +213,20 @@ function applyCardExecution(args: {
 /** 会话线程域（逻辑 hook，issue #39 拆分）：条目追加、预览卡执行/忽略
  * 与危险批次的两步确认武装态；threadRef 供容器做滚动跟随。 */
 function useAiThreadMessages(opts: {
-  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
-  readonly initialSession?: AiSession
-  readonly onValidateCommands?: (
-    commands: AiCommand[],
-  ) => BatchValidation | null
-  /** 承载批次的画布文档确认落盘后兑现（见 useAiSessionPersistence 的落盘映射）。 */
-  readonly whenCanvasCommitted?: () => Promise<void>
-  /** 画布批次计数（§12.2 提交身份）：执行后 +1 记录到卡片，恢复时对账。 */
-  readonly aiRevision?: number
+  // 可选接线全链允许显式 undefined（undefined = 未接线，issue #231）
+  readonly onApplyAiBatch?:
+    ((commands: ValidatedCommand[]) => string | null) | undefined
+  readonly initialSession?: AiSession | undefined
+  readonly onValidateCommands?:
+    ((commands: AiCommand[]) => BatchValidation | null) | undefined
+  /** 提交身份（issue #139）：计数供恢复对账，等待器决定 executed 落盘推迟。 */
+  readonly identity?: AiCommitIdentity | undefined
 }) {
   const [thread, setThread] = useState<ThreadEntry[]>(() =>
     restoreThreadEntries(
       opts.initialSession,
       opts.onValidateCommands,
-      opts.aiRevision,
+      opts.identity?.aiRevision,
     ),
   )
   /** 危险批次的两步确认：处于武装态的会话条目下标，null = 无。 */
@@ -234,7 +241,7 @@ function useAiThreadMessages(opts: {
     setThread((t) => [...t, ...entries])
 
   /** 执行预览卡：成功 → 置状态并追加回执；失败 → 错误回执（批次未动）。
-   * 成功但画布尚未确认落盘时标注 uncommitted 并记录执行后批次计数——
+   * 提交身份带画布确认等待器时标注 uncommitted 并记录执行后批次计数——
    * 持久化层据此降级为 pending，画布落盘确认后再写 executed。 */
   const executeCard = (idx: number) =>
     applyCardExecution({
@@ -245,8 +252,7 @@ function useAiThreadMessages(opts: {
       idx,
       nextId,
       onApplyAiBatch: opts.onApplyAiBatch,
-      whenCanvasCommitted: opts.whenCanvasCommitted,
-      aiRevision: opts.aiRevision,
+      identity: opts.identity,
     })
 
   const markDismissed = (idx: number) => {
@@ -269,7 +275,11 @@ function useAiThreadMessages(opts: {
     setArmedIdx(null)
   }
 
-  useCanvasCommitConfirmation(thread, setThread, opts.whenCanvasCommitted)
+  useCanvasCommitConfirmation(
+    thread,
+    setThread,
+    opts.identity?.whenCanvasCommitted,
+  )
 
   return {
     thread,
@@ -347,7 +357,8 @@ function AiGuide({
   onOpenSettings,
 }: {
   readonly hasModels: boolean
-  readonly onOpenSettings?: () => void
+  // 可显式 undefined = 未接线（issue #231）
+  readonly onOpenSettings?: (() => void) | undefined
 }) {
   return (
     <div className="pw-ai-guide">
@@ -369,7 +380,8 @@ function AiGuide({
   )
 }
 
-/** 输入行：消息输入（Enter 发送）+ 画布感知开关。 */
+/** 输入行（issue #154）：busy 时切换为取消按钮——在途回合可停止（协作式：
+ * agentLoop 停止后续循环，在途 llm_chat 不被中止）；画布感知开关常驻。 */
 function AiComposer({
   draft,
   setDraft,
@@ -378,6 +390,7 @@ function AiComposer({
   knowsCanvas,
   setKnowsCanvas,
   onSend,
+  onCancel,
 }: {
   readonly draft: string
   readonly setDraft: (v: string) => void
@@ -386,20 +399,32 @@ function AiComposer({
   readonly knowsCanvas: boolean
   readonly setKnowsCanvas: (updater: (v: boolean) => boolean) => void
   readonly onSend: () => void
+  readonly onCancel: () => void
 }) {
   return (
     <div className="pw-ai-input">
-      <input
-        type="text"
-        value={draft}
-        placeholder={ready ? '输入消息，Enter 发送…' : '配置后可输入…'}
-        aria-label="AI 对话输入"
-        disabled={!ready || busy}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') onSend()
-        }}
-      />
+      {busy ? (
+        <button
+          type="button"
+          className="pw-ai-cancel"
+          aria-label="取消"
+          onClick={onCancel}
+        >
+          取消
+        </button>
+      ) : (
+        <input
+          type="text"
+          value={draft}
+          placeholder={ready ? '输入消息，Enter 发送…' : '配置后可输入…'}
+          aria-label="AI 对话输入"
+          disabled={!ready}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onSend()
+          }}
+        />
+      )}
       <button
         type="button"
         className={`pw-ai-ctx-toggle${knowsCanvas ? ' on' : ''}`}
@@ -469,28 +494,30 @@ function AiEntryBody({
 interface AiThreadProps {
   /** 项目 id：在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
   readonly projectId: string
-  readonly onOpenSettings?: () => void
-  readonly canvasDigest?: string
-  readonly onValidateAi?: (text: string) => BatchValidation | null
-  readonly onValidateCommands?: (
-    commands: AiCommand[],
-  ) => BatchValidation | null
-  readonly onReadNode?: (nodeId: string) => string | null
-  readonly onReadSettings?: () => string
+  // 可选接线允许显式 undefined（undefined = 未接线，issue #231）
+  readonly onOpenSettings?: (() => void) | undefined
+  readonly canvasDigest?: string | undefined
+  readonly onValidateAi?: ((text: string) => BatchValidation | null) | undefined
+  readonly onValidateCommands?:
+    ((commands: AiCommand[]) => BatchValidation | null) | undefined
+  readonly onReadNode?: ((nodeId: string) => string | null) | undefined
+  readonly onReadSettings?: (() => string) | undefined
   /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON。 */
-  readonly onReadDocument?: (documentId: string) => string | null
-  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
-  /** 承载批次的画布文档确认落盘后兑现；执行卡据此推迟 executed 落盘。 */
-  readonly whenCanvasCommitted?: () => Promise<void>
-  /** 画布批次计数（§12.2 提交身份）：执行后 +1 记录到卡片，恢复时对账。 */
-  readonly aiRevision?: number
+  readonly onReadDocument?: ((documentId: string) => string | null) | undefined
+  /** 读工具 find_nodes（issue #275 评审）：按名称检索全部节点与关联连线。 */
+  readonly onFindNodes?:
+    ((query: string, offset?: number, cursor?: string) => string) | undefined
+  readonly onApplyAiBatch?:
+    ((commands: ValidatedCommand[]) => string | null) | undefined
+  /** 执行卡的提交身份（issue #139）：计数必带、等待器可选；见 AiCommitIdentity。 */
+  readonly commitIdentity?: AiCommitIdentity | undefined
   /** 打开项目时恢复的独立会话快照。 */
-  readonly initialSession?: AiSession
-  readonly initialSessionError?: string | null
+  readonly initialSession?: AiSession | undefined
+  readonly initialSessionError?: string | null | undefined
   /** 内存会话可否作为挂载重试的落盘内容；读取失败（空回退）时为 false。 */
-  readonly initialSessionRetryable?: boolean
+  readonly initialSessionRetryable?: boolean | undefined
   /** 会话变更的独立持久化通道；失败不清空当前内存历史。 */
-  readonly onSaveSession?: (session: AiSession) => Promise<void>
+  readonly onSaveSession?: ((session: AiSession) => Promise<void>) | undefined
 }
 
 /** 装配会话三域（AiThread 拆分，issue #99）：模型选择、线程消息与回合
@@ -501,8 +528,7 @@ function useAiThreadAssembly(props: AiThreadProps) {
     onApplyAiBatch: props.onApplyAiBatch,
     initialSession: props.initialSession,
     onValidateCommands: props.onValidateCommands,
-    whenCanvasCommitted: props.whenCanvasCommitted,
-    aiRevision: props.aiRevision,
+    identity: props.commitIdentity,
   })
   const saveError = useAiSessionPersistence(
     msg.thread,
@@ -524,11 +550,16 @@ function useAiThreadAssembly(props: AiThreadProps) {
     onReadNode: props.onReadNode,
     onReadSettings: props.onReadSettings,
     onReadDocument: props.onReadDocument,
+    onFindNodes: props.onFindNodes,
   })
   return { m, msg, saveError, turn }
 }
 
-export default function AiThread(props: AiThreadProps) {
+/** memo 边界（issue #157）：位置帧（拖拽过程帧）不重渲染 AI 会话面板——
+ * 输入（画布摘要、提交身份捆绑对象、校验/读取/落地回调、会话快照）在
+ * 无内容变化的帧间引用稳定（提交身份由装配层 useMemo 稳定，见
+ * EditorView）；会话内交互照常驱动自身状态更新。 */
+export const AiThread = memo(function AiThread(props: AiThreadProps) {
   const { m, msg, saveError, turn } = useAiThreadAssembly(props)
   const onOpenSettings = props.onOpenSettings
   return (
@@ -573,7 +604,11 @@ export default function AiThread(props: AiThreadProps) {
         knowsCanvas={turn.knowsCanvas}
         setKnowsCanvas={turn.setKnowsCanvas}
         onSend={() => void turn.send()}
+        onCancel={() => {
+          turn.cancel()
+          turn.appendCancelReceipt()
+        }}
       />
     </div>
   )
-}
+})

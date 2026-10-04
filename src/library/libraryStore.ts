@@ -1,5 +1,5 @@
 /** 个人资产库前端门面（docs/ui-design.md §8.1 / 数据模型 §7）。
- * 原生宿主经 src/platform 命令传输走 Rust 命令（应用级 library/ 目录，
+ * 原生宿主经 typed IPC 宿主传输走 Rust 命令（应用级 library/ 目录，
  * 媒体经 pwmedia 自定义协议按 assetId 懒加载——§7.1 opaque asset URL，
  * relPath 与本机绝对路径不进入前端媒体链路，issue #26；Swift 宿主传输待
  * P2 后续接通，未接通时可见失败）；内存回退仅限纯浏览器预览（P2 平台
@@ -8,13 +8,18 @@
  * 「拖上画布 = 拷贝进项目」由 src/editor/projectAssets.ts 承接）。
  */
 
-import { isBrowserPreviewHost } from '../platform/hostEnvironment'
-import { hostInvoke } from '../platform/hostCommands'
 import { uid } from '../uid'
+import { IPC_COMMANDS } from '../ipc/commands'
+import { ipcInvoke } from '../ipc/invoke'
+import { isBrowserPreviewHost } from '../platform/hostEnvironment'
+import { reportLibraryDiagnostics } from './libraryDiagnosticTransport'
 
+/** 资产库分类（§7）：索引条目的 kind 域；中文标签/图标见 LIBRARY_KINDS。 */
 export type LibraryKind =
   'character' | 'location' | 'wardrobe' | 'colorlight' | 'reference' | 'other'
 
+/** 资产库分类的展示表（kind → 中文标签 + 图标）：面板分组与筛选共用，
+ * 单一来源防各处文案漂移。 */
 export const LIBRARY_KINDS: Array<{
   kind: LibraryKind
   label: string
@@ -45,7 +50,9 @@ export interface LibraryAsset {
   /** 创建时间（§7.2 UTC ISO 8601 字符串，issue #29）。 */
   createdAt: string
   /** 删除事务冲突期标记（§7.2）：媒体打开/导入拒绝服务（issue #25）。 */
-  conflicted?: boolean
+  /** 冲突期标记；可显式 undefined = 非冲突期（内存规范化产出的常态，
+   * issue #231）。 */
+  conflicted?: boolean | undefined
 }
 
 /** 资产组：同一主体（如某角色）的多张视图/变体的集合（§7.2）。 */
@@ -56,7 +63,14 @@ export interface AssetGroup {
   kind: LibraryKind
 }
 
-interface RawAsset {
+/** 库命令的诊断信封：序号来自后端锁内执行顺序，不是前端请求顺序。 */
+interface LibraryDiagnostics {
+  warnings?: unknown
+  cleanupPending?: unknown
+  diagnosticsRevision?: unknown
+}
+
+interface RawAsset extends LibraryDiagnostics {
   id?: unknown
   name?: unknown
   kind?: unknown
@@ -102,34 +116,19 @@ function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
   }
 }
 
-/** 后端隔离/修复诊断统一进既有 console.warn 路径（issue #17）：list 与
- * 各变更命令的 warnings 清单逐条上报，被隔离条目不得静默消失或被
- * "落盘即净化"静默改写。 */
-function reportLibraryWarnings(warnings: unknown): void {
-  if (Array.isArray(warnings)) {
-    for (const w of warnings) {
-      if (typeof w === 'string' && w !== '')
-        console.warn('[Library] 索引条目隔离：', w)
-    }
-  }
-}
-
 /** 内存回退：blob + object URL，会话内有效。 */
 const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()
 /** 内存回退的组存储（§7.2）。 */
 const memoryGroups = new Map<string, AssetGroup>()
 
 async function tauriList(): Promise<LibraryAsset[]> {
-  const index = await hostInvoke<{
+  const index = await ipcInvoke<{
     assets?: { byId?: Record<string, unknown> }
     warnings?: unknown[]
     cleanupPending?: unknown[]
-  }>('list_library_assets')
-  reportLibraryWarnings(index.warnings)
-  // 隔离区积压（身份绑定清理不可用）：随列表上报为诊断，不再静默累积
-  if (Array.isArray(index.cleanupPending) && index.cleanupPending.length > 0) {
-    console.warn('[Library] 删除隔离区待清理：', index.cleanupPending)
-  }
+    diagnosticsRevision?: unknown
+  }>(IPC_COMMANDS.listLibraryAssets)
+  reportLibraryDiagnostics(index)
   // §7.2 Record 形状：assets.byId 的值即条目（issue #29 PR 1，评审修复——
   // 旧数组形状已迁移，前端必须按 byId 读取，否则全部资产被隐藏）
   const byId = index.assets?.byId
@@ -141,13 +140,13 @@ async function tauriList(): Promise<LibraryAsset[]> {
 
 async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
   const bytes = new Uint8Array(await file.arrayBuffer())
-  const entry = await hostInvoke<RawAsset>('import_library_asset', {
+  const entry = await ipcInvoke<RawAsset>(IPC_COMMANDS.importLibraryAsset, {
     name: file.name,
     mime: file.type || 'application/octet-stream',
     kind,
     bytes: Array.from(bytes),
   })
-  reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
+  reportLibraryDiagnostics(entry)
   const normalized = normalizeAsset(entry)
   if (!normalized) throw new Error('导入返回了无效条目')
   return normalized
@@ -157,10 +156,12 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
  * 按当前索引解析并返回 `pwmedia://` URL——relPath 与本机绝对路径不出
  * Rust，前端不再拼接。冲突期条目本地快路径先行拦截（issue #25）。 */
 async function tauriMediaUrl(
-  asset: Pick<LibraryAsset, 'id' | 'conflicted'>,
+  asset: Pick<LibraryAsset, 'id'> & {
+    readonly conflicted?: boolean | undefined
+  },
 ): Promise<string> {
   if (asset.conflicted) throw new Error('资产处于删除事务冲突期，媒体不可用')
-  return hostInvoke<string>('get_asset_media_url', {
+  return ipcInvoke<string>(IPC_COMMANDS.getAssetMediaUrl, {
     scope: { kind: 'library' },
     assetId: asset.id,
   })
@@ -185,24 +186,26 @@ function enqueueAssetOperation<T>(
   return run
 }
 
-/** updateMeta 的实际执行体（门面串行包装之内）：原生宿主走命令补丁
- * 更新，内存回退做同语义的 groupId 校验与合并。 */
-async function applyUpdateMeta(
+/** updateMeta 的实际执行体（门面串行包装之内）：Tauri 走 IPC 补丁更新，
+ * 内存回退做同语义的 groupId 校验与合并。 */
+function applyUpdateMeta(
   id: string,
   patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>,
 ): Promise<LibraryAsset> {
   if (!isBrowserPreviewHost()) {
-    const entry = await hostInvoke<RawAsset>('update_library_asset', {
-      id,
-      patch,
-    })
-    reportLibraryWarnings((entry as { warnings?: unknown } | null)?.warnings)
-    const normalized = normalizeAsset(entry)
-    if (!normalized) throw new Error('更新返回了无效条目')
-    return normalized
+    return (async () => {
+      const entry = await ipcInvoke<RawAsset>(IPC_COMMANDS.updateLibraryAsset, {
+        id,
+        patch,
+      })
+      reportLibraryDiagnostics(entry)
+      const normalized = normalizeAsset(entry)
+      if (!normalized) throw new Error('更新返回了无效条目')
+      return normalized
+    })()
   }
   const hit = memoryAssets.get(id)
-  if (!hit) throw new Error(`资产不存在：${id}`)
+  if (!hit) return Promise.reject(new Error(`资产不存在：${id}`))
   // groupId 校验（评审修复，PR #36 第五轮）：与 Rust update_meta_with 的
   // 复验同语义——组不存在或 kind 不一致即拒绝；null/空串/空白同归清除
   // （第八轮：Rust apply_group_id 把空白归清除，空串不得落入存储）
@@ -213,9 +216,11 @@ async function applyUpdateMeta(
       : null
   if (groupId !== null) {
     const group = memoryGroups.get(groupId)
-    if (!group) throw new Error(`组不存在：${groupId}`)
+    if (!group) return Promise.reject(new Error(`组不存在：${groupId}`))
     if (group.kind !== hit.asset.kind) {
-      throw new Error(`组 ${groupId} 的 kind 与资产不一致，拒绝编组`)
+      return Promise.reject(
+        new Error(`组 ${groupId} 的 kind 与资产不一致，拒绝编组`),
+      )
     }
   }
   // 归一化后的 groupId 入存储：空串/空白不留（与 Rust 落盘删字段同语义）
@@ -223,7 +228,7 @@ async function applyUpdateMeta(
   hit.asset = { ...hit.asset, ...patchNorm }
   memoryAssets.set(id, hit)
   // 克隆返回（评审修复，PR #36 第九轮）：与 list/put 同款
-  return { ...hit.asset }
+  return Promise.resolve({ ...hit.asset })
 }
 
 /** 每资产最近一次经门面成功落盘的条目快照（PR #176 评审）：与
@@ -233,31 +238,32 @@ async function applyUpdateMeta(
 const lastPersistedAssets = new Map<string, LibraryAsset>()
 
 /** 删除的实际执行体：排队落定后才删除，成功清除快照，失败保持原基线
- * 并交由调用方呈现错误；命令路径返回的隔离区诊断继续上报。 */
+ * 并交由调用方呈现错误；Tauri 返回的隔离区诊断继续上报。 */
 async function applyRemove(id: string): Promise<void> {
   if (!isBrowserPreviewHost()) {
-    const result = await hostInvoke<{
-      warnings?: unknown
-      cleanupPending?: unknown[]
-    }>('delete_library_asset', { id })
-    reportLibraryWarnings(result?.warnings)
-    if (result?.cleanupPending?.length) {
-      console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
-    }
+    const result = await ipcInvoke<LibraryDiagnostics>(
+      IPC_COMMANDS.deleteLibraryAsset,
+      {
+        id,
+      },
+    )
+    reportLibraryDiagnostics(result)
   } else {
     memoryAssets.delete(id)
   }
   lastPersistedAssets.delete(id)
 }
 
-/** 统一门面：内存回退仅限纯浏览器预览（P2 平台收敛）。 */
+/** 统一门面：两种环境同签名。 */
 export const libraryStore = {
   list: (): Promise<LibraryAsset[]> =>
-    isBrowserPreviewHost()
-      ? // 克隆返回（评审修复，PR #36 第九轮）：调用方 mutate 列表资产不得
+    !isBrowserPreviewHost()
+      ? tauriList()
+      : // 克隆返回（评审修复，PR #36 第九轮）：调用方 mutate 列表资产不得
         // 绕过组校验直接改 memoryAssets
-        Promise.resolve([...memoryAssets.values()].map((v) => ({ ...v.asset })))
-      : tauriList(),
+        Promise.resolve(
+          [...memoryAssets.values()].map((v) => ({ ...v.asset })),
+        ),
 
   put: (file: File, kind: LibraryKind): Promise<LibraryAsset> => {
     if (!isBrowserPreviewHost()) return tauriPut(file, kind)
@@ -311,7 +317,10 @@ export const libraryStore = {
    * 库资产 id 取源媒体建独立 URL（§7.3 拷贝语义）；冲突期条目拒绝服务
    * （issue #25）。 */
   mediaUrl: (
-    asset: Pick<LibraryAsset, 'id' | 'conflicted'>,
+    asset: Pick<LibraryAsset, 'id'> & {
+      // 可显式 undefined = 非冲突期（issue #231）
+      readonly conflicted?: boolean | undefined
+    },
   ): Promise<string> => {
     if (!isBrowserPreviewHost()) return tauriMediaUrl(asset)
     if (asset.conflicted)
@@ -321,53 +330,48 @@ export const libraryStore = {
     return Promise.resolve(URL.createObjectURL(hit.blob))
   },
 
-  /** 组列表：命令路径读 library.json 的 groups.byId；内存回退读内存组。 */
-  listGroups: async (): Promise<AssetGroup[]> => {
+  /** 组列表：Tauri 读 library.json 的 groups.byId；内存回退读内存组。 */
+  listGroups: (): Promise<AssetGroup[]> => {
     if (!isBrowserPreviewHost()) {
-      // 完整响应信封（评审修复，PR #36 第一轮）：warnings/cleanupPending
-      // 与 tauriList 同款上报——只读组视图不得隐藏修复/隔离诊断
-      const index = await hostInvoke<{
-        groups?: { byId?: Record<string, unknown> }
-        warnings?: unknown[]
-        cleanupPending?: unknown[]
-      }>('list_library_assets')
-      reportLibraryWarnings(index.warnings)
-      if (
-        Array.isArray(index.cleanupPending) &&
-        index.cleanupPending.length > 0
-      ) {
-        console.warn('[Library] 删除隔离区待清理：', index.cleanupPending)
-      }
-      const byId = index.groups?.byId
-      const entries =
-        byId && typeof byId === 'object' ? Object.values(byId) : []
-      return entries
-        .map((g) => g as { id?: unknown; name?: unknown; kind?: unknown })
-        .filter(
-          (g): g is AssetGroup =>
-            typeof g.id === 'string' &&
-            typeof g.name === 'string' &&
-            typeof g.kind === 'string' &&
-            KIND_SET.has(g.kind),
-        )
+      return (async () => {
+        // 完整响应信封（评审修复，PR #36 第一轮）：warnings/cleanupPending
+        // 与 tauriList 同款上报——只读组视图不得隐藏修复/隔离诊断
+        const index = await ipcInvoke<{
+          groups?: { byId?: Record<string, unknown> }
+          warnings?: unknown[]
+          cleanupPending?: unknown[]
+          diagnosticsRevision?: unknown
+        }>(IPC_COMMANDS.listLibraryAssets)
+        reportLibraryDiagnostics(index)
+        const byId = index.groups?.byId
+        const entries =
+          byId && typeof byId === 'object' ? Object.values(byId) : []
+        return entries
+          .map((g) => g as { id?: unknown; name?: unknown; kind?: unknown })
+          .filter(
+            (g): g is AssetGroup =>
+              typeof g.id === 'string' &&
+              typeof g.name === 'string' &&
+              typeof g.kind === 'string' &&
+              KIND_SET.has(g.kind),
+          )
+      })()
     }
     // 克隆返回（评审修复，PR #36 第六轮）：调用方 mutate 返回值不得改存储
-    return [...memoryGroups.values()].map((g) => ({ ...g }))
+    return Promise.resolve([...memoryGroups.values()].map((g) => ({ ...g })))
   },
 
   /** 组写入：新建/更新编组；改 kind 与成员冲突即拒绝（§7.2）。 */
-  upsertGroup: async (group: AssetGroup): Promise<AssetGroup> => {
+  upsertGroup: (group: AssetGroup): Promise<AssetGroup> => {
     if (!isBrowserPreviewHost()) {
-      const result = await hostInvoke<
-        AssetGroup & { cleanupPending?: unknown[] }
-      >('upsert_library_group', { group })
-      reportLibraryWarnings((result as { warnings?: unknown } | null)?.warnings)
-      // cleanupPending 随 upsert 响应上报（评审修复，PR #36 第三轮）——
-      // 与 list/delete 同款，删除隔离区积压不得静默
-      if (result?.cleanupPending?.length) {
-        console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
-      }
-      return result
+      return (async () => {
+        const result = await ipcInvoke<AssetGroup & LibraryDiagnostics>(
+          IPC_COMMANDS.upsertLibraryGroup,
+          { group },
+        )
+        reportLibraryDiagnostics(result)
+        return result
+      })()
     }
     // 内存回退同款形状校验（评审修复，PR #36 第三/四轮）：id 镜像 Rust
     // validate_asset_id（1–64 ASCII 字母数字/_/-）、name 去空白 1–128（合法
@@ -380,17 +384,17 @@ export const libraryStore = {
         ? group.id
         : null
     if (id === null) {
-      throw new Error(`组 id 非法：${String(group.id)}`)
+      return Promise.reject(new Error(`组 id 非法：${String(group.id)}`))
     }
     const name = typeof group.name === 'string' ? group.name.trim() : ''
     // 码点计数（评审修复，PR #36 第八轮）：Rust validate_group_for_write 用
     // chars().count()（Unicode 码点），前端 length 是 UTF-16 单元——补充字符
     // （emoji 等）在两侧必须同判，否则预览拒绝生产接受的合法名
     if (name === '' || [...name].length > 128) {
-      throw new Error('组名去空白后须为 1–128 字符')
+      return Promise.reject(new Error('组名去空白后须为 1–128 字符'))
     }
     if (!KIND_SET.has(group.kind)) {
-      throw new Error(`未知组 kind：${String(group.kind)}`)
+      return Promise.reject(new Error(`未知组 kind：${String(group.kind)}`))
     }
     // 内存回退同款冲突校验（评审修复，PR #36 第一/二轮）：改 kind 与成员
     // 冲突即拒绝——浏览器预览不得批准生产路径拒绝的状态；**首次创建也扫描**
@@ -401,38 +405,39 @@ export const libraryStore = {
         v.asset.groupId === normalized.id &&
         v.asset.kind !== normalized.kind
       ) {
-        throw new Error(
-          `组 ${normalized.id} 的 kind 与成员资产冲突：存在 kind 不一致的成员`,
+        return Promise.reject(
+          new Error(
+            `组 ${normalized.id} 的 kind 与成员资产冲突：存在 kind 不一致的成员`,
+          ),
         )
       }
     }
     // 克隆存储与返回（评审修复，PR #36 第六轮）：调用方 mutate 传入/返回
     // 的对象不得绕过校验直接改 memoryGroups
     memoryGroups.set(normalized.id, { ...normalized })
-    return { ...normalized }
+    return Promise.resolve({ ...normalized })
   },
 
   /** 组删除：原子删除组并剥离成员资产的 groupId（§7.2）。 */
-  deleteGroup: async (id: string): Promise<void> => {
+  deleteGroup: (id: string): Promise<void> => {
     if (!isBrowserPreviewHost()) {
-      const result = await hostInvoke<{
-        warnings?: unknown
-        cleanupPending?: unknown[]
-      }>('delete_library_group', { id })
-      reportLibraryWarnings(result?.warnings)
-      if (result?.cleanupPending?.length) {
-        console.warn('[Library] 删除隔离区待清理：', result.cleanupPending)
-      }
-      return
+      return (async () => {
+        const result = await ipcInvoke<LibraryDiagnostics>(
+          IPC_COMMANDS.deleteLibraryGroup,
+          { id },
+        )
+        reportLibraryDiagnostics(result)
+      })()
     }
     // 内存回退同款存在性校验（评审修复，PR #36 第一轮）：stale/重复删除
     // 不得静默成功
     if (!memoryGroups.delete(id)) {
-      throw new Error(`组不存在：${id}`)
+      return Promise.reject(new Error(`组不存在：${id}`))
     }
     // 内存回退同款语义（§7.2）：删组剥离成员 groupId
     for (const v of memoryAssets.values()) {
       if (v.asset.groupId === id) v.asset = { ...v.asset, groupId: null }
     }
+    return Promise.resolve()
   },
 }

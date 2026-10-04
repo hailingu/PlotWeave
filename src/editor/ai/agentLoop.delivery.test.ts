@@ -468,6 +468,77 @@ describe('query 改写与预览承诺的交付收敛（issue 91）', () => {
   })
 })
 
+describe('纯讨论不触发无改动纠正循环（issue #341）', () => {
+  it('协议讲解提及 commands 字段不构成交付尝试，只返回文本', async () => {
+    // 改写判为非动作：交付期待只能来自回复本身的呈交信号——行内字段
+    // 解释没有批次呈交形态（无围栏/无数组负载），不得锁存 expectsPreview。
+    // 默认回退同一讨论文本：旧词法信号下纠正轮会多烧请求并被断言捕获
+    const discussion =
+      '这里只解释协议："commands": 后面的值是命令数组，并不执行任何操作。'
+    chat
+      .mockResolvedValue({ role: 'assistant', content: discussion })
+      .mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
+      .mockResolvedValueOnce({ role: 'assistant', content: discussion })
+    const result = await run('只讨论 JSON 协议，请解释字段含义，不要改动画布。')
+    expect(result).toMatchObject({
+      prose: discussion,
+      validation: null,
+    })
+    expect(result).not.toHaveProperty('completionError')
+    expect(chat).toHaveBeenCalledTimes(2) // 改写一次 + 正常回答，无纠正轮
+  })
+
+  it('行内代码示例提及 commands 数组同样不构成交付尝试（issue #341）', async () => {
+    const explanation = '批次形如 {"commands": [...]}，其中每个元素是一条命令。'
+    chat
+      .mockResolvedValue({ role: 'assistant', content: explanation })
+      .mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
+      .mockResolvedValueOnce({ role: 'assistant', content: explanation })
+    const result = await run('解释一下批次结构')
+    expect(result).not.toHaveProperty('completionError')
+    expect(chat).toHaveBeenCalledTimes(2)
+  })
+
+  it('围栏内坏批次仍是交付尝试：按原配额纠正后收敛（issue #341 对照）', async () => {
+    // 与讨论的区分：```json 围栏内含 commands 字段 = 呈交批次形态，
+    // 可解析性失败照旧进入纠正循环（安全网保留）
+    chat.mockResolvedValue({
+      role: 'assistant',
+      content: '```json\n{"commands": [bad]}\n```',
+    })
+    const result = await run('增加下一个场景')
+    expect(result.completionError).toEqual(expect.any(String))
+    expect(chat).toHaveBeenCalledTimes(4) // 首次 + 3 次纠正，配额不变
+  })
+
+  it('未闭合围栏内的坏批次仍是交付尝试（issue #341 评审）', async () => {
+    // 截断/漏写闭合围栏：呈交信封不完整但形态可辨——改写判非动作后
+    // 回复形态是唯一信号，不得当普通讨论放行
+    chat
+      .mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
+      .mockResolvedValue({
+        role: 'assistant',
+        content: '```json\n{"commands": [bad]',
+      })
+    const result = await run('继续')
+    expect(result.completionError).toEqual(expect.any(String))
+    expect(chat).toHaveBeenCalledTimes(5) // 改写 + 首次 + 3 次纠正
+  })
+
+  it('美化排版的裸 JSON 批次仍是交付尝试（issue #341 评审）', async () => {
+    // 非 {\"commands\" 紧凑前缀的开括号形态：同样构成呈交信封
+    chat
+      .mockResolvedValueOnce({ role: 'assistant', content: '{"action":false}' })
+      .mockResolvedValue({
+        role: 'assistant',
+        content: '{\n  "commands": [bad]',
+      })
+    const result = await run('继续')
+    expect(result.completionError).toEqual(expect.any(String))
+    expect(chat).toHaveBeenCalledTimes(5)
+  })
+})
+
 describe('解析失败属于整批交付失败', () => {
   it.each([
     { role: 'assistant', content: null, tool_calls: [call('batch', '{bad')] },

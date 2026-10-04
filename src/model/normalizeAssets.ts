@@ -15,10 +15,17 @@ function isMimeToken(s: string): boolean {
 }
 
 /** 规范 MIME（§7.1，与 Rust is_canonical_mime 同域）：恰好两个 token 以 / 分隔；
- * 调用方先完成大小写/空白规范化。 */
+ * 调用方先完成大小写/空白规范化。切片式拆分（issue #230）避免数组索引
+ * 读取的缺失值分支——首个 / 为界，subtype 不得再含 /。 */
 function isCanonicalMime(s: string): boolean {
-  const parts = s.split('/')
-  return parts.length === 2 && isMimeToken(parts[0]) && isMimeToken(parts[1])
+  const separator = s.indexOf('/')
+  if (separator <= 0) return false
+  const subtype = s.slice(separator + 1)
+  return (
+    !subtype.includes('/') &&
+    isMimeToken(s.slice(0, separator)) &&
+    isMimeToken(subtype)
+  )
 }
 
 /** relPath 词法校验（§7.1，与 Rust is_valid_asset_rel_path 同域）：纯相对路径，
@@ -49,27 +56,38 @@ export function isStrictIso8601(s: string): boolean {
   const day = Number(m[3])
   if (month < 1 || month > 12) return false
   if (Number(m[4]) > 23 || Number(m[5]) > 59 || Number(m[6]) > 59) return false
-  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
-  const daysInMonth = [
-    31,
-    leap ? 29 : 28,
-    31,
-    30,
-    31,
-    30,
-    31,
-    31,
-    30,
-    31,
-    30,
-    31,
-  ][month - 1]
-  if (day < 1 || day > daysInMonth) return false
-  if (m[7] !== 'Z') {
-    const offset = m[7].slice(1).split(':')
-    if (Number(offset[0]) > 23 || Number(offset[1]) > 59) return false
+  if (day < 1 || day > daysInMonth(year, month)) return false
+  const zone = m[7]
+  if (zone !== undefined && zone !== 'Z') {
+    const [offsetHour, offsetMinute] = zone.slice(1).split(':')
+    if (Number(offsetHour) > 23 || Number(offsetMinute) > 59) return false
   }
   return true
+}
+
+/** 公历月天数（issue #230：穷举分支取代数组下标读取，月值越界返回 0——
+ * 上方 1..12 校验后不可达，防御值使「日 > 天数」恒假、与越界月拒绝同向）。 */
+function daysInMonth(year: number, month: number): number {
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+  switch (month) {
+    case 2:
+      return leap ? 29 : 28
+    case 4:
+    case 6:
+    case 9:
+    case 11:
+      return 30
+    case 1:
+    case 3:
+    case 5:
+    case 7:
+    case 8:
+    case 10:
+    case 12:
+      return 31
+    default:
+      return 0
+  }
 }
 
 /** 单条资产条目的逐字段形状校验（§11.3）：返回隔离原因；null 表示通过。
@@ -229,7 +247,9 @@ function legacyImageAssetKey(
       a.ids.has(value)
     )
   })
-  return hits.length === 1 ? hits[0].key : null
+  // 单一命中才可判定（issue #230：唯一命中经提取消解索引缺失分支）
+  const hit = hits.length === 1 ? hits[0] : undefined
+  return hit === undefined ? null : hit.key
 }
 
 /** 单条 ref 的旧 targetId 兼容转换：成功改名 assetId 并删除 targetId；

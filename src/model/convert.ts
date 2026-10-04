@@ -9,8 +9,7 @@
  * graph/settings/assets 容器级未知键按扩展字段无损保留（§11），不参与
  * 修复判定；顶层与 project 层是类型化封闭契约，演进须升级 schemaVersion。
  */
-import type { Edge } from '@xyflow/react'
-import type { CanvasNode } from '../editor/nodes/types'
+import type { SessionEdge, SessionNode } from './session'
 import { isPlainObject, sameCanonicalJson } from './jsonGuards'
 import { fromDocument, serializeProject } from './serialize'
 import { normalizeContainers } from './normalizeContainers'
@@ -211,12 +210,28 @@ function normalizeV0NodeShape(
       break
     case 'dialogue': {
       v0List(data, 'lines', nid, isObjectMember, true, warnings)
-      // 台词 speaker 头像与场景头像同一谓词（isUsableAvatar）：对象形态
-      // speaker 的 label 空白/缺失会让迁移的 ensureCharacter 以
-      // startsWith('') 命中首个既有角色（静默错关联）——不可用头像置空；
-      // 字符串 id 引用不在此处置，交由空键重发/悬空引用规则处理
+      // 台词 speaker 域预检（§11 v0 兼容子步骤：异型 speaker 删除并警告，
+      // issue #335）：字符串 id 引用与 null/缺失不在此处置，交由空键重发/
+      // 悬空引用规则；对象头像走 isUsableAvatar——label 空白/缺失会让迁移
+      // 的 ensureCharacter 以 startsWith('') 命中首个既有角色（静默错关联）
+      // ——不可用头像置空；其余异型（数组等 truthy object 会让迁移的
+      // ensureCharacter 对 label 调 trim 时崩溃，数值/布尔会被 v1 的
+      // speaker 域剥离）同样置空，单字段损坏不得放大为整档不可解析
       for (const line of data.lines as Record<string, unknown>[]) {
-        if (isPlainObject(line.speaker) && !isUsableAvatar(line.speaker)) {
+        if (
+          line.speaker !== null &&
+          line.speaker !== undefined &&
+          typeof line.speaker !== 'string' &&
+          !isPlainObject(line.speaker)
+        ) {
+          warnings.push(
+            `节点 ${nid} 的对白行 speaker 异型（须字符串 id、对象头像或 null），已置空`,
+          )
+          line.speaker = null
+        } else if (
+          isPlainObject(line.speaker) &&
+          !isUsableAvatar(line.speaker)
+        ) {
           warnings.push(
             `节点 ${nid} 的对白行 speaker 头像不可用（label 缺失/空白或 gradient 异型），已置空`,
           )
@@ -271,7 +286,11 @@ function normalizeV0Options(
 function assembleLegacyContent(
   env0: Partial<ProjectDocument> & {
     project?: Partial<ProjectDocument['project']>
-    graph?: { nodes?: CanvasNode[]; edges?: Edge[]; viewport?: Viewport }
+    graph?: {
+      nodes?: SessionNode[]
+      edges?: SessionEdge[]
+      viewport?: Viewport
+    }
     settings?: unknown
     episodeTitles?: unknown
   },
@@ -296,29 +315,63 @@ function assembleLegacyContent(
     })
     return out
   }
+  // v0 安全预检（§11 第 0 步，issue #336）：settings 容器异型或设定数组桶
+  // 缺失/非数组时重置并记录「无法机械恢复内容」警告——重置不得静默清洗，
+  // 否则修复回写把内容丢失固化为无诊断的空设定集（下游 repaired=true 却
+  // 无从知晓丢了什么）。合法数组与其余键原样交给迁移器 normalizeSettings；
+  // settings 键缺失时无内容可失，按既有行为静默补空对象、不告警。
+  const settingsRaw: unknown = env0.settings
+  let settings: ProjectContent['settings']
+  if (settingsRaw === undefined) {
+    settings = {} as ProjectContent['settings']
+  } else if (!isPlainObject(settingsRaw)) {
+    warnings.push('settings 非普通对象，无法机械恢复内容，已重置为空对象')
+    settings = {} as ProjectContent['settings']
+  } else {
+    const record = settingsRaw as Record<string, unknown>
+    for (const bucket of ['characters', 'locations'] as const) {
+      if (!Array.isArray(record[bucket])) {
+        warnings.push(
+          record[bucket] === undefined
+            ? `settings.${bucket} 缺失，无法机械恢复内容，已重置为空数组`
+            : `settings.${bucket} 非数组，无法机械恢复内容，已重置为空数组`,
+        )
+        record[bucket] = []
+      }
+    }
+    settings = record as unknown as ProjectContent['settings']
+  }
   return {
     name: env0.project?.name ?? '',
     createdAt: env0.project?.createdAt || undefined,
     nodes: normalizeV0NodeShapes(
       members(asArray(graphRaw.nodes, 'graph.nodes'), 'graph.nodes'),
       warnings,
-    ) as unknown as CanvasNode[],
+    ) as unknown as SessionNode[],
     edges: members(
       asArray(graphRaw.edges, 'graph.edges'),
       'graph.edges',
-    ) as Edge[],
-    settings: (env0.settings ?? {}) as ProjectContent['settings'],
+    ) as unknown as SessionEdge[],
+    settings,
     episodeTitles: normalizeEpisodeTitles(env0.episodeTitles, warnings),
     viewport: graphRaw.viewport as Viewport | undefined,
   }
 }
 
+/** 形状判型警告（issue #338 评审，§11 第 0 步「均记录警告」）：Rust 对
+ * 版本主张缺失/异型的信封按唯一形状判型交付并打 versionless 标记，判型
+ * 修复必须可向用户解释——保存时标记随类型化重建消失、显式版本号补盖。 */
+const SHAPE_CLASSIFIED_WARNING =
+  '文件缺少有效的 schemaVersion（缺失或为无法表达版本的异型值），已按信封形状判型，保存时将补盖显式版本号'
+
 function parseLegacyProject(
   raw: Record<string, unknown>,
   env: NormalizeEnv,
+  shapeClassified: boolean,
 ): ParseResult {
   const env0 = raw as Parameters<typeof assembleLegacyContent>[0]
   const v0Warnings: string[] = []
+  if (shapeClassified) v0Warnings.push(SHAPE_CLASSIFIED_WARNING)
   const legacy = assembleLegacyContent(env0, v0Warnings)
   const migrated = migrateProjectDocument(legacy, v0Warnings)
   const legacyAtMs = Date.parse(
@@ -355,6 +408,15 @@ function parseLegacyProject(
  * 归一化管线入口（§11）：schemaVersion 校验与迁移 → 归一化 → 会话文档。
  * v0 信封（旧扁平格式经 Rust 包装）先走节点字段迁移，再按 v1 解析。
  * env 携带加载路径的受信事实（projectId / 索引名），供元数据修复使用。
+ * Rust 形状判型标记（versionless）在入口消费为判型警告（issue #338 评审）。
+ *
+ * 输入所有权契约（issue #102）：归一化/迁移**就地改写**传入的 raw 及其
+ * 嵌套成员（v1 键控桶内嵌 id 以记录键改写、字段剥离/补默认；v0 预归一化
+ * 重置数组、补 position 等同样落在调用方对象上）。调用后不得假设输入保持
+ * 原样，也不得把调用后的 raw 再当原始档使用；需保留原始文档或嵌套引用的
+ * 调用方须先自行克隆（structuredClone）再传入。入口内部的未改动快照仅
+ * 服务 repaired 判定，不构成对调用方对象的保护。raw 按 IPC 反序列化的
+ * 单次消费产物设计，unknown 不承诺比上述契约更深的所有权约束。
  */
 export function parseProject(
   raw: unknown,
@@ -377,12 +439,24 @@ export function parseProject(
     throw new Error(`文档版本过新（schemaVersion ${version}），请升级应用`)
   }
 
+  // Rust 形状判型标记（versionless，§10.5/§11 第 0 步）：版本主张缺失或
+  // 异型时按唯一信封形状判型交付（v1/v0 两族都打标记），判型修复记录
+  // 警告（issue #338 评审）。该键经 Rust 类型化信封跨 IPC 携带，磁盘文件
+  // 中的同名顶层键在反序列化时即被剥离，不会从文件内容误触发。
+  const shapeClassified =
+    (raw as { versionless?: unknown }).versionless === true
+
   if (version === 0) {
-    return parseLegacyProject(raw as Record<string, unknown>, env)
+    return parseLegacyProject(
+      raw as Record<string, unknown>,
+      env,
+      shapeClassified,
+    )
   }
 
-  // 原始文档先克隆：归一化就地改写（id 重发/字段剥离/隔离），事后与改写
-  // 产物比较须以未改动的原始为基准——repaired 决定调用方是否回写落定修复
+  // 原始文档先克隆：归一化就地改写（id 重发/字段剥离/隔离，输入所有权
+  // 契约见上方 parseProject 公开说明），事后与改写产物比较须以未改动的
+  // 原始为基准——repaired 决定调用方是否回写落定修复
   const pristine = structuredClone(raw)
   const {
     doc: normalized,
@@ -393,7 +467,9 @@ export function parseProject(
     content: fromDocument(normalized, warnings),
     migrated: false,
     repaired: !sameCanonicalJson(pristine, normalized),
-    warnings,
+    warnings: shapeClassified
+      ? [SHAPE_CLASSIFIED_WARNING, ...warnings]
+      : warnings,
     reissuedAssetAliases,
   }
 }

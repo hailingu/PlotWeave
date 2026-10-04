@@ -92,7 +92,7 @@ describe('projectAssets Tauri 路径：mediaUrl', () => {
   it('get_asset_media_url 携带项目 scope + assetId，返回 opaque URL 透传（issue #31）', async () => {
     invoke.mockResolvedValue('pwmedia://localhost/project/p-1/pa-1')
     const { projectAssets } = await load()
-    const url = await projectAssets.mediaUrl('p-1', assetRef() as never)
+    const url = await projectAssets.mediaUrl('p-1', String(assetRef().id))
     expect(url).toBe('pwmedia://localhost/project/p-1/pa-1')
     expect(invoke.mock.calls[0]).toEqual([
       'get_asset_media_url',

@@ -11,7 +11,7 @@ import {
   persistedEntries,
   type AiSession,
   type ThreadEntry,
-} from './session'
+} from '../../ai/session'
 import { useAiSessionPersistence } from './useAiSessionPersistence'
 
 afterEach(cleanup)

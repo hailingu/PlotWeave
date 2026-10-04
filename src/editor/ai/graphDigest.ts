@@ -21,11 +21,76 @@ export interface DigestResolvers {
 /** 长文本截断上限：快照是给模型看的摘要，不是全文。 */
 const CUT = 40
 
-function cut(s: string, max = CUT): string {
+/**
+ * 画布摘要的总量预算（issue #275）：每轮随消息序列追加的摘要此前无
+ * 总量上限，病态画布（1200 节点夹具实测 17.5 万字符）会无界灌入上下文
+ * 并绕过会话历史上限。预算分两层：各节计数上限（超限节选并以计数标记
+ * 声明未列出量——不无提示删除；已列条目保留稳定 id，get_node 可按 id
+ * 补读详情）与最终字符硬上限（计数上限内仍可能因长名称/长参数拼接
+ * 超预算，截断并声明未发送量）。总量取既有会话历史上限（48,000，
+ * aiThreadModel）的一半：同量级先例，为系统提示与历史留出余量——
+ * 每轮模型可见上下文由此获得硬上界，不换算 token（字符数即预算口径）。
+ */
+export const GRAPH_DIGEST_MAX_CHARS = 24_000
+
+/** 各节计数上限：超出部分整行节选（不逐行降级），标记见 clippedMarker。 */
+const NODE_DETAIL_MAX = 128
+const EDGE_DETAIL_MAX = 192
+const SPINE_DETAIL_MAX = 128
+const ENTITY_DETAIL_MAX = 96
+
+/** 超限节选的计数标记：声明未列出量与补读入口；未超限返回 null。 */
+function clippedMarker(
+  total: number,
+  max: number,
+  what: string,
+  hint: string,
+): string | null {
+  if (total <= max) return null
+  return `（另有 ${total - max} ${what}未列出：摘要按体积预算节选，内容已裁剪；${hint}）`
+}
+
+/** 单节行集：空集给占位，超限截取前 max 行并附计数节选标记。 */
+function sectionLines(
+  lines: string[],
+  empty: string,
+  max: number,
+  what: string,
+  hint: string,
+): string[] {
+  const shown = lines.length > 0 ? lines.slice(0, max) : [empty]
+  const marker = clippedMarker(lines.length, max, what, hint)
+  return marker === null ? shown : [...shown, marker]
+}
+
+/** 字符硬上限：截断并声明未发送量，工具指引同计数节选。 */
+function clampDigest(text: string): string {
+  if (text.length <= GRAPH_DIGEST_MAX_CHARS) return text
+  const marker = `（画布摘要超出 ${GRAPH_DIGEST_MAX_CHARS} 字符预算，已截断约 ${
+    text.length - GRAPH_DIGEST_MAX_CHARS
+  } 字符；已列出条目用 get_node / get_settings_snapshot / get_document 读取详情）`
+  const keep = GRAPH_DIGEST_MAX_CHARS - marker.length - 1
+  return `${text.slice(0, keep)}\n${marker}`
+}
+
+/** 字段级截断（摘要行与 find_nodes 检索结果共用，issue #275 评审）。 */
+export function cut(s: string, max = CUT): string {
   return s.length > max ? `${s.slice(0, max)}…` : s
 }
 
 const pad2 = (n: number) => String(n).padStart(2, '0')
+
+/** 场景/分镜的人读标签（issue #156）：AI 工作流内同一节点在图摘要与
+ * 预览/执行回执中呈现同一格式——编号补零，两位以上保持完整（padStart
+ * 不截断）；useAiBridge.nodeLabelOf 与本模块三处标签共用，不做第二实现。 */
+export function sceneLabel(sceneNo: number, name: string): string {
+  return `场${pad2(sceneNo)}·${name}`
+}
+
+/** 分镜标签（issue #156，同 sceneLabel 口径）。 */
+export function shotLabel(shotNo: number, size: string): string {
+  return `SHOT${pad2(shotNo)}·${size}`
+}
 
 /** 集 N 前缀（§3.5 分集）：有 episodeNo 的编剧侧节点才标注。 */
 function epTag(data: { episodeNo?: unknown }): string {
@@ -48,7 +113,7 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
           ? `角色:${n.data.characterIds.map((id) => r.characterName(id) ?? '（已删除）').join('/')}`
           : null,
       ].filter((x): x is string => x !== null && x !== '')
-      return `- ${n.id} ${epTag(n.data)}场${pad2(n.data.sceneNo)}·${n.data.name}（${parts.join(' · ')}）`
+      return `- ${n.id} ${epTag(n.data)}${sceneLabel(n.data.sceneNo, n.data.name)}（${parts.join(' · ')}）`
     }
     case 'beat':
       return `- ${n.id} ${epTag(n.data)}节拍·${n.data.name}（${n.data.tone}）`
@@ -65,7 +130,7 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
     case 'branch':
       return `- ${n.id} ${epTag(n.data)}分支·${cut(n.data.prompt)}（选项:${n.data.options.map((o) => cut(o.label, 16)).join('/')}）`
     case 'shot':
-      return `- ${n.id} SHOT${pad2(n.data.shotNo)}·${n.data.size}（画面:${cut(n.data.picture, 24)} · Prompt:${cut(n.data.prompt, 24)}）`
+      return `- ${n.id} ${shotLabel(n.data.shotNo, n.data.size)}（画面:${cut(n.data.picture, 24)} · Prompt:${cut(n.data.prompt, 24)}）`
     case 'image':
       return `- ${n.id} 图片·${cut(n.data.prompt, 24)}（${n.data.size}）`
   }
@@ -76,11 +141,12 @@ function nodeLine(n: CanvasNode, r: DigestResolvers): string {
  * 从没有 sequence 入边的节点出发，沿 sequence 边按边序走；被分支
  * 甩出或游离的节点不进脊线。
  */
-/** 脊线行的节点标签：按类型取最具辨识度的字段（独立函数替代嵌套三元，S3358）。 */
-function spineNodeLabel(n: CanvasNode): string {
+/** 脊线行的节点标签：按类型取最具辨识度的字段（独立函数替代嵌套三元，
+ * S3358）；find_nodes 检索结果同用此标签（issue #275 评审，同一格式）。 */
+export function spineNodeLabel(n: CanvasNode): string {
   switch (n.type) {
     case 'scene':
-      return `场${pad2(n.data.sceneNo)}·${n.data.name}`
+      return sceneLabel(n.data.sceneNo, n.data.name)
     case 'dialogue':
       return `对白·${n.data.name}`
     case 'beat':
@@ -90,7 +156,7 @@ function spineNodeLabel(n: CanvasNode): string {
     case 'image':
       return `图片·${cut(n.data.prompt, 24)}`
     case 'shot':
-      return `SHOT${pad2(n.data.shotNo)}·${n.data.size}`
+      return shotLabel(n.data.shotNo, n.data.size)
   }
 }
 
@@ -130,18 +196,22 @@ export function buildGraphDigest(
   r: DigestResolvers,
 ): string {
   const nodeLines = nodes.map((n) => nodeLine(n, r))
+  // 端点索引一次构造（issue #276）：首个匹配优先，保持原 nodes.find 的
+  // 重复 id 语义（spineLines 的 Map 为后者覆盖，两处口径独立、不合并）
+  const firstById = new Map<string, CanvasNode>()
+  for (const n of nodes) if (!firstById.has(n.id)) firstById.set(n.id, n)
   const edgeLines = edges.map((e) => {
     const kind = edgeKindOf(e)
-    const src = nodes.find((n) => n.id === e.source)
-    const dst = nodes.find((n) => n.id === e.target)
+    const src = firstById.get(e.source)
+    const dst = firstById.get(e.target)
     const endLabel = (n?: CanvasNode): string => {
       if (!n) return '?'
-      if (n.type === 'scene') return `场${pad2(n.data.sceneNo)}·${n.data.name}`
+      if (n.type === 'scene') return sceneLabel(n.data.sceneNo, n.data.name)
       if (n.type === 'dialogue') return `对白·${n.data.name}`
       if (n.type === 'beat') return `节拍·${n.data.name}`
       if (n.type === 'branch') return `分支·${cut(n.data.prompt, 24)}`
       if (n.type === 'image') return `图片·${cut(n.data.prompt, 24)}`
-      return `SHOT${pad2(n.data.shotNo)}·${n.data.size}`
+      return shotLabel(n.data.shotNo, n.data.size)
     }
     if (kind === 'branch') {
       // 端口绑稳定选项 id：按 id 回源解析选项文案，不给模型看下标
@@ -161,18 +231,44 @@ export function buildGraphDigest(
   const spine = spineLines(nodes, edges)
   const sections = [
     `节点（id 标签 · 参数）：`,
-    ...(nodeLines.length > 0 ? nodeLines : ['（空画布）']),
+    ...sectionLines(
+      nodeLines,
+      '（空画布）',
+      NODE_DETAIL_MAX,
+      '个节点',
+      '已列出节点用 get_node 按 id 读取详情；按名称检索全部节点（含未列出）用 find_nodes',
+    ),
     `连线（类型: source → target）：`,
-    ...(edgeLines.length > 0 ? edgeLines : ['（无）']),
+    ...sectionLines(
+      edgeLines,
+      '（无）',
+      EDGE_DETAIL_MAX,
+      '条连线',
+      '目标节点的全部连线（含未列出）用 find_nodes 查询',
+    ),
     `剧情流顺序（大纲投影）：`,
-    ...(spine.length > 0 ? spine : ['（尚未连成剧情流）']),
+    ...sectionLines(
+      spine,
+      '（尚未连成剧情流）',
+      SPINE_DETAIL_MAX,
+      '行剧情流',
+      '已列出节点用 get_node 按 id 读取详情；按名称检索全部节点用 find_nodes',
+    ),
     `设定集（id 名称，AI 写回 characterIds/locationId 用）：`,
-    ...(r.characters.length > 0
-      ? r.characters.map((c) => `- 角色 ${c.id} ${c.name}`)
-      : ['- （无角色）']),
-    ...(r.locations.length > 0
-      ? r.locations.map((l) => `- 地点 ${l.id} ${l.name}`)
-      : ['- （无地点）']),
+    ...sectionLines(
+      r.characters.map((c) => `- 角色 ${c.id} ${c.name}`),
+      '- （无角色）',
+      ENTITY_DETAIL_MAX,
+      '个角色',
+      '完整清单用 get_settings_snapshot 读取',
+    ),
+    ...sectionLines(
+      r.locations.map((l) => `- 地点 ${l.id} ${l.name}`),
+      '- （无地点）',
+      ENTITY_DETAIL_MAX,
+      '个地点',
+      '完整清单用 get_settings_snapshot 读取',
+    ),
   ]
-  return sections.join('\n')
+  return clampDigest(sections.join('\n'))
 }

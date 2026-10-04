@@ -21,6 +21,11 @@ describe('applyEpisodeTitle（§3.5 集标题映射的单一更新语义）', ()
     expect(applyEpisodeTitle({ 1: '夜戏' }, 1, '   ')).toEqual({})
   })
 
+  it('剥 U+0085（NEL）边缘：前端产出的规范标题须能通过 Rust 保存边界（#122）', () => {
+    expect(applyEpisodeTitle({}, 1, '\u0085夜戏\u0085')).toEqual({ 1: '夜戏' })
+    expect(applyEpisodeTitle({ 1: '夜戏' }, 1, '\u0085\u0085')).toEqual({})
+  })
+
   it('对不存在的集清空 = 原映射原样返回，不产生幽灵键', () => {
     const titles = { 2: '日戏' }
     expect(applyEpisodeTitle(titles, 9, '')).toBe(titles)

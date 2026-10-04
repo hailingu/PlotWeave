@@ -1,4 +1,4 @@
-import { type BatchValidation } from '../ai/commands'
+import { batchIssueText, type BatchValidation } from '../ai/commands'
 
 const ITEM_ICONS: Record<BatchValidation['items'][number]['kind'], string> = {
   create: '＋',
@@ -19,7 +19,11 @@ function executeLabel(v: BatchValidation, armed: boolean): string {
 }
 
 /** 卡片操作区（PreviewCard 拆分，issue #99）：已执行回执，或忽略 +
- * 两步确认执行（含删除时先武装再执行）。 */
+ * 两步确认执行（含删除时先武装再执行）。忽略只受 busy 并发约束——校验
+ * 失败卡不可执行，但用户可逐张忽略其处置（issue #151，状态随会话
+ * 落盘并回喂模型，ui-design §6）；执行仍要求批次通过校验。已执行提示
+ * 只陈述「曾执行成功」：撤销不回写卡片，撤销/重做或后续编辑都会改变
+ * 撤销栈顶，提示不承诺 ⌘Z 当前可撤销本批次（issue #347）。 */
 function PreviewCardActions({
   v,
   status,
@@ -44,14 +48,14 @@ function PreviewCardActions({
     <div className="pw-ai-actions">
       {status === 'executed' ? (
         <span className="pw-ai-note">
-          {historical ? '✓ 已执行（历史改动）' : '✓ 已执行，⌘Z 可整批撤销'}
+          {historical ? '✓ 已执行（历史改动）' : '✓ 已执行'}
         </span>
       ) : (
         <>
           <button
             type="button"
             className="pw-ai-btn"
-            disabled={!v.ok || busy}
+            disabled={busy}
             onClick={onDismiss}
           >
             忽略
@@ -81,8 +85,11 @@ function PreviewCardActions({
 interface PreviewCardProps {
   readonly v: BatchValidation
   readonly status: 'pending' | 'executed' | 'dismissed'
-  /** 跨会话恢复的历史执行卡：撤销栈已重建，不宣称 ⌘Z 可整批撤销。 */
-  readonly historical?: boolean
+  /** 跨会话恢复的历史执行卡（issue #231）：撤销栈已重建，显示「历史改动」
+   * 区分于当前会话回执。可显式 undefined = 非历史卡；两类已执行卡都不
+   * 承诺 ⌘Z 当前可整批撤销——会话内撤销/重做或后续编辑同样使该宣称
+   * 失真，撤销不回写卡片（issue #347）。 */
+  readonly historical?: boolean | undefined
   readonly armed: boolean
   readonly busy: boolean
   readonly onArm: () => void
@@ -90,7 +97,9 @@ interface PreviewCardProps {
   readonly onDismiss: () => void
 }
 
-export default function PreviewCard({
+/** AI 改动预览卡（§6）：整批条目的图标化清单 + 确认/忽略动作；
+ * 删除类置顶与「执行须先确认」的武装语义由父级状态驱动。 */
+export function PreviewCard({
   v,
   status,
   historical,
@@ -112,7 +121,8 @@ export default function PreviewCard({
         <ul className="pw-ai-issues">
           {v.issues.map((iss) => (
             <li key={iss.index} className="pw-ai-issue">
-              第 {iss.index + 1} 条：{iss.message}
+              {/* 批次级整体错误不编序号（issue #150，与 agentLoop 回喂同口径） */}
+              {batchIssueText(iss)}
             </li>
           ))}
         </ul>

@@ -1,4 +1,4 @@
-import Field from './Field'
+import { Field } from './Field'
 import { useCompositionSafeValue } from './compositionValue'
 import { useNodeEdit } from '../../nodeEdit'
 import { uid } from '../../../uid'
@@ -23,14 +23,16 @@ function assetMimeOf(
   const byId = assets?.byId
   if (byId === undefined || !Object.prototype.hasOwnProperty.call(byId, id))
     return undefined
-  const mime = byId[id].mime
+  const mime = byId[id]?.mime
   return typeof mime === 'string' ? mime : undefined
 }
 
 /** 单个引用位行（kind 切换、删除、文案/绑定输入）：ShotForm 拆出的分区。
  * 资产引用位的 kind 切换受资产 MIME 家族约束（§4.2，与归一化
  * shotRefMimeMatches 同域）：错配 kind 保存后重开只是「不可用引用」
- * 警告——在编辑边界直接禁用，不产出注定不可用的引用。 */
+ * 警告——在编辑边界直接禁用，不产出注定不可用的引用。
+ * 文案输入的 aria-label 带引用类型（issue #363：裸输入框无可访问名，
+ * axe label 规则 critical 违例；多条引用位时类型是唯一可分辨线索）。 */
 function ShotRefRow({
   shotRef,
   assets,
@@ -82,6 +84,7 @@ function ShotRefRow({
       </div>
       <input
         className="pw-set-input"
+        aria-label={`${REF_KIND_LABELS[shotRef.kind]}文案`}
         placeholder={
           shotRef.assetId !== undefined
             ? `资产引用 ${shotRef.assetId}——输入文字将转为自由文案`
@@ -122,7 +125,9 @@ function ShotNoField({
   )
 }
 
-export default function ShotForm({
+/** 分镜卡的设置表单（§4.3：镜号/景别/画面描述/镜头 Prompt/引用位）：
+ * 引用位的资产 MIME 家族校验走 shotRefMimeMatches（§8.1 编辑边界）。 */
+export function ShotForm({
   node,
 }: {
   readonly node: Extract<PanelNode, { type: 'shot' }>

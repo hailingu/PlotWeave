@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import NodeSettingsGear from './NodeSettingsGear'
+import { NodeSettingsGear } from './NodeSettingsGear'
 
 afterEach(cleanup)
 
@@ -19,7 +19,7 @@ function setup(options?: { open?: boolean; light?: boolean }) {
         ariaLabel="节奏卡设置"
         open={options?.open ?? false}
         onToggle={onToggle}
-        light={options?.light}
+        {...(options?.light !== undefined && { light: options.light })}
       />
     </div>,
   )

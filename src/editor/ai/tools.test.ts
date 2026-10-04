@@ -3,6 +3,7 @@ import {
   AI_TOOLS,
   READ_TOOL_NAMES,
   WRITE_TOOL_NAMES,
+  toolCallsShapeDiagnostic,
   toolCallsToCommands,
   type ToolCall,
 } from './tools'
@@ -226,11 +227,19 @@ describe('issue 44 通道映射：upsert_* 写工具与 get_settings_snapshot �
 })
 
 describe('工具表定义', () => {
+  it('find_nodes 暴露单节点连线续页的 cursor 参数（PR #294 评审）', () => {
+    const tool = AI_TOOLS.find((t) => t.function.name === 'find_nodes')
+    const properties = tool?.function.parameters.properties as
+      Record<string, unknown> | undefined
+    expect(properties?.cursor).toMatchObject({ type: 'string' })
+  })
+
   it('包含数据模型 §12.2 的读三写八工具（issue 44 增设定集通道），参数均为对象 schema', () => {
     const names = AI_TOOLS.map((t) => t.function.name)
     for (const expected of [
       'get_graph_snapshot',
       'get_node',
+      'find_nodes',
       'get_settings_snapshot',
       'create_node',
       'delete_node',
@@ -251,6 +260,8 @@ describe('工具表定义', () => {
     expect(WRITE_TOOL_NAMES.has('upsert_character')).toBe(true)
     expect(WRITE_TOOL_NAMES.has('get_node')).toBe(false)
     expect(WRITE_TOOL_NAMES.has('get_settings_snapshot')).toBe(false)
+    expect(READ_TOOL_NAMES.has('find_nodes')).toBe(true)
+    expect(WRITE_TOOL_NAMES.has('find_nodes')).toBe(false)
   })
 
   it('issue 56 增补文档通道：get_document 读 + upsert_document 写，读写真名分域', () => {
@@ -301,4 +312,87 @@ describe('工具表定义', () => {
     )
     expect(paramOf('batch', 'commands')).toContain(documentFieldTableText())
   })
+})
+
+describe('toolCallsShapeDiagnostic（provider 回复的信任边界形状守卫，#127）', () => {
+  it('合法形态返回 null：undefined/数组/完整成员/arguments 缺省或空串', () => {
+    expect(toolCallsShapeDiagnostic(undefined)).toBeNull()
+    expect(toolCallsShapeDiagnostic(null)).toBeNull()
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 'a',
+          type: 'function',
+          function: { name: 'get_node', arguments: '{"nodeId":"n1"}' },
+        },
+        {
+          id: 'b',
+          type: 'function',
+          function: { name: 'batch', arguments: '' },
+        },
+      ]),
+    ).toBeNull()
+    expect(
+      toolCallsShapeDiagnostic([
+        { id: 'c', type: 'function', function: { name: 'get_graph_snapshot' } },
+      ]),
+    ).toBeNull()
+  })
+
+  it('issue #127 复现三形态均给出可读形状诊断', () => {
+    expect(toolCallsShapeDiagnostic({ id: 'c' })).toMatch(/不是数组/)
+    expect(toolCallsShapeDiagnostic([{ id: 'c', type: 'function' }])).toMatch(
+      /第 1 项缺 function/,
+    )
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 'c',
+          type: 'function',
+          function: { name: 'batch', arguments: '{}' },
+        },
+        { id: 'd', type: 'function', function: null },
+      ]),
+    ).toMatch(/第 2 项缺 function/)
+  })
+
+  it('name/id 非字符串、arguments 非字符串均为形状错误（协议外壳）', () => {
+    expect(
+      toolCallsShapeDiagnostic([
+        { id: 'c', type: 'function', function: { name: 7, arguments: '{}' } },
+      ]),
+    ).toMatch(/name/)
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 9,
+          type: 'function',
+          function: { name: 'batch', arguments: '{}' },
+        },
+      ]),
+    ).toMatch(/id/)
+    expect(
+      toolCallsShapeDiagnostic([
+        {
+          id: 'c',
+          type: 'function',
+          function: { name: 'batch', arguments: { commands: [] } },
+        },
+      ]),
+    ).toMatch(/arguments/)
+  })
+})
+
+describe('工具名注册表自有键白名单（issue #258）', () => {
+  it.each(Object.getOwnPropertyNames(Object.prototype))(
+    '工具名 %s 按未知工具进 errors：不抛异常、命令零产出',
+    (name) => {
+      const { commands, readRequests, errors } = toolCallsToCommands([
+        call(name, {}),
+      ])
+      expect(commands).toEqual([])
+      expect(readRequests).toEqual([])
+      expect(errors).toEqual([expect.stringContaining('未知工具')])
+    },
+  )
 })

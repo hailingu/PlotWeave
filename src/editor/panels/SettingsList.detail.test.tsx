@@ -7,7 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import SettingsList from './SettingsList'
+import { SettingsList } from './SettingsList'
 import type { SettingsActions } from './settingsActions'
 import type { ProjectSettings } from '../settings'
 

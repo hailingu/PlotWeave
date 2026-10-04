@@ -5,5 +5,7 @@
 //! 注入独立数据根。所有 I/O 仍走既有校验与恢复内核（句柄相对、no-follow
 //! 归类、原子写、保存边界复验），行为与迁出前等价（原测试随迁守护）。
 
+mod lock;
+
 pub mod isotime;
 pub mod store;

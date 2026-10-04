@@ -2,8 +2,9 @@
 
 use super::*;
 use crate::isotime::now_iso;
+use crate::store::atomic_write_faults as faults;
 use crate::store::commands::{load_project_file, persist_project};
-use crate::store::testutil::{cap, cleanup_temp, meta, temp_projects_dir};
+use crate::store::testutil::{cap, cleanup_temp, meta, temp_projects_dir, valid_save_doc};
 use crate::store::types::new_project_file;
 use serde_json::json;
 use std::fs;
@@ -130,7 +131,9 @@ fn versionless_v1_envelope_classifies_as_v1_and_keeps_graph() {
     assert!(file.versionless);
     let ipc = serde_json::to_value(&file).unwrap();
     assert_eq!(ipc["versionless"], json!(true));
-    // 显式版本与 v0 包装不打标记（v0 迁移本身即回写）
+    // 显式版本不打标记；形状判型（无论判为 v1 还是 v0）都打标记——
+    // 版本主张缺失/异型的判型修复必须可向前端解释（§11 第 0 步「均记录
+    // 警告」，issue #338 评审：v0 迁移回写本身即落定，标记只承载警告）
     let explicit = json!({
         "schemaVersion": 1,
         "project": { "id": "p-1", "name": "显式" },
@@ -145,7 +148,7 @@ fn versionless_v1_envelope_classifies_as_v1_and_keeps_graph() {
         "name": "旧项目", "updated_at": 1_700_000_000_000u64,
         "nodes": [], "edges": [],
     });
-    assert!(!parse_file("p-1", &v0.to_string()).unwrap().versionless);
+    assert!(parse_file("p-1", &v0.to_string()).unwrap().versionless);
 }
 
 #[test]
@@ -193,6 +196,94 @@ fn explicit_version_conflicting_with_envelope_family_is_rejected() {
         r#"{"schemaVersion": "1", "project": {}, "graph": {}}"#
     )
     .is_err());
+}
+
+/// [issue #338]（§11 第 0 步）：schemaVersion 键存在但为无法表达受支持/
+/// 未来版本的异型值（null/布尔/容器/非规范数字串）时不构成版本主张——
+/// 与缺失版本号同款按唯一信封形状判型：唯一匹配 v1 → versionless 标记
+/// 交付前端修复回写补盖显式版本号，graph 内容原样透传，不整份拒绝。
+#[test]
+fn heterogeneous_version_value_falls_back_to_v1_shape() {
+    let cases = [
+        ("null", "null"),
+        ("布尔", "true"),
+        ("对象", r#"{"future":true}"#),
+        ("数组", "[2]"),
+        ("非规范数字串", r#""01""#),
+    ];
+    for (label, raw) in cases {
+        let text = format!(
+            r#"{{"schemaVersion":{raw},"project":{{"id":"p-1","name":"异型版本"}},"graph":{{"nodes":[{{"id":"s1","type":"scene"}}],"edges":[]}},"assets":{{"byId":{{}}}}}}"#
+        );
+        let file =
+            parse_file("p-1", &text).unwrap_or_else(|e| panic!("{label}：应按 v1 形状判型：{e}"));
+        assert_eq!(file.schema_version, 1, "{label}：判型赋予待修复有效版本 1");
+        assert!(file.versionless, "{label}：应打 versionless 修复标记");
+        assert_eq!(
+            file.graph["nodes"][0]["id"],
+            json!("s1"),
+            "{label}：graph 原样透传不丢内容"
+        );
+    }
+}
+
+/// [issue #338]：异型版本值 + 唯一旧扁平形状 → 与缺失版本号同款包装 v0
+/// 信封并打 versionless 标记——形状判型的 v0 同样缺有效版本主张，标记
+/// 供前端记录判型警告（评审修复：§11 第 0 步「均记录警告」）。
+#[test]
+fn heterogeneous_version_value_with_legacy_shape_wraps_as_v0() {
+    let legacy = json!({
+        "schemaVersion": null,
+        "name": "旧项目",
+        "updated_at": 1_700_000_000_000u64,
+        "nodes": [{ "id": "a", "type": "scene", "data": {} }],
+        "edges": [],
+    });
+    let file = parse_file("p-old", &legacy.to_string()).unwrap();
+    assert_eq!(file.schema_version, 0);
+    assert!(file.versionless);
+    assert_eq!(file.project.name, "旧项目");
+}
+
+/// [issue #338]：异型版本值不放宽混合/不足形状的拒绝——形状不足以单独
+/// 判型时仍拒绝并保留原文件，绝不猜测家族回退空 v0 图。
+#[test]
+fn heterogeneous_version_value_with_mixed_or_insufficient_shape_is_rejected() {
+    let mixed = json!({
+        "schemaVersion": true,
+        "project": { "name": "混合信封" },
+        "name": "旧名",
+        "nodes": [],
+        "edges": [],
+    });
+    assert!(parse_file("p-1", &mixed.to_string()).is_err());
+    // 仅一个异型版本键、无任何家族特征：两组特征均不足
+    assert!(parse_file("p-1", r#"{"schemaVersion": null}"#).is_err());
+}
+
+/// [issue #338]（§11 第 0 步）：带内版本主张非法或非契约载体时直接拒绝，
+/// 不得按形状降级——number 但负数/小数、规范整数字符串（含表达受支持/
+/// 未来版本者，数字才是版本载体；未来串按形状降级会在回写中丢失升级判据）。
+#[test]
+fn illegal_version_claims_rejected_without_shape_downgrade() {
+    let cases = [
+        ("负数", "-1"),
+        ("小数", "1.5"),
+        ("未来规范数字串", r#""2""#),
+        ("负数规范数字串", r#""-1""#),
+    ];
+    for (label, raw) in cases {
+        let text = format!(
+            r#"{{"schemaVersion":{raw},"project":{{"id":"p-1","name":"非法主张"}},"graph":{{"nodes":[],"edges":[]}}}}"#
+        );
+        let err = parse_file("p-1", &text)
+            .err()
+            .unwrap_or_else(|| panic!("{label}：非法版本主张应拒绝"));
+        assert!(
+            matches!(err.root(), StoreError::CorruptEnvelope(_)),
+            "{label}：应为信封判型拒绝：{err:?}"
+        );
+    }
 }
 
 #[test]
@@ -342,35 +433,201 @@ fn list_project_metas_reads_only_verified_entries() {
     cleanup_temp(&projects);
 }
 
+/// [PR #217 第三轮评审](https://github.com/hailingu/PlotWeave/pull/217)：
+/// 挂起恢复/时钟前跳使进行中写入的临时文件 mtime 越过宽限期时，列表
+/// 清扫必须持 projects 操作锁等待写入落定，不得在排他创建与 rename
+/// 之间把活动临时文件当孤儿误删（rename 失败 → 在途保存被迫重试）。
+/// 测试协同（确定性，无计时竞态）：写入线程经 faults 探针在 rename
+/// 前回拨 mtime 并暂停等待放行；写入在等待放行期间持有操作锁，故
+/// 修复后的清扫线程 200ms 内不可能完成——超时上界只用于判定「清扫
+/// 提前完成」的红线情形。
 #[test]
-fn list_projects_falls_back_to_placeholder_for_overlong_name() {
+fn list_sweep_waits_for_active_write_even_when_temp_looks_aged() {
     let projects = temp_projects_dir();
-    let long = "剧".repeat(65);
-    fs::write(
-    projects.join("p-1.json"),
-    format!(
-        r#"{{"schemaVersion":1,"project":{{"id":"p-1","name":"{long}","createdAt":"","updatedAt":""}},"graph":{{"nodes":[],"edges":[]}}}}"#
-    ),
-)
-.expect("写项目文件");
-    let metas = list_project_metas(&cap(&projects)).expect("列出项目");
-    // 超 64 字符在 §9.3 名称域外（打开时会被前端归一化替换）：列表同款占位
-    assert_eq!(metas[0].name, "未命名项目");
+    let (paused_tx, paused_rx) = std::sync::mpsc::channel::<String>();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+    let writer_dir = projects.clone();
+    let writer = std::thread::spawn(move || {
+        let probe_dir = writer_dir.clone();
+        let _injection = faults::Injection::with_probe(faults::Stage::Rename, move || {
+            let tmp = std::fs::read_dir(&probe_dir)
+                .expect("读项目目录")
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .find(|n| n.starts_with('.') && n.ends_with(".tmp"))
+                .expect("临时文件存在");
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .open(probe_dir.join(&tmp))
+                .expect("打开临时文件");
+            file.set_modified(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 60 * 60),
+            )
+            .expect("回拨 mtime");
+            paused_tx.send(tmp).expect("通知主线程");
+            resume_rx.recv().expect("等待放行");
+        });
+        persist_project(&cap(&writer_dir), "p-1", valid_save_doc())
+    });
+    let tmp_name = paused_rx.recv().expect("写入线程在 rename 前暂停");
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let sweep_dir = projects.clone();
+    let sweeper = std::thread::spawn(move || {
+        let metas = list_project_metas(&cap(&sweep_dir));
+        done_tx.send(metas).expect("报告列表结果");
+    });
+    let early = done_rx.recv_timeout(std::time::Duration::from_millis(200));
+    let sweep_finished_during_write = early.is_ok();
+    resume_tx.send(()).expect("放行写入线程");
+    let save_result = writer.join().expect("写入线程结束");
+    let metas = match early {
+        Ok(metas) => metas,
+        Err(_) => done_rx.recv().expect("清扫线程在写入落定后完成"),
+    };
+    assert!(
+        !sweep_finished_during_write,
+        "列表清扫在写入进行中不得完成（应持锁等待写入落定）"
+    );
+    assert!(
+        save_result.is_ok(),
+        "活动写入的 rename 不得因清扫误删临时文件而失败：{save_result:?}"
+    );
+    let metas = metas.expect("列出项目");
+    assert_eq!(metas.len(), 1, "写入落定后列表可见新项目");
+    assert!(
+        !projects.join(&tmp_name).exists(),
+        "临时文件已随 rename 落位"
+    );
+    sweeper.join().expect("清扫线程结束");
     cleanup_temp(&projects);
 }
 
+/// [issue #148](https://github.com/hailingu/PlotWeave/issues/148)：列表
+/// 顺带清扫崩溃遗留的孤儿临时文件（归属可辨 + 超龄 + 普通文件三条件
+/// 同时成立）；进行中写入的新鲜临时文件与项目文件不受影响，清扫
+/// fail-soft 永不阻断列表。
 #[test]
-fn list_projects_falls_back_to_placeholder_for_blank_name() {
+fn list_sweeps_crash_orphaned_temp_files() {
     let projects = temp_projects_dir();
-    // project.name 空白：列表回退占位，修复留待 §11.1 加载归一化
-    fs::write(
-        projects.join("p-1.json"),
-        r#"{"schemaVersion":1,"project":{"id":"p-1","name":""},"graph":{"nodes":[],"edges":[]}}"#,
-    )
-    .expect("写项目文件");
+    let doc = new_project_file("p-1", "正常项目".into(), now_iso());
+    persist_project(&cap(&projects), "p-1", doc).expect("先保存");
+    let aged_tmp = projects.join(".p-1.json.p-18f-0.tmp");
+    fs::write(&aged_tmp, b"partial").expect("写遗留临时文件");
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&aged_tmp)
+        .expect("打开遗留临时文件")
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 60 * 60))
+        .expect("回拨 mtime");
+    let fresh_tmp = projects.join(".p-2.json.p-18f-1.tmp");
+    fs::write(&fresh_tmp, b"writing").expect("写进行中临时文件");
     let metas = list_project_metas(&cap(&projects)).expect("列出项目");
-    assert_eq!(metas[0].name, "未命名项目");
+    assert_eq!(metas.len(), 1);
+    assert!(!aged_tmp.exists(), "超龄归属临时文件应随列表被清理");
+    assert!(fresh_tmp.exists(), "进行中的临时文件不得被清理");
     cleanup_temp(&projects);
+}
+
+/// [issue #123](https://github.com/hailingu/PlotWeave/issues/123)：损坏或
+/// 不可读的项目不再从列表静默消失——以占位摘要（诊断 + 缺省统计/时间，
+/// 缺省时间排序最后）返回，正常项目不受影响；点击占位卡打开仍走
+/// load_project 的失败诊断（issue #98 横幅）。
+#[test]
+fn list_returns_broken_placeholder_for_corrupt_project() {
+    let projects = temp_projects_dir();
+    let doc = new_project_file("p-ok", "正常项目".into(), now_iso());
+    persist_project(&cap(&projects), "p-ok", doc).expect("先保存");
+    fs::write(projects.join("p-bad.json"), "{not json").expect("写损坏文件");
+    let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+    assert_eq!(metas.len(), 2, "坏项目不得静默消失");
+    assert_eq!(metas[0].id, "p-ok", "正常项目在前，不受坏项目影响");
+    let broken = &metas[1];
+    assert_eq!(broken.id, "p-bad");
+    assert!(
+        broken
+            .diagnostic
+            .as_deref()
+            .is_some_and(|d| d.contains("损坏")),
+        "占位须带诊断：{:?}",
+        broken.diagnostic
+    );
+    assert_eq!(broken.scene_count, 0);
+    assert_eq!(broken.ending_count, 0);
+    assert!(broken.updated_at.is_empty(), "缺省时间排序最后");
+    // IPC 形状：正常项目省略 diagnostic 键（wire 兼容），占位携带
+    assert!(serde_json::to_value(&metas[0])
+        .unwrap()
+        .get("diagnostic")
+        .is_none());
+    assert_eq!(
+        serde_json::to_value(broken).unwrap()["diagnostic"],
+        json!(broken.diagnostic)
+    );
+    cleanup_temp(&projects);
+}
+
+/// 信封两族矛盾（不可判型）与非 UTF-8 不可读同样产出占位而非跳过（issue
+/// #123）。不可读触发取非 UTF-8 字节而非 mode 000 收权（PR #196 评审）：
+/// root/CAP_DAC_OVERRIDE（容器 CI 常态）下收权不拦读取；read_to_string
+/// 的 UTF-8 校验与特权无关，同一 Io 分派分支随处触发。两形态共用「坏
+/// 文件 → 占位 + 判型诊断」模板（issue #291 参数化；损坏 JSON 的完整
+/// 占位行为——正常项目排序与 IPC wire 形状——由上方用例覆盖）。
+#[test]
+fn list_returns_broken_placeholder_for_unclassifiable_or_unreadable() {
+    let cases: [(&str, Vec<u8>, &str); 2] = [
+        (
+            "信封两族矛盾（不可判型）",
+            r#"{"schemaVersion":0,"project":{"name":"伪装旧版"},"graph":{"nodes":[]},"assets":{"byId":{}}}"#
+                .as_bytes()
+                .to_vec(),
+            "信封",
+        ),
+        ("非 UTF-8 字节", vec![0xff, 0xfe, b'{'], "不可读"),
+    ];
+    for (label, bytes, keyword) in cases {
+        let projects = temp_projects_dir();
+        fs::write(projects.join("p-bad.json"), bytes).expect("写坏项目文件");
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+        assert_eq!(metas.len(), 1, "{label}：坏项目不得静默消失");
+        assert_eq!(metas[0].id, "p-bad");
+        assert!(
+            metas[0]
+                .diagnostic
+                .as_deref()
+                .is_some_and(|d| d.contains(keyword)),
+            "{label}：占位须带判型诊断：{:?}",
+            metas[0].diagnostic
+        );
+        cleanup_temp(&projects);
+    }
+}
+
+/// 名称域外（超 64 字符，§9.3）与空白名称：列表回退「未命名项目」占位
+/// （打开时由前端归一化替换/修复，§11.1）；两形态共用回退模板（issue
+/// #291 参数化）。
+#[test]
+fn list_projects_fall_back_to_placeholder_for_out_of_range_names() {
+    let long = "剧".repeat(65);
+    let cases: [(&str, String); 2] = [
+        (
+            "超长名称",
+            format!(
+                r#"{{"schemaVersion":1,"project":{{"id":"p-1","name":"{long}","createdAt":"","updatedAt":""}},"graph":{{"nodes":[],"edges":[]}}}}"#
+            ),
+        ),
+        (
+            "空白名称",
+            r#"{"schemaVersion":1,"project":{"id":"p-1","name":""},"graph":{"nodes":[],"edges":[]}}"#
+                .to_string(),
+        ),
+    ];
+    for (label, content) in cases {
+        let projects = temp_projects_dir();
+        fs::write(projects.join("p-1.json"), content).expect("写项目文件");
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+        assert_eq!(metas[0].name, "未命名项目", "{label}：应回退占位名");
+        cleanup_temp(&projects);
+    }
 }
 #[test]
 fn load_and_list_read_anchored_tree_after_dir_replacement() {
@@ -416,4 +673,24 @@ fn wrap_legacy_rejects_overflowing_numeric_timestamp() {
         wrapped.project.updated_at.is_empty(),
         "溢出时间戳应回退默认而非伪造"
     );
+}
+
+/// [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：projects
+/// 操作锁中毒恢复——持锁 panic 后列表/保存照常：磁盘一致性由 §10.2
+/// 原子写协议独立保证（遗留临时文件由清扫承接），锁不守卫内存状态。
+/// 静态锁此后保持中毒状态，后续用例经同一恢复路径照常工作。
+#[test]
+fn projects_op_lock_recovers_after_poison() {
+    let projects = temp_projects_dir();
+    std::thread::spawn(|| {
+        let _guard = crate::store::persist::projects_op_lock();
+        panic!("测试注入的持锁 panic");
+    })
+    .join()
+    .expect_err("注入 panic 应发生");
+    let doc = new_project_file("p-1", "正常项目".into(), now_iso());
+    persist_project(&cap(&projects), "p-1", doc).expect("中毒后保存应可用");
+    let metas = list_project_metas(&cap(&projects)).expect("中毒后列表应可用");
+    assert_eq!(metas.len(), 1);
+    cleanup_temp(&projects);
 }

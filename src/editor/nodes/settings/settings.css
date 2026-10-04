@@ -64,7 +64,7 @@
 
 .pw-set-danger:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 /* ---- 字段 ---- */
@@ -206,7 +206,7 @@ select.pw-set-input {
 
 .pw-set-x:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 .pw-set-add {

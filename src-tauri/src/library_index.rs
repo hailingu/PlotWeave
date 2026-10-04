@@ -13,15 +13,19 @@
 
 mod keys;
 mod normalize;
+mod salvage;
 
 pub(crate) use normalize::{
     migrate_and_normalize, migrate_and_normalize_readonly, validate_group_for_write,
 };
+pub(crate) use salvage::parse_index;
 
 #[cfg(test)]
 mod fixup_tests;
 #[cfg(test)]
 mod normalize_tests;
+#[cfg(test)]
+mod salvage_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

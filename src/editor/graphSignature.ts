@@ -18,17 +18,45 @@ function stripRuntime(item: object, keys: string[]): Record<string, unknown> {
   return rest
 }
 
-/** 画布语义签名：同一语义内容恒得同一字符串。 */
+const NODE_RUNTIME_KEYS = ['selected', 'dragging', 'measured', 'className']
+const EDGE_RUNTIME_KEYS = ['selected', 'className']
+
+/** 逐项签名缓存（issue #272）：以节点/连线对象为键——React Flow 与命令
+ * 层以新对象表达变化（补丁路径都产新引用），同一对象恒同一语义。拖拽
+ * 过程帧只替换被拖节点，其余项命中缓存，每帧序列化开销从 O(图大小)
+ * 降为 O(变化项)。WeakMap 随对象回收。 */
+const NODE_SIG = new WeakMap<object, string>()
+const EDGE_SIG = new WeakMap<object, string>()
+
+function cachedItemSig(
+  cache: WeakMap<object, string>,
+  item: object,
+  keys: string[],
+): string {
+  const hit = cache.get(item)
+  if (hit !== undefined) return hit
+  const sig = JSON.stringify(stripRuntime(item, keys))
+  cache.set(item, sig)
+  return sig
+}
+
+/** 画布语义签名：同一语义内容恒得同一字符串。字面与整体
+ * `JSON.stringify({ nodes, edges, settings })` 完全一致（逐项 JSON 以
+ * `,` 拼接等价于数组序列化），仅计算路径改为逐项缓存。 */
 export function graphSignature(
   nodes: CanvasNode[],
   edges: Edge[],
   settings: ProjectSettings,
 ): string {
-  return JSON.stringify({
-    nodes: nodes.map((n) =>
-      stripRuntime(n, ['selected', 'dragging', 'measured', 'className']),
-    ),
-    edges: edges.map((e) => stripRuntime(e, ['selected', 'className'])),
-    settings,
-  })
+  const nodesJson = nodes
+    .map((n) => cachedItemSig(NODE_SIG, n, NODE_RUNTIME_KEYS))
+    .join(',')
+  const edgesJson = edges
+    .map((e) => cachedItemSig(EDGE_SIG, e, EDGE_RUNTIME_KEYS))
+    .join(',')
+  const settingsJson: string | undefined = JSON.stringify(settings)
+  // settings 为 undefined 时 JSON.stringify 整体对象会省略该键，保持一致
+  const settingsPart =
+    settingsJson === undefined ? '' : `,"settings":${settingsJson}`
+  return `{"nodes":[${nodesJson}],"edges":[${edgesJson}]${settingsPart}}`
 }

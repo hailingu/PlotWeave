@@ -54,10 +54,12 @@ function checkFieldKeys(
   if (!Object.prototype.hasOwnProperty.call(AI_FIELD_KEYS, nodeType)) {
     return `${nodeType || '未知类型'} 暂不支持 AI 命令修改`
   }
+  // 白名单缺失（hasOwnProperty 拒绝之外的空值防御，issue #230）：可选链
+  // 谓词把 undefined 白名单按全量未知上报，与「暂不支持」同向拒绝
   const allowed = AI_FIELD_KEYS[nodeType]
-  const unknownKeys = Object.keys(fields).filter((k) => !allowed.includes(k))
+  const unknownKeys = Object.keys(fields).filter((k) => !allowed?.includes(k))
   if (unknownKeys.length === 0) return null
-  return `未知字段：${unknownKeys.join('、')}（${NODE_TYPE_LABELS[nodeType]} 允许：${allowed.join('、')}）`
+  return `未知字段：${unknownKeys.join('、')}（${NODE_TYPE_LABELS[nodeType]} 允许：${allowed?.join('、')}）`
 }
 
 /** 分类型写载荷校验（create 的 data 与 update 的 patch 共用同一序列）：

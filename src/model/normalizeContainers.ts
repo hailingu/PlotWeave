@@ -22,6 +22,7 @@ import {
 import { normalizeEpisodeTitles } from './legacy'
 import {
   type BlankKeyRemaps,
+  type SettingsBuckets,
   normalizeEntityShapes,
   normalizeSettingsBuckets,
   reKeyBlankEntries,
@@ -94,7 +95,8 @@ function normalizeProjectMeta(
 ): {
   id: string
   name: string
-  description?: string
+  /** 归一化产出可为显式 undefined（= 无描述；序列化剥离）。 */
+  description?: string | undefined
   createdAt: string
   updatedAt: string
 } {
@@ -265,7 +267,7 @@ function reKeyBucketIdentities(
  * 资产 AssetRef 完整校验、分镜 refs 的 targetId 兼容转换/隔离——均就地
  * 改写传入的桶与节点原始成员。 */
 function sanitizeBucketEntries(
-  settings: Record<string, Record<string, unknown>>,
+  settings: SettingsBuckets,
   byId: Record<string, Record<string, unknown>>,
   nodesRaw: unknown[],
   env: NormalizeEnv,
@@ -306,7 +308,7 @@ function sanitizeBucketEntries(
  * 句柄改写用的映射随管线带出。 */
 function normalizeActiveNodes(
   nodesRaw: unknown[],
-  settings: Record<string, Record<string, unknown>>,
+  settings: SettingsBuckets,
   blankRemaps: BlankKeyRemaps,
   warnings: string[],
 ): {
@@ -334,8 +336,9 @@ function normalizeActiveNodes(
  * 形状校验）与三个透传容器的同版本扩展键（issue #100 字段演进策略，§11）
  * 一并收拢，避免装配签名参数继续膨胀。 */
 interface EnvelopeExtras {
-  viewport?: Viewport
-  aiRevision?: number
+  /** 归一化产出可为显式 undefined（= 缺省；序列化剥离，issue #231）。 */
+  viewport?: Viewport | undefined
+  aiRevision?: number | undefined
   extensions: {
     graph: Record<string, unknown>
     settings: Record<string, unknown>
@@ -549,6 +552,8 @@ function resolveRawContainers(
   }
 }
 
+/** 容器级形状校验与文档装配入口（语义见模块头，§11.1 第 2 步）：
+ * 返回最终 ProjectDocument 与逐项规则所需的 id 重发映射。 */
 export function normalizeContainers(
   raw: Record<string, unknown>,
   env: NormalizeEnv,

@@ -25,6 +25,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
+import { resolveChain } from '../../styles/sheetTokensEngine'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = (path: string): string =>
@@ -88,7 +89,7 @@ function tokenValues(env: Env): Map<string, string> {
   return out
 }
 
-/** 消解一层 var() 引用（--branch-dim: var(--text-secondary) 形态）。 */
+/** 消解一层 var() 引用（--branch-text: var(--text-primary) 形态）。 */
 function resolveOnce(value: string, tokens: Map<string, string>): string {
   return value.replace(
     /var\(\s*(--[\w-]+)\s*\)/g,
@@ -97,41 +98,9 @@ function resolveOnce(value: string, tokens: Map<string, string>): string {
 }
 
 describe('nodes.css 颜色结构（issue #107）', () => {
-  it('颜色类声明不硬编码色值，全部经语义令牌', () => {
-    const literal =
-      /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\bhwb\(|\blab\(|\blch\(|\boklab\(|\boklch\(|\bcolor\(/
-    const offenders: string[] = []
-    const walk = (container: postcss.Container): void => {
-      for (const node of container.nodes ?? []) {
-        if (node.type === 'atrule' && node.name === 'media') walk(node)
-        else if (node.type === 'rule') walk(node)
-        else if (node.type === 'decl' && literal.test(node.value)) {
-          offenders.push(`${node.prop}: ${node.value}`)
-        }
-      }
-    }
-    walk(nodesCss)
-    expect(offenders).toEqual([])
-  })
-
-  it('引用的自定义属性全部有定义（tokens.css 或 nodes.css 自身）', () => {
-    const defined = new Set<string>()
-    const collect = (root: postcss.Root): void => {
-      root.walkDecls((decl) => {
-        if (decl.prop.startsWith('--')) defined.add(decl.prop)
-      })
-    }
-    collect(tokensCss)
-    collect(nodesCss)
-    const referenced = new Set<string>()
-    nodesCss.walkDecls((decl) => {
-      for (const match of decl.value.matchAll(/var\(\s*(--[\w-]+)/g)) {
-        referenced.add(match[1]!)
-      }
-    })
-    expect([...referenced].filter((name) => !defined.has(name))).toEqual([])
-  })
-
+  // 不硬编码色值与 var() 接线由 sheetTokens.test.ts 的 #278 全表契约扫描
+  // 所有（box-shadow 字面色按该契约 F6 边界明确不在展示色禁用范围）；
+  // 本文件保留语义族归属与黄金基准。
   it('深色选中分支的填充引用画布令牌（分支族跟随画布外观契约）', () => {
     let selected: postcss.Rule | undefined
     nodesCss.walkRules((rule) => {
@@ -220,14 +189,6 @@ const BRANCH_TOKENS: Readonly<Record<string, { light: string; dark: string }>> =
     '--branch-opt-text': {
       light: '#3a3a3c',
       dark: 'rgba(245, 245, 247, 0.92)',
-    },
-    '--branch-addopt-border': {
-      light: 'rgba(0, 0, 0, 0.22)',
-      dark: 'rgba(235, 235, 245, 0.3)',
-    },
-    '--branch-dim': {
-      light: 'var(--text-secondary)',
-      dark: 'rgba(235, 235, 245, 0.45)',
     },
   }
 
@@ -343,16 +304,6 @@ function effectiveBg(
   const surface = tokenColor(surfaceName, tokens)
   if (!bg || !surface) throw new Error('背景/承载面令牌非颜色值')
   return bg.a >= 1 ? bg : blendOver(bg, surface)
-}
-
-/** 迭代消解 var() 引用链至无引用（深度限 12，防循环）。 */
-function resolveChain(value: string, tokens: Map<string, string>): string {
-  let current = value
-  for (let i = 0; i < 12 && current.includes('var('); i += 1) {
-    current = resolveOnce(current, tokens)
-  }
-  if (current.includes('var(')) throw new Error(`var() 链过深: ${value}`)
-  return current
 }
 
 /** 顶层逗号分割（忽略括号内逗号），用于展开渐变参数列表。 */
@@ -484,17 +435,8 @@ describe('增强对比度：家族文本 ≥ 4.5:1（§2 原则 2）', () => {
       const surface = on === '--branch-opt-bg' ? '--branch-bg' : on
       expectContrast(token, on, surface, lightMore, 4.5)
     }
-    // branch-dim 是 var 链，消解后同样须达标（浅外观 = text-secondary more 变体）
-    expectContrast('--branch-dim', '--branch-bg', '--branch-bg', lightMore, 4.5)
-    // 分支族跟随画布外观：深外观下 dim/opt-text 同样须达标。分支深色底为
-    // transparent，addopt 文字实际画在画布底色上（PR #114 评审 4000027706）
-    expectContrast(
-      '--branch-dim',
-      '--surface-canvas',
-      '--surface-canvas',
-      darkMore,
-      4.5,
-    )
+    // 分支族跟随画布外观：深外观下 opt-text 同样须达标。分支深色底为
+    // transparent，opt 文字实际画在画布底色上（PR #114 评审 4000027706）
     expectContrast(
       '--branch-opt-text',
       '--branch-opt-bg',
@@ -557,14 +499,9 @@ describe('增强对比度：家族文本 ≥ 4.5:1（§2 原则 2）', () => {
 })
 
 describe('增强对比度：UI 组件 ≥ 3:1（非文本）', () => {
-  it('分支虚线框/添加行边、画外音徽标边在 more 对比度下达标', () => {
+  it('分支虚线框、画外音徽标边在 more 对比度下达标', () => {
     const uiTargetsLight = [
       { token: '--branch-frame', bg: '--branch-bg', surface: '--branch-bg' },
-      {
-        token: '--branch-addopt-border',
-        bg: '--branch-bg',
-        surface: '--branch-bg',
-      },
       {
         token: '--node-paper-voiceover-border',
         bg: '--node-paper-note',
@@ -575,7 +512,7 @@ describe('增强对比度：UI 组件 ≥ 3:1（非文本）', () => {
       expectContrast(token, bg, surface, lightMore, 3)
     }
     // 深色下分支底透明，虚线框实际画在画布底色上
-    for (const token of ['--branch-frame', '--branch-addopt-border']) {
+    for (const token of ['--branch-frame']) {
       expectContrast(token, '--surface-canvas', '--surface-canvas', darkMore, 3)
     }
   })

@@ -390,3 +390,64 @@ describe('validateAiBatch：阶段 B 折叠 · 节点 ref 别名与在存节点 
     expect(v.issues[0]?.message).toContain('ref 别名')
   })
 })
+
+describe('validateAiBatch：删除节点的虚拟边语义与执行一致（issue #128）', () => {
+  it('删除宿主场景后同批重连分镜到新场景：不再被「已有宿主」误拒', () => {
+    // 复现步骤：s1 经 shots 端口下挂 sh1；同批 delete(s1) + 新建场景 s2 +
+    // attach 到 sh1——执行侧 simDelete 会移除 s1 的全部关联边，校验折叠
+    // 必须同口径移除，否则残留边让 hasAttachHost 误判换宿主非法
+    const hosted: AiGraphSnapshot = {
+      ...richSnap(),
+      edges: [{ source: 's1', target: 'sh1', sourceHandle: 'shots' }],
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'delete_node', nodeId: 's1' },
+        {
+          op: 'create_node',
+          nodeType: 'scene',
+          ref: 's2',
+          data: { name: '场 02' },
+        },
+        {
+          op: 'connect_edge',
+          sourceId: 's2',
+          targetId: 'sh1',
+          edgeKind: 'attach',
+        },
+      ],
+      hosted,
+    )
+    expect(v.ok, JSON.stringify(v.issues)).toBe(true)
+    expect(v.commands.map((c) => c.op)).toEqual([
+      'delete_node',
+      'create_node',
+      'connect_edge',
+    ])
+  })
+
+  it('删除中间剧情节点后连线：被删节点不再参与成环拓扑', () => {
+    // A→M→B 删除 M 后连 B→A：执行侧两条边随 M 一并移除，不存在 A 到 B
+    // 的通路；校验态若保留幽灵端点边会把合法连线误判成环
+    const chain: AiGraphSnapshot = {
+      nodes: [
+        { id: 'a', type: 'scene', label: '场 A' },
+        { id: 'm', type: 'beat', label: '节拍 M' },
+        { id: 'b', type: 'scene', label: '场 B' },
+      ],
+      edges: [
+        { source: 'a', target: 'm' },
+        { source: 'm', target: 'b' },
+      ],
+      assets: new Map(),
+    }
+    const v = validateAiBatch(
+      [
+        { op: 'delete_node', nodeId: 'm' },
+        { op: 'connect_edge', sourceId: 'b', targetId: 'a' },
+      ],
+      chain,
+    )
+    expect(v.ok, JSON.stringify(v.issues)).toBe(true)
+  })
+})

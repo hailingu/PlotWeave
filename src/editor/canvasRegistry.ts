@@ -1,15 +1,15 @@
 import type { EdgeTypes, NodeTypes } from '@xyflow/react'
-import SceneNode from './nodes/SceneNode'
-import DialogueNode from './nodes/DialogueNode'
-import BeatNode from './nodes/BeatNode'
-import BranchNode from './nodes/BranchNode'
-import ShotNode from './nodes/ShotNode'
-import ImageNode from './nodes/ImageNode'
-import BranchEdge from './edges/BranchEdge'
+import { SceneNode } from './nodes/SceneNode'
+import { DialogueNode } from './nodes/DialogueNode'
+import { BeatNode } from './nodes/BeatNode'
+import { BranchNode } from './nodes/BranchNode'
+import { ShotNode } from './nodes/ShotNode'
+import { ImageNode } from './nodes/ImageNode'
+import { BranchEdge } from './edges/BranchEdge'
 
 /**
  * 画布渲染注册的单一来源（docs/ui-design.md §4.2/§13）：编辑器画布
- * （EditorCanvasRegion）与原生外壳的画布演示页（src/native-canvas，P1
+ * （EditorCanvasRegion）与原生外壳的画布演示页（src/editor/nativeCanvas，P1
  * 视觉首片）共用同一份节点/连线注册与背景网格参数——新增节点类型只在
  * 此登记，两端同时可见，避免演示页漂移出第二套注册表。
  */
@@ -30,4 +30,4 @@ export const canvasEdgeTypes: EdgeTypes = {
 }
 
 /** 背景点阵间距（像素），与画布网格视觉密度一致。 */
-export const CANVAS_DOT_GAP = 22
+export { CANVAS_GRID_SIZE as CANVAS_DOT_GAP } from './canvasAlignment'

@@ -5,7 +5,7 @@
  * 不得回退为未包裹的裸组件（mock 探针看不到真实导出）。
  */
 import { describe, expect, it } from 'vitest'
-import EditorCanvasRegion from './EditorCanvasRegion'
+import { EditorCanvasRegion } from './EditorCanvasRegion'
 
 describe('EditorCanvasRegion 渲染边界', () => {
   it('默认导出是 memo 包裹的隔离边界', () => {

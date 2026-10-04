@@ -5,6 +5,7 @@
  * duplicateNode 以同 data 新 id 右下偏移并只选中副本。纯构建见 nodeFactory。
  */
 import { useCallback, type Dispatch, type SetStateAction } from 'react'
+import { uid } from '../uid'
 import type { XYPosition } from '@xyflow/react'
 import { buildCanvasNode } from './nodeFactory'
 import type { CreatableType } from './creatable'
@@ -17,11 +18,12 @@ const DUPLICATE_OFFSET = { x: 48, y: 40 }
 
 /** buildNewNode 可选项：落点/选中/字段覆盖与编号基线。 */
 export interface NewNodeOptions {
-  at?: XYPosition
-  selected?: boolean
-  data?: Record<string, unknown>
+  // 可显式 undefined = 选项缺省（issue #231）
+  at?: XYPosition | undefined
+  selected?: boolean | undefined
+  data?: Record<string, unknown> | undefined
   /** 编号基线列表；批量连续创建时传模拟数组防止编号重复。 */
-  against?: CanvasNode[]
+  against?: CanvasNode[] | undefined
 }
 
 /** 节点创建动作组。 */
@@ -107,7 +109,10 @@ export function useNodeCreation(deps: NodeCreationDeps): NodeCreationActions {
       if (!src) return
       const copy = {
         ...src,
-        id: `${src.type}-${Date.now()}`,
+        // 统一唯一 id 能力（#129）：type + Date.now() 在同毫秒复制下重号，
+        // 一次撤销按 id 过滤会删掉多个副本——归队 uid()（CSPRNG，与
+        // nodeFactory 的前缀约定一致）
+        id: uid(src.type),
         position: {
           x: src.position.x + DUPLICATE_OFFSET.x,
           y: src.position.y + DUPLICATE_OFFSET.y,
