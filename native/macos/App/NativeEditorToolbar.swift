@@ -6,20 +6,29 @@ struct NativeEditorToolbar: ToolbarContent {
     let layout: ShellLayoutState
 
     var body: some ToolbarContent {
-        if state.route != "settings" {
+        if state.route == "editor" {
             ToolbarItemGroup(placement: .navigation) {
-                Button("首页", systemImage: "house") { state.send("app.home") }
-                    .disabled(state.route != "editor" || state.busy)
+                NativeProjectLibraryButton(state: state)
             }
-            if state.route == "editor" {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    NativeEditorActions(state: state, layout: layout)
-                    if state.projectId != nil {
-                        Button("检查器", systemImage: "sidebar.trailing") { layout.toggleInspector() }
-                    }
+            ToolbarItemGroup(placement: .primaryAction) {
+                NativeEditorActions(state: state, layout: layout)
+                if state.projectId != nil {
+                    Button("检查器", systemImage: "sidebar.trailing") { layout.toggleInspector() }
                 }
             }
         }
+    }
+}
+
+/// Toolbar and menu navigation share one destination, readiness guard and existing save-coordinated action.
+struct NativeProjectLibraryButton: View {
+    /// The application remains the sole owner of route, pending navigation and failures.
+    let state: NativeApplicationState
+
+    var body: some View {
+        Button("返回项目片库", systemImage: "house") { state.send("app.home") }
+            .help("返回项目片库")
+            .disabled(state.route != "editor" || state.busy)
     }
 }
 

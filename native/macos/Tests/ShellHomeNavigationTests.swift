@@ -9,6 +9,39 @@ import WebKit
 @MainActor
 @Suite(.serialized)
 struct ShellHomeNavigationTests {
+    /// The real homepage button must remain unavailable during creation and commit only one new native project.
+    @Test func creationButtonCommitsOnceAndOpensEditor() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let webView = try await fixture.waitForReady()
+        let projects = try #require(fixture.services.projectStore)
+        let before = try await projects.invoke(command: "list_projects", args: [:])
+        let originalIDs = Set(before.arrayValue?.compactMap { $0["id"]?.string } ?? [])
+        try await webView.evaluateJavaScript("""
+            const original = window.__pwNativeIntent;
+            window.__pwNativeIntent = request => request.command !== 'app.create'
+                ? original(request)
+                : new Promise(resolve => {
+                    window.__pwReleaseCreate = () => original(request).then(resolve);
+                });
+            undefined;
+            """)
+        let button = try await NativeCreationControlFixture.button(in: fixture.window)
+        try NativeCreationControlFixture.press(button)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.state.busy)
+        #expect(try !NativeCreationControlFixture.isEnabled(button))
+        try await webView.evaluateJavaScript("window.__pwReleaseCreate(); undefined")
+        try await wait { fixture.state.route == "editor" && !fixture.state.busy }
+        let id = try #require(fixture.state.projectId)
+        let after = try await projects.invoke(command: "list_projects", args: [:])
+        let currentIDs = Set(after.arrayValue?.compactMap { $0["id"]?.string } ?? [])
+        #expect(currentIDs.subtracting(originalIDs) == Set([id]))
+        #expect(try await projects.invoke(command: "load_project", args: ["id": .string(id)])["graph"] != nil)
+        #expect(findWebView(fixture.window.contentView) === webView)
+        await fixture.services.close()
+    }
+
     /// Home and settings release WebKit editing focus; reopening uses the same page.
     @Test(arguments: ["app.home", "app.settings"])
     func nativeNavigationReturnsToSameCanvasAndSavedDocument(command: String) async throws {
@@ -32,7 +65,8 @@ struct ShellHomeNavigationTests {
 
         for _ in 0..<2 {
             #expect(fixture.window.makeFirstResponder(webView))
-            _ = try await fixture.state.request(command)
+            if command == "app.home" { try ProjectLibraryToolbarFixture.activateReturn(in: fixture.window) }
+            else { _ = try await fixture.state.request(command) }
             try await wait { fixture.state.route == (command == "app.home" ? "home" : "settings") }
             try await Task.sleep(for: .milliseconds(300))
             #expect(webView.isHidden, "原生页面必须隐藏 WebKit 编辑表面")

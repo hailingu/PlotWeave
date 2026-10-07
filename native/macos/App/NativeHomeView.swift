@@ -19,7 +19,7 @@ struct NativeProjectProjection: Identifiable, Equatable {
     }
 }
 
-/// Read-only homepage policy: search preserves identities and unfinished loads never enable writes.
+/// Read-only homepage policy preserves the full ordered library and disables writes during unfinished loads.
 struct NativeHomeProjection {
     /// The ordered list is supplied by the application owner, including unreadable projects.
     let projects: [NativeProjectProjection]
@@ -35,12 +35,6 @@ struct NativeHomeProjection {
         error = value["error"]?.string
     }
 
-    /// Matches the dev homepage's trimmed, case-insensitive title search.
-    func filtered(by query: String) -> [NativeProjectProjection] {
-        let term = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return term.isEmpty ? projects : projects.filter { $0.name.lowercased().contains(term) }
-    }
-
     /// Conflicting navigation and project mutations wait for the current application action.
     func canMutate(busy: Bool) -> Bool { !loading && !busy }
 
@@ -48,12 +42,11 @@ struct NativeHomeProjection {
     func contains(id: String) -> Bool { projects.contains { $0.id == id } }
 }
 
-/// Native homepage with actual project navigation; only search and confirmation drafts live locally.
+/// Native homepage with actual project navigation; only confirmation drafts live locally.
 struct NativeHomeView: View {
     /// The application state receives every mutation, retaining the authoritative save coordination.
     @Bindable var state: NativeApplicationState
     /// Presentation-only state never changes persisted project metadata by itself.
-    @State private var query = ""
     @State private var renameTarget: NativeProjectProjection?
     @State private var deleteTarget: NativeProjectProjection?
 
@@ -66,15 +59,12 @@ struct NativeHomeView: View {
     var body: some View {
         VStack(spacing: 16) {
             header
-            TextField("搜索剧名", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("搜索项目")
             if let error = state.error ?? home.error {
                 failure(error)
             }
             if home.loading {
                 ProgressView("正在加载项目…").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if home.filtered(by: query).isEmpty {
+            } else if home.projects.isEmpty {
                 emptyList
             } else {
                 projectList
@@ -112,7 +102,10 @@ struct NativeHomeView: View {
                 Text("选择一部短剧继续创作").foregroundStyle(.secondary)
             }
             Spacer()
-            Button("新建短剧", systemImage: "plus") { state.send("app.create") }.disabled(!enabled)
+            NativeProjectCreationButton(state: state)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .help("新建短剧（⌘N）")
         }
     }
 
@@ -125,17 +118,17 @@ struct NativeHomeView: View {
         }
     }
 
-    /// Empty search results never imply persisted projects were removed.
+    /// Only a loaded, empty library presents the creation prompt.
     private var emptyList: some View {
         ContentUnavailableView(
-            query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "还没有短剧项目" : "没有匹配的项目",
-            systemImage: "rectangle.stack", description: Text("新建短剧，或调整搜索词。")
+            "还没有短剧项目",
+            systemImage: "rectangle.stack", description: Text("新建短剧，开始创作。")
         ).frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Every action carries an immutable project ID; a dirty placeholder can still be opened for its diagnostic.
     private var projectList: some View {
-        List(home.filtered(by: query)) { project in
+        List(home.projects) { project in
             HStack(spacing: 12) {
                 Button { state.send("app.open", args: ["id": .string(project.id)]) } label: {
                     NativeProjectRow(project: project)
@@ -147,9 +140,21 @@ struct NativeHomeView: View {
                     Divider()
                     Button("删除", role: .destructive) { deleteTarget = project }
                 } label: { Image(systemName: "ellipsis") }
-                    .menuStyle(.borderlessButton).frame(width: 28).disabled(!enabled)
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden)
+                    .accessibilityLabel("项目操作").frame(width: 28).disabled(!enabled)
             }.padding(.vertical, 8)
         }.listStyle(.inset)
+    }
+}
+
+/// Homepage and menu creation share one title, readiness boundary and save-coordinated application action.
+struct NativeProjectCreationButton: View {
+    /// Read projections and pending intent state remain owned by the existing application coordinator.
+    let state: NativeApplicationState
+
+    var body: some View {
+        Button("新建短剧", systemImage: "plus") { state.send("app.create") }
+            .disabled(!NativeHomeProjection(state.app).canMutate(busy: state.busy))
     }
 }
 

@@ -5,17 +5,16 @@ import Testing
 /// Native form rules keep drafts local and enforce the shared projection/intent contracts.
 @MainActor
 struct NativeFormsTests {
-    /// Search only changes presentation, retaining persisted IDs and dirty-data diagnostics.
-    @Test func homeSearchPreservesIdentitiesAndUnreadableProjects() {
+    /// The complete library retains persisted IDs, source ordering and dirty-data diagnostics.
+    @Test func homePreservesAllIdentitiesAndUnreadableProjects() {
         let projects = HostJSON.array([
             .object(["id": .string("first"), "name": .string("Night 剧本"), "updatedAt": .string("2026-10-04T00:00:00Z")]),
             .object(["id": .string("dirty"), "name": .string("损坏项目"), "error": .string("无法读取")]),
             .object(["id": .string("second"), "name": .string("白天"), "updatedAt": .string("2026-10-03T00:00:00Z")])
         ])
         let home = NativeHomeProjection(.object(["projects": projects, "loading": .bool(false)]))
-        #expect(home.filtered(by: "  NIGHT  ").map(\.id) == ["first"])
-        #expect(home.filtered(by: " ").map(\.id) == ["first", "dirty", "second"])
-        #expect(home.filtered(by: "损坏").first?.error == "无法读取")
+        #expect(home.projects.map(\.id) == ["first", "dirty", "second"])
+        #expect(home.projects[1].error == "无法读取")
         #expect(home.canMutate(busy: false))
         #expect(!home.canMutate(busy: true))
         #expect(!NativeHomeProjection(.null).canMutate(busy: false))

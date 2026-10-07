@@ -20,14 +20,19 @@ struct PlotWeaveNativeApp: App {
         }
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("新建项目") { application.send("app.create") }
+                NativeProjectCreationButton(state: application)
+                    .labelStyle(.titleOnly)
                     .keyboardShortcut("n", modifiers: .command)
-                    .disabled(Self.isHostedTest || application.route == "loading" || application.busy)
+                    .disabled(Self.isHostedTest)
             }
             CommandGroup(replacing: .appSettings) {
                 Button("设置…") { application.send("app.settings") }
                     .keyboardShortcut(",", modifiers: .command)
                     .disabled(Self.isHostedTest || application.route == "loading" || application.busy)
+            }
+            CommandGroup(after: .sidebar) {
+                NativeProjectLibraryButton(state: application)
+                    .disabled(Self.isHostedTest)
             }
         }
     }

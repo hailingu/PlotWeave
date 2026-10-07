@@ -4,6 +4,58 @@
 
 日期：2026-10-04。基线：本地 `dev` 的 `752cd5c`，已合入 `codex/swiftui-react-flow` 的 `08653d2`。本记录对应所有者“补充 swiftui-react-flow 里和 dev 上对比缺失的功能”的任务，沿用[迁移计划](swiftui-react-flow-migration-plan.md)的单写入者、持久化和数据隔离合同。
 
+## 项目片库控件精简：状态与不变量（2026-10-07）
+
+所有者要求项目行菜单仅显示三个点，并移除顶部搜索栏。本次限于 `NativeHomeView` 的呈现与不再需要的搜索状态；菜单仍使用系统 `Menu`。以下矩阵在生产代码修改前记录。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证与当前缺口 |
+| --- | --- | --- | --- | --- |
+| N51 | 项目加载完成→首页显示／返回首页 | 无搜索输入框，全部项目按投影顺序显示 | `NativeHomeView` 只读 `NativeHomeProjection.projects`；无本地过滤状态，不改项目身份或存储 | 通过：`NativeHomeViewTests.projectLibraryHasNoSearchField` 在真实 SwiftUI／AppKit 树验证无可编辑文本框且两行项目菜单均存在；`NativeFormsTests.homePreservesAllIdentitiesAndUnreadableProjects` 验证身份、顺序与损坏项目诊断 |
+| N52 | 已加载项目→项目行菜单显示／打开 | 标签仅显示三个点，无系统箭头；重命名、复制、删除仍可达 | `NativeHomeView` 负责菜单呈现；已有不可变项目 ID、确认与 busy／loading 门禁保持 | 通过：`NativeHomeViewTests.projectMenusHideSystemArrows` 验证两行真实 `NSPopUpButtonCell.arrowPosition == .noArrow` 且菜单可用；原 ellipsis 标签与菜单动作结构复核。系统弹出菜单交互、VoiceOver 和双外观视觉目验未执行 |
+| N53 | 加载中／列表失败→首页→重试／恢复 | 加载与失败仍可见，未就绪禁用项目操作；恢复后显示完整列表，空列表只提示创建 | 原有投影与应用动作拥有就绪和失败恢复；删除确认仍检查捕获 ID 是否存在 | 通过：既有表单 loading／busy 门禁、陈旧确认与 `ShellHomeNavigationTests` 生产导航回归及完整原生路由。加载、失败、重试和确认入口结构复核；本次不增加恢复状态，未新增失败页面故障注入或空列表视觉验收 |
+
+并发、乱序投影、持久化和跨项目动作仍由原有 owner 处理，本次不修改这些入口；故不增加相应测试组合。文档更新反映原生首页；浏览器／Tauri 首页不在本次范围内。
+
+聚焦回归先红：旧视图的搜索框存在，两个菜单的箭头位置均为 `arrowAtCenter`，2 tests／1 suite 报告三项预期断言失败，Xcode 退出 65；修改后同一回归与 `NativeFormsTests` 共 6 tests／2 suites 全通过。测试只注入只读投影，使用真实 SwiftUI／AppKit 控件，不读取用户项目目录或源文件文本。变异复核：恢复搜索输入框会使 N51 失败，移除 `.menuIndicator(.hidden)` 会使 N52 失败，丢弃或乱序项目会使投影身份／顺序断言失败。
+
+在仓库根目录使用 Node 24.18.0、Xcode 27.0／macOS SDK 27.0，完整路由 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test` 通过：683 个维护文件、65 个显式排除项、389 个画布模块、135 tests／39 suites。聚焦检查使用同一 Xcode 命令追加 `-only-testing:PlotWeaveNativeTests/NativeHomeViewTests`，绿灯另追加 `-only-testing:PlotWeaveNativeTests/NativeFormsTests`。首次沙箱内 Xcode 被系统通知限制中断，沙箱外检查通过；现有 Vite 大 chunk 提示与 WebKit／系统服务诊断未阻断检查。文档无配置的自动语义检查，已对照实现、矩阵与章节链接结构化复核；`git diff --check` 通过。一次性构建和生成画布已清理，任务前已有产物恢复。未运行无改动的前端／Rust 全量路由、覆盖率、SonarQube 或 PR CI，未提交或推送。
+
+## 返回项目片库入口：状态与不变量（2026-10-07）
+
+所有者确认首页无需无效 Home 控件，编辑页保留系统房子图标并采用明确的“返回项目片库”名称与悬停说明，同时补齐菜单栏命令。本次为原生导航呈现与入口补齐，不更改 `app.home` 的保存协调或导航合同。以下矩阵在生产代码修改前记录。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证与当前缺口 |
+| --- | --- | --- | --- | --- |
+| N54 | 加载→首页；编辑→首页／设置 | 首页、加载和设置工具栏均不出现 Home 控件 | `NativeEditorToolbar` 仅在编辑路由提供返回入口；沿用只读路由，无独立可写导航状态 | 通过：`NativeProjectLibraryNavigationTests.libraryToolbarIsAbsentOutsideEditor` 使用真实 SwiftUI／AppKit 工具栏，覆盖三个非编辑状态；生产首页往返回归通过 |
+| N55 | 打开项目→工具栏返回→首页→重开项目 | 系统 house 图标，名称／悬停说明为“返回项目片库”；返回保留最新稿件与同一 WebView，会话不重建 | 工具栏与菜单共用返回按钮，业务动作统一由 `NativeApplicationState` 的 `app.home` 和 Web 保存 owner 承接 | 通过：`editorReturnButtonNamesItsDestination` 检查真实工具栏名称与 tooltip；`ShellHomeNavigationTests.nativeNavigationReturnsToSameCanvasAndSavedDocument` 以真实鼠标事件点击返回按钮并两次往返，验证稿件、页面标记、WebView 身份和焦点释放 |
+| N56 | 首页／加载／设置／操作在途→菜单或工具栏返回；页面不可用→返回失败 | 菜单保留对应命令并禁用不可用状态；在途不重复导航，失败可见且不虚构成功路由 | 共享按钮 owns route／busy 门禁，菜单沿用 hosted-test 禁用边界；应用 owner owns error／busy 和恢复 | 通过：`menuBarExposesProjectLibraryReturn` 检查真实 app 菜单命令与 hosted-test 禁用；`unavailablePageKeepsEditorAndClearsBusyState` 点击真实按钮后验证错误、编辑路由保留和 busy 清除。共享 route／busy 条件结构复核；持续在途时的实际控件禁用、正常应用菜单激活未单独自动验证。保存失败沿用 F04，未新增磁盘故障注入 |
+
+乱序投影、跨项目保存与恢复仍由原有 owner 处理，本次不新增业务状态或存储入口，因此不扩展这些组合。系统圆形容器、house 符号及前侧导航位置保持系统默认；双外观、实际悬停与 VoiceOver 未目验，不以工具栏语义断言替代。`NSToolbarItem.isEnabled` 无法代表 SwiftUI 托管按钮的禁用状态，故未用该元数据声称验证持续在途门禁；菜单激活受既有 hosted-test 数据隔离边界限制，共用按钮动作由实际工具栏点击验证。
+
+聚焦回归先红：旧实现仍在首页／加载显示“首页”，编辑页无目标名称，菜单缺命令；3 tests／1 suite 报告四项预期失败，Xcode 退出 65。实现后聚焦控件与生产导航共 6 tests／2 suites 通过。测试使用只读投影或隔离临时项目根，按钮激活通过公开 AppKit 鼠标事件，不调用私有 SwiftUI 类型或直接替代按钮动作。
+
+仓库根目录使用 Node 24.18.0、Xcode 27.0／SDK 27.0 执行原生路由：`npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`。大小检查通过（684 个维护文件、65 个排除项），389 个画布模块构建通过；默认并发全量首次因既有 `hostedApplicationWindowHasExitDelegate` 超时失败，再次另有既有 `explicitNodeRequestsReopenTheSameNativeInspector` 的一次断言失败，本次返回控件与导航测试均通过。退出窗口套件单独运行 4 tests／1 suite 通过，排除新增控件套件的对照运行仍有同一退出超时。相同完整 Xcode 命令追加 `-parallel-testing-enabled NO` 后，139 tests／40 suites 全部通过，日志 `/private/tmp/plotweave-home-navigation.TATsKF/full-serial-check.log`；默认并发回归的不稳定仍保留，未修改范围外的退出或检查器代码。[Swift Testing 并行规则](https://developer.apple.com/documentation/testing/parallelization)说明 suite 的 `.serialized` 不隔离其他 suite；上述运行差异与多个夹具共用 AppKit 窗口通知、SwiftUI 布局的干扰相符，属于推断而非已修复结论。
+
+现有 Vite 大 chunk 提示与 WebKit／系统服务诊断未阻止串行检查。文档无配置的自动语义检查，已对照实现、矩阵与章节链接结构化复核；`git diff --check` 通过。一次性构建与生成画布清理后恢复任务前已有产物。未运行无改动的前端／Rust 全量路由、覆盖率、SonarQube 或 PR CI，未提交或推送。
+
+## 新建短剧按钮：状态与不变量（2026-10-07）
+
+所有者要求按 Apple macOS 27 指南优化首页创建入口。本次限于原生按钮与对应菜单：保留 SF Symbols `plus` 和“新建短剧”，使用系统强调样式、大号控件与快捷键说明，菜单统一名称并保留 ⌘N；两处共用创建按钮的 loading／busy 条件，沿用同一 `app.create` 和单写入者保存／创建协调。以下矩阵在生产代码修改前记录。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证与当前缺口 |
+| --- | --- | --- | --- | --- |
+| N57 | 已加载首页→浅／深外观呈现 | 系统强调色与原生大号按钮；实际点击区域至少达到 macOS 默认建议的 28×28 pt，名称和悬停说明明确 | `NativeHomeView` 负责呈现，系统负责材质、字体、色彩和交互状态；不硬编码颜色、圆角或高度 | 通过：`NativeHomeViewTests.creationHasAccessiblePrimaryPresentation` 使用公开 AX API 验证生产视图的按钮角色、名称、help 和尺寸；浅／深外观均为 101.5×28 pt。强调级别由原生 `.borderedProminent` 实现；未自动判定像素、配色或材质 |
+| N58 | 菜单→新建；首页按钮→新建 | 同名“新建短剧”，菜单使用 ⌘N，创建真实项目并进入编辑页 | 菜单和按钮共用 `NativeProjectCreationButton`，由 `NativeApplicationState` 的 `app.create` 承接，业务与磁盘身份仍由原有 owner 管理 | 通过：实际 `NSMenuItem` 的标题、快捷键和修饰键；`ShellHomeNavigationTests.creationButtonCommitsOnceAndOpensEditor` 激活生产 AX 按钮，读取真实隔离磁盘项目并确认进入编辑页、复用同一 WebView。真实 ⌘N 按键目验未执行 |
+| N59 | 加载中／创建在途→再次激活；失败→恢复 | 未就绪／在途禁用创建；单次完成只增加一个项目，失败留在当前页面且可重试 | `NativeHomeProjection.canMutate` 与 application.busy 统一控制首页和菜单；原有失败／恢复入口不变 | 通过：实际加载按钮禁用；生产请求延迟期间 busy 为真且 AX 按钮禁用，完成后 busy 清除且磁盘仅增加一个项目。失败／恢复沿用 F04，本次未增加磁盘故障注入；宿主测试菜单有额外禁用保护，未实际触发菜单创建 |
+
+按钮样式参照 [Buttons](https://developer.apple.com/design/human-interface-guidelines/buttons)、[macOS 控件设计](https://developer.apple.com/videos/play/wwdc2025/310/) 和 [Accessibility 平台尺寸](https://developer.apple.com/design/human-interface-guidelines/accessibility)。系统原生 API 提供平台适配；全量产品的视觉、VoiceOver、增强对比度／减少透明度及真实键盘导航验收不能由几项自动测试推导为全部合格。本次不改变持久化、重试、跨项目或乱序投影合同，故不扩展这些组合。
+
+聚焦回归先红：旧控件在浅／深外观均未达到 28 pt 高度，均缺少快捷键 help，菜单仍为“新建项目”；5 tests／1 suite 报告五项预期断言失败。真实创建回归在生产样式修改前已通过，保护原有保存与导航行为。修改后 `NativeHomeViewTests` 和 `ShellHomeNavigationTests` 共 8 tests／2 suites 全通过。辅助功能测试按独立窗口身份查询系统公开 AX 树，真实创建使用隔离项目目录，不检查源文件文本。
+
+仓库根目录使用 Node 24.18.0、Xcode 27.0／macOS SDK 27.0 运行完整原生路由 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`：大小检查通过（685 个维护文件／65 个显式排除项）、画布构建通过（389 模块）；默认并行的 143 tests／40 suites 在已有退出 delegate 超时与检查器显示断言两处失败，本次新增回归通过。追加 `-parallel-testing-enabled NO` 串行复核，143 tests／40 suites 全通过。失败与前一节记录相同，未据此认定并行隔离问题已修复。
+
+真实窗口截图复核了大号胶囊形状、`plus` 与文字和原有右侧位置；捕获时窗口未激活，不能作为强调色、浅／深全状态的视觉验收。View 缓存截图遗漏部分合成图层，已弃用；临时截图、等待与打印代码未保留在回归中。Vite 大 chunk 提示、WebKit／系统服务和 SwiftUI 布局诊断未阻止串行检查。`npx prettier --check docs/ui-design.md docs/swiftui-react-flow-feature-parity.md` 和 `git diff --check` 通过；文档按实现、矩阵和链接结构化复核，无独立自动语义检查。一次性构建、生成画布与临时截图已清理，并恢复任务前已有构建产物。前端／Rust 产品代码未改，未运行其全量路由、覆盖率、SonarQube 或 PR CI，未提交或推送。
+
 ## 差异与实施范围
 
 比较起点：生产 React 项目管理、六类节点编辑、历史、大纲、设定、资产、设置、AI 与导出均已在分支中，但原生入口只有内存演示，服务和正常退出未接通。当前已实现 SwiftUI 首页、设置、大纲、检查器、设定、图库、AI 与导出，25 条业务命令和两条退出命令由 Swift 承接，另提供两条系统文本交付命令。默认入口运行真实编辑会话，`#fixture` 仅用于隔离演示。补齐复用既有编辑动作，不升级磁盘 schema；视频制作、JSON 导入和资产收藏回库等 dev 尚未实现的规划功能不计入差异。
