@@ -1,0 +1,246 @@
+import Foundation
+
+/// Swift-owned persistence actor serializes project mutations, media commits and deletion at one boundary.
+actor NativeProjectStore {
+    /// The independent host-selected root never comes from a Web request.
+    let root: URL
+    /// A cached capability keeps later operations anchored if the ambient projects path is renamed.
+    private var projects: NativeDirectory?
+    /// A disposed fixture or app service cannot silently reopen its previous directory.
+    private var closed = false
+    /// Imported bytes are addressable before the Web's next debounced document save.
+    var pendingMedia: [String: [String: HostJSON]] = [:]
+    /// Repair aliases store only identity mappings; authoritative paths always come from the current document.
+    var mediaAliases: [String: [String: String]] = [:]
+
+    /// Construction does no filesystem I/O, keeping App-hosted fixture startup independent of user data.
+    init(root: URL) { self.root = root }
+
+    /// Existing nine project IPC operations retain their wire values while execution moves into native Swift.
+    func invoke(command: String, args: [String: HostJSON]) throws -> HostJSON {
+        do {
+            switch command {
+            case "list_projects": return try listProjects()
+            case "create_project": return try createProject(name: string(args, "name"))
+            case "load_project": return try loadProject(id: string(args, "id"))
+            case "save_project":
+                guard let doc = args["doc"] else { throw invalid("缺少 doc 字段") }
+                let existing: Bool
+                switch args["expectExisting"] {
+                case nil: existing = false
+                case .bool(let flag): existing = flag
+                default: throw invalid("expectExisting 必须是布尔值")
+                }
+                return try saveProject(id: string(args, "id"), doc: doc, expectExisting: existing)
+            case "delete_project": try deleteProject(id: string(args, "id")); return .null
+            case "load_ai_session": return try loadAiSession(id: string(args, "id"))
+            case "save_ai_session":
+                guard let session = args["session"] else { throw invalid("缺少 session 字段") }
+                try saveAiSession(id: string(args, "id"), session: session); return .null
+            case "verify_project_assets":
+                guard let assets = args["assets"] else { throw invalid("缺少 assets 字段") }
+                return try verifyAssets(id: string(args, "id"), assets: assets)
+            case "copy_project_assets": try copyAssets(from: string(args, "fromId"), to: string(args, "toId")); return .null
+            default: throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "宿主命令尚未接通：\(command)")
+            }
+        } catch let failure as HostFailure { throw failure }
+        catch { throw HostFailure(code: "PW_STORAGE_ERROR", message: "原生存储操作失败：\(error.localizedDescription)") }
+    }
+
+    /// Stops future operations; outstanding media descriptors retain their own lifetime independently.
+    func close() {
+        closed = true
+        projects = nil
+        pendingMedia.removeAll()
+        mediaAliases.removeAll()
+    }
+
+    /// Assets and model services submit a synchronous file transaction to this same actor as deletion.
+    func withProject<T: Sendable>(id: String, body: @Sendable (NativeDirectory, HostJSON) throws -> T) throws -> T {
+        let document = try loadProject(id: id)
+        let directory = try projectDirectory(id: id, create: true)
+        return try body(directory, document)
+    }
+
+    /// Lazily anchors the projects root on the background actor, including its durable first creation.
+    func projectsDirectory() throws -> NativeDirectory {
+        guard !closed else { throw HostFailure(code: "PW_CORE_CLOSED", message: "原生存储已关闭") }
+        if let projects { return projects }
+        let parent = try NativeDirectory(root: root)
+        let directory = try parent.directory("projects", create: true)
+        projects = directory
+        return directory
+    }
+
+    /// All project-local directories go through the validated, anchored projects capability.
+    func projectDirectory(id: String, create: Bool = false) throws -> NativeDirectory {
+        try NativeProjectEnvelope.validateID(id)
+        return try projectsDirectory().directory(id, create: create)
+    }
+
+    /// Dirty records are isolated into their own diagnostic card; symlinks and disappeared entries stay invisible.
+    private func listProjects() throws -> HostJSON {
+        let directory = try projectsDirectory()
+        directory.sweepOldTemporaryFiles { target in
+            target.hasSuffix(".json") && (try? NativeProjectEnvelope.validateID(String(target.dropLast(5)))) != nil
+        }
+        var metas: [HostJSON] = []
+        for name in try directory.entries() where name.hasSuffix(".json") {
+            let id = String(name.dropLast(5))
+            guard (try? NativeProjectEnvelope.validateID(id)) != nil else { continue }
+            do {
+                guard let kind = try directory.metadata(name), NativeDirectory.isRegular(kind) else { continue }
+                let document = try decodeProject(directory.read(name), id: id)
+                metas.append(NativeProjectEnvelope.metadata(document, id: id))
+            } catch let failure as HostFailure where failure.code == "PW_STORAGE_REFUSED" { continue }
+            catch {
+                metas.append(.object([
+                    "id": .string(id), "name": .string(""), "updated_at": .string(""),
+                    "scene_count": .number(0), "ending_count": .number(0),
+                    "diagnostic": .string("项目文件损坏或不可读：\(error.localizedDescription)")
+                ]))
+            }
+        }
+        metas.sort {
+            let a = NativeProjectEnvelope.parseTime($0["updated_at"]?.string ?? "") ?? .distantPast
+            let b = NativeProjectEnvelope.parseTime($1["updated_at"]?.string ?? "") ?? .distantPast
+            return a == b ? ($0["id"]?.string ?? "") < ($1["id"]?.string ?? "") : a > b
+        }
+        return .array(metas)
+    }
+
+    /// Native UUID generation plus vacant-target validation prevents cross-process new-project collisions.
+    private func createProject(name: String) throws -> HostJSON {
+        let name = try NativeProjectEnvelope.sanitizeName(name)
+        let directory = try projectsDirectory()
+        let id = "p-" + UUID().uuidString.lowercased()
+        let document = NativeProjectEnvelope.empty(id: id, name: name)
+        try directory.writeNew(JSONEncoder().encode(document), name: id + ".json")
+        return NativeProjectEnvelope.metadata(document, id: id)
+    }
+
+    /// Only confirmed absence receives the stable missing-project prefix used by the existing UI decoder.
+    func loadProject(id: String) throws -> HostJSON {
+        try NativeProjectEnvelope.validateID(id)
+        let directory = try projectsDirectory()
+        guard try directory.metadata(id + ".json") != nil else {
+            throw HostFailure(code: "project_not_found", message: "[project_not_found] 项目不存在：\(id)")
+        }
+        return try decodeProject(directory.read(id + ".json"), id: id)
+    }
+
+    /// The existence check and atomic write share this actor with delete, so guarded late saves cannot resurrect it.
+    private func saveProject(id: String, doc: HostJSON, expectExisting: Bool) throws -> HostJSON {
+        try NativeProjectEnvelope.validateID(id)
+        let directory = try projectsDirectory()
+        if expectExisting, try directory.metadata(id + ".json") == nil {
+            throw HostFailure(code: "PW_PROJECT_NOT_FOUND", message: "项目不存在，拒绝写入副本：\(id)")
+        }
+        let document = try NativeProjectEnvelope.prepareSave(doc, id: id)
+        try verifySaveAssets(id: id, assets: document["assets"] ?? .null)
+        try directory.write(JSONEncoder().encode(document), name: id + ".json")
+        try verifySaveAssets(id: id, assets: document["assets"] ?? .null)
+        if let entries = document["assets"]?["byId"]?.object {
+            for key in entries.keys { pendingMedia[id]?.removeValue(forKey: key) }
+        }
+        return NativeProjectEnvelope.metadata(document, id: id)
+    }
+
+    /// Media/AI tree removal precedes the control file, keeping a failed deletion discoverable and retryable.
+    private func deleteProject(id: String) throws {
+        try NativeProjectEnvelope.validateID(id)
+        let directory = try projectsDirectory()
+        try directory.removeTree(id)
+        try directory.removeTree(id + ".json")
+        pendingMedia.removeValue(forKey: id)
+        mediaAliases.removeValue(forKey: id)
+    }
+
+    /// Missing session files are legitimate empty history; corrupt bytes are reported without rewriting the original.
+    private func loadAiSession(id: String) throws -> HostJSON {
+        try NativeProjectEnvelope.validateID(id)
+        let projects = try projectsDirectory()
+        guard try projects.metadata(id) != nil else { return sessionCopy(nil, corrupt: false) }
+        let directory = try projects.directory(id)
+        guard try directory.metadata("ai-session.json") != nil else { return sessionCopy(nil, corrupt: false) }
+        let data = try directory.read("ai-session.json")
+        guard let session = try? JSONDecoder().decode(HostJSON.self, from: data), validSession(session) else {
+            return sessionCopy(nil, corrupt: true)
+        }
+        return sessionCopy(session, corrupt: false)
+    }
+
+    /// AI writes require an existing ordinary project record under the same deletion barrier.
+    private func saveAiSession(id: String, session: HostJSON) throws {
+        try NativeProjectEnvelope.validateID(id)
+        guard validSession(session) else { throw invalid("AI 会话版本或 entries 形状无效") }
+        let projects = try projectsDirectory()
+        guard try projects.metadata(id + ".json") != nil else {
+            throw HostFailure(code: "PW_PROJECT_NOT_FOUND", message: "项目不存在，拒绝保存 AI 会话")
+        }
+        _ = try projects.read(id + ".json")
+        let directory = try projects.directory(id, create: true)
+        try directory.write(JSONEncoder().encode(session), name: "ai-session.json")
+    }
+
+    /// Verification reports only lexically valid references whose actual ordinary file cannot be opened safely.
+    private func verifyAssets(id: String, assets: HostJSON) throws -> HostJSON {
+        try NativeProjectEnvelope.validateID(id)
+        let fields = assets["byId"]?.object ?? [:]
+        let bad = fields.keys.sorted().filter { key in
+            guard let path = fields[key]?["relPath"]?.string, NativeAssetContract.activeRelPath(path) else { return false }
+            return (try? projectDirectory(id: id).media(path, mime: fields[key]?["mime"]?.string ?? "application/octet-stream")) == nil
+        }
+        return .array(bad.map(HostJSON.string))
+    }
+
+    /// A document may reference only verified real files, both before and after its atomic persistence.
+    private func verifySaveAssets(id: String, assets: HostJSON) throws {
+        for (key, value) in assets["byId"]?.object ?? [:] {
+            guard let path = value["relPath"]?.string, let mime = value["mime"]?.string else { throw invalid("资产 \(key) 缺失路径或 MIME") }
+            _ = try projectDirectory(id: id).media(path, mime: mime)
+        }
+    }
+
+    /// Copy validates the destination record even for an empty source, and rolls back every partial media tree.
+    private func copyAssets(from source: String, to destination: String) throws {
+        try NativeProjectEnvelope.validateID(source)
+        try NativeProjectEnvelope.validateID(destination)
+        let projects = try projectsDirectory()
+        guard source != destination, try projects.metadata(destination) == nil else {
+            throw NativeDirectory.refused("目标资产目录已存在或与源相同，拒绝复制")
+        }
+        guard try projects.metadata(destination + ".json") != nil else {
+            throw HostFailure(code: "PW_PROJECT_NOT_FOUND", message: "目标项目已被删除，拒绝复制")
+        }
+        _ = try projects.read(destination + ".json")
+        guard try projects.metadata(source) != nil else { return }
+        let sourceDirectory = try projects.directory(source)
+        guard try sourceDirectory.metadata("assets") != nil else { return }
+        let assets = try sourceDirectory.directory("assets")
+        do { try assets.copyContents(to: projects.directory(destination, create: true).directory("assets", create: true)) }
+        catch {
+            do { try projects.removeTree(destination) }
+            catch { throw HostFailure(code: "PW_COPY_ROLLBACK_FAILED", message: "资产复制失败且清理未完成：\(error.localizedDescription)") }
+            throw error
+        }
+    }
+
+    /// Storage parses no application prose; malformed wire bytes remain untouched and produce a structured failure.
+    private func decodeProject(_ data: Data, id: String) throws -> HostJSON {
+        do { return try NativeProjectEnvelope.parse(JSONDecoder().decode(HostJSON.self, from: data), id: id) }
+        catch { throw HostFailure(code: "PW_PROJECT_CORRUPT", message: "项目文件损坏：\(error.localizedDescription)") }
+    }
+
+    /// Session schema validation stays narrow; existing application entry payloads are preserved verbatim.
+    private func validSession(_ value: HostJSON) -> Bool { value.object != nil && value["schemaVersion"] == .number(1) && value["entries"]?.arrayValue != nil }
+    /// The AI read wire distinguishes missing, malformed and valid sessions explicitly.
+    private func sessionCopy(_ session: HostJSON?, corrupt: Bool) -> HostJSON { .object(["session": session ?? .null, "corrupt": .bool(corrupt)]) }
+    /// Required wire strings never receive permissive empty defaults.
+    private func string(_ args: [String: HostJSON], _ key: String) throws -> String {
+        guard let value = args[key]?.string, !value.isEmpty else { throw invalid("缺少 \(key) 字段") }
+        return value
+    }
+    /// Shared invalid-input code is separate from persisted missing/corrupt record diagnostics.
+    private func invalid(_ message: String) -> HostFailure { NativeProjectEnvelope.invalid(message) }
+}

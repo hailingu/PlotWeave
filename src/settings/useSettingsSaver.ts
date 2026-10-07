@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AppSettings } from './types'
 import { settingsStore } from './settingsStore'
+import { registerSettingsFlushGate } from './settingsSaveRegistry'
 
 /** useSettingsSaver 的返回：编辑写入、关闭处理、可见错误与关态。 */
 export interface SettingsSaver {
@@ -17,6 +18,10 @@ export interface SettingsSaver {
   update: (next: AppSettings) => void
   /** 「完成」：await 在途/未保存落盘（含冲刷期间的新编辑）；失败置 closeError 并保持打开。 */
   handleClose: () => void
+  /** 原生关闭等待同一冲刷，成功才导航；失败返回 false 并保留可见错误。 */
+  requestClose: () => Promise<boolean>
+  /** 将加密及后续状态写回登记为关闭/退出必须等待的在途工作。 */
+  trackPendingKey: (work: Promise<void>) => Promise<void>
   /** 关闭冲刷失败的可见可重试错误（null = 无）。 */
   closeError: string | null
   /** 关闭冲刷进行中（按钮「保存中…」防双击）。 */
@@ -25,6 +30,8 @@ export interface SettingsSaver {
 
 /** 冲刷/落盘所需的在途状态（ref 族）。 */
 interface SaverRefs {
+  /** Key encryption and its state update complete before persistence can be considered drained. */
+  readonly keyWork: { current: Set<Promise<void>> }
   /** 500ms 防抖计时器：冲刷每轮先清，防止计时器路径绕过 await 落盘。 */
   readonly saveTimer: { current: ReturnType<typeof setTimeout> | null }
   /** 未落盘的最新快照（null = 无待存编辑）。 */
@@ -66,6 +73,10 @@ async function flushPendingSaves(refs: SaverRefs): Promise<void> {
   const { saveTimer, pendingSaveRef, saveChainRef } = refs
   if (saveTimer.current) clearTimeout(saveTimer.current)
   for (;;) {
+    if (refs.keyWork.current.size > 0) {
+      await Promise.all(refs.keyWork.current)
+      continue
+    }
     const tail = saveChainRef.current
     if (tail !== null) {
       await tail.catch(() => {})
@@ -79,6 +90,74 @@ async function flushPendingSaves(refs: SaverRefs): Promise<void> {
   }
 }
 
+/** Tracks complete key edits, including their state write, while retaining the caller's error outcome. */
+function usePendingKeys(keyWork: SaverRefs['keyWork']) {
+  return useCallback(
+    (work: Promise<void>): Promise<void> => {
+      keyWork.current.add(work)
+      const release = () => {
+        keyWork.current.delete(work)
+      }
+      void work.then(release, release)
+      return work
+    },
+    [keyWork],
+  )
+}
+
+/** Makes the live saver visible to application exit without moving settings state into a second owner. */
+function useExitRegistration(
+  refs: SaverRefs,
+  flush: () => Promise<void>,
+): void {
+  useEffect(
+    () =>
+      registerSettingsFlushGate({
+        hasPending: () =>
+          refs.keyWork.current.size > 0 ||
+          refs.pendingSaveRef.current !== null ||
+          refs.saveChainRef.current !== null,
+        flush,
+      }),
+    [refs, flush],
+  )
+}
+
+/** Coalesces Web/native close requests around the same fixed-point flush and visible retry state. */
+function useSettingsClose(flush: () => Promise<void>, onClose: () => void) {
+  const [closing, setClosing] = useState(false)
+  const closeRequest = useRef<Promise<boolean> | null>(null)
+  const [closeError, setCloseError] = useState<string | null>(null)
+  const requestClose = useCallback((): Promise<boolean> => {
+    if (closeRequest.current) return closeRequest.current
+    setClosing(true)
+    const request = flush()
+      .then(() => {
+        setCloseError(null)
+        onClose()
+        return true
+      })
+      .catch((err: unknown) => {
+        setCloseError(
+          `保存设置失败：${err instanceof Error ? err.message : String(err)}——请重试关闭`,
+        )
+        setClosing(false)
+        return false
+      })
+    closeRequest.current = request
+    void request.finally(() => {
+      if (closeRequest.current === request) closeRequest.current = null
+    })
+    return request
+  }, [flush, onClose])
+
+  const handleClose = useCallback((): void => {
+    void requestClose()
+  }, [requestClose])
+
+  return { handleClose, requestClose, closeError, closing }
+}
+
 /** 设置页「编辑即保存」的调度 hook：返回防抖落盘/关闭冲刷动作族与可见
  * 错误态；串行队列与失败回填语义见模块头（不静默丢失编辑）。 */
 export function useSettingsSaver(
@@ -89,8 +168,15 @@ export function useSettingsSaver(
   const pendingSaveRef = useRef<AppSettings | null>(null)
   const saveChainRef = useRef<Promise<void> | null>(null)
   const revRef = useRef(0)
-  const [closing, setClosing] = useState(false)
-  const [closeError, setCloseError] = useState<string | null>(null)
+  const keyWork = useRef(new Set<Promise<void>>())
+  const refs = useRef({
+    saveTimer,
+    pendingSaveRef,
+    saveChainRef,
+    revRef,
+    keyWork,
+  }).current
+  const trackPendingKey = usePendingKeys(keyWork)
 
   const update = useCallback(
     (next: AppSettings) => {
@@ -99,37 +185,22 @@ export function useSettingsSaver(
       if (saveTimer.current) clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(() => {
         pendingSaveRef.current = null
-        enqueueSave(
-          { saveTimer, pendingSaveRef, saveChainRef, revRef },
-          next,
-        ).catch((err) => console.warn('[SettingsView] 防抖落盘失败', err))
+        enqueueSave(refs, next).catch((err) =>
+          console.warn('[SettingsView] 防抖落盘失败', err),
+        )
       }, 500)
     },
-    [setSettings],
+    [setSettings, refs],
   )
 
   /** 关闭冲刷：委托 flushPendingSaves（S3358），失败保留现场上抛。 */
   const flush = useCallback(
-    (): Promise<void> =>
-      flushPendingSaves({ saveTimer, pendingSaveRef, saveChainRef, revRef }),
-    [],
+    (): Promise<void> => flushPendingSaves(refs),
+    [refs],
   )
+  useExitRegistration(refs, flush)
 
-  const handleClose = useCallback((): void => {
-    if (closing) return
-    setClosing(true)
-    flush()
-      .then(() => {
-        setCloseError(null)
-        onClose()
-      })
-      .catch((err) => {
-        setCloseError(
-          `保存设置失败：${err instanceof Error ? err.message : String(err)}——请重试关闭`,
-        )
-        setClosing(false)
-      })
-  }, [closing, flush, onClose])
+  const close = useSettingsClose(flush, onClose)
 
   // 卸载兜底（非常规关闭）：flush 只经 ref 读写，首帧闭包行为不变
   useEffect(() => {
@@ -140,5 +211,9 @@ export function useSettingsSaver(
     }
   }, [flush])
 
-  return { update, handleClose, closeError, closing }
+  return {
+    update,
+    ...close,
+    trackPendingKey,
+  }
 }

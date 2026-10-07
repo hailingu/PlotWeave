@@ -14,6 +14,33 @@ describe('ipcErrorCode（issue #229）', () => {
     )
   })
 
+  it('Swift 结构化机器码保持项目不存在判定，支持 Error 与错误载荷', () => {
+    expect(
+      ipcErrorCode({ code: 'project_not_found', message: 'missing' }),
+    ).toBe('project_not_found')
+    expect(
+      ipcErrorCode(
+        Object.assign(new Error('missing'), { code: 'project_not_found' }),
+      ),
+    ).toBe('project_not_found')
+  })
+
+  it.each([
+    'PW_UNKNOWN',
+    '',
+    'project-not-found',
+    '[project_not_found]',
+    42,
+    null,
+  ])('非法结构化码 %j 不参与判定，Error 的旧前缀仍兼容', (code) => {
+    expect(ipcErrorCode({ code, message: 'missing' })).toBeNull()
+    expect(
+      ipcErrorCode(
+        Object.assign(new Error('[project_not_found] missing'), { code }),
+      ),
+    ).toBe('project_not_found')
+  })
+
   it('无码/非法形态回退 null——消费者按未知错误保守处理', () => {
     // 裸文案（旧后端或本地构造）不得被误判为「项目不存在」
     expect(ipcErrorCode('项目不存在：p-1')).toBeNull()

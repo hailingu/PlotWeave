@@ -6,7 +6,8 @@
  * 布局层下传的这些成员引用保持稳定，整个 ReactFlow 子树跳过执行；节点/
  * 连线/选中变化仍经 doc 与 displayNodes 正常触发改区。
  */
-import { memo, useState, type RefObject } from 'react'
+import { memo, useState, type MouseEvent, type RefObject } from 'react'
+import { isSwiftHost } from '../platform/hostEnvironment'
 import {
   Background,
   BackgroundVariant,
@@ -61,6 +62,10 @@ export interface EditorCanvasRegionProps {
   readonly onAlignNodes: EditorGraphActions['alignment']['onAlignNodes']
   /** 视口落定持久化（useEditorPersistence，§3 视口随文档落盘）。 */
   readonly onMoveEnd: EditorPersistence['onMoveEnd']
+  /** 原生版普通节点点击：请求对应属性，不接管框架选择或视口。 */
+  readonly onInspectNode: (id: string) => void
+  /** 原生版空白点击：清理属性目标，不展开或切换右栏。 */
+  readonly onClearNodeInspector: () => void
 }
 
 /** 画布容器与 ReactFlow 装配；文档变化经 doc/displayNodes 穿透 memo 边界。 */
@@ -82,6 +87,12 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
         nodeTypes={canvasNodeTypes}
         edgeTypes={canvasEdgeTypes}
         proOptions={{ hideAttribution: true }}
+        onNodeClick={(event, node) =>
+          requestNodeInspector(event, node.id, props.onInspectNode)
+        }
+        onPaneClick={() => {
+          if (isSwiftHost()) props.onClearNodeInspector()
+        }}
         onNodesChange={props.onNodesChange}
         onEdgesChange={doc.onEdgesChange}
         onConnect={props.onConnect}
@@ -108,11 +119,11 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
         />
         <CanvasAlignmentControls
           selectedCount={doc.nodes.filter((node) => node.selected).length}
+          autoLayoutDisabled={doc.nodes.length === 0}
+          onAutoLayout={props.onAutoLayout}
           onAlignNodes={props.onAlignNodes}
         />
         <CanvasLayoutControl
-          disabled={doc.nodes.length === 0}
-          onAutoLayout={props.onAutoLayout}
           snapToGrid={snapToGrid}
           onToggleSnap={() => setSnapToGrid((enabled) => !enabled)}
         />
@@ -121,20 +132,34 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
   )
 }
 
+/** 普通原生主体点击打开属性；多选、文本编辑和连接端口仍由原交互所有者处理。 */
+function requestNodeInspector(
+  event: MouseEvent,
+  id: string,
+  inspect: (id: string) => void,
+): void {
+  if (!isSwiftHost() || event.metaKey || event.ctrlKey || event.shiftKey) return
+  const target = event.target
+  if (
+    target instanceof Element &&
+    target.closest(
+      'input,textarea,select,[contenteditable="true"],.react-flow__handle,button:not(.pw-editable)',
+    )
+  )
+    return
+  inspect(id)
+}
+
 /** memo 隔离边界（issue #103）：与画布输入无关的状态变化不重执行本区域。
  * 命名导出（issue #164）：内部实现与导出名分离，消费方仍按
  * EditorCanvasRegion 引用。 */
 export const EditorCanvasRegion = memo(EditorCanvasRegionImpl)
 
-/** 自动排布入口独立于对齐工具条；空画布禁用。 */
+/** 缩放／适配／锁定与网格吸附继续使用左下角 React Flow 控件。 */
 function CanvasLayoutControl({
-  disabled,
-  onAutoLayout,
   snapToGrid,
   onToggleSnap,
 }: {
-  readonly disabled: boolean
-  readonly onAutoLayout: () => void
   readonly snapToGrid: boolean
   readonly onToggleSnap: () => void
 }) {
@@ -162,36 +187,6 @@ function CanvasLayoutControl({
           <path d="M8 3v18M16 3v18M3 8h18M3 16h18" />
         </svg>
       </button>
-      <button
-        type="button"
-        className="react-flow__controls-button"
-        title="自动排布"
-        aria-label="自动排布"
-        disabled={disabled}
-        onClick={onAutoLayout}
-      >
-        <AutoLayoutIcon />
-      </button>
     </Controls>
-  )
-}
-
-/** 自动排布按钮图标：三卡对齐 + 归位箭头，表达「整理布局」。 */
-function AutoLayoutIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      aria-hidden="true"
-    >
-      <rect x="3" y="3" width="7" height="6" rx="1.2" />
-      <rect x="3" y="12" width="7" height="6" rx="1.2" />
-      <path d="M14 5h7M14 9h4" strokeLinecap="round" />
-      <path d="M14 14h7M14 18h4" strokeLinecap="round" />
-    </svg>
   )
 }

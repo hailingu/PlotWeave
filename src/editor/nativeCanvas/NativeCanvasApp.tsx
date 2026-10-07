@@ -1,4 +1,3 @@
-import { useEffect } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -14,25 +13,7 @@ import {
 } from '../canvasRegistry'
 import { useDemoEditor } from './useDemoEditor'
 import { DEMO_GRAPH_LABEL } from './demoGraph'
-import {
-  notifyCanvasHostReady,
-  readInitialHostAppearance,
-  setHostAppearanceHandler,
-  type HostAppearance,
-} from './canvasHostBridge'
-
-/**
- * 把宿主同步的外观语义落到 `<html>` data 属性（§2.2）：宿主语义是权威
- * 来源，CSS 与后续逻辑按属性消费；无宿主（浏览器 dev）时不落属性，
- * 样式继续跟随系统媒体查询。
- */
-function applyHostAppearance(appearance: HostAppearance): void {
-  const root = document.documentElement
-  root.dataset.hostColorScheme = appearance.colorScheme
-  root.dataset.hostReduceTransparency = String(appearance.reduceTransparency)
-  root.dataset.hostIncreaseContrast = String(appearance.increaseContrast)
-  root.dataset.hostReduceMotion = String(appearance.reduceMotion)
-}
+import { useNativeCanvasLifecycle } from './useNativeCanvasLifecycle'
 
 /**
  * P1 原生视觉首片的画布演示页（docs/swiftui-react-flow-migration-plan.md
@@ -82,20 +63,7 @@ const DEMO_IMAGE_GEN_API: ImageGenApi = {
 export function NativeCanvasApp() {
   const editor = useDemoEditor()
 
-  useEffect(() => {
-    // 首帧绘制完成后再报就绪，避免原生侧过早放行编辑（§4.1 握手）。
-    const frame = requestAnimationFrame(() => notifyCanvasHostReady())
-    return () => cancelAnimationFrame(frame)
-  }, [])
-
-  useEffect(() => {
-    // 宿主外观语义：应用初始注入并承接后续推送（§2.2；无效载荷已在
-    // 桥边界被拒绝）。卸载时移除推送入口。
-    const initial = readInitialHostAppearance()
-    if (initial) applyHostAppearance(initial)
-    setHostAppearanceHandler(applyHostAppearance)
-    return () => setHostAppearanceHandler(null)
-  }, [])
+  useNativeCanvasLifecycle()
 
   return (
     <div style={VIEWPORT_STYLE}>

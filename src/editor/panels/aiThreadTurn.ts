@@ -301,8 +301,8 @@ export function useAiTurn(opts: UseAiTurnOpts) {
   /** 认领盒子的 canceller（issue #154）：claim 存入、cancel 调用以停止旧轮。 */
   const claimBoxRef = useRef<TurnBox | null>(null)
   useTurnClaimDelivery(opts, heldBox, setBusy, setError, claimBoxRef)
-  const send = async () => {
-    const text = draft.trim()
+  const send = async (submittedDraft?: string) => {
+    const text = (submittedDraft ?? draft).trim()
     if (!text || busy || !opts.activeOption || !opts.activeProvider) return
     // 新一轮：世代 +1、重置取消标志（旧轮迟到的 signal 引用不影响本轮）
     const { generation, signal } = turn.begin()

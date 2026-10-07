@@ -29,22 +29,27 @@
 
 当前支持平台为 **macOS**；**不支持 Windows**，不提供 Windows 构建、测试或发行支持。
 
-需要 macOS、[Node.js 24.18.0](.nvmrc) 以及 [Rust 1.95.0](rust-toolchain.toml)。
+当前 `codex/swiftui-react-flow` 原生分支已实现 SwiftUI 首页、编辑工具栏、大纲、检查器、设定、图库、AI、导出与设置界面，存储、素材、密钥和模型服务均由 Swift 承接。React Flow 保留画布与单一编辑会话。此处描述的是当前源码实现，已发布的 v0.2.0 仍以其[发布说明](docs/releases/v0.2.0.md)为准。
+
+原生构建需要 macOS 26.0+、[Node.js 24.18.0](.nvmrc) 与 Xcode 27.0／macOS SDK 27.0：
 
 ```bash
 nvm use
 npm install
-npm run tauri dev
+npm run build:native
+open -n native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app
 ```
 
-上述命令启动开发构建，不等同于经过签名和公证的发行安装包。AI 图像生成还需要在应用中配置可用的 Provider。
+默认入口运行真实项目应用；`#fixture` 仅为不落盘的隔离演示。原生开发数据位于 Application Support 下独立的 `dev.plotweave.PlotWeaveNative.development` 目录，不读取旧 Tauri 数据或历史 Keychain。AI 功能需要重新配置可用的 Provider。真实公网 TLS、计费模型、视觉、中文输入法、VoiceOver 与性能尚未验收，已验证能力及边界见[功能补齐记录](docs/swiftui-react-flow-feature-parity.md)。
+
+保留的 Tauri 基线另需 [Rust 1.95.0](rust-toolchain.toml)，通过 `npm run tauri dev` 启动。上述源码构建均不等同于经过签名、公证与安装验收的发行安装包；完整开发与验证步骤见[开发工作流](docs/development/workflow.md)。
 
 ## 文档
 
 - [v0.2.0 发布说明](docs/releases/v0.2.0.md)
 - [数据模型与项目格式](docs/data-model/README.md)
 - [界面与交互设计](docs/ui-design.md)
-- [SwiftUI/AppKit + React Flow 改造计划](docs/swiftui-react-flow-migration-plan.md)（P1 内存画布演示及 P2 宿主接口、Rust 内核/FFI 已落地，完整业务迁移待续）
+- [SwiftUI/AppKit + React Flow 改造计划](docs/swiftui-react-flow-migration-plan.md)与[当前功能、证据及验收边界](docs/swiftui-react-flow-feature-parity.md)
 - [开发与贡献指南](docs/development/workflow.md)
 
 ## 开发与贡献

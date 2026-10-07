@@ -43,7 +43,7 @@ struct ShellWebCanvasLifecycleTests {
         )
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(
-            rootView: NativeShellRoot(layout: layout, appearance: appearance)
+            rootView: NativeShellRoot(layout: layout, appearance: appearance, demoMode: true)
         )
         window.orderFront(nil)
         defer { window.close() }
@@ -92,8 +92,8 @@ struct ShellWebCanvasLifecycleTests {
     }
 
     /// M17: the document-start user script must expose the Swift host marker
-    /// (`window.__pwNativeHost = {"kind":"swift"}`) before any app script runs
-    /// — the web side's host identification consumes exactly this marker
+    /// (protocol version, host kind and fresh session UUID) before any app script runs
+    /// — the web side's host identification consumes this versioned marker
     /// (plan §2.3/§3, matrix M17) and must never fall back to memory mode.
     @Test func documentStartScriptInjectsSwiftHostMarker() async throws {
         let layout = ShellLayoutState()
@@ -106,7 +106,7 @@ struct ShellWebCanvasLifecycleTests {
         )
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(
-            rootView: NativeShellRoot(layout: layout, appearance: appearance)
+            rootView: NativeShellRoot(layout: layout, appearance: appearance, demoMode: true)
         )
         window.orderFront(nil)
         defer { window.close() }
@@ -114,9 +114,16 @@ struct ShellWebCanvasLifecycleTests {
         let webView = try await waitForWebView(in: window)
         try await waitForReadyCanvas(webView)
         let marker = try await webView.evaluateJavaScript(
-            "JSON.stringify(window.__pwNativeHost ?? null)"
-        ) as? String
-        #expect(marker == #"{"kind":"swift"}"#)
+            "window.__pwNativeHost"
+        ) as? [String: Any]
+        #expect(marker?["kind"] as? String == "swift")
+        #expect(marker?["protocolVersion"] as? Int == 1)
+        let session = marker?["sessionId"] as? String
+        #expect(session.flatMap(UUID.init(uuidString:)) != nil)
+        let hasBridge = try await webView.evaluateJavaScript(
+            "Boolean(window.webkit.messageHandlers.plotweaveHost)"
+        ) as? Bool
+        #expect(hasBridge == true)
     }
 
     /// Reads the semantic attribute the web side applies from host sync.

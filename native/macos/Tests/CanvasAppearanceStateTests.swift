@@ -10,6 +10,13 @@ import Testing
 @MainActor
 struct CanvasAppearanceStateTests {
 
+    /// The erased system reader stays compatible with the main-actor
+    /// bridge callable; compiler probes additionally verify call isolation.
+    @Test func systemReaderRetainsMainActorContract() {
+        let reader: Any = CanvasAppearanceState.Snapshot.current
+        #expect(reader is @MainActor () -> CanvasAppearanceState.Snapshot)
+    }
+
     /// The bridge payload must round-trip every semantic field so the web
     /// side can consume it without a second interpretation.
     @Test func payloadJSONRoundTripsEverySemanticField() throws {

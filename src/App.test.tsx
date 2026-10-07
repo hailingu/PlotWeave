@@ -1688,3 +1688,66 @@ it('App ✦重命名后台恢复：先收到恢复成功、后处理保存拒绝
   expect(screen.queryByRole('alert')).toBeNull()
   warn.mockRestore()
 })
+
+/** Native shell consumes the same App coordinator through read-only projections. */
+it('原生项目动作进入共享协调层，设置往返保留同一编辑器', async () => {
+  const nativeWindow = window as Window & {
+    __pwNativeHost?: unknown
+    __pwNativeIntent?: (request: unknown) => Promise<unknown>
+    webkit?: unknown
+  }
+  const postMessage = vi.fn()
+  nativeWindow.__pwNativeHost = {
+    kind: 'swift',
+    protocolVersion: 1,
+    sessionId: 'app-page',
+  }
+  nativeWindow.webkit = { messageHandlers: { canvasHost: { postMessage } } }
+  let requestNo = 0
+  const intent = (command: string, args: unknown = {}) =>
+    nativeWindow.__pwNativeIntent?.({
+      protocolVersion: 1,
+      sessionId: 'app-page',
+      requestId: String(++requestNo),
+      command,
+      args,
+    })
+  try {
+    render(<App />)
+    await waitFor(() =>
+      expect(nativeWindow.__pwNativeIntent).toBeTypeOf('function'),
+    )
+    await act(async () => {
+      await intent('app.open', { id: 'p1' })
+    })
+    const editor = await screen.findByTestId('editor')
+    await act(async () => {
+      await intent('app.settings')
+    })
+    await screen.findByTestId('settings')
+    expect(screen.getByTestId('editor')).toBe(editor)
+    fireEvent.click(screen.getByTestId('settings'))
+    await waitFor(() => expect(screen.queryByTestId('settings')).toBeNull())
+    expect(screen.getByTestId('editor')).toBe(editor)
+    await act(async () => {
+      await intent('app.home')
+    })
+    await waitFor(() => expect(screen.queryByTestId('editor')).toBeNull())
+    const snapshots = postMessage.mock.calls
+      .map(([value]) => value.projection?.app)
+      .filter(Boolean)
+    expect(
+      snapshots.some(
+        (state) => state.route === 'editor' && state.project.id === 'p1',
+      ),
+    ).toBe(true)
+    expect(snapshots[snapshots.length - 1].route).toBe('home')
+    expect(snapshots[snapshots.length - 1].projects).toEqual([
+      { id: 'p1', name: '雨夜' },
+    ])
+  } finally {
+    cleanup()
+    delete nativeWindow.__pwNativeHost
+    delete nativeWindow.webkit
+  }
+})

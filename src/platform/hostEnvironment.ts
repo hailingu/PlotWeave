@@ -5,7 +5,8 @@
  * - tauri：Tauri webview 的 IPC 桥 `__TAURI_INTERNALS__`（沿用 main.tsx 与
  *   各 store 的既有探测口径）。
  * - swift：原生外壳在文档开始前经 userScript 注入
- *   `window.__pwNativeHost = { kind: 'swift' }`（M17 契约）。标记形状非法
+ *   `window.__pwNativeHost = { kind: 'swift', protocolVersion: 1, sessionId }`。
+ *   仅 kind 的旧标记也识别为 Swift，传输另行拒绝不完整协议。标记形状非法
  *   不识别为 swift——注入契约由原生侧测试钉住，垃圾标记按纯浏览器对待。
  * - browser：纯浏览器预览（vite dev），唯一允许内存回退的宿主。
  * 关键不变量：Swift 宿主绝不落入内存模式，未接通的能力必须可见失败。
@@ -20,12 +21,16 @@ export type HostKind = 'tauri' | 'swift' | 'browser'
 /** 宿主探测窗口的最小形状（测试可传字面量对象驱动）。 */
 export type HostProbeWindow = Record<string, unknown>
 
-/** 原生外壳注入的宿主标记载荷（kind 字面量即契约全部）。 */
+/** 原生外壳 document-start 注入的 v1 协议会话标记。 */
 export interface NativeHostMarker {
   kind: 'swift'
+  protocolVersion: 1
+  sessionId: string
 }
 
-function isSwiftMarker(value: unknown): value is NativeHostMarker {
+function isSwiftMarker(
+  value: unknown,
+): value is Pick<NativeHostMarker, 'kind'> {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -50,7 +55,7 @@ export function isTauriHost(): boolean {
   return detectHostKind() === 'tauri'
 }
 
-/** Swift 原生外壳宿主（WKWebView + 注入标记）：命令传输待 P2 后续接通。 */
+/** Swift 原生外壳宿主（WKWebView + 注入标记）：服务由 v1 会话命令桥提供。 */
 export function isSwiftHost(): boolean {
   return detectHostKind() === 'swift'
 }

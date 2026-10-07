@@ -5,15 +5,15 @@ import Observation
 ///
 /// The inspector is toggled by the shell toolbar; `sidebarVisible` drives
 /// the split view's column visibility so the system navigation toggle and
-/// tests share one source. The canvas placeholder reads no layout state —
+/// tests share one source. The retained canvas reads no panel preference —
 /// panel changes must not rebuild the hosted web view (plan §4.2).
 @Observable
 final class ShellLayoutState {
 
-    /// Whether the trailing inspector column is shown.
+    /// User preference for showing the trailing inspector while editing; non-editor routes temporarily hide it.
     var inspectorVisible = true
 
-    /// Whether the navigation sidebar column is shown.
+    /// User preference for the editor sidebar; non-editor routes hide it without changing this value.
     var sidebarVisible = true
 
     /// Flips inspector visibility; bound to the trailing toolbar toggle.

@@ -10,10 +10,15 @@
 import { useMemo } from 'react'
 import { ReactFlowProvider, useReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import { NativeImageBridge } from './nativeCanvas/NativeImageBridge'
 import { ImageGenProvider } from './imagegen/ImageGenProvider'
 import { NodeEditContext } from './nodeEdit'
 import { EditorLayout } from './EditorLayout'
-import { useEditorController } from './useEditorController'
+import {
+  useEditorController,
+  type EditorController,
+} from './useEditorController'
+import { useNativeEditorShell } from './nativeCanvas/useNativeEditorShell'
 import type { EditorProjectContent } from './useEditorDocument'
 import type { ProjectContent } from '../model/content'
 import type { AiCommitIdentity } from './ai/commitIdentity'
@@ -63,19 +68,39 @@ const DEFAULT_ON_SAVE_AI_SESSION: NonNullable<
 > = async () => undefined
 
 /** 编辑器装配层：组装各域 hook 与 Provider，渲染布局（不含业务语义）。 */
-function EditorWindow({
+function EditorWindow(props: EditorViewProps) {
+  const viewport = useReactFlow()
+  const { screenToFlowPosition, fitView } = viewport
+  const controller = useEditorController({
+    project: props.project,
+    onSave: props.onSave,
+    screenToFlowPosition,
+    fitView,
+  })
+  useNativeEditorShell({
+    project: props.project,
+    projectId: props.project.id,
+    aiSessionLoadFailed: props.aiSessionLoadFailed ?? false,
+    aiSessionError: props.aiSessionError ?? null,
+    editor: controller,
+    viewport,
+  })
+  return <EditorContent {...props} controller={controller} />
+}
+
+/** Assembles providers and layout while keeping native registration in the production controller owner. */
+function EditorContent({
   project,
   onBackHome,
   onRenameProject,
   onOpenSettings,
-  onSave,
   aiSession = DEFAULT_AI_SESSION,
   aiSessionError = null,
   aiSessionRetryable = true,
   aiSessionLoadFailed = false,
   onSaveAiSession = DEFAULT_ON_SAVE_AI_SESSION,
-}: EditorViewProps) {
-  const { screenToFlowPosition, fitView } = useReactFlow()
+  controller,
+}: EditorViewProps & { readonly controller: EditorController }) {
   const {
     canvasRef,
     doc,
@@ -88,7 +113,7 @@ function EditorWindow({
     actionError,
     nodeEditApi,
     imageGen,
-  } = useEditorController({ project, onSave, screenToFlowPosition, fitView })
+  } = controller
   // AI 执行卡的提交身份捆绑（issue #139）：把 doc.aiRevision 与
   // persistence.whenCanvasCommitted 收成单一嵌套对象下传——类型层保证
   // 等画布落盘的执行卡必带批次计数（缺身份的未确认卡落盘后无法与画布
@@ -104,6 +129,7 @@ function EditorWindow({
   return (
     <NodeEditContext.Provider value={nodeEditApi}>
       <ImageGenProvider {...imageGen}>
+        <NativeImageBridge projectId={project.id} nodes={doc.contentNodes} />
         <EditorLayout
           project={project}
           onBackHome={onBackHome}

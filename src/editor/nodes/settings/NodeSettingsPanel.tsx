@@ -1,3 +1,4 @@
+import { isSwiftHost } from '../../../platform/hostEnvironment'
 import { useNodeEdit } from '../../nodeEdit'
 import { ImageNodeForm } from './ImageNodeForm'
 import { SceneForm } from './SceneForm'
@@ -29,6 +30,7 @@ export { EditableName } from './EditableName'
  */
 export function NodeSettingsPanel({ node }: { readonly node: PanelNode }) {
   const { duplicateNode, deleteNode, settings } = useNodeEdit()
+  if (isSwiftHost()) return null
 
   return (
     // 内嵌表单面板而非模态对话框：原生 section 地标（S6819），不冒用 dialog 角色

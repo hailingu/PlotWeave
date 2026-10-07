@@ -1,9 +1,9 @@
 /** 个人资产库前端门面（docs/ui-design.md §8.1 / 数据模型 §7）。
- * 原生宿主经 typed IPC 宿主传输走 Rust 命令（应用级 library/ 目录，
- * 媒体经 pwmedia 自定义协议按 assetId 懒加载——§7.1 opaque asset URL，
- * relPath 与本机绝对路径不进入前端媒体链路，issue #26；Swift 宿主传输待
- * P2 后续接通，未接通时可见失败）；内存回退仅限纯浏览器预览（P2 平台
- * 收敛，Blob object URL）。
+ * typed IPC 复用命令合同：Swift 宿主由原生库 actor 承接，Tauri 由 Rust
+ * 承接（各宿主独立的应用级 library/ 目录）；媒体经 pwmedia 自定义协议
+ * 按 assetId 懒加载——§7.1 opaque asset URL，relPath 与本机绝对路径
+ * 不进入前端媒体链路，issue #26。宿主错误可见，内存回退仅限纯浏览器
+ * 预览（Blob object URL），Swift 不读取旧 Tauri 数据根。
  * 跨项目复用：库是应用级作用域，与项目内资产互不引用（§7.3 流转
  * 「拖上画布 = 拷贝进项目」由 src/editor/projectAssets.ts 承接）。
  */

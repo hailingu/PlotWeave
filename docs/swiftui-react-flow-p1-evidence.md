@@ -2,13 +2,99 @@
 
 > 配套：[改造计划](swiftui-react-flow-migration-plan.md)（§7.3 证据模板、§6 状态矩阵）。本页只记录已实际执行的验证；未执行的检查明确标注原因。
 
+> 当前工具链同步（2026-10-04）：所有者已授权升级为 Xcode 27.0／Swift 6.4 编译器／macOS SDK 27.0，语言模式仍为 Swift 6，部署目标仍为 macOS 26.0；现行约定与本次验证结果见[工具链升级记录](swiftui-react-flow-toolchain.md)。以下 P1 工具链、Figma 选型、构建结果与测试数量均保留为历史执行记录，不作为新版工具链的验证结论。
+
 > 当前路径同步（2026-10-04）：原 `src/native-canvas/` 演示源码已迁至 `src/editor/nativeCanvas/`，遵守 `dev` 的 shell → editor 运行时边界；`native-canvas.html` 指向新入口。以下 2026-09-15 记录中的旧路径、命令和结果均为当时的历史证据，构建命令与资源输出保持不变。
+
+## Xcode 27 工具链同步（2026-10-07）
+
+所有者在本任务中要求将项目设置更新为 Xcode 27；本节取代下方 P1-1 的当前工具链约束，旧记录保留为历史证据。本次为工程/CI 配置与规范文档更新，不改变原生业务阶段、画布协议或最低部署版本。验证对应 `codex/swiftui-react-flow` 工作区在 `08653d21cb45f0a70b96651c590b4eec37397ff6` 上的本轮未提交配置更新，不构成提交或托管 CI 证据。
+
+| 项 | 当前记录值 |
+| --- | --- |
+| 本机系统 | macOS 27.0.1（26A434），arm64 |
+| Xcode | 27.0（27A266a），本机选择 `/Applications/Xcode.app/Contents/Developer` |
+| Swift 编译器 / 语言模式 | Apple Swift 6.4（swiftlang-6.4.0.34.1 clang-2100.3.34.1）/ `SWIFT_VERSION = 6.0` |
+| macOS SDK / 最低部署版本 | 27.0 / 26.0（`SDKROOT = macosx`，`MACOSX_DEPLOYMENT_TARGET = 26.0`） |
+| native CI | `runs-on: xcode-27`；`DEVELOPER_DIR = /Applications/Xcode_27.0.app/Contents/Developer`，构建前校验 Xcode 27.0 与 SDK 27.0 |
+| Node / Rust | 沿用 `.nvmrc` 的 24.18.0 与 `rust-toolchain.toml` 的 1.95.0 |
+
+2026-10-07 核对的[官方镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md)列出 Xcode 27.0（27A266a）、上述版本别名与 macOS SDK 27.0；[可用镜像表](https://github.com/actions/runner-images#available-images)确认 YAML 标签为 `xcode-27`。[官方公告](https://github.com/actions/runner-images/issues/14404)将该镜像标为 public preview，并记录其系统基线已切至 macOS 27。CI 显式选择 27.0，避免镜像默认版本变化后静默改用其它 Xcode。
+
+工程与共享 scheme 的升级检查元数据更新为 `2700`，创建版本 `CreatedOnToolsVersion = 26.6` 保留其历史含义。构建命令仍为 `npm run build:native`；原生验证继续使用 `AGENTS.md` 的完整路由命令，项目成员关系、签名方式与部署版本维持原配置。macOS 26 UI Kit 仍是 P1 已采纳的设计基准，工具链升级不代表已完成 macOS 27 的控件映射或视觉验收。
+
+**验证（仓库根目录；Node 24.18.0）**：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npx prettier --check .github`；本次修改的 Markdown 格式检查 | 通过；文档另按工具链约束、交叉链接、历史/当前证据与业务边界做结构化审阅，无独立文档自动检查配置 |
+| `plutil -lint native/macos/PlotWeaveNative.xcodeproj/project.pbxproj`；`xmllint --noout native/macos/PlotWeaveNative.xcodeproj/xcshareddata/xcschemes/PlotWeaveNative.xcscheme` | 通过；工程与 scheme 可解析 |
+| Ruby YAML 解析工作流并执行实际版本校验脚本 | 本机 Xcode 27.0 / SDK 27.0 通过；临时命令夹具下 27.0/27.0 接受，26.6/27.0、27.1/27.0 与 27.0/26.5 均以非零状态拒绝；该检查不代替真实 runner 的版本别名验证 |
+| `npm run check:size` | 失败：任务开始前已存在的未跟踪 `native/macos/PlotWeaveNative.xcodeproj/project.xcworkspace/contents.xcworkspacedata` 触发 `SIZE_UNCLASSIFIED_FILE`；保留该文件，未增加排除或绕过守卫 |
+| `npm run build:native-canvas` | 通过；规模检查失败后单独执行，完整路由不宣称全绿 |
+| `xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test` | 沙箱外通过：`TEST SUCCEEDED`，6 suites / 16 tests；覆盖真实 WKWebView ready、节点渲染与面板切换不重建页面 |
+| `xcrun vtool -show-build native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app/Contents/MacOS/PlotWeaveNative` | `platform MACOS`、`minos 26.0`、`sdk 27.0`，部署目标与 SDK 配置一致 |
+
+**尚未验证与已知诊断**：托管 CI 须以该配置对应 PR 的工作流结果为准，本轮未提交或推送，未运行 SonarQube 门禁；其要求继续适用于后续 Git 操作。最低部署版本不等同 macOS 26 实机已验证，本次无 macOS 26 测试主机；未执行 Release 构建、性能或视觉验收。工具链同步验证时，`Snapshot.currentColorScheme` 中的 `NSApp.effectiveAppearance` 曾产生两条主线程隔离警告，已由下方[外观隔离修复](#外观快照主线程隔离修复2026-10-07)解决；AppIntents 元数据提取与 WebKit 系统服务诊断未造成测试失败。一次性构建、画布资源和临时校验夹具在验证完成后删除，原有工作区改动保留。
+
+## 外观快照主线程隔离修复（2026-10-07）
+
+所有者要求修复 Xcode 27 报告的两条 AppKit 主线程隔离警告。`CanvasAppearanceState` 已在主 actor，但嵌套值类型 `Snapshot` 的静态方法没有继承该隔离；生产读取链 `Snapshot.current()` → `currentColorScheme()` 需要显式主 actor 约束。值类型的构造、比较与 Codable/JSON 编码继续保持纯数据语义。
+
+本次通过读取函数的 Swift 类型合同做回归：`systemReaderRetainsMainActorContract` 在擦除类型后仍要求系统读取函数兼容主 actor 桥接函数类型。先观察缺失隔离使该测试失败，再修复读取链并重跑聚焦与完整原生路由；类型擦除后的兼容检查不单独证明 actor 调用边界，额外编译探针验证非法非隔离调用被拒绝。不通过文本匹配 Swift 注解来验证隔离。探索时尝试 `SWIFT_TREAT_WARNINGS_AS_ERRORS`，编译器仍将这两条 AppKit 诊断保留为警告，故撤回该配置，不把它当作有效的回归门禁。
+
+### 关键状态与不变量矩阵
+
+| 前置状态 | 动作／时序 | 可观察结果 | 不变量及所有者／入口 | 对应验证／缺口 |
+| --- | --- | --- | --- | --- |
+| 系统外观读取链未正确隔离 | 读取函数经类型擦除进入合同检查；编译非隔离调用探针 | 主 actor 合同测试失败；修复后非法调用探针编译失败 | `Snapshot.current` 与 `currentColorScheme`：系统外观读取必须在主 actor；入口包括默认 `SnapshotReader` 与直接调用 `current()` | `systemReaderRetainsMainActorContract` 先红后绿；额外非隔离调用探针须由编译器拒绝 |
+| 合法的主 actor 调用 | 初始化状态／直接读取当前系统快照 | 取得桥接合同允许的 light/dark 和可访问性值 | 同一读取链：主 actor 调用可同步完成；不增加异步、缓存或第二快照来源 | `currentSnapshotStaysWithinBridgeContract` 与真实 WKWebView 加载回归 |
+| 已有快照被序列化或比较 | 编码桥接载荷，再解码；比较刷新前后值 | 每个语义字段保持一致，相同值不触发推送 | `Snapshot` 数据操作：actor 约束只覆盖系统读取，不把纯值载荷变成主 actor 服务 | `payloadJSONRoundTripsEverySemanticField`、`refreshNotifiesOnlyOnActualChange` |
+| 外观变化／观察停止 | 刷新后推送；停止观察后解绑回调 | 仅真实变化通知，停止后不再向已释放页面推送 | `CanvasAppearanceState` 与 coordinator：既有主线程通知、去重和生命周期约束维持 | `stopObservingDetachesChangeHandler`、`panelTogglesKeepWebViewAndPageAlive` |
+
+本次不改变状态、重试或事件时序，持久化不适用；跨 actor 的非法同步读取由编译器拒绝，不增加后台任务来搬运 AppKit 访问。无法识别外观时回退 light 的分支未修改，未新增故障注入；当前系统状态与现有 WebKit 回归覆盖合法读取入口。
+
+**验证结果（仓库根目录；Xcode 27.0 / Swift 6 模式；Node 24.18.0）**：
+
+- 聚焦命令 `xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test -only-testing:PlotWeaveNativeTests/CanvasAppearanceStateTests`：先红，新增合同测试在未隔离读取函数上断言失败（退出 65），其余 4 项通过；为 `Snapshot.current` 与 `currentColorScheme` 增加 `@MainActor` 后，5 项全部通过，原两条 AppKit 隔离警告消失。
+- Swift 编译探针使用 `xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-macos26.0 -module-cache-path <临时目录>/module-cache native/macos/App/CanvasAppearanceState.swift <探针文件>` 编译实际生产文件：主 actor 同步读取，以及非隔离上下文的值构造、比较、JSON 编解码均通过；非隔离同步调用 `Snapshot.current()` 被拒绝（退出 1，稳定诊断 `ActorIsolatedCall`）。正向探针无编译诊断；探针为临时校验夹具，完成后删除。
+- `npm run check:size` 仍因任务开始前已有的未跟踪 workspace 文件触发 `SIZE_UNCLASSIFIED_FILE`，完整路由不能宣称全绿。其余路由命令单独运行：`npm run build:native-canvas` 通过，`xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test` 通过，6 suites / 17 tests，包含真实 WKWebView 加载与生命周期回归。
+- `npx prettier --check docs/development/swift-standard.md docs/swiftui-react-flow-p1-evidence.md` 与 `git diff --check` 通过。源文件 131 行、测试文件 103 行；文档按矩阵映射、当前/历史证据、工具链和交叉链接做结构化审阅，无独立文档自动检查配置。
+
+矩阵中的类型兼容、合法读取、纯值操作与通知/生命周期条目分别映射到上述回归、编译探针和现有测试，均通过。macOS 26 实机、Release 构建和托管 CI 未执行；本次未改变运行时状态或保存链路，未运行前端/Rust 全量检查或 SonarQube，未创建提交或推送。一次性原生构建、画布资源、测试日志与编译探针均在验证后删除；原有 workspace 与其它任务的文档改动保留。
+
+## Home 图标与演示首页导航（2026-10-07）
+
+所有者要求只恢复标题栏 Home 图标按钮。本次为原生界面的局部导航补齐：Home 返回演示首页，首页可继续当前画布。启动仍直接进入画布演示；不接入真实项目列表、存储或右侧业务工具。首页明确说明演示内容不落盘，不能用占位首页冒充已完成 P3 项目首页。
+
+### Home 导航状态与不变量矩阵
+
+| 前置状态 | 动作／时序 | 可观察结果 | 不变量及所有者／入口 | 对应验证／缺口 |
+| --- | --- | --- | --- | --- |
+| 应用已显示演示画布 | 点击标题栏 Home 图标 | 显示演示首页及继续画布入口；Home 有可访问名称 | `NativeShellRoot` / `ShellLayoutState`：导航仅切换界面，不创建第二份图文档；工具栏 Home 入口 | 真实应用窗口通过辅助功能按钮执行点击；实现前应因 Home 按钮缺失失败 |
+| 已编辑画布并返回演示首页 | 点击继续画布，再次 Home → 继续 | 回到同一画布，已删除节点不复活，页面探针和视口保持，WebView 实例未更换 | 同一组合：首页往返不销毁或重载 WebView；继续入口与 Home 共用导航状态 | 同一真实窗口回归先通过节点设置 UI 删除节点（9 → 8），再覆盖两次往返；现有面板与外观生命周期回归 |
+| 画布加载未完成或失败 | Home → 继续画布 | 原加载／诊断与重试状态保留 | `WebCanvasSection` 仍拥有加载状态，导航不伪造 ready 或保存成功 | `homeDuringLoadingPreservesCanvasAndPanelPreference` 覆盖在首页挂载画布后继续；失败后的首页往返未单独注入，现有加载失败／重试测试保留 |
+| 检查器可见／隐藏 | 返回首页，再继续画布 | 首页不显示画布属性；返回画布恢复原检查器偏好 | `ShellLayoutState` 保留面板偏好，首页可见性不能覆盖它 | 窗口回归覆盖检查器偏好；原布局切换单测 |
+| WebView 正持有键盘焦点 | 点击 Home | 焦点离开隐藏画布，可操作首页继续按钮 | `WebCanvasHostView` 在导航隐藏时释放自身第一响应者，`ShellHomeView` 请求继续按钮焦点；Home 与首页挂载入口不得让不可见编辑表面接收输入 | 真实窗口先聚焦 WebView，再经 Home 点击检查第一响应者已离开 WebView；仅 SwiftUI FocusState 的实现曾使此断言失败 |
+
+导航无异步请求或持久化写入，乱序回执、磁盘失败及重试不适用。真实项目首页与保存屏障仍属 P2/P3；本次不扩大该阶段边界。图标视觉位置由标准 macOS 工具栏负责，辅助功能回归检查按钮角色、可操作性与名称，不按源码文字或像素布局断言。
+
+**实现与验证结果（仓库根目录；Xcode 27.0；Node 24.18.0；叠加于 `08653d21cb45f0a70b96651c590b4eec37397ff6` 的未提交修改）**：
+
+- `NativeShellRoot` 在导航工具栏加入 `house` 图标与「返回首页」可访问名称；`ShellLayoutState.homeVisible` 是两页切换的唯一状态。演示首页的继续按钮回到原画布，首页期间保留检查器偏好；`WebCanvasSection` 与宿主均常驻，不创建第二份图文档。`WebCanvasHostView` 按导航状态隐藏自身并释放其 WebKit 第一响应者，避免仅用 SwiftUI opacity / FocusState 时仍可输入隐藏画布的缺陷。
+- 聚焦命令：`xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test -only-testing:PlotWeaveNativeTests/ShellHomeNavigationTests`。旧界面实际因缺少 `shell.returnHome` / `shell.resumeCanvas` 控件失败（退出 65）；实现后通过。额外的焦点断言曾在只用 SwiftUI 隐藏／请求焦点时失败，增加原生隐藏与释放第一响应者后通过。
+- Home 回归通过公开 AXUIElement API 操作本测试进程的真实窗口；辅助功能查询按特定窗口限定，避免完整套件并行打开其它原生测试窗口时误点另一窗口的同名按钮。最终通过节点设置 UI 删除演示节点（9 → 8），再验证两次 Home → 继续后的节点数、WebView 身份、JS 探针、视口与焦点。加载期间的首页继续覆盖检查器可见／隐藏两种偏好。
+- `npm run check:size` 仍失败：任务开始前已有的未跟踪 `native/macos/PlotWeaveNative.xcodeproj/project.xcworkspace/contents.xcworkspacedata` 触发 `SIZE_UNCLASSIFIED_FILE`。该文件保留；本次 4 个生产文件分别为 145、26、106、214 行，新测试文件 202 行，均低于适用上限。完整路由不能宣称全绿。
+- 其余原生路由分别执行：`npm run build:native-canvas` 通过；`xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test` 通过，7 suites / 19 tests（Home 加载用例另含 2 个参数案例）。覆盖现有真实 WKWebView 加载／重试、外观和面板生命周期回归。
+- `git diff --check` 通过。文档按当前阶段、状态矩阵、构建入口及链接做结构化审阅，无独立文档自动检查配置。仓库默认 Prettier 忽略 Markdown；额外执行 `npx prettier --check --ignore-path /dev/null docs/development/workflow.md docs/swiftui-react-flow-migration-plan.md docs/swiftui-react-flow-p1-evidence.md docs/ui-design.md`，workflow 通过，另 3 页未通过，已用 Prettier API 确认其 HEAD 版本也存在格式差异，未夹带整页重排。
+
+矩阵中的可操作入口、已编辑画布往返、加载期间继续、面板偏好与隐藏画布焦点分别映射到上述真实窗口回归，均通过。失败画布的首页往返未另作资源故障注入：本次没有修改加载状态机，失败／重试由既有套件覆盖，首页只隐藏同一宿主。图标像素位置、macOS 26 实机、Release 与托管 CI 未验证；前端／Rust 源码未变，未运行其全量路由或 SonarQube，未提交／推送。一次性测试构建、资源与日志删除；任务开始前已有的本地构建和资源先备份、验证后恢复，原有其它工作区修改保留。
 
 ## P1-1 工具链记录与原生工程骨架（2026-09-15）
 
 **阶段 / 日期 / 分支与代码修订**：P1 第 1 项；2026-09-15；`codex/swiftui-react-flow` 工作区未提交状态（叠加在 P0 文档改动之上；提交与门禁按任务另行执行，本页不构成提交证据）。
 
-**系统 / 工具链 / 硬件（此后固定为本分支构建配置）**：
+**系统 / 工具链 / 硬件（当时固定的构建配置；当前约束见上方 Xcode 27 同步）**：
 
 | 项 | 记录值 |
 | --- | --- |

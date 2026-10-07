@@ -1,103 +1,105 @@
 import SwiftUI
 
-/// Canvas area of the native shell: the WKWebView canvas host with
-/// load-phase overlays and the floating glass control cluster
-/// (`docs/swiftui-react-flow-migration-plan.md` §2.2 — the canvas stays an
-/// opaque content surface, glass lives on floating controls and chrome).
+/// One mounted WKWebView survives native navigation and panels; only the page generation owns the edit session.
 struct WebCanvasSection: View {
+    /// The mounted page owns its own load generation independently of app navigation.
     @State private var state = WebCanvasState()
-
-    /// Host appearance semantics synced into the hosted page (plan §2.2);
-    /// owned by the shell root so the page outlives panel-visibility churn.
+    /// The shell's system appearance observation outlives native route changes.
     let appearance: CanvasAppearanceState
+    /// Only hosted integration tests select the isolated memory canvas.
+    var demoMode = false
+    /// Native navigation consumes the page's read-only application projection.
+    var application: NativeApplicationState? = nil
+    /// Test services are explicit; production lazily selects its independent data root.
+    var services: NativeHostServices? = nil
+
+    /// Fixture mode is explicit and never initializes production application data.
+    private var fixtureURL: URL? {
+        guard demoMode, let url = Bundle.main.url(forResource: "native-canvas", withExtension: "html") else { return nil }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.fragment = "fixture"
+        return components?.url
+    }
 
     var body: some View {
         ZStack {
-            WebCanvasHostView(state: state, appearance: appearance)
-            switch state.phase {
-            case .loading:
-                CanvasPhaseOverlay {
-                    ProgressView()
-                    Text("正在加载画布演示…")
-                        .font(.headline)
+            WebCanvasHostView(
+                state: state, appearance: appearance, entryURL: fixtureURL, services: services,
+                onProjection: { body in
+                    do { try application?.receiveProjection(body) }
+                    catch { application?.invalidate(error.localizedDescription) }
+                },
+                onConnection: { application?.connect($0) },
+                isPresented: canvasPresented
+            )
+            .opacity(canvasPresented ? 1 : 0)
+            .allowsHitTesting(demoMode || application?.route == "editor")
+            .accessibilityHidden(!canvasPresented)
+            if !demoMode, state.phase == .ready, let application {
+                switch application.route {
+                case "home": NativeHomeView(state: application)
+                case "settings": NativeSettingsView(state: application)
+                default: EmptyView()
                 }
-            case .failed(let message):
-                CanvasPhaseOverlay {
-                    CanvasFailureContent(message: message) {
-                        state.retry()
-                    }
-                }
-            case .ready:
-                EmptyView()
             }
+            CanvasLoadOverlay(state: state, demoMode: demoMode)
         }
         .overlay(alignment: .bottom) {
-            CanvasGlassCluster()
-                .padding(.bottom, 20)
-                .opacity(state.phase == .ready ? 1 : 0)
-                .animation(.default, value: state.phase)
-                .accessibilityHidden(state.phase != .ready)
+            if !demoMode, application?.route == "editor", state.phase == .ready, let application {
+                NativeCanvasZoom(state: application).padding(.bottom, 18)
+            }
+        }
+        .onChange(of: state.phase) { _, phase in
+            if case .failed(let message) = phase { application?.invalidate(message) }
+        }
+    }
+
+    /// Loading stays visible for the ready handshake; native business routes
+    /// then hide the retained editing surface and release its keyboard focus.
+    private var canvasPresented: Bool {
+        demoMode || state.phase != .ready || application?.route == "editor"
+    }
+}
+
+/// Loading and recovery remain visible even when a native business screen normally covers the canvas.
+private struct CanvasLoadOverlay: View {
+    let state: WebCanvasState
+    let demoMode: Bool
+
+    var body: some View {
+        switch state.phase {
+        case .ready: EmptyView()
+        case .loading:
+            VStack(spacing: 12) { ProgressView(); Text(demoMode ? "正在加载画布演示…" : "正在加载项目…") }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor))
+        case .failed(let message):
+            VStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle").font(.largeTitle)
+                Text(message).multilineTextAlignment(.center)
+                Button("重试加载") { state.retry() }
+            }
+            .padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 }
 
-/// Full-cover overlay for the non-ready phases; keeps the stage summary
-/// visible so the window never shows a silent blank canvas.
-private struct CanvasPhaseOverlay<Content: View>: View {
-    @ViewBuilder let content: Content
+/// Public React Flow zoom commands are view operations and do not mutate a second graph.
+private struct NativeCanvasZoom: View {
+    let state: NativeApplicationState
 
     var body: some View {
-        VStack(spacing: 12) {
-            content
-            Text(ShellStage.current.summary)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+        HStack(spacing: 8) {
+            Button("缩小", systemImage: "minus.magnifyingglass") { state.sendEditor("editor.zoomOut") }
+            Text("\(Int((state.editor["zoom"]?.number ?? 1) * 100))%")
+                .monospacedDigit().foregroundStyle(.secondary)
+            Button("放大", systemImage: "plus.magnifyingglass") { state.sendEditor("editor.zoomIn") }
+            Button("适应画布", systemImage: "arrow.up.left.and.arrow.down.right") { state.sendEditor("editor.fit") }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-}
-
-/// Failure diagnostic with an explicit retry entry (M01: failures stay
-/// visible and recoverable, never a fake empty canvas).
-private struct CanvasFailureContent: View {
-    let message: String
-    let onRetry: () -> Void
-
-    var body: some View {
-        Image(systemName: "exclamationmark.triangle")
-            .font(.system(size: 32))
-            .foregroundStyle(.secondary)
-        Text(message)
-            .font(.headline)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 32)
-        Button("重试加载") {
-            onRetry()
-        }
-    }
-}
-
-/// Floating glass control cluster over the canvas (demo placeholders stay
-/// disabled until the real canvas commands are bridged in P2/P3).
-private struct CanvasGlassCluster: View {
-    var body: some View {
-        HStack(spacing: 4) {
-            Button("缩小", systemImage: "minus.magnifyingglass") {}
-                .disabled(true)
-            Text("100%")
-                .font(.callout)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-            Button("放大", systemImage: "plus.magnifyingglass") {}
-                .disabled(true)
-        }
-        .controlSize(.small)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .labelStyle(.iconOnly).controlSize(.small)
+        .padding(.horizontal, 12).padding(.vertical, 8)
         .glassEffect(.regular, in: .capsule)
-        .help("画布缩放由触控板/滚轮手势直接操作；原生缩放命令随 P3 桥接接通")
+        .disabled(state.busy)
     }
 }

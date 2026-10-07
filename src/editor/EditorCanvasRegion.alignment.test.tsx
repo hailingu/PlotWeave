@@ -132,14 +132,15 @@ async function dragElement(element: HTMLElement, delta: number): Promise<void> {
 }
 
 describe('对齐控件语义（issue #500）', () => {
-  it('六个对齐按钮属于有可访问名称的分组', () => {
+  it('整图排布和六个对齐按钮共用有可访问名称的分组', () => {
     mount()
-    const group = screen.getByRole('group', { name: '选中节点对齐' })
+    const group = screen.getByRole('group', { name: '画布排布' })
     expect(
       within(group)
         .getAllByRole('button')
         .map((button) => button.getAttribute('aria-label')),
     ).toEqual([
+      '自动排布',
       '左对齐',
       '水平居中',
       '右对齐',

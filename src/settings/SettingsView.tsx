@@ -7,6 +7,7 @@ import {
 } from './types'
 import { settingsStore } from './settingsStore'
 import { useSettingsSaver } from './useSettingsSaver'
+import { useNativeSettingsShell } from './useNativeSettingsShell'
 
 /** SettingsViewProps。 */
 interface SettingsViewProps {
@@ -130,6 +131,7 @@ function DefaultModelsSection({
 function useProviderKeyForms(
   settings: AppSettings,
   update: (next: AppSettings) => void,
+  trackPendingKey: (work: Promise<void>) => Promise<void>,
 ) {
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({})
   const [keyError, setKeyError] = useState<Record<string, string>>({})
@@ -146,7 +148,9 @@ function useProviderKeyForms(
     if (!key) return
     try {
       // Rust 加密返回密文 envelope → 合并进 provider 配置走防抖落盘
-      update(await settingsStore.setProviderKey(settings, providerId, key))
+      await trackPendingKey(
+        settingsStore.setProviderKey(settings, providerId, key).then(update),
+      )
       setKeyDraft((d) => ({ ...d, [providerId]: '' }))
       setKeyError((e) => ({ ...e, [providerId]: '' }))
     } catch (err) {
@@ -389,9 +393,11 @@ function ProviderCard({
 function SettingsEditorBody({
   settings,
   update,
+  trackPendingKey,
 }: {
   readonly settings: AppSettings
   readonly update: (next: AppSettings) => void
+  readonly trackPendingKey: (work: Promise<void>) => Promise<void>
 }) {
   const {
     keyDraft,
@@ -400,7 +406,7 @@ function SettingsEditorBody({
     patchProvider,
     submitKey,
     removeKey,
-  } = useProviderKeyForms(settings, update)
+  } = useProviderKeyForms(settings, update, trackPendingKey)
   // key 状态直接从 provider 配置派生（keyEnc 存在即已配置）
   const keyStatus = Object.fromEntries(
     settings.providers.map((p) => [p.id, Boolean(p.keyEnc)]),
@@ -443,29 +449,12 @@ function SettingsEditorBody({
   )
 }
 
-/**
- * 设置页（docs/ui-design.md §8.2 修订）：⌘, 打开，左侧分段列表。
- * Provider 分段：Base URL / 启用 / API key（加密后存本机设置，
- * 不回显明文）/ 模型清单；默认模型分段：三层过滤后的可用组合下拉。
- * 编辑即保存（防抖 500ms，关闭时冲刷未落盘编辑）；无外观设置（跟随
- * 系统，原则 1）。加载完成前不渲染编辑表单，读取失败进入可重试
- * 错误态且不保存（issue #120）。
- */
-export function SettingsView({ onClose }: SettingsViewProps) {
-  const [settings, setSettings] = useState<AppSettings>(defaultSettings)
-  const [loadPhase, setLoadPhase] = useState<SettingsLoadPhase>({
-    status: 'loading',
-  })
-  /** load 代际（PR #175 评审）：StrictMode 双挂载/重试使新请求先行完成
-   * 时，迟到的旧完成不得覆盖修复快照或把界面拉回错误态——仅最新代
-   * 可写状态。 */
-  const loadGenRef = useRef(0)
-  /** 「编辑即保存」状态族（防抖/关闭冲刷/失败重试）拆至 useSettingsSaver。 */
-  const { update, handleClose, closeError, closing } = useSettingsSaver(
-    setSettings,
-    onClose,
-  )
-
+/** Loads settings with generation ownership so retry/StrictMode completions cannot roll back state. */
+function useSettingsLoading(
+  setSettings: (next: AppSettings) => void,
+  setLoadPhase: (next: SettingsLoadPhase) => void,
+  loadGenRef: { current: number },
+): () => void {
   /** 读取设置（issue #120）：成功才进入可编辑态；失败保持错误态可重试，
    * 原配置不被默认值覆盖。完成按代际守卫：仅最新发起的请求可写状态。 */
   const reloadSettings = useCallback(() => {
@@ -485,11 +474,58 @@ export function SettingsView({ onClose }: SettingsViewProps) {
           message: err instanceof Error ? err.message : String(err),
         })
       })
-  }, [])
+  }, [loadGenRef, setSettings, setLoadPhase])
 
   useEffect(() => {
     reloadSettings()
   }, [reloadSettings])
+
+  return reloadSettings
+}
+
+/**
+ * 设置页（docs/ui-design.md §8.2 修订）：⌘, 打开，左侧分段列表。
+ * Provider 分段：Base URL / 启用 / API key（加密后存本机设置，
+ * 不回显明文）/ 模型清单；默认模型分段：三层过滤后的可用组合下拉。
+ * 编辑即保存（防抖 500ms，关闭时冲刷未落盘编辑）；无外观设置（跟随
+ * 系统，原则 1）。加载完成前不渲染编辑表单，读取失败进入可重试
+ * 错误态且不保存（issue #120）。
+ */
+export function SettingsView({ onClose }: SettingsViewProps) {
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings)
+  const [loadPhase, setLoadPhase] = useState<SettingsLoadPhase>({
+    status: 'loading',
+  })
+  /** load 代际（PR #175 评审）：StrictMode 双挂载/重试使新请求先行完成
+   * 时，迟到的旧完成不得覆盖修复快照或把界面拉回错误态——仅最新代
+   * 可写状态。 */
+  const loadGenRef = useRef(0)
+  /** 「编辑即保存」状态族（防抖/关闭冲刷/失败重试）拆至 useSettingsSaver。 */
+  const {
+    update,
+    handleClose,
+    requestClose,
+    trackPendingKey,
+    closeError,
+    closing,
+  } = useSettingsSaver(setSettings, onClose)
+
+  const reloadSettings = useSettingsLoading(
+    setSettings,
+    setLoadPhase,
+    loadGenRef,
+  )
+  useNativeSettingsShell({
+    settings,
+    phase: loadPhase.status,
+    error: loadPhase.status === 'error' ? loadPhase.message : closeError,
+    closing,
+    loadGeneration: loadGenRef,
+    update,
+    requestClose,
+    trackPendingKey,
+    reload: reloadSettings,
+  })
 
   return (
     <div className="settings-root">
@@ -511,7 +547,11 @@ export function SettingsView({ onClose }: SettingsViewProps) {
             <p className="settings-hint">正在加载设置…</p>
           )}
           {loadPhase.status === 'ready' && (
-            <SettingsEditorBody settings={settings} update={update} />
+            <SettingsEditorBody
+              settings={settings}
+              update={update}
+              trackPendingKey={trackPendingKey}
+            />
           )}
         </section>
       </main>

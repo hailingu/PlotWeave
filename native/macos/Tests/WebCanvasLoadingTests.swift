@@ -12,7 +12,10 @@ struct WebCanvasLoadingTests {
     @Test func bundledCanvasRendersAndReportsReady() async throws {
         let state = WebCanvasState()
         let appearance = CanvasAppearanceState()
-        let coordinator = WebCanvasCoordinator(state: state, appearance: appearance)
+        let entry = try #require(Bundle.main.url(forResource: "native-canvas", withExtension: "html"))
+        var parts = try #require(URLComponents(url: entry, resolvingAgainstBaseURL: false))
+        parts.fragment = "fixture"
+        let coordinator = WebCanvasCoordinator(state: state, appearance: appearance, entryURL: parts.url)
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(coordinator, name: WebCanvasCoordinator.bridgeName)
         configuration.userContentController.addUserScript(WKUserScript(
@@ -38,6 +41,8 @@ struct WebCanvasLoadingTests {
         window.orderFront(nil)
         defer {
             webView.stopLoading()
+            coordinator.invalidateSession()
+            configuration.userContentController.removeScriptMessageHandler(forName: "plotweaveHost")
             configuration.userContentController.removeScriptMessageHandler(
                 forName: WebCanvasCoordinator.bridgeName
             )

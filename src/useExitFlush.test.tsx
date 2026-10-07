@@ -14,7 +14,7 @@ import { act, renderHook } from '@testing-library/react'
 import { useExitFlush } from './useExitFlush'
 
 type CloseHandler = (event: { preventDefault: () => void }) => Promise<void>
-type QuitHandler = () => Promise<void>
+type QuitHandler = (event: { payload: null }) => Promise<void>
 
 const hasPending = vi.fn(() => true)
 const flushPending = vi.fn(async (): Promise<string[]> => [])
@@ -162,7 +162,7 @@ describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
     hasPending.mockReturnValue(false)
     await mountBarrier()
     await act(async () => {
-      await quitHandlers[0]()
+      await quitHandlers[0]({ payload: null })
     })
     expect(flushPending).not.toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith('app_exit')
@@ -173,7 +173,7 @@ describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
     hasPending.mockReturnValue(false).mockReturnValueOnce(true)
     await mountBarrier()
     await act(async () => {
-      await quitHandlers[0]()
+      await quitHandlers[0]({ payload: null })
     })
     expect(flushPending).toHaveBeenCalledTimes(1)
     expect(invoke).toHaveBeenCalledWith('app_exit')
@@ -184,7 +184,7 @@ describe('useExitFlush（⌘Q 应用级退出冲刷屏障）', () => {
     flushPending.mockResolvedValue(['p1'])
     const { result } = await mountBarrier()
     await act(async () => {
-      await quitHandlers[0]()
+      await quitHandlers[0]({ payload: null })
     })
     expect(invoke).not.toHaveBeenCalledWith('app_exit')
     expect(result.current).toContain('已阻止退出')
@@ -249,7 +249,7 @@ describe('useExitFlush（退出屏障覆盖画布防抖与项目重试，issue #
     })
     await mountBarrier()
     await act(async () => {
-      await quitHandlers[0]()
+      await quitHandlers[0]({ payload: null })
     })
     expect(projectPending).toBe(false)
     expect(flushCanvas).toHaveBeenCalled()
@@ -263,7 +263,7 @@ describe('useExitFlush（退出屏障覆盖画布防抖与项目重试，issue #
     flushProject.mockResolvedValue(['p1'])
     const { result } = await mountBarrier()
     await act(async () => {
-      await quitHandlers[0]()
+      await quitHandlers[0]({ payload: null })
     })
     expect(invoke).not.toHaveBeenCalledWith('app_exit')
     expect(result.current).toContain('已阻止退出')

@@ -4,6 +4,7 @@
  * 本组件只做 props 解构与布局，不含状态与业务语义。
  */
 import { useMemo } from 'react'
+import { isSwiftHost } from '../platform/hostEnvironment'
 import { EditorTitlebar } from './EditorTitlebar'
 import { ErrorBanner } from './ErrorBanner'
 import { LeftPanel } from './panels/LeftPanel'
@@ -68,6 +69,8 @@ function toCanvasRegionProps(
     onAutoLayout: props.graph.layout.onAutoLayout,
     onAlignNodes: props.graph.alignment.onAlignNodes,
     onMoveEnd: props.persistence.onMoveEnd,
+    onInspectNode: props.panels.toggleSettings,
+    onClearNodeInspector: props.panels.closeSettings,
   }
 }
 
@@ -143,31 +146,40 @@ function useRightAi(props: EditorLayoutProps): RightPanelAiProps {
   )
 }
 
+/** Native chrome owns titlebar controls; other hosts retain their existing Web controls. */
+function LayoutTitlebar({ props }: { readonly props: EditorLayoutProps }) {
+  const { project, panels, history, graph } = props
+  if (isSwiftHost()) return null
+  return (
+    <EditorTitlebar
+      projectName={project.name}
+      onRenameProject={props.onRenameProject}
+      leftOpen={panels.leftOpen}
+      onToggleLeft={() => panels.setLeftOpen((v) => !v)}
+      canUndo={history.canUndo}
+      canRedo={history.canRedo}
+      onUndo={history.undo}
+      onRedo={history.onRedo}
+      onBackHome={props.onBackHome}
+      plusOpen={panels.plusOpen}
+      onTogglePlus={() => panels.setPlusOpen((v) => !v)}
+      onCreateNode={graph.creation.createNode}
+      onOpenExport={() => panels.setExportOpen(true)}
+      inspectorOn={panels.rightOpen && panels.rightTab === 'inspector'}
+      aiOn={panels.rightTab === 'ai' && panels.rightOpen}
+      onToggleRight={panels.toggleRight}
+    />
+  )
+}
+
 /** 编辑器整体布局：顶部工具栏（§3.3）+ 三栏主体（§3.4）+ 浮层。 */
 export function EditorLayout(props: EditorLayoutProps) {
-  const { project, doc, panels, persistence, history, view, graph } = props
+  const { doc, panels, persistence, view, graph } = props
   const rightAi = useRightAi(props)
   return (
     <div className="editor-root">
       {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
-      <EditorTitlebar
-        projectName={project.name}
-        onRenameProject={props.onRenameProject}
-        leftOpen={panels.leftOpen}
-        onToggleLeft={() => panels.setLeftOpen((v) => !v)}
-        canUndo={history.canUndo}
-        canRedo={history.canRedo}
-        onUndo={history.undo}
-        onRedo={history.onRedo}
-        onBackHome={props.onBackHome}
-        plusOpen={panels.plusOpen}
-        onTogglePlus={() => panels.setPlusOpen((v) => !v)}
-        onCreateNode={graph.creation.createNode}
-        onOpenExport={() => panels.setExportOpen(true)}
-        inspectorOn={panels.rightOpen && panels.rightTab === 'inspector'}
-        aiOn={panels.rightTab === 'ai' && panels.rightOpen}
-        onToggleRight={panels.toggleRight}
-      />
+      <LayoutTitlebar props={props} />
       <LayoutBanners
         saveError={persistence.saveError}
         actionError={props.actionError}
@@ -175,7 +187,7 @@ export function EditorLayout(props: EditorLayoutProps) {
       <div className="editor-body">
         <LeftPanel
           {...toDocDialogProps(panels)}
-          open={panels.leftOpen}
+          open={panels.leftOpen && !isSwiftHost()}
           width={panels.leftWidth}
           onResize={panels.setLeftWidth}
           nodes={doc.nodes}
@@ -193,7 +205,7 @@ export function EditorLayout(props: EditorLayoutProps) {
         />
         <EditorCanvasRegion {...toCanvasRegionProps(props)} />
         <RightPanel
-          open={panels.rightOpen}
+          open={panels.rightOpen && !isSwiftHost()}
           width={panels.rightWidth}
           onResize={panels.setRightWidth}
           tab={panels.rightTab}

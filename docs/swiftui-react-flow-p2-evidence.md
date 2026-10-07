@@ -2,6 +2,10 @@
 
 > 配套：[改造计划](swiftui-react-flow-migration-plan.md)（§7.3 证据模板、§6 状态矩阵）。本页只记录已实际执行的验证；未执行的检查明确标注原因。P1 及之前的证据见 [P1 证据记录](swiftui-react-flow-p1-evidence.md)。
 
+> 当前工具链同步（2026-10-07）：Xcode 27.0 / macOS SDK 27.0 与 `xcode-27` CI 配置见 [Xcode 27 工具链记录](swiftui-react-flow-p1-evidence.md#xcode-27-工具链同步2026-10-07)。下方 2026-09-15 与 2026-10-04 的版本、CI 配置及验证结果保留为历史证据。
+
+> 当前工具链同步（2026-10-04）：所有者在完成本地 `dev` 合并后授权升级为 Xcode 27.0／Swift 6.4 编译器／macOS SDK 27.0；语言模式与部署目标仍为 Swift 6／macOS 26.0。当前记录见[工具链升级记录](swiftui-react-flow-toolchain.md)。本页 P2-1/P2-2 与原合并节的 Xcode 26.6、runner 及测试数值保留原执行含义，不用旧通过结果证明升级后的构建、测试或启动。
+
 ## P2-1 前端宿主接口收敛（2026-09-15）
 
 **阶段 / 日期 / 分支与代码修订**：P2 第 1 项（矩阵 M16/M17）；2026-09-15；`codex/swiftui-react-flow` 工作区未提交状态（叠加在 P1 待目验改动之上；提交与门禁按任务另行执行，本页不构成提交证据）。
@@ -103,3 +107,9 @@
 本次原生路由已执行 XCTest，16 测试通过。Rust 两 workspace 的 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 与 `cargo test` 全部通过：core 130、FFI 单元 3、ABI 集成 6；Tauri 库 535，cleanup 集成 3、media leaf 集成 2 及 native/invoke 响应性夹具通过。模块图守卫元检查 150/150 通过，包含 core/FFI 的生产根无环与有限见证审计。FFI 复制到同项目按 dev 既有目的目录拒绝合同返回 ERROR，复制到独立项目成功，不放宽存储校验。
 
 最终前端路由 `npm run format:check && npm run lint && npm run check:size && npm run typecheck:strict && npm run build && npm test` 全部通过，整仓 198 文件 / 2942 测试；hooks/scripts 路由 `npm run check:size && npm test -- scripts` 通过 15 文件 / 313 测试；`.github` 的 Prettier 检查通过。新鲜覆盖率及 SonarQube 在合并提交创建时由版本化 Git 钩子重新执行并记录，结论以该次门禁输出及待物化记录为准；本节的测试记录不替代提交门禁。Swift FFI 尚未链接、新宿主真实保存/退出和视觉目验仍未验证，不因分支合并视为完成。
+
+## Xcode 27.0 升级衔接（2026-10-04）
+
+所有者今日明确要求升级 Swift 开发规范后构建并启动原生版本。实测 Xcode 27.0（`27A266a`）、Swift 6.4（`swiftlang-6.4.0.34.1 clang-2100.3.34.1`）、macOS SDK 27.0；本机运行于 macOS 26.6.2（`25G83`），沿用已有 `/Applications/Xcode.app/Contents/Developer` 选择。Swift 6 语言模式与 macOS 26.0 最低部署目标保持。
+
+现行原生 CI 改用 `xcode-27` 并检查 Xcode 27.0、SDK 27.0；原合并节的 `macos-26`／Xcode 26.6 为升级前记录。当前工具链与构建、测试、启动、画布就绪结果统一记录在[工具链升级记录](swiftui-react-flow-toolchain.md)，本地构建、16 项测试及窗口就绪已通过；托管 CI 未执行，完整视觉验收未完成。Swift FFI 保存/退出及完整视觉验收仍属于后续阶段。

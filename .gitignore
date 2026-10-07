@@ -23,6 +23,8 @@ src-tauri/gen/schemas/
 # --- macOS 原生工程（native/macos）---
 native/macos/build/
 native/macos/App/WebCanvas/
+# Xcode creates this standalone project's workspace metadata locally.
+native/macos/PlotWeaveNative.xcodeproj/project.xcworkspace/
 xcuserdata/
 *.xcuserstate
 

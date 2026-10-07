@@ -32,6 +32,23 @@ describe('ipcInvoke 转发契约', () => {
 
 /** Swift 宿主直达 typed IPC 时仍须保持原生能力不可用的可见失败。 */
 describe('ipcInvoke 宿主边界', () => {
+  it('Swift 有效桥执行生产命令，返回原生结果且不触及 Tauri', async () => {
+    const postMessage = vi.fn().mockResolvedValue({ ok: { native: true } })
+    vi.stubGlobal(
+      'window',
+      Object.assign(new EventTarget(), {
+        __pwNativeHost: { kind: 'swift', protocolVersion: 1, sessionId: 's1' },
+        webkit: { messageHandlers: { plotweaveHost: { postMessage } } },
+      }),
+    )
+    vi.mocked(invoke).mockClear()
+    await expect(ipcInvoke(IPC_COMMANDS.loadPrefs)).resolves.toEqual({
+      native: true,
+    })
+    expect(postMessage).toHaveBeenCalledOnce()
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
   it('Swift 的直接 IPC 调用拒绝，携带稳定错误码，不加载 Tauri 传输', async () => {
     vi.stubGlobal('window', { __pwNativeHost: { kind: 'swift' } })
     await expect(ipcInvoke(IPC_COMMANDS.loadPrefs)).rejects.toMatchObject({

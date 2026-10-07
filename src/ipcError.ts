@@ -6,9 +6,15 @@
 
 /** 码词法：小写蛇形 + 数字；后随一个空格与文案分隔。 */
 const CODE_PREFIX = /^\[([a-z0-9_]+)\] /
+/** Swift v1 结构化码沿用旧前缀的小写蛇形词法白名单。 */
+const CODE_TOKEN = /^[a-z0-9_]+$/
 
-/** 提取 IPC 错误的机器码；无码或非文本形态回退 null。 */
+/** 优先提取合法结构化码，兼容旧文本前缀；无码或非法形态回退 null。 */
 export function ipcErrorCode(err: unknown): string | null {
+  if (err !== null && typeof err === 'object') {
+    const code = (err as { code?: unknown }).code
+    if (typeof code === 'string' && CODE_TOKEN.test(code)) return code
+  }
   if (err instanceof Error) return codeOf(err.message)
   if (typeof err === 'string') return codeOf(err)
   return null

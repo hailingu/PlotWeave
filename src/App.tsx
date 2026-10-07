@@ -22,6 +22,9 @@ import {
   useCreateFamilyAttempts,
 } from './useCreateFamilyAttempts'
 import { useExitFlush } from './useExitFlush'
+import { useNativeAppShell } from './useNativeAppShell'
+import { useAppSettingsShortcut } from './useAppSettingsShortcut'
+import { isSwiftHost } from './platform/hostEnvironment'
 import { ErrorBanner } from './editor/ErrorBanner'
 import { displayIpcError } from './ipcError'
 import { useProjectSummaries } from './useProjectSummaries'
@@ -544,23 +547,8 @@ function EditorScreen({
   )
 }
 
-function AppView({
-  projects,
-  loading,
-  loadError,
-  onRetryLoad,
-  openProject,
-  openFailure,
-  mutationFailure,
-  onRetryMutation,
-  settingsOpen,
-  open,
-  home,
-  latestAiSession,
-  latestDoc,
-  onOpenSettings,
-  onCloseSettings,
-}: {
+/** Application view assembly shared by web and native shell routes. */
+interface AppViewProps {
   readonly projects: ProjectSummary[]
   readonly loading: boolean
   readonly loadError: string | null
@@ -580,7 +568,43 @@ function AppView({
   readonly latestDoc: LatestDocRef
   readonly onOpenSettings: () => void
   readonly onCloseSettings: () => void
-}) {
+}
+
+function AppView({
+  projects,
+  loading,
+  loadError,
+  onRetryLoad,
+  openProject,
+  openFailure,
+  mutationFailure,
+  onRetryMutation,
+  settingsOpen,
+  open,
+  home,
+  latestAiSession,
+  latestDoc,
+  onOpenSettings,
+  onCloseSettings,
+}: AppViewProps) {
+  if (isSwiftHost()) {
+    return (
+      <Suspense fallback={null}>
+        <div hidden>
+          {settingsOpen && <SettingsView onClose={onCloseSettings} />}
+        </div>
+        {openProject && (
+          <EditorScreen
+            openProject={openProject}
+            open={open}
+            latestAiSession={latestAiSession}
+            latestDoc={latestDoc}
+            onOpenSettings={onOpenSettings}
+          />
+        )}
+      </Suspense>
+    )
+  }
   let view: ReactNode
   if (settingsOpen) {
     view = <SettingsView onClose={onCloseSettings} />
@@ -674,21 +698,7 @@ export function App() {
   const actionFeedback = useHomeActionFeedback()
   const attempts = useCreateFamilyAttempts(readProjects)
 
-  // ⌘,/Ctrl+, 打开设置（macOS 惯例，§8.2）：文档级监听只判键值与修饰
-  // 键，不按焦点目标过滤——输入控件聚焦时同样触发（issue #274）；
-  // aria-modal 弹窗打开时挂起（issue #263 评审）：应用级入口同样服从
-  // 键盘模态边界，编辑器与弹窗不被静默卸载，弹窗关闭后恢复
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === ',' && (e.metaKey || e.ctrlKey)) {
-        if (document.querySelector('dialog[aria-modal="true"]')) return
-        e.preventDefault()
-        startTransition(() => setSettingsOpen(true))
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [])
+  useAppSettingsShortcut(() => startTransition(() => setSettingsOpen(true)))
 
   const open = useOpenProjectActions({
     setOpenProject,
@@ -708,6 +718,31 @@ export function App() {
   )
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
   const exitBlocked = useExitFlush()
+  useNativeAppShell({
+    projects,
+    loading,
+    settingsOpen,
+    project: openProject
+      ? { id: openProject.id, name: openProject.doc.name }
+      : null,
+    error:
+      exitBlocked ??
+      loadError ??
+      openFailure?.detail ??
+      actionFeedback.failure?.error.detail ??
+      null,
+    actions: {
+      create: open.handleCreateProject,
+      open: open.handleOpenProject,
+      rename: home.handleRenameProject,
+      duplicate: home.handleDuplicateProject,
+      delete: home.handleDeleteProject,
+      home: open.handleBackHome,
+      settings: () => startTransition(() => setSettingsOpen(true)),
+      retry: refreshProjects,
+    },
+  })
+
   return (
     <>
       {exitBlocked !== null && <ErrorBanner message={exitBlocked} />}

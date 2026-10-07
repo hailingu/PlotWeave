@@ -25,13 +25,15 @@ import type { AiCommitIdentity } from '../ai/commitIdentity'
 import { useAiSessionPersistence } from '../ai/useAiSessionPersistence'
 import { revalidatePendingCard, useAiTurn } from './aiThreadTurn'
 import { AiTopbar } from './AiThreadTopbar'
+import { useNativeAiShell } from '../nativeCanvas/useNativeAiShell'
+import { isSwiftHost } from '../../platform/hostEnvironment'
 
 export { AiSettingsButton } from './AiThreadTopbar'
 
 /** 模型选择域（逻辑 hook，issue #39 拆分）：应用设置加载、面板内模型
  * 选择与三层派生（可用模型 → 生效模型 → provider key 就绪）。 */
 function useAiModels() {
-  // 挂载时读一次设置快照（切回 AI 分段即重挂重读，从设置页回来能刷新）；
+  // 首次挂载读取设置；Swift 常驻会话在成功保存后本页重读，保留线程与模型选择。
   // 读取失败保持 null → 空选项走引导（issue #120）；key 状态直接从
   // provider 配置派生（keyEnc 密文存在即已配置）
   const appSettings = useSettingsSnapshot()
@@ -561,7 +563,15 @@ function useAiThreadAssembly(props: AiThreadProps) {
  * EditorView）；会话内交互照常驱动自身状态更新。 */
 export const AiThread = memo(function AiThread(props: AiThreadProps) {
   const { m, msg, saveError, turn } = useAiThreadAssembly(props)
+  useNativeAiShell({
+    projectId: props.projectId,
+    models: m,
+    messages: msg,
+    turn,
+    saveError,
+  })
   const onOpenSettings = props.onOpenSettings
+  if (isSwiftHost()) return null
   return (
     <div className="pw-ai">
       <AiTopbar

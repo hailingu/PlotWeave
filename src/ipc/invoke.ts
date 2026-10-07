@@ -16,6 +16,7 @@
  */
 import type { IpcCommandName } from './commands'
 import { detectHostKind, type HostKind } from '../platform/hostEnvironment'
+import { hasSwiftHostTransport, invokeSwiftHost } from '../platform/swiftHost'
 
 /** 命令传输不可用错误的稳定错误码（界面层据此展示可重试失败）。 */
 export const HOST_COMMAND_UNAVAILABLE = 'PW_HOST_COMMAND_UNAVAILABLE'
@@ -48,7 +49,7 @@ export function setHostCommandTransportForTests(
   testTransport = transport
 }
 
-/** 经共享常量执行宿主命令：Swift 未接通时可见失败，其余延迟加载 Tauri。 */
+/** 经共享常量执行宿主命令：Swift 走带会话身份的原生桥，其余延迟加载 Tauri。 */
 export function ipcInvoke<T = unknown>(
   cmd: IpcCommandName,
   args?: Record<string, unknown>,
@@ -56,7 +57,11 @@ export function ipcInvoke<T = unknown>(
   return (async () => {
     if (testTransport !== null) return testTransport<T>(cmd, args)
     const host = detectHostKind()
-    if (host === 'swift') throw new HostCommandUnavailableError(cmd, host)
+    if (host === 'swift') {
+      if (!hasSwiftHostTransport())
+        throw new HostCommandUnavailableError(cmd, host)
+      return invokeSwiftHost<T>(cmd, args)
+    }
     const { invoke } = await import('@tauri-apps/api/core')
     return args === undefined ? invoke<T>(cmd) : invoke<T>(cmd, args)
   })()

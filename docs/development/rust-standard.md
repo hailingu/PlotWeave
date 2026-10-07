@@ -46,10 +46,12 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   `src-tauri` (project storage first, P2 of the native-shell migration): data
   roots are injected by the caller, no Tauri runtime dependency, kernels stay
   callable from both the Tauri adapter and the FFI boundary.
-- `crates/plotweave-ffi/` — the C ABI boundary for the Swift host: opaque
+- `crates/plotweave-ffi/` — the historical P2 C ABI boundary for the Swift host: opaque
   handle, JSON request/response, worker-thread completion callbacks, explicit
   allocation/free and cancellation contracts (see the crate-level docs of
   `plotweave-ffi/src/lib.rs`).
+  The current native application uses Swift services and does not link this
+  crate; Tauri/core and ABI regressions remain in the Rust gate's scope.
 - `crates/` forms its own Cargo workspace; run its routed checks from the
   `crates` directory.
 - Core fault-injection helpers are available through `cfg(test)` or the

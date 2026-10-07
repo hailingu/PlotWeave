@@ -23,7 +23,9 @@ final class CanvasAppearanceState {
         let increaseContrast: Bool
         let reduceMotion: Bool
 
-        /// Reads the live system values; the sole production reader.
+        /// Reads the live system values on the main actor; the sole
+        /// production reader. Pure snapshot data operations stay unisolated.
+        @MainActor
         static func current() -> Snapshot {
             Snapshot(
                 colorScheme: currentColorScheme(),
@@ -46,7 +48,9 @@ final class CanvasAppearanceState {
         }
 
         /// Maps the app's effective appearance onto the bridge contract;
-        /// unknown or unmatched appearances fall back to light.
+        /// AppKit reads stay on the main actor, and unknown or unmatched
+        /// appearances fall back to light.
+        @MainActor
         private static func currentColorScheme() -> String {
             guard
                 let appearance = NSApp?.effectiveAppearance,

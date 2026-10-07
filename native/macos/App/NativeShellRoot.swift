@@ -1,96 +1,92 @@
 import SwiftUI
 
-/// Root composition of the native shell: standard navigation sidebar,
-/// unified toolbar, and trailing inspector around the canvas area.
-///
-/// Chrome uses standard macOS 26 containers, which supply Liquid Glass for
-/// navigation and operation areas while the canvas stays an opaque content
-/// surface (`docs/swiftui-react-flow-migration-plan.md` §2.2). The detail
-/// column hosts ``WebCanvasSection``: a WKWebView rendering the in-memory
-/// demo canvas built from the shared frontend sources.
+/// Native navigation, toolbar, inspector and business views surround one persistent Web canvas session.
 struct NativeShellRoot: View {
+    let demoMode: Bool
+    let services: NativeHostServices?
     @State private var layout: ShellLayoutState
     @State private var appearance: CanvasAppearanceState
+    @State private var application: NativeApplicationState
 
-    /// InjectableViews keep the canonical in-app defaults while letting
-    /// lifecycle tests drive the very state objects the live shell uses.
+    /// Injected services isolate integration fixtures from production and Tauri application data.
     init(
         layout: ShellLayoutState = ShellLayoutState(),
-        appearance: CanvasAppearanceState = CanvasAppearanceState()
+        appearance: CanvasAppearanceState = CanvasAppearanceState(),
+        demoMode: Bool = false,
+        services: NativeHostServices? = nil,
+        application: NativeApplicationState = NativeApplicationState()
     ) {
+        self.demoMode = demoMode
+        self.services = services
         _layout = State(initialValue: layout)
         _appearance = State(initialValue: appearance)
+        _application = State(initialValue: application)
     }
 
     var body: some View {
         @Bindable var layout = layout
+        @Bindable var application = application
         NavigationSplitView(
             columnVisibility: Binding(
-                get: { layout.sidebarVisible ? .all : .detailOnly },
-                set: { layout.sidebarVisible = $0 != .detailOnly }
+                get: { editorPanelsAvailable && layout.sidebarVisible ? .all : .detailOnly },
+                set: { visibility in
+                    guard editorPanelsAvailable else { return }
+                    layout.sidebarVisible = visibility != .detailOnly
+                }
             )
         ) {
-            ShellSidebarView()
+            NativeNavigationView(state: application, demoMode: demoMode)
+                .toolbar(removing: editorPanelsAvailable ? nil : .sidebarToggle)
         } detail: {
-            WebCanvasSection(appearance: appearance)
+            WebCanvasSection(
+                appearance: appearance, demoMode: demoMode,
+                application: application, services: services
+            )
         }
-        .inspector(isPresented: $layout.inspectorVisible) {
-            ShellInspectorView()
+        .inspector(isPresented: editorPanelsAvailable ? $layout.inspectorVisible : .constant(false)) {
+            NativeInspectorView(state: application)
+                .inspectorColumnWidth(min: 300, ideal: 360, max: 640)
         }
-        .navigationTitle("PlotWeave")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("检查器", systemImage: "sidebar.trailing") {
-                    layout.toggleInspector()
-                }
-                .help("显示或隐藏属性检查器（占位）")
-            }
+        .navigationTitle(application.projectName)
+        .onChange(of: application.projection) { previous, current in
+            revealRequestedNodeInspector(previous: previous, current: current)
+        }
+        .toolbar { NativeEditorToolbar(state: application, layout: layout) }
+        .sheet(isPresented: $application.exportVisible) {
+            NativeExportView(state: application, services: services ?? .shared, projectId: application.projectId ?? "")
+        }
+        .sheet(isPresented: $application.projectSettingsVisible) {
+            NativeProjectSettingsView(state: application, projectId: application.projectId ?? "").id(application.projectId)
+        }
+        .sheet(isPresented: $application.libraryVisible) {
+            NativeLibrarySheet(state: application, services: services ?? .shared)
         }
         .frame(minWidth: 960, minHeight: 600)
         .task { appearance.startObserving() }
         .onDisappear { appearance.stopObserving() }
     }
-}
 
-/// Placeholder navigation sidebar; rows carry no function until P3 connects
-/// real single-project navigation.
-private struct ShellSidebarView: View {
-    var body: some View {
-        List {
-            Section("导航（占位）") {
-                Label("首页", systemImage: "house")
-                Label("剧本", systemImage: "text.book.closed")
-                Label("角色", systemImage: "person.2")
-                Label("场景", systemImage: "photo.on.rectangle.angled")
-                Label("设定", systemImage: "slider.horizontal.3")
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            Text("功能在 P3 接通")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-        }
+    /// Only new edit requests between valid snapshots of one project reveal the inspector; route and page restoration do not replay targets.
+    private func revealRequestedNodeInspector(previous: HostJSON, current: HostJSON) {
+        guard editorPanelsAvailable,
+              previous["app"]?["route"]?.string == "editor", current["app"]?["route"]?.string == "editor",
+              let project = current["app"]?["project"]?["id"]?.string,
+              previous["app"]?["project"]?["id"]?.string == project,
+              let editor = current["editor"], let previousEditor = previous["editor"],
+              editor["projectId"]?.string == project, previousEditor["projectId"]?.string == project,
+              let target = editor["editingNodeId"]?.string, !target.isEmpty,
+              editor["selected"]?["id"]?.string == target else { return }
+        let request = editor["nodeSettingsRequest"]?.number ?? 0
+        let previousRequest = previousEditor["nodeSettingsRequest"]?.number ?? 0
+        let newRequest = request.isFinite && request.rounded(.down) == request
+            && previousRequest >= 0 && request > previousRequest
+        let changedTarget = previousEditor["editingNodeId"]?.string != target
+        if newRequest || changedTarget { layout.inspectorVisible = true }
     }
-}
 
-/// Placeholder trailing inspector; attribute editing arrives in P3.
-private struct ShellInspectorView: View {
-    var body: some View {
-        List {
-            Section("属性（占位）") {
-                LabeledContent("名称", value: "—")
-                LabeledContent("位置", value: "—")
-                LabeledContent("状态", value: "—")
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            Text("属性编辑在 P3 接通")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-        }
+    /// Project panels belong to an active editor; the isolated canvas fixture retains panel lifecycle coverage.
+    private var editorPanelsAvailable: Bool {
+        demoMode || (application.route == "editor" && application.projectId != nil)
     }
+
 }
