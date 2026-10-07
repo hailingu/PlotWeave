@@ -3,8 +3,8 @@ import SwiftUI
 /// Entry point of the native PlotWeave shell under development on the
 /// `codex/swiftui-react-flow` branch.
 ///
-/// The single window keeps one Web document writer; native controls consume
-/// read projections and issue session-bound intents through its coordinator.
+/// One retained editor window keeps the Web document writer; the welcome card and native controls
+/// consume read projections and issue session-bound intents through its coordinator.
 /// Normal exit waits for that writer's persisted-edit flush.
 @main
 struct PlotWeaveNativeApp: App {

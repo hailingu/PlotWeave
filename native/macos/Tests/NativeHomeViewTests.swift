@@ -8,6 +8,101 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct NativeHomeViewTests {
+    /// Every direct welcome-control fixture uses the owner's fixed Xcode point geometry, including both appearances.
+    @Test func welcomeControlsUseOnlyReferenceGeometry() throws {
+        let window = try makeWindow()
+        defer { window.close(); window.contentView = nil }
+        // Owner reference N66/N71: 960 × 1264 screenshot pixels are 480 × 632 layout points.
+        #expect(window.frame.size == NSSize(width: 480, height: 632))
+        #expect(!window.styleMask.contains(.resizable))
+        #expect(window.titleVisibility == .hidden && window.titlebarAppearsTransparent)
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            #expect(window.standardWindowButton(kind)?.isHidden != false)
+        }
+    }
+
+    /// The custom close control must use this fixture's normal window delegate and honor its refusal.
+    @Test func customCloseHonorsWindowDelegate() async throws {
+        let window = try makeWindow()
+        let delegate = RefusingCloseDelegate()
+        window.delegate = delegate
+        defer { window.delegate = nil; window.close(); window.contentView = nil }
+        try await Task.sleep(for: .milliseconds(300))
+        let button = try await NativeCreationControlFixture.button(in: window, named: "关闭欢迎页")
+        let size = try NativeCreationControlFixture.size(button)
+        // Owner reference N66: the 75 px circular close control is 37.5 pt at 2×.
+        #expect(abs(size.width - 37.5) <= 0.5 && abs(size.height - 37.5) <= 0.5)
+        try NativeCreationControlFixture.press(button)
+        #expect(delegate.requests == 1)
+        #expect(window.isVisible)
+    }
+
+    /// An empty loaded library cannot invent a selection or enable the Open action.
+    @Test func emptyLibraryDisablesOpening() async throws {
+        let window = try makeWindow(projects: [])
+        defer { window.close(); window.contentView = nil }
+        try await Task.sleep(for: .milliseconds(300))
+        let button = try await NativeCreationControlFixture.button(in: window, named: "打开项目")
+        #expect(try !NativeCreationControlFixture.isEnabled(button))
+        #expect(descendants(window.contentView).compactMap { $0 as? NSTableView }.isEmpty)
+        let creation = try await NativeCreationControlFixture.button(in: window)
+        #expect(try NativeCreationControlFixture.isEnabled(creation))
+    }
+
+    /// Opening is explicit; the welcome list selects a project without navigating on a single click.
+    @Test func welcomeListSelectsWithoutOpening() async throws {
+        let state = NativeApplicationState()
+        let window = try makeWindow(state: state)
+        defer { window.close(); window.contentView = nil }
+        try await Task.sleep(for: .milliseconds(300))
+        let button = try await NativeCreationControlFixture.button(in: window, named: "打开项目")
+        let table = try #require(descendants(window.contentView).compactMap { $0 as? NSTableView }.first)
+        #expect(table.selectedRow == 0)
+        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(table.selectedRow == 1)
+        #expect(state.route == "home" && !state.busy && state.error == nil)
+        #expect(try NativeCreationControlFixture.isEnabled(button))
+    }
+
+    /// Reordering preserves identity; removing it must not redirect a later Open action to another project.
+    @Test func removedSelectionDisablesOpening() async throws {
+        let state = NativeApplicationState()
+        let window = try makeWindow(state: state)
+        defer { window.close(); window.contentView = nil }
+        try await Task.sleep(for: .milliseconds(300))
+        let button = try await NativeCreationControlFixture.button(in: window, named: "打开项目")
+        let table = try #require(descendants(window.contentView).compactMap { $0 as? NSTableView }.first)
+        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        try await Task.sleep(for: .milliseconds(100))
+        try state.receiveProjection([
+            "protocolVersion": 1, "sessionId": "home-controls", "sequence": 2,
+            "projection": ["app": ["route": "home", "loading": false,
+                "projects": [["id": "second", "name": "午夜出租车"], ["id": "first", "name": "都市奇缘"]]]]
+        ])
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(table.selectedRow == 0)
+        #expect(try NativeCreationControlFixture.isEnabled(button))
+        try state.receiveProjection([
+            "protocolVersion": 1, "sessionId": "home-controls", "sequence": 3,
+            "projection": ["app": ["route": "home", "loading": false,
+                "projects": [["id": "first", "name": "都市奇缘"]]]]
+        ])
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try !NativeCreationControlFixture.isEnabled(button))
+        #expect(table.selectedRow == -1)
+        #expect(state.error == nil)
+    }
+
+    /// Opening must wait for a finished list just like the existing creation command.
+    @Test func loadingDisablesOpening() async throws {
+        let window = try makeWindow(loading: true)
+        defer { window.close(); window.contentView = nil }
+        try await Task.sleep(for: .milliseconds(300))
+        let button = try await NativeCreationControlFixture.button(in: window, named: "打开项目")
+        #expect(try !NativeCreationControlFixture.isEnabled(button))
+    }
+
     /// Reintroducing a homepage search field violates the owner's unfiltered-library UI contract.
     @Test func projectLibraryHasNoSearchField() async throws {
         let window = try makeWindow()
@@ -32,19 +127,25 @@ struct NativeHomeViewTests {
         }
     }
 
-    /// Removing primary presentation or help leaves the creation action less discoverable in either system appearance.
+    /// Rounded welcome actions retain readable help and platform target sizes in either system appearance.
     @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
     func creationHasAccessiblePrimaryPresentation(appearance: NSAppearance.Name) async throws {
         let window = try makeWindow()
         defer { window.close(); window.contentView = nil }
         window.appearance = NSAppearance(named: appearance)
         try await Task.sleep(for: .milliseconds(300))
-        let button = try await NativeCreationControlFixture.button(in: window)
-        let size = try NativeCreationControlFixture.size(button)
-        // Apple HIG Accessibility's macOS default control size is 28 × 28 pt.
-        #expect(size.width >= 28 && size.height >= 28)
-        #expect(NativeCreationControlFixture.string(button, kAXHelpAttribute) == "新建短剧（⌘N）")
-        #expect(try NativeCreationControlFixture.isEnabled(button))
+        #expect(window.frame.size == NSSize(width: 480, height: 632))
+        for name in ["打开项目", "新建短剧"] {
+            let button = try await NativeCreationControlFixture.button(in: window, named: name)
+            let size = try NativeCreationControlFixture.size(button)
+            // Owner reference N69: 215 × 75 pixels at 2×, with a half-point rendering tolerance.
+            #expect(abs(size.width - 107.5) <= 0.5 && abs(size.height - 37.5) <= 0.5)
+            #expect(NativeCreationControlFixture.string(button, kAXHelpAttribute) != nil)
+            #expect(try NativeCreationControlFixture.isEnabled(button))
+            if name == "新建短剧" {
+                #expect(NativeCreationControlFixture.string(button, kAXHelpAttribute) == "新建短剧（⌘N）")
+            }
+        }
     }
 
     /// Changing only the header must not make project creation available before the list is ready.
@@ -64,23 +165,29 @@ struct NativeHomeViewTests {
         #expect(item.keyEquivalentModifierMask == .command)
     }
 
-    /// Read-only projections seed real SwiftUI controls without opening any user data directory.
-    private func makeWindow(loading: Bool = false) throws -> NSWindow {
-        let state = NativeApplicationState()
+    /// Read-only controls use only the fixed welcome geometry, with no editor-sized or real-data fixture.
+    private func makeWindow(
+        loading: Bool = false, state: NativeApplicationState = NativeApplicationState(),
+        projects: [[String: String]] = [["id": "first", "name": "都市奇缘"], ["id": "second", "name": "午夜出租车"]]
+    ) throws -> NSWindow {
         state.beginSession("home-controls")
         try state.receiveProjection([
             "protocolVersion": 1, "sessionId": "home-controls", "sequence": 1,
-            "projection": ["app": ["route": "home", "loading": loading, "projects": [
-                ["id": "first", "name": "都市奇缘"],
-                ["id": "second", "name": "午夜出租车"]
-            ]]]
+            "projection": ["app": ["route": "home", "loading": loading, "projects": projects]]
         ])
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
-            styleMask: [.titled], backing: .buffered, defer: false
-        )
+        let frame = NSRect(origin: .zero, size: NativeWelcomeMetrics.windowSize)
+        let window = NSWindow(contentRect: frame,
+                              styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: NativeHomeView(state: state))
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(kind)?.isHidden = true
+        }
+        let content = NSHostingView(rootView: NativeHomeView(state: state).ignoresSafeArea())
+        content.sizingOptions = []
+        window.contentView = content
+        window.setFrame(frame, display: false)
         window.contentView?.layoutSubtreeIfNeeded()
         window.orderFrontRegardless()
         return window
@@ -97,4 +204,17 @@ struct NativeHomeViewTests {
         menu.items.flatMap { [$0] + ($0.submenu.map(menuItems) ?? []) }
     }
 
+}
+
+/// A refused normal close proves the custom control cannot bypass AppKit's delegate boundary.
+@MainActor
+private final class RefusingCloseDelegate: NSObject, NSWindowDelegate {
+    /// Requests count actual delegate invocations rather than a mocked view action.
+    private(set) var requests = 0
+
+    /// Keeps the fixture visible just as a pending or failed save barrier does.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        requests += 1
+        return false
+    }
 }

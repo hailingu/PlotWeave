@@ -4,6 +4,21 @@
 
 日期：2026-10-04。基线：本地 `dev` 的 `752cd5c`，已合入 `codex/swiftui-react-flow` 的 `08653d2`。本记录对应所有者“补充 swiftui-react-flow 里和 dev 上对比缺失的功能”的任务，沿用[迁移计划](swiftui-react-flow-migration-plan.md)的单写入者、持久化和数据隔离合同。
 
+## 原生应用图标修复：状态与不变量（2026-10-07）
+
+所有者截图显示原生版本启动后 Dock 使用占位图标。检查实际 Debug bundle，未声明 `CFBundleIconFile`，Resources 也没有图标。以下矩阵在工程配置修改前记录。现已复用 `src-tauri/icons/icon.icns`，工程通过资源引用打包同一文件；`native/macos/Info.plist` 声明图标，Debug／Release 均由 Xcode 合并生成其余应用元数据。[Apple 图标键合同](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html)规定系统从主资源目录解析该声明；[清单合并规则](https://developer.apple.com/documentation/bundleresources/managing-your-app-s-information-property-list)说明显式清单与生成字段的合并。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证与当前缺口 |
+| --- | --- | --- | --- | --- |
+| N49 | Debug／Release 构建→应用启动 | 应用声明并打包现有 PlotWeave 图标，系统可解码 | Xcode app target 同时拥有清单与资源打包；组合构建、Xcode 构建使用同一资源路径 | 通过：`NativeAppIconTests.bundledApplicationIconCanBeDecoded` 检查真实 Debug app 清单、资源与至少 512 像素的解码表示；完整原生路由通过。Release 构建、清单键、图标逐字节一致及签名校验通过；Release 未单独运行 Swift 测试 |
+| N50 | 图标声明缺失、文件未打包、路径错误或内容不可解码→构建回归 | 回归明确失败，不能把占位图标视为合格产物 | 同一打包不变量由实际 bundle 测试守护，无运行时伪造图标或失败回退 | 先红：旧工程真实 bundle 的图标键为 `nil`，聚焦测试退出 65；后绿：同一测试通过。测试的资源查找与解码断言守护文件丢失／错路径／损坏；未另作这些配置变异的故障注入 |
+
+本次仅修复应用身份资源，不增加业务状态、持久化、并发、重试或恢复入口，故这些维度不适用。已运行旧实例及 Dock 缓存的视觉刷新仍需重新构建并启动后目验；不以 bundle 检查代替该验收。
+
+验证在仓库根目录，使用 Node 24.18.0、Xcode 27.0／SDK 27.0。`npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test` 通过：682 个维护文件、65 个已登记排除项、389 个画布模块、38 suites／133 tests。聚焦测试在同一 Xcode 命令后追加 `-only-testing:PlotWeaveNativeTests/NativeAppIconTests`，先红后绿；Release 使用同一 project／scheme／destination／DerivedData 参数及 `-configuration Release build`，`BUILD SUCCEEDED`。Debug／Release 的 `plutil -extract CFBundleIconFile raw`、`cmp src-tauri/icons/icon.icns <app>/Contents/Resources/icon.icns`、`codesign --verify --deep --strict <app>` 均通过，应用身份和版本字段仍正确生成。
+
+`sh scripts/check-static.sh` 通过格式、ESLint 零警告、大小与严格类型检查。新增 `.plist` 配置类别按大小守卫的显式清单登记，使用实际 checker 的隔离仓库回归先红后绿；`npm run check:size && npm test -- scripts` 在沙箱外通过 15 文件／314 tests，首次沙箱内运行的进程身份／子进程监督相关失败未再出现，详见[文件大小守卫记录](development/file-size-guard.md#native-shell-merge-state-and-invariant-matrix)。Xcode 首次测试在沙箱内被系统通知阻断，沙箱外运行通过；Vite 保留现有大 chunk 提示，WebKit／系统服务诊断未阻止测试。文档无独立自动语义检查，已按实现、矩阵和交叉链接结构化复核。前端／Rust 产品代码未改，未运行其全量路由、覆盖率或 SonarQube，未提交、推送或运行 PR CI；一次性验证构建和生成资源已删除，并恢复任务前已有产物。
+
 ## 项目片库控件精简：状态与不变量（2026-10-07）
 
 所有者要求项目行菜单仅显示三个点，并移除顶部搜索栏。本次限于 `NativeHomeView` 的呈现与不再需要的搜索状态；菜单仍使用系统 `Menu`。以下矩阵在生产代码修改前记录。
@@ -55,6 +70,73 @@
 仓库根目录使用 Node 24.18.0、Xcode 27.0／macOS SDK 27.0 运行完整原生路由 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`：大小检查通过（685 个维护文件／65 个显式排除项）、画布构建通过（389 模块）；默认并行的 143 tests／40 suites 在已有退出 delegate 超时与检查器显示断言两处失败，本次新增回归通过。追加 `-parallel-testing-enabled NO` 串行复核，143 tests／40 suites 全通过。失败与前一节记录相同，未据此认定并行隔离问题已修复。
 
 真实窗口截图复核了大号胶囊形状、`plus` 与文字和原有右侧位置；捕获时窗口未激活，不能作为强调色、浅／深全状态的视觉验收。View 缓存截图遗漏部分合成图层，已弃用；临时截图、等待与打印代码未保留在回归中。Vite 大 chunk 提示、WebKit／系统服务和 SwiftUI 布局诊断未阻止串行检查。`npx prettier --check docs/ui-design.md docs/swiftui-react-flow-feature-parity.md` 和 `git diff --check` 通过；文档按实现、矩阵和链接结构化复核，无独立自动语义检查。一次性构建、生成画布与临时截图已清理，并恢复任务前已有构建产物。前端／Rust 产品代码未改，未运行其全量路由、覆盖率、SonarQube 或 PR CI，未提交或推送。
+
+## 首页辅助说明可读性（2026-10-07）
+
+所有者当时确认保留窗口标题、页面标题和项目名称，仅提高“选择一部短剧继续创作”的对比度。说明改用系统 `.body` 普通字重与 `.primary` 前景样式，以字号和字重维持层级；不写死 RGB、透明度或字号。以下风险记录先于呈现修改；后续[欢迎页改版](#xcode-风格欢迎首页状态与不变量2026-10-07)替换了该标题与说明，保留此节原验证范围。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证与当前缺口 |
+| --- | --- | --- | --- | --- |
+| N60 | 首页加载／已加载／错误→浅色、深色或增强对比度外观 | 辅助说明可读，普通字重区别于大标题；文字、创建入口和列表行为一致 | `NativeHomeView.header` 仅拥有呈现；系统文字与颜色角色拥有外观适配，不增加路由、写入、重试或并发状态 | 通过：原生编译和既有片库、创建、导航回归；公开 AppKit API 解析 `labelColor`／`windowBackgroundColor`，按 sRGB alpha 合成与 WCAG 相对亮度计算，浅色参考值 14.94:1、深色 12.23:1，增强对比度分别相同。该系统角色参考计算不等于实际 SwiftUI 文本像素验收；真实窗口像素和 VoiceOver 人工验收保留缺口 |
+
+本次为可逆的纯文字呈现调整，不新增样式实现的镜像测试。现有回归复核片库控件、创建和导航语义；文档结构化复核包括上述角色参考值的范围与保留缺口，不以截图抗锯齿后的最深像素推导运行时前景颜色。
+
+仓库根目录使用 Node 24.18.0、Xcode 27.0／macOS SDK 27.0 运行原生路由 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`：大小检查通过（685 个维护文件／65 个显式排除项）、画布构建通过（389 模块）；默认并行 143 tests／40 suites 在已记录的 `hostedApplicationWindowHasExitDelegate` 超时失败，片库与创建回归通过。相同 Xcode 命令追加 `-parallel-testing-enabled NO`，143 tests／40 suites 全通过。Vite 大 chunk 提示及 WebKit／系统服务、SwiftUI 布局诊断未阻止串行检查。
+
+`npx prettier --check docs/ui-design.md docs/swiftui-react-flow-feature-parity.md` 与 `git diff --check` 通过；文档无独立自动语义检查，已对照实现、矩阵和链接结构化复核。一次性验证构建、生成画布和系统颜色诊断缓存已清理，并恢复任务前已有产物。前端／Rust 产品代码未改，未运行其全量路由、覆盖率、SonarQube 或 PR CI；本次未提交或推送。
+
+## Xcode 风格欢迎首页：状态与不变量（2026-10-07）
+
+所有者以 Xcode 27 欢迎页截图授权首页改版。采用居中的现有应用图标、名称与真实 bundle 版本、圆角操作按钮和系统单选项目列表；保留系统窗口关闭机制及完整片库，无搜索栏。操作区提供“打开项目”和“新建短剧”，复用已有打开／创建能力。以下矩阵先于生产代码修改记录，覆盖新增选择行为；早前左侧标题及强调创建按钮的呈现记录保留为历史结果。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证与当前缺口 |
+| --- | --- | --- | --- | --- |
+| N61 | 首次加载完成→显示欢迎页→单击另一项目 | 默认选中首个项目，单击只更改系统高亮，不进入编辑页 | `NativeHomeView` 仅拥有瞬态项目 ID；项目顺序、完整元数据和文档仍由应用投影与 Web 编辑会话拥有 | 通过：`NativeHomeViewTests.welcomeListSelectsWithoutOpening` 及隔离服务打开回归；真实鼠标单击夹具第二行仅改变 AX 选择 |
+| N62 | 有效选择→打开按钮／回车／双击 | 打开该 ID 的既有项目，保留同一 WebView 与保存协调 | 三个入口共用 loading／busy／当前 ID 存在检查；不通过行号打开 | 通过：`selectedWelcomeProjectOpensWithoutCreatingAnother` 用实际 AX 按钮与 Return 事件验证已选 ID、未新增项目、真实磁盘图及同一 WebView；实际鼠标双击独立只读夹具触发打开、显示未连接页面的诊断，验证派发，未单独验证双击的完整存储链。创建沿真实创建回归 |
+| N63 | 选择后→项目移除／重排／加载或操作在途 | 重排保留原 ID；目标消失清除选择；未就绪与在途禁用打开和写操作 | 当前投影拥有身份有效性，过期选择不能悄悄替换为另一项目；菜单确认仍绑定捕获 ID | 通过：`removedSelectionDisablesOpening` 在真实列表重排后保持选择、移除后清空；`loadingDisablesOpening` 和延迟创建回归验证实际 AX 禁用；既有表单测试保留损坏条目、加载／busy 和陈旧确认身份边界 |
+| N64 | 空片库／列表失败／打开失败→重试或创建恢复 | 空态与失败可见，打开失败保留片库；显式重试刷新列表，保留既有打开错误诊断 | 原应用错误、重试与删除确认边界保持；欢迎页不创建第二份可写数据 | 通过：`emptyLibraryDisablesOpening` 验证空列表仍可创建且不可打开；`failedOpeningKeepsWelcomeAndRetryRefreshesSelection` 在原生存储删除目标后验证实际打开失败、首页／WebView 保持、AX 重试移除陈旧行且禁用打开、新建恢复进入新项目。列表读取失败未新增故障注入，沿既有回归和入口结构复核 |
+| N65 | 小窗口／浅深外观→显示品牌、按钮与列表 | 品牌使用现有 app 图标和实际版本；布局受限居中，系统绘制按钮与选中颜色 | 系统语义样式拥有外观适配；原窗口关闭沿退出保存协调，无新增关闭旁路 | 通过：960 × 600 pt 窗口的浅／深实际 AX 按钮均满足 28 × 28 pt 目标下限、名称／help／启用语义；现有真实 bundle 图标回归通过。浅色独立窗口目验品牌与版本 0.1.0、圆角面板、灰色非激活／蓝色激活选中行及文字图标；深色完整目验、VoiceOver、增强对比度／减少透明度保留人工验收缺口 |
+
+磁盘格式、网络、并发服务和投影乱序处理未变，沿既有回归，不扩展相关组合。本次不增加 Xcode 的仓库克隆或外部项目导入能力。
+
+最小回归先红：旧首页不存在“打开项目”，三个新增入口／选择回归均在实际 AX 元素查找处失败（8 tests／1 suite，退出 65）；实现后选择和菜单回归通过。列表采用 [SwiftUI 选择主操作接口](https://developer.apple.com/documentation/swiftui/view/contextmenu(forselectiontype:menu:primaryaction:))，由系统处理 Return 与双击。直接构造鼠标事件或调用 table 的 double-action target 未能提供真实点击行，因此未保留为自动双击验收；已用 Computer Use 的实际鼠标点击完成上述独立窗口派发复核。临时窗口等待和捕获代码已删除；ScreenCaptureKit 捕获因测试宿主缺少 TCC 权限失败，未改动权限，目验使用现有 Computer Use 截图能力，不保存一次性截图。
+
+列表重试沿既有 `App` owner 刷新项目摘要，不清除已有打开错误；该诊断保持可见，新建可恢复进入编辑页，本次没有扩大到改变错误恢复合同。当前布局与接口已同步到 [UI 设计 §12.1](ui-design.md#121-界面与状态职责)。
+
+仓库根目录以 Node 24.18.0、Xcode 27.0／macOS SDK 27.0 执行原生路由 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`：大小检查通过（685 个维护文件／65 个显式排除项）、生产画布及显式夹具构建通过（生产 389 模块）；默认并行 149 tests／40 suites 中欢迎页新增回归全部通过，仅复现已记录的 `hostedApplicationWindowHasExitDelegate` 超时。相同 Xcode 命令追加 `-parallel-testing-enabled NO`，149 tests／40 suites 全通过；未认定默认并行隔离问题已修复。Vite 大 chunk 提示及既有 WebKit／系统服务和 SwiftUI 布局诊断未阻止串行检查。
+
+`npx prettier --check docs/ui-design.md docs/swiftui-react-flow-feature-parity.md` 和 `git diff --check` 通过；文档无独立自动语义检查，已对照实现、矩阵、历史记录及链接结构化复核。修改后的生产视图 287 行，测试文件均低于上限，新增／实质修改的执行单元均小于 80 代码行。一次性构建、生成画布、截图等待与捕获代码已清理，并恢复任务前已有构建产物。前端／Rust 产品代码未改，未运行其全量路由、覆盖率、SonarQube 或 PR CI；本次未提交或推送。
+
+## 欢迎卡片与 Xcode 尺寸对齐：状态与不变量（2026-10-07）
+
+所有者补充五项差异：隐藏首页原生窗口栏、卡片左上角关闭按钮、每行项目 logo、持续蓝色选择、固定窗口及更大的按钮。截图元数据表明 Xcode 为 144 DPI，960 × 1264 px 对应 480 × 632 pt；按钮 215 × 75 px 对应 107.5 × 37.5 pt。PlotWeave 对照截图为 72 DPI。所有者已确认采用上述实际布局点尺寸；此节矩阵先于生产代码修改记录。此节覆盖 N65 的旧窗口、控件尺寸及非激活选中颜色，N61–N64 的业务边界保留。首次同窗收缩方案在真实编辑→首页回归中触发 `SplitViewChildController`／`NSHostingView` 约束更新循环；所有者补充的 14:03 崩溃日志与该测试进程一致。替代方案先确定独立欢迎窗口、保留原编辑窗口与画布挂载、关闭转交原保存流程，再实现。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证与当前缺口 |
+| --- | --- | --- | --- | --- |
+| N66 | 启动／加载→首页；编辑→首页→编辑或设置 | 独立首页外框固定 480 × 632 pt，无可见系统标题栏、红绿灯或缩放；离开首页重新显示原编辑窗口，大小与能力保持 | 适配器不主动缩放原窗口；系统可重排隐藏窗口工具栏高度，回编辑恢复原外框；`NativeShellRoot` 保留同一挂载、WebView、文档与侧栏偏好 | 通过：`welcomeWindowIsFixedAndHidesStandardChrome` 与 `removingWelcomeRestoresWindowConfiguration` 检查实际样式／几何；真实首页／设置两次往返验证磁盘稿件、同一 WebView、原编辑窗口尺寸。已验证欢迎窗口禁止全屏；原全屏编辑窗口退出后的实际动画事件顺序未验证，保留公开通知 guard 的结构复核 |
+| N67 | 欢迎卡片先成为主窗口→应用退出委托后订阅→关闭；监听未注册／冲刷中／失败／批准 | 关闭前重新报告当前画布已挂接，欢迎窗口将正常关闭转交原窗口；批准前卡片保留，失败可显式重试，原窗口批准关闭后才清理卡片 | 关闭按钮调用自身 `performClose`；卡片委托报告当前原窗口并调用其 `performClose`，原应用委托和 Web 保存 owner 继续拥有批准，无画布 `close()` 旁路 | 通过：`closeWaitsForListenerAndApproval` 在卡片先成为主窗口、退出委托后订阅的顺序下激活实际 AX 关闭按钮，未注册时批准失败、注册后再次关闭仍等待、最终批准关闭两个窗口；`customCloseHonorsWindowDelegate` 验证 37.5 pt 关闭目标及委托拒绝。真实存储冲刷失败沿既有退出生命周期回归 |
+| N68 | 有序项目列表→单击、重排、移除、窗口失活／恢复 | 每项有现有 PlotWeave 图标；按不可变 ID 选择；选中蓝色背景和对应文字保持可读 | 图片仅呈现，不代替项目身份；只读投影、菜单确认和打开 guard 保持；本地 NSTableView 只禁用额外系统选择底板，不修改选择语义 | 通过：原列表身份回归；Computer Use 在隔离临时项目根目验品牌、项目 logo、浅／深外观及持续蓝色，浅色失活／激活均可读、单击第二行仅改变 AX 选择；不增加颜色实现镜像测试 |
+| N69 | 初始／已加载／空态／busy→按钮或键盘 | 两按钮均为 107.5 × 37.5 pt，创建与打开原动作、禁用、帮助及 ⌘N 不变；回车继续打开 | 尺寸来自截图点／像素合同，控件呈现不拥有新业务动作或可写文档 | 通过：`creationHasAccessiblePrimaryPresentation` 浅／深实际 AX 几何及帮助语义、空态／loading 禁用、同名 ⌘N 菜单；`selectedWelcomeProjectOpensWithoutCreatingAnother` 的 AX 按钮／回车验证原项目与磁盘图；延迟真实创建验证 busy 禁用及只新增一个项目 |
+| N70 | 页面或存储错误→卡片内重试／创建恢复；卡片→其他路由→快速返回 | 固定卡片保留诊断和显式恢复；旧窗口观察不能关闭或显示另一挂载窗口 | 页面错误、顺序与恢复由既有 owner 处理；欢迎窗口通知及关闭转交绑定当前原窗口 | 通过：实际打开失败、AX 重试和创建恢复；`rapidPresentationChangesRestoreOnlyTheirOwnWindow` 验证请求合并、替换挂载恢复各自外框及输入属性、旧窗口关闭通知无影响；移除根视图清理卡片。VoiceOver、增强对比度／减少透明度保留人工验收 |
+| N71 | 首页控件夹具→浅／深外观、加载／空态／列表与关闭；真实编辑器→首页→编辑 | 所有直接渲染首页的测试只有 480 × 632 pt 外框；编辑器的较大尺寸只验证隐藏原窗口及返回后的恢复 | 首页几何由 N66 的唯一尺寸合同约束；测试不能用旧 960 × 600／1000 × 700 首页掩盖固定卡片内的问题；编辑器尺寸与单一画布会话保留 | 通过：`welcomeControlsUseOnlyReferenceGeometry` 在旧夹具上先有 5 项预期失败，统一后控件／窗口／导航 20 tests／3 suites 通过；浅深实际 AX 控件都在同一固定外框内，完整串行 155 tests／41 suites 通过 |
+
+本次不改磁盘格式、IPC 或保存批准合同。欢迎窗口采用公开 AppKit 全尺寸内容与隐藏标准按钮，保留可关闭的有标题身份以维持键盘焦点及系统圆角；关闭转交当前原画布窗口的现有退出委托。原窗口保持有序但透明、禁用鼠标并从辅助功能树隐藏，保留 WebKit 首次 viewport／布局回调；直接 `orderOut` 曾导致启动画布未就绪，未采用该方案。离开首页恢复原透明度、鼠标和辅助功能属性。
+
+最小窗口／关闭回归先红（12 tests／2 suites、14 项预期失败），实现后通过；晚订阅关闭回归随后先红（4 tests／1 suite、5 项预期失败），补当前画布挂接报告后通过。保存、项目身份和失败恢复测试使用隔离服务目录与实际 AX 控件；外观核对的临时项目／窗口等待代码在全量验证前删除。
+
+最终验证在仓库根目录、Node 24.18.0、Xcode 27.0／macOS SDK 27.0、macOS 27.0.1 上执行原生路由：`npm run check:size` 通过（687 个维护文件／65 个显式排除项）；`npm run build:native-canvas` 通过，生产 389 模块与显式测试夹具均已生成。`xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test` 最终默认并行 154 tests／41 suites 中本次首页、窗口及关闭回归全部通过，仅复现已记录的 `hostedApplicationWindowHasExitDelegate` 超时与 `explicitNodeRequestsReopenTheSameNativeInspector` 断言失败。相同命令追加 `-parallel-testing-enabled NO`，154 tests／41 suites 全通过；这次约束循环崩溃未再复现。此前新增关闭夹具在异步 AX 查找期间订阅了其他并行窗口，已将查找放到注册之前，注册到关闭之间不再让出调度；最终并行中该回归通过，不据此认定整个进程的窗口隔离问题已修复。
+
+日志保留在 `/private/tmp/plotweave-welcome-card-c5k1aveu/`：`full-default-final.log`、`full-serial-final.log`、`canvas-build.log`；聚焦与外观核对沿同目录 `visual3.log`、`visual5.log`。Vite 大 chunk 提示及既有 WebKit／系统服务、SwiftUI 布局诊断未阻止串行检查。`npx prettier --check docs/ui-design.md docs/swiftui-react-flow-feature-parity.md` 与 `git diff --check` 通过；文档无独立自动语义检查，已结构化复核 N66–N70、UI §3.1／§12.1、历史覆盖关系及交叉引用。主页／窗口生产文件分别为 347／232 行，改动执行单元均小于 80 代码行，测试文件低于 1800 行。临时等待代码及本次生成的画布／构建产物已清理，恢复任务前已有产物。前端／Rust 产品代码未改，未运行其全量路由、覆盖率、SonarQube 或 PR CI；本次未提交或推送。全屏编辑→首页的实际系统动画、VoiceOver、增强对比度／减少透明度仍需人工验收，因此本记录不构成“完全符合 Apple 全部设计标准”的认证。
+
+### 首页测试尺寸统一与阶段性提交（2026-10-07）
+
+所有者要求首页测试只使用 Xcode 欢迎页的唯一尺寸并阶段性提交。直接渲染 `NativeHomeView` 的夹具已统一为 480 × 632 pt 外框、全尺寸内容及隐藏标题控件，移除旧 1000 × 700 初始窗口和 960 × 600 浅深测试覆写。浅深外观、加载／空态、选择、菜单和关闭都复用该夹具；两按钮保持 107.5 × 37.5 pt。`NativeWelcomeWindowTests` 的较大原窗口仅用于编辑器恢复，不再代表另一种首页尺寸，替换原窗口后也断言欢迎卡片仍为 480 × 632 pt。
+
+N71 最小回归先红：1 test／1 suite、5 项预期失败，日志 `/private/tmp/plotweave-welcome-size-red.log`。统一后聚焦 20 tests／3 suites 全通过。关闭协议夹具延迟设置公开的原画布标记，直到卡片 AX 控件就绪才注册退出委托；避免其他套件在该就绪等待期间把它绑定成自己的画布。它验证实际窗口关闭、监听握手、拒绝与批准；真实 WKWebView／存储链继续由 N66／N69／N70 的生产导航与既有生命周期测试覆盖。
+
+仓库根目录按 Node 24.18.0、Xcode 27.0／SDK 27.0 执行 `npm run check:size && npm run build:native-canvas` 通过（687 维护文件／65 排除项、生产 389 模块与显式夹具）；`npm test -- scripts` 在沙箱外 15 文件／314 tests 全通过。相同完整原生路由默认并行 155 tests／41 suites 中本次欢迎页／关闭／导航回归均通过，仅有已记录的窗口退出委托超时与检查器断言失败；追加 `-parallel-testing-enabled NO` 后 155 tests／41 suites 全通过。日志目录 `/private/tmp/plotweave-welcome-checkpoint-j0nm7xvg/`，文件为 `native-focused.log`、`native-full-default-final.log`、`native-full-serial.log`、`script-tests.log` 和 `canvas-build.log`。本轮不声称修复整体 AppKit 并行隔离，人工验收缺口沿 N66–N70 保留。
+
+主页／窗口生产文件为 348／251 行，修改后的控件／窗口测试为 220／130 行，均低于文件上限，新增或实质修改的执行单元均低于 80 代码行；无配置的自动复杂度工具，已复核单元跨度和嵌套。阶段性提交包含欢迎页、保存协调的崩溃修复、唯一尺寸测试及其应用图标打包依赖；版本化 Git 钩子必须完成静态检查、最新前端／Rust 覆盖率（各 ≥80%）、SonarQube Quality Gate `OK` 和新代码未解决问题为零后才能创建提交。此轮文档复核覆盖 N71 与既有矩阵的关系、图标依赖和 UI §12.1；临时验证产物按任务前备份恢复。
 
 ## 差异与实施范围
 

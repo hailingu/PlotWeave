@@ -6,7 +6,7 @@ import Testing
 @MainActor
 enum NativeCreationControlFixture {
     /// A unique title selects only the disposable fixture window, excluding the hosted application's main window.
-    static func button(in window: NSWindow) async throws -> AXUIElement {
+    static func button(in window: NSWindow, named name: String = "新建短剧") async throws -> AXUIElement {
         window.title = "创建控件回归-" + UUID().uuidString
         let application = AXUIElementCreateApplication(getpid())
         _ = attribute(application, kAXWindowsAttribute)
@@ -15,7 +15,7 @@ enum NativeCreationControlFixture {
         let owned = try #require(windows.first { string($0, kAXTitleAttribute) == window.title })
         return try #require(descendants(owned).first {
             string($0, kAXRoleAttribute) == kAXButtonRole
-                && (string($0, kAXTitleAttribute) == "新建短剧" || string($0, kAXDescriptionAttribute) == "新建短剧")
+                && (string($0, kAXTitleAttribute) == name || string($0, kAXDescriptionAttribute) == name)
         })
     }
 

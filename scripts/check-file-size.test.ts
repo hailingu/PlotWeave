@@ -927,23 +927,26 @@ it('仅存在于有效索引的未分类文件同样 fail-closed（#466）', () 
   expect(rejected.stderr).toContain('scripts/probe-tool')
 })
 
-it('登记的排除类别不计行数，但在完成记录的 excluded 计数中可见（#466）', () => {
-  const root = checkerFixture()
-  write(root, 'src/icon.png', '\n'.repeat(2000))
-  const result = runChecker(root)
-  expect(result.status).toBe(0)
-  const records = result.stdout
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  expect(records).toContainEqual(
-    expect.objectContaining({
-      code: 'SIZE_CHECK_COMPLETE',
-      excluded: 2,
-      passed: true,
-    }),
-  )
-})
+it.each(['src/icon.png', 'native/macos/Info.plist'])(
+  '登记的排除类别 %s 不计行数，但在完成记录的 excluded 计数中可见（#466）',
+  (path) => {
+    const root = checkerFixture()
+    write(root, path, '\n'.repeat(2000))
+    const result = runChecker(root)
+    expect(result.status).toBe(0)
+    const records = result.stdout
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        code: 'SIZE_CHECK_COMPLETE',
+        excluded: 2,
+        passed: true,
+      }),
+    )
+  },
+)
 
 it.each([
   'crates/plotweave-core/src/example.rs',

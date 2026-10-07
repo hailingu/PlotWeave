@@ -7,6 +7,8 @@ struct NativeShellRoot: View {
     @State private var layout: ShellLayoutState
     @State private var appearance: CanvasAppearanceState
     @State private var application: NativeApplicationState
+    /// Welcome presentation retains the editor while forwarding normal closing to its save owner.
+    @State private var windowPresentation: NativeWelcomeWindowController
 
     /// Injected services isolate integration fixtures from production and Tauri application data.
     init(
@@ -14,13 +16,15 @@ struct NativeShellRoot: View {
         appearance: CanvasAppearanceState = CanvasAppearanceState(),
         demoMode: Bool = false,
         services: NativeHostServices? = nil,
-        application: NativeApplicationState = NativeApplicationState()
+        application: NativeApplicationState = NativeApplicationState(),
+        windowPresentation: NativeWelcomeWindowController = NativeWelcomeWindowController()
     ) {
         self.demoMode = demoMode
         self.services = services
         _layout = State(initialValue: layout)
         _appearance = State(initialValue: appearance)
         _application = State(initialValue: application)
+        _windowPresentation = State(initialValue: windowPresentation)
     }
 
     var body: some View {
@@ -62,6 +66,8 @@ struct NativeShellRoot: View {
             NativeLibrarySheet(state: application, services: services ?? .shared)
         }
         .frame(minWidth: 960, minHeight: 600)
+        .background(NativeWelcomeWindow(isWelcome: welcomeAvailable, state: application, controller: windowPresentation)
+            .frame(width: 0, height: 0))
         .task { appearance.startObserving() }
         .onDisappear { appearance.stopObserving() }
     }
@@ -88,5 +94,8 @@ struct NativeShellRoot: View {
     private var editorPanelsAvailable: Bool {
         demoMode || (application.route == "editor" && application.projectId != nil)
     }
+
+    /// Initial loading uses the same welcome geometry; isolated editor fixtures keep their existing window contract.
+    private var welcomeAvailable: Bool { !demoMode && ["loading", "home"].contains(application.route) }
 
 }

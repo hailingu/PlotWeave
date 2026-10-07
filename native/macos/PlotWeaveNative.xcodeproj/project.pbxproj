@@ -6,6 +6,10 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		1000000000000000000000F2 /* ../../src-tauri/icons/icon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000000F1 /* ../../src-tauri/icons/icon.icns */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		1000000000000000000000E2 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -19,6 +23,8 @@
 /* Begin PBXFileReference section */
 		1000000000000000000000A4 /* PlotWeaveNative.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PlotWeaveNative.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1000000000000000000000A5 /* PlotWeaveNativeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PlotWeaveNativeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1000000000000000000000F1 /* ../../src-tauri/icons/icon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = "../../src-tauri/icons/icon.icns"; sourceTree = SOURCE_ROOT; };
+		1000000000000000000000F3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -48,6 +54,8 @@
 			children = (
 				1000000000000000000000A6 /* App */,
 				1000000000000000000000A7 /* Tests */,
+				1000000000000000000000F1 /* ../../src-tauri/icons/icon.icns */,
+				1000000000000000000000F3 /* Info.plist */,
 				1000000000000000000000A3 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -145,6 +153,7 @@
 		1000000000000000000000D3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				1000000000000000000000F2 /* ../../src-tauri/icons/icon.icns in Resources */,
 			);
 		};
 		1000000000000000000000D6 /* Resources */ = {
@@ -265,6 +274,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PlotWeave;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -292,6 +302,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_PREVIEWS = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PlotWeave;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				LD_RUNPATH_SEARCH_PATHS = (

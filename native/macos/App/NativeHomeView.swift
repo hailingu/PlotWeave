@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Project metadata for native navigation; this projection never owns a writable document.
@@ -42,13 +43,17 @@ struct NativeHomeProjection {
     func contains(id: String) -> Bool { projects.contains { $0.id == id } }
 }
 
-/// Native homepage with actual project navigation; only confirmation drafts live locally.
+/// A native welcome page keeps project selection local and navigation with the existing application owner.
 struct NativeHomeView: View {
     /// The application state receives every mutation, retaining the authoritative save coordination.
     @Bindable var state: NativeApplicationState
     /// Presentation-only state never changes persisted project metadata by itself.
     @State private var renameTarget: NativeProjectProjection?
     @State private var deleteTarget: NativeProjectProjection?
+    /// Selection is an ephemeral persisted ID, never a list offset or a writable project copy.
+    @State private var selectedId: String?
+    /// Only the first completed load may choose a default; later refreshes cannot retarget a removed selection.
+    @State private var selectionInitialized = false
 
     /// Recomputes readiness from the latest projection, including actions completing while a sheet is open.
     private var home: NativeHomeProjection { NativeHomeProjection(state.app) }
@@ -58,19 +63,24 @@ struct NativeHomeView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            header
+            branding
+            actions
             if let error = state.error ?? home.error {
                 failure(error)
             }
-            if home.loading {
-                ProgressView("正在加载项目…").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if home.projects.isEmpty {
-                emptyList
-            } else {
-                projectList
-            }
+            library
         }
-        .padding(24)
+        .frame(width: 360)
+        .padding(.top, 64).padding(.bottom, 60)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .overlay(alignment: .topLeading) {
+            NativeWelcomeCloseButton(enabled: !state.busy)
+                .frame(width: NativeWelcomeMetrics.closeDiameter, height: NativeWelcomeMetrics.closeDiameter)
+                .padding(20)
+        }
+        .onChange(of: home.projects, initial: true) { _, _ in synchronizeSelection() }
+        .onChange(of: home.loading) { _, _ in synchronizeSelection() }
         .sheet(item: $renameTarget) { project in
             NativeProjectRenameForm(project: project, disabled: !enabled) { renameTarget = nil } submit: { name in
                 guard enabled, home.contains(id: project.id) else { renameTarget = nil; return }
@@ -94,25 +104,54 @@ struct NativeHomeView: View {
         Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })
     }
 
-    /// The project-library header offers project creation while app settings stay in the standard app menu.
-    private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("项目片库").font(.largeTitle.bold())
-                Text("选择一部短剧继续创作").foregroundStyle(.secondary)
+    /// Branding reuses the system application icon and actual bundle version instead of a reference-app asset.
+    private var branding: some View {
+        VStack(spacing: 4) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable().scaledToFit().frame(width: 120, height: 120)
+                .clipShape(RoundedRectangle(cornerRadius: 24))
+                .accessibilityHidden(true)
+            VStack(spacing: 4) {
+                Text("PlotWeave").font(.title2.bold())
+                if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+                    Text("版本 \(version)").font(.body).foregroundStyle(.secondary)
+                }
             }
-            Spacer()
-            NativeProjectCreationButton(state: state)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .help("新建短剧（⌘N）")
         }
+    }
+
+    /// Rounded system controls expose only the app's existing open and create capabilities.
+    private var actions: some View {
+        HStack(spacing: 16) {
+            Button("打开项目") { if let selectedId { open(selectedId) } }
+                .disabled(!enabled || selectedId == nil || !home.contains(id: selectedId ?? ""))
+                .help("打开选中的短剧；也可双击项目或按回车")
+            NativeProjectCreationButton(state: state)
+                .help("新建短剧（⌘N）")
+        }.buttonStyle(NativeWelcomeActionStyle())
+    }
+
+    /// Loading and empty states occupy the same rounded recent-project surface as a populated library.
+    private var library: some View {
+        Group {
+            if home.loading {
+                ProgressView("正在加载项目…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if home.projects.isEmpty {
+                emptyList
+            } else {
+                projectList
+            }
+        }
+        .frame(minHeight: 180, maxHeight: 278)
+        .background(.quinary, in: RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
     /// List failures stay observable and a retry is an explicit application action.
     private func failure(_ message: String) -> some View {
         HStack {
-            Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.red).textSelection(.enabled)
+            Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+                .lineLimit(3).help(message).textSelection(.enabled)
             Spacer()
             Button("重试") { state.send("app.retry") }.disabled(state.busy)
         }
@@ -128,22 +167,63 @@ struct NativeHomeView: View {
 
     /// Every action carries an immutable project ID; a dirty placeholder can still be opened for its diagnostic.
     private var projectList: some View {
-        List(home.projects) { project in
-            HStack(spacing: 12) {
-                Button { state.send("app.open", args: ["id": .string(project.id)]) } label: {
-                    NativeProjectRow(project: project)
-                }.buttonStyle(.plain).disabled(!enabled)
-                Spacer()
-                Menu {
-                    Button("重命名") { renameTarget = project }
-                    Button("复制") { state.send("app.duplicate", args: ["id": .string(project.id)]) }
-                    Divider()
-                    Button("删除", role: .destructive) { deleteTarget = project }
-                } label: { Image(systemName: "ellipsis") }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden)
-                    .accessibilityLabel("项目操作").frame(width: 28).disabled(!enabled)
-            }.padding(.vertical, 8)
-        }.listStyle(.inset)
+        List(selection: $selectedId) {
+            ForEach(home.projects) { project in
+                HStack(spacing: 12) {
+                    NativeProjectRow(project: project, selected: selectedId == project.id)
+                    projectMenu(project)
+                }
+                .background(NativeWelcomeSelectionPresentation().frame(width: 0, height: 0))
+                .padding(12)
+                .foregroundStyle(selectedId == project.id ? Color(nsColor: .alternateSelectedControlTextColor) : .primary)
+                .background {
+                    if selectedId == project.id {
+                        RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .selectedContentBackgroundColor))
+                    }
+                }
+                .tag(project.id).listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets())
+            }
+        }
+        .listStyle(.plain).scrollContentBackground(.hidden).disabled(!enabled)
+        .padding(.vertical, 8)
+        .accessibilityLabel("项目片库")
+        .contextMenu(forSelectionType: String.self) { ids in
+            if let id = ids.first {
+                Button("打开项目") { open(id) }.disabled(!enabled || !home.contains(id: id))
+            }
+        } primaryAction: { ids in
+            if let id = ids.first { open(id) }
+        }
+    }
+
+    /// Menu confirmations retain their original immutable target independently of the selected row.
+    private func projectMenu(_ project: NativeProjectProjection) -> some View {
+        Menu {
+            Button("重命名") { renameTarget = project }
+            Button("复制") { state.send("app.duplicate", args: ["id": .string(project.id)]) }
+            Divider()
+            Button("删除", role: .destructive) { deleteTarget = project }
+        } label: { Image(systemName: "ellipsis") }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .accessibilityLabel("项目操作").frame(width: 28).disabled(!enabled)
+    }
+
+    /// The first completed library selects its first project; later removal clears rather than retargets selection.
+    private func synchronizeSelection() {
+        guard !home.loading else { return }
+        if !selectionInitialized {
+            selectedId = home.projects.first?.id
+            selectionInitialized = true
+        } else if let selectedId, !home.contains(id: selectedId) {
+            self.selectedId = nil
+        }
+    }
+
+    /// Button, double-click and Return share one live readiness and identity boundary before opening.
+    private func open(_ id: String) {
+        guard enabled, home.contains(id: id) else { return }
+        state.send("app.open", args: ["id": .string(id)])
     }
 }
 
@@ -160,23 +240,71 @@ struct NativeProjectCreationButton: View {
 
 /// Metadata presentation avoids claiming valid timestamps or counts for unreadable project placeholders.
 private struct NativeProjectRow: View {
-    /// Captured metadata is read-only and its ID stays with the action button.
+    /// Captured metadata is read-only; the selected system foreground remains legible under the blue highlight.
     let project: NativeProjectProjection
+    /// Selection changes presentation without introducing a row-local navigation owner.
+    let selected: Bool
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: project.error == nil ? "film.stack" : "exclamationmark.triangle")
-                .font(.title2).foregroundStyle(project.error == nil ? Color.accentColor : .orange)
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable().scaledToFit().frame(width: 24, height: 24)
+                .clipShape(RoundedRectangle(cornerRadius: 5)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(project.name).font(.headline)
                 if let error = project.error {
-                    Text(error).font(.caption).foregroundStyle(.orange)
+                    Label(error, systemImage: "exclamationmark.triangle").font(.caption)
+                        .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.orange))
                 } else if let timestamp = project.updatedAt,
                           let date = ISO8601DateFormatter().date(from: timestamp) {
-                    Text(date, style: .relative).font(.caption).foregroundStyle(.secondary)
+                    Text(date, style: .relative).font(.caption)
+                        .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 }
             }
         }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+    }
+}
+
+/// Welcome actions match the reference's point dimensions while retaining real SwiftUI button semantics.
+private struct NativeWelcomeActionStyle: ButtonStyle {
+    /// Disabled presentation follows the controls' shared loading and in-flight boundary.
+    @Environment(\.isEnabled) private var enabled
+
+    /// Explicit capsule geometry avoids the varying intrinsic padding of toolbar/menu controls.
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.body)
+            .frame(width: NativeWelcomeMetrics.actionSize.width, height: NativeWelcomeMetrics.actionSize.height)
+            .background(.quaternary, in: Capsule())
+            .brightness(configuration.isPressed ? -0.06 : 0)
+            .opacity(enabled ? 1 : 0.5)
+            .contentShape(Capsule())
+    }
+}
+
+/// The welcome row draws its own persistent blue highlight while the native list retains selection and keyboard behavior.
+private struct NativeWelcomeSelectionPresentation: NSViewRepresentable {
+    /// Each row anchor styles only its enclosing native table, without global appearance changes.
+    func makeNSView(context: Context) -> NativeWelcomeSelectionAnchor { NativeWelcomeSelectionAnchor() }
+
+    /// SwiftUI row updates keep its system selection platter from showing outside the custom rounded highlight.
+    func updateNSView(_ view: NativeWelcomeSelectionAnchor, context: Context) { view.updateHighlight() }
+}
+
+/// A zero-sized presentation anchor leaves hit testing and accessibility with the actual list row.
+private final class NativeWelcomeSelectionAnchor: NSView {
+    /// Styling waits for the real native table hierarchy rather than relying on private SwiftUI view types.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateHighlight()
+    }
+
+    /// Native selection state stays intact; only its additional background drawing is disabled.
+    func updateHighlight() {
+        var ancestor = superview
+        while let view = ancestor {
+            if let table = view as? NSTableView { table.selectionHighlightStyle = .none; return }
+            ancestor = view.superview
+        }
     }
 }
 

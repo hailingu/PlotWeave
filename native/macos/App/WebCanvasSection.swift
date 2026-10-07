@@ -37,7 +37,7 @@ struct WebCanvasSection: View {
             .accessibilityHidden(!canvasPresented)
             if !demoMode, state.phase == .ready, let application {
                 switch application.route {
-                case "home": NativeHomeView(state: application)
+                case "home": EmptyView() // The separate native welcome window presents this read-only route.
                 case "settings": NativeSettingsView(state: application)
                 default: EmptyView()
                 }

@@ -42,6 +42,7 @@ const excludedSuffixes = new Set([
   'icns',
   'ico',
   'xml',
+  'plist',
   'json',
   'toml',
   'lock',
