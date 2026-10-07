@@ -40,22 +40,23 @@ struct NativeShellRoot: View {
             )
         ) {
             NativeNavigationView(state: application, demoMode: demoMode)
-                .toolbar(removing: editorPanelsAvailable ? nil : .sidebarToggle)
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             WebCanvasSection(
                 appearance: appearance, demoMode: demoMode,
                 application: application, services: services
             )
         }
+        .toolbar { NativeEditorToolbar(state: application, layout: layout) }
         .inspector(isPresented: editorPanelsAvailable ? $layout.inspectorVisible : .constant(false)) {
             NativeInspectorView(state: application)
                 .inspectorColumnWidth(min: 300, ideal: 360, max: 640)
+                .toolbar { NativeInspectorToolbar(state: application, layout: layout) }
         }
         .navigationTitle(application.projectName)
         .onChange(of: application.projection) { previous, current in
             revealRequestedNodeInspector(previous: previous, current: current)
         }
-        .toolbar { NativeEditorToolbar(state: application, layout: layout) }
         .sheet(isPresented: $application.exportVisible) {
             NativeExportView(state: application, services: services ?? .shared, projectId: application.projectId ?? "")
         }
@@ -68,6 +69,13 @@ struct NativeShellRoot: View {
         .frame(minWidth: 960, minHeight: 600)
         .background(NativeWelcomeWindow(isWelcome: welcomeAvailable, state: application, controller: windowPresentation)
             .frame(width: 0, height: 0))
+        .background(NativeSidebarTitlebar(layout: layout, available: editorPanelsAvailable, expanded: layout.sidebarVisible)
+            .frame(width: 0, height: 0))
+        .transaction(value: editorPanelsAvailable) { transaction in
+            // Route restoration lays out both columns once; user panel toggles retain their normal transaction.
+            transaction.disablesAnimations = true
+            transaction.animation = nil
+        }
         .task { appearance.startObserving() }
         .onDisappear { appearance.stopObserving() }
     }

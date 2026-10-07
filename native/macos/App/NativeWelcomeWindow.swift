@@ -85,6 +85,8 @@ final class NativeWelcomeWindowController: NSObject, NSWindowDelegate {
     private var writerIgnoresMouse = false
     /// The hidden writer's accessibility state is restored together with its input state.
     private var writerAccessibilityHidden = false
+    /// Only the project's red title control returns home; normal welcome close retains its exit approval.
+    private let projectClosing = NativeProjectWindowCloseController()
 
     /// Coalesces attachment and routes outside SwiftUI's current constraint pass.
     func update(window next: NSWindow?, isWelcome: Bool, state: NativeApplicationState? = nil) {
@@ -113,6 +115,7 @@ final class NativeWelcomeWindowController: NSObject, NSWindowDelegate {
             stopObserving()
             window = requestedWindow
         }
+        projectClosing.update(window: window, state: state)
         guard isWelcome, let window, let state else {
             dismiss(restoreWriter: true)
             stopObserving()

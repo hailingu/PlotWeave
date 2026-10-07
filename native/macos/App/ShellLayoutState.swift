@@ -4,7 +4,7 @@ import Observation
 /// shell itself toggles.
 ///
 /// The inspector is toggled by the shell toolbar; `sidebarVisible` drives
-/// the split view's column visibility so the system navigation toggle and
+/// the split view's column visibility so the native outline toggle and
 /// tests share one source. The retained canvas reads no panel preference —
 /// panel changes must not rebuild the hosted web view (plan §4.2).
 @Observable

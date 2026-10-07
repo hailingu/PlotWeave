@@ -59,10 +59,15 @@ struct ShellWebCanvasLifecycleTests {
 
         layout.toggleInspector()
         try await settle()
-        layout.sidebarVisible = false
+        let expandedCanvasWidth = webView.bounds.width
+        try NativeSidebarControlFixture.press(in: window)
         try await settle()
-        layout.sidebarVisible = true
+        #expect(!layout.sidebarVisible)
+        #expect(webView.bounds.width > expandedCanvasWidth, "折叠实际侧栏必须释放画布宽度")
+        try NativeSidebarControlFixture.press(in: window)
         try await settle()
+        #expect(layout.sidebarVisible)
+        #expect(abs(webView.bounds.width - expandedCanvasWidth) < 1, "重新展开恢复原画布宽度")
 
         #expect(ObjectIdentifier(try await waitForWebView(in: window)) == identity)
         let probe = try await webView.evaluateJavaScript(

@@ -19,17 +19,16 @@ struct NativeProjectLibraryNavigationTests {
         #expect(!labels.contains("返回项目片库"))
     }
 
-    /// The editor's system button identifies its actual destination and provides matching hover help.
-    @Test func editorReturnButtonNamesItsDestination() async throws {
+    /// The owner removed the redundant Home button while retaining the existing menu command (N75).
+    @Test func editorToolbarHasNoHomeButton() async throws {
         let window = try makeWindow(route: "editor")
         defer { window.close(); window.contentView = nil }
         try await Task.sleep(for: .milliseconds(300))
         let toolbar = try #require(window.toolbar)
-        let item = try #require(flattened(toolbar.items).first { $0.label == "返回项目片库" })
-        #expect(item.toolTip == "返回项目片库")
+        #expect(!flattened(toolbar.items).contains { $0.label == "返回项目片库" || $0.label == "首页" })
     }
 
-    /// The real app menu exposes the toolbar command while hosted tests keep its app owner unavailable.
+    /// The real app menu retains the return command while hosted tests keep its app owner unavailable.
     @Test func menuBarExposesProjectLibraryReturn() throws {
         let menu = try #require(NSApp.mainMenu)
         let item = try #require(menuItems(menu).first { $0.title == "返回项目片库" })
@@ -44,7 +43,7 @@ struct NativeProjectLibraryNavigationTests {
         let window = try makeWindow(route: "editor", state: state)
         defer { window.close(); window.contentView = nil }
         try await Task.sleep(for: .milliseconds(300))
-        try ProjectLibraryToolbarFixture.activateReturn(in: window)
+        state.send("app.home")
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while state.error == nil && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(state.error != nil)
@@ -89,29 +88,5 @@ struct NativeProjectLibraryNavigationTests {
     /// Searches actual menu semantics rather than source strings or command-builder implementation details.
     private func menuItems(_ menu: NSMenu) -> [NSMenuItem] {
         menu.items.flatMap { [$0] + ($0.submenu.map(menuItems) ?? []) }
-    }
-}
-
-/// Sends pointer events to the production toolbar surface without assuming a SwiftUI button's private type.
-@MainActor
-enum ProjectLibraryToolbarFixture {
-    /// The actual hosted control receives down/up events at its center and owns navigation dispatch.
-    static func activateReturn(in window: NSWindow) throws {
-        let toolbar = try #require(window.toolbar)
-        let item = try #require(toolbar.items.first { $0.label == "返回项目片库" })
-        let view = try #require(item.view)
-        let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
-        let down = try #require(NSEvent.mouseEvent(
-            with: .leftMouseDown, location: point, modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-            context: nil, eventNumber: 1, clickCount: 1, pressure: 1
-        ))
-        let up = try #require(NSEvent.mouseEvent(
-            with: .leftMouseUp, location: point, modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-            context: nil, eventNumber: 2, clickCount: 1, pressure: 0
-        ))
-        NSApp.postEvent(up, atStart: true)
-        window.sendEvent(down)
     }
 }

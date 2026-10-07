@@ -3,8 +3,8 @@ import Testing
 
 /// Layout-visibility behavior for the P1 shell containers.
 ///
-/// The inspector toggle is the only chrome state the shell owns in this
-/// slice; the sidebar follows the system navigation-split toggle. Flip
+/// The inspector toggle and native outline control share shell-owned
+/// panel visibility with the navigation split view. Flip
 /// semantics are covered here so later slices keep the same contract when
 /// panels gain real content (`docs/swiftui-react-flow-migration-plan.md` §5
 /// P1).

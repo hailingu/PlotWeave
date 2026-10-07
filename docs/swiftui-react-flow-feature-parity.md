@@ -35,6 +35,116 @@
 
 在仓库根目录使用 Node 24.18.0、Xcode 27.0／macOS SDK 27.0，完整路由 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test` 通过：683 个维护文件、65 个显式排除项、389 个画布模块、135 tests／39 suites。聚焦检查使用同一 Xcode 命令追加 `-only-testing:PlotWeaveNativeTests/NativeHomeViewTests`，绿灯另追加 `-only-testing:PlotWeaveNativeTests/NativeFormsTests`。首次沙箱内 Xcode 被系统通知限制中断，沙箱外检查通过；现有 Vite 大 chunk 提示与 WebKit／系统服务诊断未阻断检查。文档无配置的自动语义检查，已对照实现、矩阵与章节链接结构化复核；`git diff --check` 通过。一次性构建和生成画布已清理，任务前已有产物恢复。未运行无改动的前端／Rust 全量路由、覆盖率、SonarQube 或 PR CI，未提交或推送。
 
+## 添加节点位置与打开画布稳定性（2026-10-07）
+
+所有者要求添加节点按钮保留在右侧检查器顶部左端，其余工具靠右，两组之间采用弹性空白，并消除打开项目时的画布抖动。首次位置解释为画布右端，所有者随后通过隔离核对截图明确右侧栏归属；本矩阵按最新要求更新。本轮属于源码修改及只读根因调查，沿用当前任务分支。以下矩阵在生产修改前记录；先核对页面重载、React 编辑器挂载、视口初始化及原生栏位布局的实际变化，再据证据选择修复入口。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证及当前缺口 |
+| --- | --- | --- | --- | --- |
+| N84 | 编辑页；右侧检查器展开／收起→打开添加菜单→选择节点类型；非编辑页／busy | 添加按钮位于右栏顶部左端，其余工具靠右，空白随栏宽伸缩；六类节点菜单和原禁用条件保持 | `NativeInspectorToolbar` 拥有两端排列；创建仍由 `sendEditor` 与 React 图／历史 owner 承接 | 聚焦／目验通过：`NativeInspectorToolbarTests.inspectorToolsUseAvailableColumnWidth` 验证真实工具栏位于检查器两端、按钮等高且中心一致，覆盖默认／最窄 300 pt／扩宽和收起重开。CUA 核对六类菜单与真实收展入口；busy 门禁和非编辑 route 门禁沿用原条件，未另作 busy 视觉故障注入。最新默认全量中夹具收展几何仍有失败，尚未定位 |
+| N85 | 首页→打开带保存视口的项目→首帧呈现→静置；返回首页后重开 | 同一 WK 页面，不重复挂载或重载；编辑画布首次可见后几何和已恢复视口不反复跳变 | 原生 shell 拥有栏位与呈现；React 拥有视口／节点初始化；projectId 与保存链仍拥有文档身份 | 部分通过：`ShellHomeNavigationTests.openingProjectPresentsStableCanvasGeometry(savedViewport: true)` 采集真实生产 WK 页面在编辑窗口可见、三个节点渲染后的尺寸与 transform，尺寸和保存视口不变、WebView 身份保持。下述连续动画复现先红后绿；最新完整串行发现首页宽度先显示一帧，随后恢复栏位，窗口恢复显示时序仍未修复 |
+| N86 | 无保存视口→首开；窗口或面板尺寸尚未落定→布局完成；项目打开失败／旧结果迟到 | 可见节点区域尺寸保持稳定，缺少保存视口时允许一次初始化适配，随后不重复跳变；失败保持诊断和首页，不用空文档替代 | 首开适配属于 React Flow；路由失败／乱序仍由 App owner 管理，不增加延迟重试业务动作 | 部分通过：同一稳定性回归的 `savedViewport: false` 要求尺寸不变且视口最多变化一次；生产首页打开失败／重试及旧投影拒绝回归通过。默认全量仍发现首帧尺寸变化；全屏、跨显示器和空图首开视觉保留缺口。本次不改 fit 或失败恢复 owner |
+| N87 | 已稳定编辑→调整窗口／收展面板→平移／缩放／编辑／撤销→保存→重开 | 合法交互继续更新画布和保存；修复不会冻结节点、视口或用户栏位偏好 | 同一编辑／保存 owner；原生布局变化只改变可用区域，不改文档位置或历史 | 通过：真实面板／Web 页面存活、节点属性请求、生产历史与保存回归；前端原生命令和视口持久化 33 tests 通过。正常窗口尺寸与栏宽变化由工具栏几何和生命周期回归覆盖；实时拖拽帧率、VoiceOver 与输入法视觉未另验收 |
+
+优先处理 N85／N86（P1）：开页抖动影响正常阅读及首开定位；N84 为 P2 呈现调整。WK 只在 reloadToken 改变时加载，App 编辑器 key 为不可变 projectId。真实生产页面回归先红：已渲染三个节点且编辑窗口可见时，约 0.2 秒内画布宽度依次为 649、876、930、980、1002、1004 像素，高度与 `translate(463.5px, -80px) scale(0.5)` 保持不变。该复现的抖动来自原生栏位恢复的连续布局，不能据此认定反复重载或重复 fit。仅为 `editorPanelsAvailable` 路由变化关闭事务动画，工具栏生产改动前同一回归即转绿，建立修复与几何稳定之间的因果证据；用户面板偏好变化保留正常事务。随后补入有／无保存视口两种情况：联合串行回归发现无视口首开从单位变换到适配变换的一次正常初始化，尺寸始终为 1005×698 像素；原断言将这次必要适配误算为抖动，现按 N86 允许一次初始化并继续阻止后续反复变换。带保存视口仍要求零变换跳变，所有场景均要求可见节点区域尺寸不变。调查使用临时项目根与合成节点，不读取用户文档；未新增网络、存储格式或写入重试。失败及迟到打开结果仍复用原有 owner，不扩展相应业务状态。
+
+右栏工具栏附在系统 inspector 内容内，添加菜单与其余工具之间使用 [Apple `ToolbarSpacer(.flexible)`](https://developer.apple.com/documentation/swiftui/toolbarspacer)；弹性空白随右栏宽度扩展，不持有独立栏宽偏好。[Apple 检查器工具栏归属](https://developer.apple.com/videos/play/wwdc2023/10161/)说明内容内部的工具栏属于检查器。隔离可视宿主仅使用合成只读投影、占位内容和生产工具栏／侧栏按钮，不挂载 WK 或读用户数据。960 pt 窗口中右栏起点为 600 pt，添加按钮从 608 pt 开始，右端工具结束于 952 pt；全部原生工具按钮高 36 pt、中心一致。右栏收起后系统保留工具入口，重开恢复两端排列。CUA 已核对浅色窗口和菜单；深色、全屏及跨显示器保留人工验收边界。
+
+两项行为均有红绿证据：`inspector-toolbar-red.log` 中添加按钮落在画布、工具组未靠右，1 test／1 suite 的六项几何断言失败；弹性空白和检查器归属修正后同一测试通过。`geometry-red-actual.log` 记录开页连续宽度变化，路由事务修正后 `geometry-green.log` 通过。最终联合串行命令使用标准 Xcode project／scheme／destination／DerivedData 参数，追加 `-parallel-testing-enabled NO` 及 `-only-testing:PlotWeaveNativeTests/` 下的 `NativeInspectorToolbarTests`、`ShellHomeNavigationTests`、`NativeSidebarToggleTests`、`NativeProjectLibraryNavigationTests`、`ShellWebCanvasLifecycleTests`、`NativeShellNodeSettingsTests`，21 tests／6 suites 全通过（`focused-serial-confirmed.log`）。首次联合默认并行在节点属性请求恢复断言上失败，串行复核该断言通过；首次联合串行的无视口回归误拒一次初始化适配，已修正测试预期并保留尺寸恒定与重复跳变断言。
+
+前端仅复用既有测试：仓库根目录 `npm test -- src/editor/nativeCanvas/nativeEditorShell.test.tsx src/editor/useEditorPersistence.test.tsx`，2 files／33 tests 通过（`web-history-viewport.log`）。未修改前端生产／测试代码，不扩展其全量路由。日志目录为 `/private/tmp/plotweave-open-canvas-x40iu_2g/`。中断时的完整原生路由与清理状态见下文；本轮仍未完成，不作为全量通过声明。
+
+
+中断时状态：仓库根目录按原生路由执行 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`，692 个维护文件／65 个排除项与 389 模块画布构建通过。默认全量日志 `full-default-final.log` 的 164 tests／44 suites 在工具栏初始夹具和既有退出委托两处失败。夹具补入有界就绪等待及检查器列宽识别后，最新默认 `full-default-verified.log` 仍退出 65：工具栏几何、节点属性请求、退出委托和开页尺寸共四个测试、五项问题；所有断言保留，未将结果报为通过。
+
+完整串行 `full-serial-final.log` 曾 164 tests／44 suites 全通过；后续 `full-serial-confirmed.log` 在带保存视口的开页回归仍失败：画布从首页的 1605×698 像素变为恢复栏位后的 1005×698 像素。因此路由事务修正已消除此前连续动画，尚不能保证所有打开顺序都在最终尺寸后呈现。下一步需处理 `NativeWelcomeWindowController` 恢复编辑窗口透明度与原生／Web 布局就绪之间的事件顺序；该进一步生产改动尚未执行。默认全量的共享 AppKit／SwiftUI 夹具干扰仍是推断，未以该推断豁免新增失败。
+
+新增与实质修改的执行单元已复核不超过 80 代码行，文件位于大小上限内。文档无配置的自动语义检查，已对照实现、N84–N87、UI §12.1 与最新失败证据结构化复核；Markdown 在仓库 Prettier 排除范围内，本轮不把被忽略的格式命令计为检查通过。`git diff --check` 通过。一次性隔离应用、源文件、编译缓存、验证构建和生成画布已清理，任务前已有构建及资源恢复，保留诊断日志。未运行无改动的前端／Rust 全量、覆盖率、SonarQube 或 PR CI，未提交或推送。
+
+## 历史按钮前置与三横线侧栏图标（2026-10-07）
+
+所有者最新截图要求撤销／重做位于项目标题前，蓝色箭头所指的大纲折叠按钮使用三条横线，并与右侧顶部图标保持相同高度、大小。此轮为可逆的呈现调整：将既有历史按钮从右侧项目动作组移到[系统导航工具栏组](https://developer.apple.com/documentation/swiftui/toolbaritemplacement/navigation)，折叠图标改为 `line.3.horizontal`；沿用中性圆形玻璃材质、侧栏位置及原命令。按钮尺寸和垂直中心读取公开工具栏控件几何，三横线使用 18 pt 常规字重。以下矩阵在生产修改前记录，结果随后更新。当前呈现以本节和 UI §12.1 为准，下节保留首次材质统一及回归范围评估记录。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证及缺口 |
+| --- | --- | --- | --- | --- |
+| N81 | 已打开项目；历史为空／可撤销／可重做；请求在途；切到首页／设置 | 编辑页从左到右为大纲开关、撤销／重做、项目标题、其余项目动作；历史按钮按原条件禁用，非编辑页无项目工具栏 | `NativeEditorToolbar` 只调整系统 placement；历史仍由 React 单会话 owner 和 `sendEditor` 承接，项目／busy 门禁不变 | 通过：既有非编辑工具栏、生产首页往返回归；Web 命令回归验证真实编辑／撤销／重做、保存与投影。CUA 目验生产工具栏在隔离真实 Window 中的标题顺序及空历史禁用；原生 canUndo／canRedo／busy 条件结构复核，未额外注入原生在途历史按钮状态 |
+| N82 | 大纲展开→点击三横线→收起→重开；外部偏好改变；浅／深外观 | 三横线按钮保持原圆形中性材质及位置，收起后仍可展开，帮助同步 | `ShellLayoutState.sidebarVisible` 仍是唯一显隐 owner；标题栏附件不更换窗口／WebView，不写文档或历史 | 通过：既有双外观真实点击、外部偏好、几何及 WK 页面存活回归；CUA 浅／深外观三横线目验、收起／展开及帮助同步。全屏、VoiceOver 保留视觉缺口 |
+| N83 | 侧栏展开／收起；窗口及栏宽变化；浅／深外观 | 左侧圆形按钮及图形大小、垂直中心与右侧顶部控件一致，不因附加标题栏区域而下移 | 标题栏适配器负责跟随系统工具栏几何；栏宽仍由原导航列拥有；工具栏尚未布局时保留可恢复的系统默认尺寸 | 通过：隔离真实 SwiftUI Window 的公开几何中左右控件均高 36 pt、中心均为窗口内 y=626 pt；既有窗口／分隔线调整及收展回归通过。浅／深外观图形大小和对齐目验；工具栏未挂载默认尺寸分支仅结构复核，全屏／跨显示器未验 |
+
+没有新增业务状态、网络、存储、异步重试或失败恢复入口；原导航及保存错误继续由既有 owner 处理，因此这些维度不扩展。按可逆低影响呈现调整复用真实行为回归，不制造只检测图标名称或 placement 常量的失败测试。
+
+隔离核对窗口仅使用合成只读投影和生产 `NativeEditorToolbar`／`NativeSidebarTitlebar`，不挂载画布、服务或用户项目目录。修改前左侧按钮位于 y=600、右侧工具栏控件位于 y=608，均高 36 pt；原实现把整个附件也限制到 36 pt，导致左侧中心低 8 pt。修改后附件使用实际 52 pt 标题栏区域，左右按钮均位于 y=608，中心均为 y=626；18 pt 三横线符号按自身比例呈现，未拉伸为检查器符号的宽高比例。浅／深外观及收展经 CUA 核对，未判定玻璃像素或完整产品视觉验收。几何日志为 `/private/tmp/plotweave-history-leading-hPjNya/geometry-light.log` 与 `geometry-dark.log`。
+
+验证在既有授权分支 `codex/swiftui-react-flow` 的仓库根，使用 Node 24.18.0、Xcode 27.0／SDK 27.0。原生路由 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test` 中，大小检查（691 维护文件／65 排除项）和画布构建（389 模块）通过。聚焦同一 Xcode 命令追加 `-only-testing:PlotWeaveNativeTests/NativeSidebarToggleTests -only-testing:PlotWeaveNativeTests/NativeProjectLibraryNavigationTests -only-testing:PlotWeaveNativeTests/ShellWebCanvasLifecycleTests -only-testing:PlotWeaveNativeTests/ShellHomeNavigationTests`，15 tests／4 suites 全通过。`npm test -- src/editor/nativeCanvas/nativeEditorShell.test.tsx` 的 22 项生产命令回归通过。
+
+默认并行全量 162 tests／43 suites 退出 65：此前已有的 `hostedApplicationWindowHasExitDelegate` 和 `explicitNodeRequestsReopenTheSameNativeInspector` 失败，另有 `panelTogglesKeepWebViewAndPageAlive` 重开画布宽度偏差 7 pt。最后一项在本轮聚焦运行通过；完整 Xcode 命令追加 `-parallel-testing-enabled NO` 后，162 tests／43 suites 全通过，耗时 50.486 秒。并行夹具共用 AppKit／SwiftUI 布局的干扰是合理推断，尚未定位或修复；串行通过不等于默认并行路由通过。日志目录 `/private/tmp/plotweave-history-leading-hPjNya/` 中保留 `focused.log`、`full-default.log`、`full-serial.log`、`web-history.log`、`size.log` 与 `canvas.log`。
+
+两个修改的 Swift 文件分别为 174／59 物理行，修改的执行单元均小于 80 代码行；文档已对照生产入口、矩阵、历史章节及 UI §12.1 结构化复核，文档格式及 `git diff --check` 通过。既有 Vite 大 chunk 与 WebKit／SwiftUI 系统诊断未阻止聚焦或串行检查。一次性隔离应用、编译缓存、验证构建与生成画布已清理，任务前已有产物恢复；仅保留诊断日志。未运行无改动的前端／Rust 全量路由、覆盖率、SonarQube 或 PR CI，未提交或推送。
+
+## 侧栏按钮统一工具栏风格与尺寸回归评估（2026-10-07）
+
+首次材质统一按所有者截图将左侧折叠图标对齐右侧原生工具栏：当时采用与右侧 `sidebar.trailing` 对应的 `sidebar.leading`，以 [AppKit 原生玻璃按钮](https://developer.apple.com/documentation/appkit/nsbutton/bezelstyle-swift.enum/glass)替代展开时持续蓝色的状态按钮；侧栏位置和唯一显示偏好沿用既有实现。以下矩阵在当次生产修改前记录，验证结果随后补充。最新图标和历史按钮位置以本页“历史按钮前置与三横线侧栏图标”及 UI §12.1 为准，后文保留之前列表图标／选中态的历史记录。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证及缺口 |
+| --- | --- | --- | --- | --- |
+| N79 | 项目已打开；侧栏展开／收起；浅／深外观 | 左右使用对应的侧栏线条符号与系统中性玻璃材质；点击只产生瞬时按下反馈，帮助说明下一步动作 | `NativeSidebarTitlebarController` 负责呈现；`ShellLayoutState.sidebarVisible` 仍是唯一显隐 owner，控件不持有第二份开关状态 | 通过：既有 `outlineControlTracksSidebarVisibility` 双外观真实点击、帮助和外部偏好更新；删除已失效的持续按下状态断言。CUA 核对浅色隔离窗口的侧栏符号、中性圆形玻璃与收展帮助；深色及活动态像素、VoiceOver 未目验，未新增实现常量断言 |
+| N80 | 展开→调整窗口／分隔线→收起→重开；非编辑路由／无项目 | 按钮保持在导航列右侧，隐藏后仍可展开；非编辑页无该入口；画布空间释放／恢复 | 现有标题栏附件和系统分隔线负责几何；同一 NavigationSplitView／WKWebView 保持，页面不重载、不发文档写入 | 通过：N73／N74／N76 的真实控件、几何及 WK 身份／页面探针回归，生产首页往返保留稿件；CUA 临时窗口收起／展开后帮助同步。默认并行窗口夹具干扰仍存在，详见本节验证结果 |
+
+此改动不增加业务状态、网络、存储、异步重试或失败恢复入口，因此这些维度不适用；原加载／导航失败仍由既有 owner 处理。没有为样式修改制造失败的源码镜像测试，沿用可逆低影响呈现调整的真实行为回归与视觉核对。
+
+对“布局只有一种，其余是尺寸缩放”的判断：**编辑页具有一套结构规则，判断基本成立；把所有差异视为等比缩放则不成立。** `NativeShellRoot` 始终组合导航列、Web 画布和 inspector，没有按宽高比选择另一套编辑模板；栏宽调整、收展和内容换行改变可用空间。480×632 pt 固定欢迎卡片属于另一页面；截图的 2× 像素倍率与点尺寸也不代表第二套布局。React Flow 的 viewport 缩放／平移只改变画布坐标映射，节点自动排布则改变文档位置并进入保存／撤销链，二者都不是原生窗口尺寸变化。
+
+此次静态评估覆盖 `NativeSidebarToggleTests`、`ShellWebCanvasLifecycleTests`、`ShellHomeNavigationTests`、`NativeWelcomeWindowTests` 及 `EditorOverlays.viewport.test.tsx`。多处 1100×750／1200×800 数值是夹具的初始窗口尺寸，不是独立布局产品能力；侧栏几何用例只有一项尺寸／分隔线转换。各测试的主要断言分别保护控件可达、侧栏释放空间、Web 会话存活、往返稿件及视口保存／交付一致性，不能仅因都有尺寸变量而删除。
+
+建议把纯尺寸适配按同一不变量参数化为最小可用窗口、常用窗口、宽窗口三个代表点，再单独覆盖左右栏边界与收展；其余比例仅在触发另一分支或历史缺陷时补充。优先保留 P1 稿件／会话／视口保存一致性，P2 控件可达和窗口恢复；精确材质、普通截图比例归视觉核对。当前同一欢迎卡片尺寸在两个 suite 重复确认，可在后续测试整理时集中到窗口合同 suite，内容 suite 保留自己的控件语义。此次仅评估，没有批量删除／重写这些测试，也未验证最小窗口、缩放命中、全屏或跨显示器倍率。出现控件溢出、误命中、会话重建、稿件丢失或保存结果不一致时，应停止缩减并补对应失败场景；不因截图外观相似继续增加比例组合。数据迁移和多用户角色不适用本次本地单用户呈现调整。
+
+验证在既有授权分支 `codex/swiftui-react-flow` 的仓库根执行，使用 Node 24.18.0、Xcode 27.0／SDK 27.0。聚焦命令 `xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -only-testing:PlotWeaveNativeTests/NativeSidebarToggleTests -only-testing:PlotWeaveNativeTests/ShellWebCanvasLifecycleTests -only-testing:PlotWeaveNativeTests/ShellHomeNavigationTests test` 退出 0，11 tests／3 suites 通过。
+
+完整原生路由 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`：691 个维护文件大小检查和 389 个画布模块构建通过；默认并行退出 65，162 tests／43 suites 中复现既有 `hostedApplicationWindowHasExitDelegate` 超时与 `explicitNodeRequestsReopenTheSameNativeInspector` 断言失败，本次相关回归通过。相同 Xcode 命令追加 `-parallel-testing-enabled NO` 后退出 0，162 tests／43 suites 全部通过（49.790 秒）。日志目录 `/private/tmp/plotweave-sidebar-neutral-KBEubL/`，保留 `focused.log`、`full-default.log`、`full-serial.log`；不把串行通过视作并行缺口修复。
+
+视觉夹具仅编译实际 `NativeSidebarTitlebar`、`ShellLayoutState` 和临时标准工具栏，不读取用户数据或调用业务服务；CUA 已核对浅色中性样式及真实按钮收展。其切换深色入口依赖未成为 main 的窗口，未成功切换，因此不声称深色视觉通过。一次性夹具、编译输出和生成画布已清理，任务前已有构建及画布产物按备份恢复。此次源码 163 行、测试 139 行，实质修改执行单元低于 80 代码行；文档无配置的自动语义检查，已对照实现、矩阵、历史记录及章节链接结构化复核，Prettier 和 `git diff --check` 通过。前端／Rust 源码未修改，未运行其全量路由；未提交、推送或运行 Git 操作的覆盖率／Sonar 门禁及 PR CI。
+
+## 项目工具栏与关闭返回：首页状态矩阵（2026-10-07）
+
+所有者最新截图要求移除编辑工具栏 Home，将大纲切换按钮移到侧栏顶部右侧；项目窗口红色关闭按钮返回首页。此轮保留“显示 → 返回项目片库”菜单与同一 `app.home` 保存协调。以下矩阵在生产代码修改前记录，末列随验证更新。此节覆盖下方早前 Home／大纲按钮呈现记录的当前实现。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证与当前缺口 |
+| --- | --- | --- | --- | --- |
+| N75 | 编辑／首页／加载／设置→工具栏；菜单返回 | 所有工具栏不显示 Home；原生菜单保留返回命令 | `NativeEditorToolbar` owns 呈现；原菜单按钮和应用 owner owns `app.home` | 通过：真实工具栏在编辑及三个非编辑路由均无 Home；保留实际应用菜单命令与隔离测试禁用条件。正常应用菜单激活未另作人工验收 |
+| N76 | 侧栏展开→调整宽度→收起→重开 | 列表按钮位于侧栏标题区域右侧；收起后仍可展开；无重复控件 | 系统侧栏分隔线 owns 几何，原 `sidebarVisible` owns 唯一偏好；按钮不重建 Web 会话 | 通过：原生按钮与实际导航 arranged column 的横向边界和红绿灯中心高度一致；扩大窗口／拖动列宽／收起重开均保持位置，浅深外观的选中态、帮助及外部偏好同步。真实 WK 画布宽度释放／恢复，身份与页面标记不变；视觉核对见下文 |
+| N77 | 项目已编辑→点击红色关闭→首页／卸载保存→重开 | 显示固定欢迎卡片，保留编辑窗口／WebView，重开后稿件与页面标记保持 | 关闭入口使用既有 `app.home`，保存与路由由 Web 单写入者 owns；首页关闭与应用退出仍沿原退出批准 | 通过：生产 WK 中点击真实标准红色关闭按钮两次返回首页并重开，固定卡片、编辑窗口框架、WebView 身份、页面标记及稿件保留；既有欢迎关闭等待监听／批准回归通过。返回仍沿异步卸载保存及未落盘快照恢复，未改为保存前置屏障 |
+| N78 | 返回在途→重复关闭；home 投影已到、标题控件尚未恢复→旧点击；返回失败→修复→重试；窗口替换／卸载 | 在途不重复导航；已完成导航的旧点击不退出；失败保留项目及诊断；重试恢复；旧窗口不保留关闭重定向 | 原应用 busy／error owns 恢复，原生入口只路由当前窗口；不绕过退出保存批准 | 通过：真实页面意图延迟时多次点击仅一个返回请求；注入导航失败后保持编辑及诊断，显式重试恢复首页。标准按钮在窗口替换、非编辑路由和释放后恢复原生关闭委托；home 投影到达但标题栏尚未更新时，旧动作被忽略，防止 `performClose` 再次触发同一被重定向的标准按钮。该事件顺序先红（测试进程递归退出）后绿，3 tests／1 suite 通过；未新增磁盘故障注入或存储合同 |
+
+按钮通过 [AppKit 标题栏附件](https://developer.apple.com/documentation/appkit/nstitlebaraccessoryviewcontroller) 的公开 `.left` 位置挂在红绿灯右侧，按 `NSSplitView.arrangedSubviews` 的导航列边界计算附件宽度；系统装饰子视图不作为列几何。窗口采用 `.unified` 工具栏，真实 SwiftUI 窗口使用完整内容样式，隔离夹具同步该安全区域合同；首页仍由独立固定卡片承载。大纲与红色关闭入口均不替换窗口／工具栏委托，不匹配私有 SwiftUI 类名或项目标识。窗口替换、根视图卸载和非编辑路由清理各自拥有的控制。
+
+通过 CUA 核对隔离宿主主窗口的实际浅色呈现：按钮位于侧栏右上、仅有圆点列表图形及原生选中底色，辅助功能显示“故事大纲”／“隐藏故事大纲”及 `on`。临时视觉夹具和诊断代码已删除；深色的状态、帮助与控件图像由真实 AppKit 回归覆盖，本轮未完成深色截图或 Xcode 像素量化对照。隔离宿主真实 SwiftUI `main` 窗口的 `fullSizeContentView` 已核对，测试夹具使用同一窗口样式。
+
+导航失败测试注入的是 `app.home` 的失败回执；既有卸载保存失败可跨首页保留最新内存快照，其恢复机制不在本次重写。只改项目红色关闭按钮；欢迎卡片关闭、普通窗口关闭／⌘W、⌘Q 和 Dock 退出保留原保存批准链。真实 VoiceOver 朗读、全屏模式与实时拖拽动画未人工验收；列宽调整由实际 AppKit 分隔线回归覆盖。无需新的网络、存储 schema 或投影乱序组合，因为其所有者和入口合同未改变。
+
+聚焦回归先红：旧编辑工具栏仍有 Home，项目红色关闭未产生 home 路由；准确标题栏控制回归在未接入时缺失目标按钮。实现后 21 tests／6 suites 聚焦回归通过，日志目录 `/private/tmp/plotweave-sidebar-position-vaoxba94/`，包括 `native-slot-red.log`、`accessory-red.log`、`focused-final.log` 与 `stale-close-red.log`／`stale-close-green.log`。移除临时诊断、恢复无框架强制修正的原生布局后再次通过。下方早前大纲／Home 章节保留当时的行为及检查历史，当前呈现以本节和 UI §12.1 为准。
+
+本轮按仓库原生路由，在根目录使用 Node 24.18.0、Xcode 27.0／SDK 27.0 执行 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`：691 维护文件／65 排除项大小检查通过，生产画布 389 模块及显式夹具构建通过。最终默认并行 162 tests／43 suites 中只有先前已记录的 `hostedApplicationWindowHasExitDelegate` 超时，本轮相关回归均通过；未将该并行缺口称为通过。首次串行发现首页刷新投影先于按钮重绘，原断言读取旧 AX 元素；改为获取刷新后的实际按钮并有界等待禁用，保留原语义断言，聚焦首页 6 tests／1 suite 通过。最终同一 Xcode 命令追加 `-parallel-testing-enabled NO`，162 tests／43 suites 全部通过，包括最后补入的旧关闭点击顺序回归。日志为 `full-default-final.log`、`home-final.log` 与 `full-serial-final.log`；本轮未推送、提交或运行无改动的前端／Rust 全量、覆盖率、SonarQube 或 PR CI。
+
+维护源码及测试均在文件上限内，新增及实质修改的执行单元已复核为不超过 80 代码行。文档没有配置的自动语义检查，已核对 UI §12.1、矩阵、当前实现与历史记录的覆盖关系；文档格式和 `git diff --check` 通过。一次性构建及生成画布已清理，任务前已有产物按备份恢复。
+
+## 大纲侧栏按钮对齐 Xcode：状态与不变量（2026-10-07）
+
+所有者要求项目窗口的侧栏折叠按钮与所附 Xcode 27 截图保持相同样式：圆点加横线的列表图形、展开时的原生选中态。此轮属于原生呈现调整，复用 `ShellLayoutState.sidebarVisible` 与 `NavigationSplitView` 的双向绑定；不新增侧栏偏好或业务动作。采用 [Apple 原生按钮式 Toggle](https://developer.apple.com/documentation/swiftui/togglestyle/button)，通过[默认工具栏项目移除 API](https://developer.apple.com/documentation/swiftui/view/toolbar(removing:))替换原自动按钮。以下矩阵在生产代码修改前记录。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证与当前缺口 |
+| --- | --- | --- | --- | --- |
+| N72 | 已打开项目、侧栏展开／收起→浅／深外观下显示工具栏 | 仅一个大纲切换控件，使用系统 `list.bullet` 图形；选中态与侧栏同步，帮助说明准确描述下一步动作 | 原生 Toggle owns 控件呈现；`ShellLayoutState` owns 唯一偏好，系统工具栏 owns 材质和交互反馈 | 通过：`NativeSidebarToggleTests.outlineControlTracksSidebarVisibility` 覆盖双外观、真实工具栏数量、点击和帮助同步；CUA 核对隔离窗口浅／深列表图形、原生灰色选中底色及 AX `on`／`list.bullet` 身份。未作 Xcode 像素量化对照 |
+| N73 | 展开→点击收起→点击展开；布局从其他入口变化→控件同步 | 实际侧栏随操作变化；展开／收起均可重复，保留同一 WebView 与页面标记 | `NavigationSplitView` 双向绑定覆盖按钮与系统布局入口；面板变化不重建 Web 会话 | 通过：`ShellWebCanvasLifecycleTests.panelTogglesKeepWebViewAndPageAlive` 点击实际控件，断言画布宽度释放与恢复、WebView 身份及页面标记保留；控件回归另覆盖外部偏好变化 |
+| N74 | 加载／首页／应用设置；项目 ID 缺失→展示工具栏；返回编辑页 | 非编辑状态不提供侧栏控件，自动隐藏不改写用户偏好；隔离画布保留侧栏测试入口 | 根视图统一 owns `editorPanelsAvailable`，按钮不引入独立路由或保存状态 | 通过：`unavailablePanelsHaveNoSidebarControl` 的四种状态下真实工具栏均无切换入口，默认偏好保持；生产首页往返聚焦回归通过。收起偏好跨业务路由组合仅复核既有绑定与非编辑 setter 门禁，未另增 UI 组合测试，偏好拥有者未改变 |
+
+存储、保存失败、网络、重试和乱序业务投影未改变，沿既有 owner 与回归边界，不增加故障注入。VoiceOver 朗读与系统减少透明度未作人工验收；本轮不扩展右侧检查器样式或添加 Xcode 的其他工具按钮。
+
+聚焦回归先红：旧工具栏没有目标控件，浅／深两种外观各一项预期缺失失败，2 tests／1 suite 退出 65，日志 `red.log`。实现后控件 2 tests／1 suite、联合真实画布及首页导航 9 tests／3 suites 全通过；真实点击覆盖反向展开，画布几何、WebView 身份与页面探针保留。使用临时隔离窗口通过 CUA 核对浅／深渲染与 AX 切换语义，图形是三行圆点列表，展开显示系统灰色选中底色；临时等待、位图诊断代码及图片已删除，未保留测试专用生产分支。
+
+仓库根目录使用 Node 24.18.0、Xcode 27.0／SDK 27.0 执行 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`：大小检查通过（688 维护文件／65 排除项）、生产画布 389 模块及显式夹具构建通过；默认并行 157 tests／42 suites 中本次相关回归通过，仅复现已记录的 `hostedApplicationWindowHasExitDelegate` 超时和 `explicitNodeRequestsReopenTheSameNativeInspector` 断言失败。相同 Xcode 命令追加 `-parallel-testing-enabled NO` 后，最终 157 tests／42 suites 全通过。日志目录 `/private/tmp/plotweave-sidebar-style-85ew68rk/`，包括 `red.log`、`focused-integration.log`、`full-default.log`、`full-serial.log`、`canvas-build.log`；一次性构建与生成画布按任务前备份恢复。未运行无改动的前端／Rust 全量路由、覆盖率、SonarQube 或 PR CI，未提交或推送。
+
+维护源码与测试均低于文件上限，新增或实质修改的执行单元均低于 80 代码行；无配置的自动复杂度检查工具，已复核跨度与嵌套。文档无配置的自动语义检查，已结构化复核矩阵、UI §12.1、单一偏好绑定与恢复边界，格式及 `git diff --check` 通过。
+
 ## 返回项目片库入口：状态与不变量（2026-10-07）
 
 所有者确认首页无需无效 Home 控件，编辑页保留系统房子图标并采用明确的“返回项目片库”名称与悬停说明，同时补齐菜单栏命令。本次为原生导航呈现与入口补齐，不更改 `app.home` 的保存协调或导航合同。以下矩阵在生产代码修改前记录。

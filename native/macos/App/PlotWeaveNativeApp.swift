@@ -8,7 +8,7 @@ import SwiftUI
 /// Normal exit waits for that writer's persisted-edit flush.
 @main
 struct PlotWeaveNativeApp: App {
-    /// AppKit routes normal window close, Command-Q and Dock Quit through the Web flush barrier.
+    /// AppKit routes normal close and application quit through Web flush; the project's red button returns home.
     @NSApplicationDelegateAdaptor(NativeApplicationDelegate.self) private var delegate
 
     /// App menus and the visible shell share one read projection/action owner.
@@ -18,6 +18,7 @@ struct PlotWeaveNativeApp: App {
         Window("PlotWeave", id: "main") {
             NativeShellRoot(demoMode: Self.isHostedTest, application: application)
         }
+        .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {
                 NativeProjectCreationButton(state: application)

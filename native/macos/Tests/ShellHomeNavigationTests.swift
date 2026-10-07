@@ -9,6 +9,82 @@ import WebKit
 @MainActor
 @Suite(.serialized)
 struct ShellHomeNavigationTests {
+    /// Native dimensions and Web viewport transform are separate observable initialization concerns.
+    private struct CanvasFrame: Equatable {
+        /// The rendered React Flow region follows the native column geometry.
+        let size: CGSize
+        /// A missing saved viewport may require one initial fit after nodes are measured.
+        let transform: String
+    }
+
+    /// Saved restoration and first fit must not expose repeated native canvas relayouts (N85–N86).
+    @Test(arguments: [true, false])
+    func openingProjectPresentsStableCanvasGeometry(savedViewport: Bool) async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let id = try await fixture.createProject()
+        let webView = try await fixture.waitForReady()
+        _ = try await fixture.state.request("app.open", args: ["id": .string(id)])
+        try await wait { fixture.state.route == "editor" }
+        for type in ["scene", "branch", "dialogue"] {
+            _ = try await fixture.state.request("editor.create", args: ["projectId": .string(id), "nodeType": .string(type)])
+        }
+        _ = try await fixture.state.request("editor.fit", args: ["projectId": .string(id)])
+        _ = try await fixture.state.request("app.home")
+        try await wait { fixture.presentation.welcomeWindow != nil }
+        if !savedViewport { try await removeSavedViewport(fixture: fixture, id: id) }
+        _ = try await fixture.state.request("app.open", args: ["id": .string(id)])
+        var frames: [CanvasFrame] = []
+        for _ in 0..<40 {
+            if fixture.window.alphaValue > 0, fixture.state.route == "editor" {
+                if let frame = try await canvasFrame(webView) { frames.append(frame) }
+            }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        #expect(!frames.isEmpty)
+        #expect(frames.allSatisfy { $0.size == frames.first?.size }, "可见画布尺寸应一次落定：\(frames)")
+        let changes = zip(frames, frames.dropFirst()).filter { $0.transform != $1.transform }.count
+        #expect(changes <= (savedViewport ? 0 : 1), "保存视口不跳变；无保存视口只允许一次首开适配：\(frames)")
+        #expect(findWebView(fixture.window.contentView) === webView)
+        #expect(fixture.state.editor["canUndo"] == .bool(false))
+        await fixture.services.close()
+    }
+
+    /// Only an already-flushed isolated document is changed to exercise the missing-viewport boundary.
+    private func removeSavedViewport(fixture: Fixture, id: String) async throws {
+        let store = try #require(fixture.services.projectStore)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        var document = try await store.invoke(command: "load_project", args: ["id": .string(id)])
+        while document["graph"]?["nodes"]?.arrayValue?.count != 3, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(30))
+            document = try await store.invoke(command: "load_project", args: ["id": .string(id)])
+        }
+        #expect(document["graph"]?["nodes"]?.arrayValue?.count == 3)
+        var fields = try #require(document.object)
+        var graph = try #require(fields["graph"]?.object)
+        graph.removeValue(forKey: "viewport")
+        fields["graph"] = .object(graph)
+        _ = try await store.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(fields)])
+    }
+
+    /// Reads actual rendered geometry and viewport rather than counting component executions.
+    private func canvasFrame(_ webView: WKWebView) async throws -> CanvasFrame? {
+        guard let values = try await webView.evaluateJavaScript("""
+            (() => {
+                const flow = document.querySelector('.react-flow');
+                const viewport = document.querySelector('.react-flow__viewport');
+                if (!flow || !viewport || document.querySelectorAll('.react-flow__node').length !== 3) return null;
+                const rect = flow.getBoundingClientRect();
+                return [rect.width, rect.height, viewport.style.transform];
+            })()
+            """) as? [Any] else { return nil }
+        #expect(values.count == 3)
+        let width = try #require(values.first as? Double)
+        let height = try #require(values.dropFirst().first as? Double)
+        let transform = try #require(values.last as? String)
+        return CanvasFrame(size: CGSize(width: width, height: height), transform: transform)
+    }
+
     /// Each explicit welcome-page entry opens the selected persisted ID through the retained editing session.
     @Test(arguments: ["button", "return"])
     func selectedWelcomeProjectOpensWithoutCreatingAnother(entry: String) async throws {
@@ -63,7 +139,7 @@ struct ShellHomeNavigationTests {
         try await wait { !fixture.state.busy && !NativeHomeProjection(fixture.state.app).contains(id: id) }
         // App retry refreshes the list; the existing open-error owner retains its diagnostic until the next navigation.
         #expect(NativeHomeProjection(fixture.state.app).error != nil)
-        #expect(try !NativeCreationControlFixture.isEnabled(open))
+        try await waitForDisabledOpen(in: fixture.interactionWindow)
         let creation = try await NativeCreationControlFixture.button(in: fixture.interactionWindow)
         try NativeCreationControlFixture.press(creation)
         try await wait { fixture.state.route == "editor" && !fixture.state.busy }
@@ -107,7 +183,7 @@ struct ShellHomeNavigationTests {
     }
 
     /// Home and settings release WebKit editing focus; reopening uses the same page.
-    @Test(arguments: ["app.home", "app.settings"])
+    @Test(arguments: ["app.home", "app.settings", "window.close"])
     func nativeNavigationReturnsToSameCanvasAndSavedDocument(command: String) async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
@@ -130,11 +206,13 @@ struct ShellHomeNavigationTests {
 
         for _ in 0..<2 {
             #expect(fixture.window.makeFirstResponder(webView))
-            if command == "app.home" { try ProjectLibraryToolbarFixture.activateReturn(in: fixture.window) }
+            if command == "window.close" {
+                try #require(fixture.window.standardWindowButton(.closeButton)).performClick(nil)
+            }
             else { _ = try await fixture.state.request(command) }
-            try await wait { fixture.state.route == (command == "app.home" ? "home" : "settings") }
+            try await wait { fixture.state.route == (command == "app.settings" ? "settings" : "home") }
             try await Task.sleep(for: .milliseconds(300))
-            if command == "app.home" {
+            if command != "app.settings" {
                 #expect(fixture.presentation.welcomeWindow?.frame.size == NativeWelcomeMetrics.windowSize)
                 #expect(fixture.window.alphaValue == 0 && fixture.window.ignoresMouseEvents)
                 // AppKit may reflow hidden toolbar height; the retained editor is never reduced to the card viewport.
@@ -148,7 +226,8 @@ struct ShellHomeNavigationTests {
             try await wait { fixture.state.route == "editor" }
             try await Task.sleep(for: .milliseconds(300))
             #expect(fixture.presentation.welcomeWindow == nil && fixture.window.isVisible)
-            #expect(fixture.window.frame == editorFrame && fixture.window.styleMask.contains(.resizable))
+            #expect(fixture.window.frame == editorFrame)
+            #expect(fixture.window.styleMask.contains(.resizable))
             #expect(!webView.isHidden)
             #expect(ObjectIdentifier(try #require(findWebView(fixture.window.contentView))) == identity)
             #expect(try await webView.evaluateJavaScript("window.__pwHomeProbe") as? Int == 271828)
@@ -158,6 +237,49 @@ struct ShellHomeNavigationTests {
             let document = try JSONDecoder().decode(HostJSON.self, from: Data(try #require(exported["text"]?.string).utf8))
             #expect(document["graph"]?["nodes"]?.arrayValue?.first?["data"]?["spec"]?["synopsis"]?.string == "首页往返后保留的稿件")
         }
+        await fixture.services.close()
+    }
+
+    /// Repeated red-button clicks share one pending navigation; a failed reply keeps editing and permits retry (N78).
+    @Test func projectCloseWaitsForNavigationAndCanRetryFailure() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let id = try await fixture.createProject()
+        let webView = try await fixture.waitForReady()
+        _ = try await fixture.state.request("app.open", args: ["id": .string(id)])
+        try await wait { fixture.state.route == "editor" }
+        try await Task.sleep(for: .milliseconds(200))
+        try await webView.evaluateJavaScript("""
+            const original = window.__pwNativeIntent;
+            window.__pwHomeCalls = 0;
+            window.__pwNativeIntent = request => request.command !== 'app.home'
+                ? original(request)
+                : new Promise(resolve => {
+                    window.__pwHomeCalls += 1;
+                    window.__pwRejectHome = () => {
+                        window.__pwNativeIntent = original;
+                        resolve({ error: { code: 'PW_NAVIGATION_FAILED', message: '隔离导航失败' } });
+                    };
+                });
+            undefined;
+            """)
+        let close = try #require(fixture.window.standardWindowButton(.closeButton))
+        close.performClick(nil)
+        #expect(fixture.state.busy)
+        close.performClick(nil)
+        close.performClick(nil)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(try await webView.evaluateJavaScript("window.__pwHomeCalls") as? Int == 1)
+        #expect(fixture.state.route == "editor" && fixture.window.isVisible && fixture.presentation.welcomeWindow == nil)
+        try await webView.evaluateJavaScript("window.__pwRejectHome(); undefined")
+        try await wait { !fixture.state.busy && fixture.state.error != nil }
+        #expect(fixture.state.route == "editor" && fixture.state.projectId == id)
+        #expect(fixture.state.error?.contains("隔离导航失败") == true)
+        close.performClick(nil)
+        try await wait { fixture.state.route == "home" && !fixture.state.busy }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(fixture.state.error == nil && fixture.presentation.welcomeWindow != nil)
+        #expect(findWebView(fixture.window.contentView) === webView)
         await fixture.services.close()
     }
 
@@ -185,6 +307,16 @@ struct ShellHomeNavigationTests {
         let deadline = ContinuousClock.now.advanced(by: .seconds(12))
         while !predicate() && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(30)) }
         try #require(predicate(), "原生首页状态转换超时")
+    }
+
+    /// Projection receipt can precede SwiftUI's control update; query the refreshed AX button until it becomes unavailable.
+    private func waitForDisabledOpen(in window: NSWindow) async throws {
+        let control = try await NativeCreationControlFixture.button(in: window, named: "打开项目")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while try NativeCreationControlFixture.isEnabled(control), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        #expect(try !NativeCreationControlFixture.isEnabled(control))
     }
 
     /// Finds the retained host under the real SwiftUI view composition.
@@ -234,9 +366,11 @@ struct ShellHomeNavigationTests {
         init(inspectorVisible: Bool = true) {
             services = NativeHostServices(dataRoot: root, quit: HostQuitController())
             layout.inspectorVisible = inspectorVisible
+            // Match the real unified SwiftUI window's full-size content and safe-area behavior.
             window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 750),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
+            window.toolbarStyle = .unified
             window.level = .floating
             window.contentView = NSHostingView(rootView: NativeShellRoot(
                 layout: layout, services: services, application: state, windowPresentation: presentation
