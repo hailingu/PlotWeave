@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   waitFor,
+  within,
 } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { branchOptionHandle } from '../graphRules'
@@ -1161,7 +1162,9 @@ it('modified selection, inline inputs and connection handles preserve the AI mod
       nodeSettingsRequest: request,
     })
   }
-  fireEvent.doubleClick(view.getByText('天台'))
+  fireEvent.doubleClick(
+    within(view.getByTestId('rf__node-scene-a')).getByText('天台'),
+  )
   fireEvent.click(view.getByLabelText('场景名称'))
   const handle = view
     .getByTestId('rf__node-scene-a')

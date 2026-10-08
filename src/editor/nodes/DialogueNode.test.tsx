@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { NodeProps } from '@xyflow/react'
+import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import type { ProjectSettings } from '../settings'
 import { DialogueNode } from './DialogueNode'
@@ -68,9 +68,11 @@ function setup(
     selected: false,
   } as unknown as NodeProps<DialogueFlowNode>
   const { container, unmount } = render(
-    <NodeEditContext.Provider value={api}>
-      <DialogueNode {...props} />
-    </NodeEditContext.Provider>,
+    <ReactFlowProvider>
+      <NodeEditContext.Provider value={api}>
+        <DialogueNode {...props} />
+      </NodeEditContext.Provider>
+    </ReactFlowProvider>,
   )
   return { api, container, unmount }
 }

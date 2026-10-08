@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { NodeProps } from '@xyflow/react'
+import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import { projectAssets } from '../projectAssets'
 import type { AssetRef } from '../../model/document'
@@ -78,9 +78,11 @@ function setup(
     selected: false,
   } as unknown as NodeProps<ShotFlowNode>
   const { container } = render(
-    <NodeEditContext.Provider value={api}>
-      <ShotNode {...props} />
-    </NodeEditContext.Provider>,
+    <ReactFlowProvider>
+      <NodeEditContext.Provider value={api}>
+        <ShotNode {...props} />
+      </NodeEditContext.Provider>
+    </ReactFlowProvider>,
   )
   return { api, container }
 }
@@ -175,17 +177,21 @@ function renderShotWithRef(
       selected: false,
     }) as unknown as NodeProps<ShotFlowNode>
   const view = render(
-    <NodeEditContext.Provider value={api}>
-      <ShotNode {...props(assetId)} />
-    </NodeEditContext.Provider>,
+    <ReactFlowProvider>
+      <NodeEditContext.Provider value={api}>
+        <ShotNode {...props(assetId)} />
+      </NodeEditContext.Provider>
+    </ReactFlowProvider>,
   )
   return {
     rerender: (id: string, nextById?: Record<string, AssetRef>) => {
       if (nextById !== undefined) api.assets = { byId: nextById }
       view.rerender(
-        <NodeEditContext.Provider value={api}>
-          <ShotNode {...props(id)} />
-        </NodeEditContext.Provider>,
+        <ReactFlowProvider>
+          <NodeEditContext.Provider value={api}>
+            <ShotNode {...props(id)} />
+          </NodeEditContext.Provider>
+        </ReactFlowProvider>,
       )
     },
   }

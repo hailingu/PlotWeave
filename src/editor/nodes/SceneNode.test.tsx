@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { NodeProps } from '@xyflow/react'
+import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import type { ProjectSettings } from '../settings'
 import { SCENE_SHOT_HANDLE } from '../graphRules'
@@ -73,9 +73,11 @@ function setup(
     selected: true,
   } as unknown as NodeProps<SceneFlowNode>
   const { container, unmount } = render(
-    <NodeEditContext.Provider value={api}>
-      <SceneNode {...props} />
-    </NodeEditContext.Provider>,
+    <ReactFlowProvider>
+      <NodeEditContext.Provider value={api}>
+        <SceneNode {...props} />
+      </NodeEditContext.Provider>
+    </ReactFlowProvider>,
   )
   return { api, container, unmount }
 }
@@ -85,7 +87,7 @@ describe('SceneNode（索引卡）', () => {
     setup()
     expect(screen.getByText('天台对峙')).toBeTruthy()
     expect(screen.getByText('SCENE 03')).toBeTruthy()
-    expect(screen.getByText('🎞 2 镜')).toBeTruthy()
+    expect(screen.getByText('2 镜')).toBeTruthy()
   })
 
   it('meta 行：外景 chip、地点名解析、时间与可选天气', () => {
@@ -103,8 +105,7 @@ describe('SceneNode（索引卡）', () => {
     unmount()
 
     setup({ locationId: undefined })
-    // 组件模板自带 📍 前缀，locationName 为空时回退文案再叠一个
-    expect(screen.getByText('📍 📍 未指定')).toBeTruthy()
+    expect(screen.getByText('📍 未指定')).toBeTruthy()
   })
 
   it('角色头像串：命中渲染渐变头像，失效 ✕；无角色不渲染头像区', () => {

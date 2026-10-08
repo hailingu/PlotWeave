@@ -6,7 +6,7 @@
  * Swift 通过节点点击进入原生检查器，隐藏本按钮；其他宿主切换内联面板。
  * 点击阻止冒泡，避免
  * 触发画布拖动/画布级点击；
- * light 变体用于纸面节点，默认变体用于深色石板节点。
+ * light 为旧调用方保留的类名；全部节点使用同一随外观适配的中性配色。
  */
 import { isSwiftHost } from '../../../platform/hostEnvironment'
 
@@ -23,7 +23,7 @@ export function NodeSettingsGear({
   readonly open: boolean
   /** 请求节点属性；组件内不捕获节点 id，由调用方闭包绑定宿主动作。 */
   readonly onToggle: () => void
-  /** 纸面浅色外观变体；缺省为深色石板外观。 */
+  /** 旧外观类名兼容参数；不再改变节点配色。 */
   readonly light?: boolean
 }) {
   if (isSwiftHost()) return null

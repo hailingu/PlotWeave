@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { NodeProps } from '@xyflow/react'
+import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import type { BeatFulfillment } from '../outline'
 import { BeatNode } from './BeatNode'
@@ -47,9 +47,11 @@ function setup(fulfillment: BeatFulfillment | null = null) {
     selected: false,
   } as unknown as NodeProps<BeatFlowNode>
   const { container } = render(
-    <NodeEditContext.Provider value={api}>
-      <BeatNode {...props} />
-    </NodeEditContext.Provider>,
+    <ReactFlowProvider>
+      <NodeEditContext.Provider value={api}>
+        <BeatNode {...props} />
+      </NodeEditContext.Provider>
+    </ReactFlowProvider>,
   )
   return { api, container }
 }

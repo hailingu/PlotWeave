@@ -6,6 +6,7 @@ import { NodeSettingsPanel } from './settings/NodeSettingsPanel'
 import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import type { AssetRef } from '../../model/document'
 import type { ImageFlowNode } from './types'
+import { NodeKind } from './NodeKind'
 
 /** 产物图像：项目资产门面解析媒体 URL 懒渲染；解析失败显示可读占位
  * （资产条目在而媒体不可读属异常态——不静默空白，保留可诊断线索）。
@@ -50,7 +51,7 @@ function outputPlaceholder(
 
 /**
  * 图片节点 = 生成侧媒体节点（docs/ui-design.md §4.1/数据模型 §13 文生图
- * 首版）。深色石板监视器卡：标题行（IMAGE 徽标 + 尺寸 + 作业状态 + 常驻
+ * 首版）。统一中性内容卡：标题行（IMAGE 徽标 + 尺寸 + 作业状态 + 常驻
  * ⚙️）→ Prompt 预览 → 产物区（生成图像 / 生成中 / 空态 / 悬空引用占位）。
  * 不参与任何连线（自由摆放），无 Handle。
  */
@@ -68,9 +69,16 @@ export function ImageNode({ id, data, selected }: NodeProps<ImageFlowNode>) {
       : undefined
 
   return (
-    <div className={`pw-image${selected ? ' pw-on' : ''}`}>
+    <div className={`pw-card pw-image${selected ? ' pw-on' : ''}`}>
+      <NodeKind kind="image">
+        <NodeSettingsGear
+          ariaLabel="图片节点设置"
+          open={settingsOpen}
+          onToggle={() => toggleSettings(id)}
+        />
+      </NodeKind>
       <div className="pw-image-tb">
-        <span className="pw-image-badge">🖼 IMAGE</span>
+        <span className="pw-image-badge">IMAGE</span>
         <span className="pw-image-size">{data.size}</span>
         <span className="pw-sp" />
         {job?.status === 'running' && (
@@ -84,11 +92,6 @@ export function ImageNode({ id, data, selected }: NodeProps<ImageFlowNode>) {
             生成失败
           </span>
         )}
-        <NodeSettingsGear
-          ariaLabel="图片节点设置"
-          open={settingsOpen}
-          onToggle={() => toggleSettings(id)}
-        />
       </div>
       <p className="pw-image-prompt">
         {data.prompt !== '' ? data.prompt : '（未填写 Prompt）'}

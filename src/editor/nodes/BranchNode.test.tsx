@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { NodeProps } from '@xyflow/react'
+import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import { BRANCH_OPTION_HANDLE_PREFIX } from '../graphRules'
 import { BranchNode } from './BranchNode'
@@ -53,9 +53,11 @@ function setup(openSettingsId: string | null = null) {
     selected: false,
   } as unknown as NodeProps<BranchFlowNode>
   render(
-    <NodeEditContext.Provider value={api}>
-      <BranchNode {...props} />
-    </NodeEditContext.Provider>,
+    <ReactFlowProvider>
+      <NodeEditContext.Provider value={api}>
+        <BranchNode {...props} />
+      </NodeEditContext.Provider>
+    </ReactFlowProvider>,
   )
   return { api }
 }

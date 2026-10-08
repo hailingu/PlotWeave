@@ -24,7 +24,7 @@ export const canvasNodeTypes: NodeTypes = {
   image: ImageNode,
 }
 
-/** 连线类型注册：branch = 品牌渐变 + 选项胶囊；sequence 用默认贝塞尔加样式类。 */
+/** 连线类型注册：branch = 中性曲线 + 选项标签；sequence 用默认贝塞尔加样式类。 */
 export const canvasEdgeTypes: EdgeTypes = {
   branch: BranchEdge,
 }
