@@ -7,18 +7,23 @@ struct NativeNodeFields: View {
     let data: HostJSON
 
     var body: some View {
-        Section("节点属性") {
+        NativeInspectorSection(title: "基本信息") {
             ForEach(textFields, id: \.1) { label, key in
                 NativeTextField(label: label, value: data[key]?.string ?? "") { target.patch([key: .string($0)]) }
             }
-            if type == "scene" { sceneFields }
             if type == "shot" {
                 NativeNumberField(label: "镜号", value: data["shotNo"]?.number) { target.patch(["shotNo": .number($0)]) }
             }
-            if ["scene", "beat", "dialogue", "branch"].contains(type) {
-                NativeNumberField(label: "集号", value: data["episodeNo"]?.number, onClear: { target.clear("episodeNo") }) { target.patch(["episodeNo": .number($0)]) }
+            if type == "scene" {
+                HStack(alignment: .top, spacing: 12) {
+                    NativeNumberField(label: "场次", value: data["sceneNo"]?.number) { target.patch(["sceneNo": .number($0)]) }
+                    episodeField
+                }
+            } else if ["beat", "dialogue", "branch"].contains(type) {
+                episodeField
             }
         }
+        if type == "scene" { sceneFields }
         if type == "dialogue" || type == "branch" || type == "shot" {
             NativeNodeLists(target: target, type: type, data: data)
         }
@@ -28,7 +33,7 @@ struct NativeNodeFields: View {
     /// Text field names match dev's declared node model; generated outputs stay read-only.
     private var textFields: [(String, String)] {
         switch type {
-        case "scene": [("名称", "name"), ("时间", "time"), ("天气", "weather"), ("梗概", "synopsis")]
+        case "scene": [("名称", "name"), ("梗概", "synopsis")]
         case "beat": [("名称", "name"), ("基调", "tone")]
         case "dialogue": [("名称", "name")]
         case "branch": [("问句", "prompt")]
@@ -38,11 +43,35 @@ struct NativeNodeFields: View {
         }
     }
 
-    /// Scene references retain stable entity identities, including visible broken references.
+    /// Optional episode numbers share the unchanged typed clear and safe-integer paths.
+    private var episodeField: some View {
+        NativeNumberField(label: "集号", value: data["episodeNo"]?.number, onClear: { target.clear("episodeNo") }) { target.patch(["episodeNo": .number($0)]) }
+    }
+
+    /// Scene context and cast are separate content groups, preserving stable and broken reference identities.
+    @ViewBuilder
     private var sceneFields: some View {
-        Group {
-            NativeNumberField(label: "场次", value: data["sceneNo"]?.number) { target.patch(["sceneNo": .number($0)]) }
-            Toggle("内景", isOn: Binding(get: { data["interior"]?.bool ?? false }, set: { target.patch(["interior": .bool($0)]) }))
+        NativeInspectorSection(title: "时间与地点") {
+            HStack(alignment: .top, spacing: 12) {
+                NativeTextField(label: "时间", value: data["time"]?.string ?? "") { target.patch(["time": .string($0)]) }
+                NativeTextField(label: "天气", value: data["weather"]?.string ?? "") { target.patch(["weather": .string($0)]) }
+            }
+            NativeInspectorToggle(label: "内景", isOn: Binding(get: { data["interior"]?.bool ?? false }, set: { target.patch(["interior": .bool($0)]) }))
+            locationField
+        }
+        NativeInspectorSection(title: "出场角色") {
+            if characters.isEmpty && cast.isEmpty { Text("暂无角色").foregroundStyle(.secondary) }
+            ForEach(Array(characters.enumerated()), id: \.offset) { _, character in
+                let id = character["id"]?.string ?? ""
+                NativeInspectorToggle(label: character["name"]?.string ?? "未命名角色", isOn: Binding(get: { cast.contains(id) }, set: { _ in target.send("editor.toggleCharacter", ["characterId": .string(id)]) }))
+            }
+            ForEach(cast.filter { id in !characters.contains(where: { $0["id"]?.string == id }) }, id: \.self) { Text("失效角色引用 · " + $0).foregroundStyle(.secondary) }
+        }
+    }
+
+    /// The native location selector retains an explicit empty choice and a visible missing-entity choice.
+    private var locationField: some View {
+        NativeInspectorField(label: "地点") {
             Picker("地点", selection: Binding(get: { data["locationId"]?.string ?? "" }, set: {
                 if $0.isEmpty { target.clear("locationId") } else { target.patch(["locationId": .string($0)]) }
             })) {
@@ -52,11 +81,6 @@ struct NativeNodeFields: View {
                     Text(location["name"]?.string ?? "未命名").tag(location["id"]?.string ?? "")
                 }
             }
-            ForEach(Array(characters.enumerated()), id: \.offset) { _, character in
-                let id = character["id"]?.string ?? ""
-                Toggle(character["name"]?.string ?? "未命名角色", isOn: Binding(get: { cast.contains(id) }, set: { _ in target.send("editor.toggleCharacter", ["characterId": .string(id)]) }))
-            }
-            ForEach(cast.filter { id in !characters.contains(where: { $0["id"]?.string == id }) }, id: \.self) { Text("失效角色引用 · " + $0).foregroundStyle(.secondary) }
         }
     }
     private var locations: [HostJSON] { target.state.editor["settings"]?["locations"]?.array ?? [] }
@@ -72,17 +96,21 @@ private struct NativeImageFields: View {
     private var job: HostJSON { image["jobs"]?[target.id] ?? .null }
 
     var body: some View {
-        Section("图片生成") {
-            Picker("模型", selection: Binding(get: { data["model"]?.string ?? "" }, set: { target.patch(["model": .string($0)]) })) {
-                Text("跟随默认模型").tag("")
-                ForEach(Array((image["models"]?.array ?? []).enumerated()), id: \.offset) { _, model in
-                    Text(model["label"]?.string ?? "").tag(model["value"]?.string ?? "")
+        NativeInspectorSection(title: "图片生成") {
+            NativeInspectorField(label: "模型") {
+                Picker("模型", selection: Binding(get: { data["model"]?.string ?? "" }, set: { target.patch(["model": .string($0)]) })) {
+                    Text("跟随默认模型").tag("")
+                    ForEach(Array((image["models"]?.array ?? []).enumerated()), id: \.offset) { _, model in
+                        Text(model["label"]?.string ?? "").tag(model["value"]?.string ?? "")
+                    }
                 }
             }
-            Picker("尺寸", selection: Binding(get: { data["size"]?.string ?? "1024x1536" }, set: { target.patch(["size": .string($0)]) })) {
-                Text("1024 × 1024 · 方图").tag("1024x1024")
-                Text("1024 × 1536 · 竖图").tag("1024x1536")
-                Text("1536 × 1024 · 横图").tag("1536x1024")
+            NativeInspectorField(label: "尺寸") {
+                Picker("尺寸", selection: Binding(get: { data["size"]?.string ?? "1024x1536" }, set: { target.patch(["size": .string($0)]) })) {
+                    Text("1024 × 1024 · 方图").tag("1024x1024")
+                    Text("1024 × 1536 · 竖图").tag("1024x1536")
+                    Text("1536 × 1024 · 横图").tag("1536x1024")
+                }
             }
             if job["status"]?.string == "running" {
                 ProgressView("正在生成")

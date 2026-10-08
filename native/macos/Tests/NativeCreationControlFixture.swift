@@ -7,16 +7,26 @@ import Testing
 enum NativeCreationControlFixture {
     /// A unique title selects only the disposable fixture window, excluding the hosted application's main window.
     static func button(in window: NSWindow, named name: String = "新建短剧") async throws -> AXUIElement {
+        try await element(in: window, named: name, roles: [kAXButtonRole])
+    }
+
+    /// Named native inputs and buttons share one public accessibility lookup within the owned window.
+    static func element(in window: NSWindow, named name: String, roles: [String]) async throws -> AXUIElement {
+        try #require(await elements(in: window).first {
+            roles.contains(string($0, kAXRoleAttribute) ?? "")
+                && (string($0, kAXTitleAttribute) == name || string($0, kAXDescriptionAttribute) == name)
+        })
+    }
+
+    /// Traversal is restricted to the uniquely titled fixture so unrelated application windows cannot match.
+    static func elements(in window: NSWindow) async throws -> [AXUIElement] {
         window.title = "创建控件回归-" + UUID().uuidString
         let application = AXUIElementCreateApplication(getpid())
         _ = attribute(application, kAXWindowsAttribute)
         try await Task.sleep(for: .milliseconds(100))
         let windows = attribute(application, kAXWindowsAttribute) as? [AXUIElement] ?? []
         let owned = try #require(windows.first { string($0, kAXTitleAttribute) == window.title })
-        return try #require(descendants(owned).first {
-            string($0, kAXRoleAttribute) == kAXButtonRole
-                && (string($0, kAXTitleAttribute) == name || string($0, kAXDescriptionAttribute) == name)
-        })
+        return descendants(owned)
     }
 
     /// Strings retain the system-exposed control semantics rather than inspecting source or private view classes.
@@ -37,6 +47,16 @@ enum NativeCreationControlFixture {
         var size = CGSize.zero
         try #require(AXValueGetValue(geometry, .cgSize, &size))
         return size
+    }
+
+    /// Screen-space geometry allows independently rendered controls to be compared after native layout.
+    static func frame(_ element: AXUIElement) throws -> CGRect {
+        let value = try #require(attribute(element, kAXPositionAttribute))
+        try #require(CFGetTypeID(value) == AXValueGetTypeID())
+        let geometry = unsafeDowncast(value, to: AXValue.self)
+        var position = CGPoint.zero
+        try #require(AXValueGetValue(geometry, .cgPoint, &position))
+        return CGRect(origin: position, size: try size(element))
     }
 
     /// The supported press action invokes the production control's existing action owner.

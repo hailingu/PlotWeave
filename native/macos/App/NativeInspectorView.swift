@@ -34,16 +34,42 @@ private struct NativeNodeInspector: View {
     @State private var confirmDelete = false
 
     var body: some View {
-        Form {
-            NativeNodeFields(target: NativeNodeTarget(state: state, projectId: projectId, id: id), type: type, data: data)
-            Section {
-                Button("复制节点", systemImage: "square.on.square") { state.sendEditor("editor.duplicate", args: ["projectId": .string(projectId), "id": .string(id)]) }
-                Button("删除节点", systemImage: "trash", role: .destructive) { confirmDelete = true }
+        VStack(spacing: 0) {
+            NativeInspectorHeader(type: type, data: data)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    NativeNodeFields(target: NativeNodeTarget(state: state, projectId: projectId, id: id), type: type, data: data)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            actions
         }
-        .formStyle(.grouped).disabled(state.busy)
+        .font(.system(size: 13))
+        .textFieldStyle(.roundedBorder)
+        .toggleStyle(.switch)
+        .environment(\.nativeInspectorFields, true)
+        .disabled(state.busy)
         .confirmationDialog("删除这个节点及其连线？", isPresented: $confirmDelete) {
             Button("删除节点", role: .destructive) { state.sendEditor("editor.delete", args: ["projectId": .string(projectId), "id": .string(id)]) }
+        }
+    }
+
+    /// Fixed footer actions stay reachable while long node fields and stable list rows scroll independently.
+    private var actions: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 10) {
+                Button { state.sendEditor("editor.duplicate", args: ["projectId": .string(projectId), "id": .string(id)]) } label: {
+                    Label("复制节点", systemImage: "square.on.square").frame(maxWidth: .infinity)
+                }
+                Button(role: .destructive) { confirmDelete = true } label: {
+                    Label("删除节点", systemImage: "trash").frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(.bordered).controlSize(.regular)
+            .padding(16)
         }
     }
 }

@@ -16,12 +16,20 @@ struct NativeNodeLists: View {
     }
 
     var body: some View {
-        Section(title) {
+        NativeInspectorSection(title: title) {
             ForEach(rows, id: \.id) { row in
                 let item = row.value
                 let id = row.id
                 let index = row.index
-                Group {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("条目 \(index + 1)").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("删除条目", systemImage: "minus.circle", role: .destructive) {
+                            target.list("editor.deleteListItem", field: field, itemId: id)
+                        }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless).help("删除条目 \(index + 1)")
+                    }
                     if type == "dialogue" { NativeDialogueRow(target: target, id: id, item: item) }
                     else if type == "shot" { NativeShotRefRow(target: target, id: id, item: item) }
                     else {
@@ -29,13 +37,11 @@ struct NativeNodeLists: View {
                             target.list("editor.patchListItem", field: field, itemId: id, patch: ["label": .string($0)])
                         }
                     }
-                    Button("删除条目", systemImage: "minus.circle", role: .destructive) {
-                        target.list("editor.deleteListItem", field: field, itemId: id)
-                    }
-                    Divider()
                 }
+                if id != rows.last?.id { Divider() }
             }
-            Button("添加条目", systemImage: "plus.circle") { target.list("editor.insertListItem", field: field) }
+            Button("添加条目", systemImage: "plus") { target.list("editor.insertListItem", field: field) }
+                .buttonStyle(.borderless)
         }
     }
 }
@@ -49,22 +55,30 @@ private struct NativeDialogueRow: View {
 
     var body: some View {
         Group {
-            Picker("行类型", selection: textBinding("kind", fallback: "line")) {
-                Text("台词").tag("line")
-                Text("动作").tag("action")
+            NativeInspectorField(label: "行类型") {
+                Picker("行类型", selection: textBinding("kind", fallback: "line")) {
+                    Text("台词").tag("line")
+                    Text("动作").tag("action")
+                }
+                .pickerStyle(.segmented)
             }
             if item["kind"]?.string != "action" {
-                Picker("说话人", selection: Binding(get: { item["speaker"]?.string ?? "" }, set: { patch(["speaker": $0.isEmpty ? .null : .string($0)]) })) {
-                    Text("未指定").tag("")
-                    if let speaker = item["speaker"]?.string, !characters.contains(where: { $0["id"]?.string == speaker }) { Text("失效引用 · " + speaker).tag(speaker) }
-                    ForEach(Array(characters.enumerated()), id: \.offset) { _, character in
-                        Text(character["name"]?.string ?? "未命名").tag(character["id"]?.string ?? "")
+                NativeInspectorField(label: "说话人") {
+                    Picker("说话人", selection: Binding(get: { item["speaker"]?.string ?? "" }, set: { patch(["speaker": $0.isEmpty ? .null : .string($0)]) })) {
+                        Text("未指定").tag("")
+                        if let speaker = item["speaker"]?.string, !characters.contains(where: { $0["id"]?.string == speaker }) { Text("失效引用 · " + speaker).tag(speaker) }
+                        ForEach(Array(characters.enumerated()), id: \.offset) { _, character in
+                            Text(character["name"]?.string ?? "未命名").tag(character["id"]?.string ?? "")
+                        }
                     }
                 }
-                Picker("位置", selection: textBinding("side", fallback: "left")) {
-                    Text("左侧").tag("left"); Text("右侧").tag("right")
+                NativeInspectorField(label: "位置") {
+                    Picker("位置", selection: textBinding("side", fallback: "left")) {
+                        Text("左侧").tag("left"); Text("右侧").tag("right")
+                    }
+                    .pickerStyle(.segmented)
                 }
-                Toggle("画外音", isOn: Binding(get: { item["vo"]?.bool ?? false }, set: { patch(["vo": .bool($0)]) }))
+                NativeInspectorToggle(label: "画外音", isOn: Binding(get: { item["vo"]?.bool ?? false }, set: { patch(["vo": .bool($0)]) }))
             }
             NativeTextField(label: item["kind"]?.string == "action" ? "动作描述" : "台词内容", value: item["text"]?.string ?? "") { patch(["text": .string($0)]) }
         }
@@ -90,15 +104,18 @@ private struct NativeShotRefRow: View {
 
     var body: some View {
         Group {
-            Picker("引用类型", selection: Binding(get: { item["kind"]?.string ?? "character" }, set: { patch(["kind": .string($0)]) })) {
-                Text("角色垫图").tag("character").disabled(mime.map { !$0.hasPrefix("image/") } ?? false)
-                Text("场景底图").tag("location").disabled(mime.map { !$0.hasPrefix("image/") } ?? false)
-                Text("音频").tag("audio").disabled(mime.map { !$0.hasPrefix("audio/") } ?? false)
+            NativeInspectorField(label: "引用类型") {
+                Picker("引用类型", selection: Binding(get: { item["kind"]?.string ?? "character" }, set: { patch(["kind": .string($0)]) })) {
+                    Text("角色垫图").tag("character").disabled(mime.map { !$0.hasPrefix("image/") } ?? false)
+                    Text("场景底图").tag("location").disabled(mime.map { !$0.hasPrefix("image/") } ?? false)
+                    Text("音频").tag("audio").disabled(mime.map { !$0.hasPrefix("audio/") } ?? false)
+                }
             }
             if let asset = item["assetId"]?.string {
                 Text((mime == nil ? "失效资产 · " : "资产 · ") + asset).font(.caption).foregroundStyle(.secondary)
             }
-            NativeTextField(label: "自由文案（输入后替换资产绑定）", value: item["label"]?.string ?? "") { patch(["label": .string($0)]) }
+            NativeTextField(label: "自由文案", value: item["label"]?.string ?? "") { patch(["label": .string($0)]) }
+            Text("编辑文案会替换资产绑定").font(.caption).foregroundStyle(.secondary)
         }
     }
 

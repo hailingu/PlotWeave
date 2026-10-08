@@ -18,9 +18,17 @@ struct NativeTextField: View {
     let onSubmit: (String) -> Void
     @State private var draft = ""
     @FocusState private var focused: Bool
+    @Environment(\.nativeInspectorFields) private var inspectorFields
 
     var body: some View {
+        if inspectorFields { NativeInspectorField(label: label) { input } }
+        else { input }
+    }
+
+    /// The presentation wrapper shares the existing draft, focus and incremental commit behavior.
+    private var input: some View {
         TextField(label, text: $draft, axis: .vertical)
+            .accessibilityLabel(label)
             .focused($focused)
             .onChange(of: draft) { _, updated in if focused && updated != value { onSubmit(updated) } }
             .onAppear { draft = value }
@@ -36,10 +44,18 @@ struct NativeNumberField: View {
     let onSubmit: (Double) -> Void
     @State private var draft = ""
     @FocusState private var focused: Bool
+    @Environment(\.nativeInspectorFields) private var inspectorFields
 
     var body: some View {
+        if inspectorFields { NativeInspectorField(label: label) { input } }
+        else { input }
+    }
+
+    /// Numeric drafts and explicit clearing remain native controls with one validation path.
+    private var input: some View {
         HStack {
             TextField(label, text: $draft).focused($focused)
+                .accessibilityLabel(label)
                 .onAppear { refresh() }
                 .onChange(of: value) { _, _ in if !focused { refresh() } }
                 .onChange(of: draft) { _, text in
