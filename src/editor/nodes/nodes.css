@@ -74,6 +74,19 @@
   font-size: 9px;
 }
 
+/* 仅节点内容中的人物标记使用设计稿中性色，列表与表单头像保留原展示。 */
+.pw-card .pw-node-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: var(--node-fill);
+  color: var(--node-text);
+  font-size: 11px;
+  line-height: 1;
+}
+
 /* 设置入口继续由宿主决定显示；两个旧变体使用同一中性配色。 */
 .pw-gear {
   width: 24px;

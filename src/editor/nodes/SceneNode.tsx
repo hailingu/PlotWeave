@@ -15,7 +15,7 @@ import { NodeKind } from './NodeKind'
  * 名称双击内联改名；⚙️ 打开设置面板（§4.3，编辑即命令）。
  */
 
-/** 在场角色头像串；条目已删除回落 ✕ 占位（SceneNode 拆分，issue #99）。 */
+/** 在场角色使用中性单字头像；条目已删除回落 ✕ 占位（issue #99）。 */
 function CharacterAvatarStrip({
   settings,
   characterIds,
@@ -28,17 +28,13 @@ function CharacterAvatarStrip({
       {characterIds.map((cid) => {
         const avatar = resolveCharacterAvatar(settings, cid)
         return avatar ? (
-          <span
-            key={cid}
-            className="pw-av"
-            style={{ background: avatar.gradient }}
-          >
+          <span key={cid} className="pw-av pw-node-avatar">
             {avatar.label}
           </span>
         ) : (
           <span
             key={cid}
-            className="pw-av pw-av-invalid"
+            className="pw-av pw-node-avatar pw-av-invalid"
             title="设定集条目已删除"
           >
             ✕

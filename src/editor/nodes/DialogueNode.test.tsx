@@ -28,7 +28,9 @@ vi.mock('@xyflow/react', async (importOriginal) => {
 afterEach(cleanup)
 
 const SETTINGS: ProjectSettings = {
-  characters: [{ id: 'c1', name: '林晚', gradient: 'g1' }],
+  characters: [
+    { id: 'c1', name: '林晚', gradient: 'linear-gradient(#a700ab, #047ad2)' },
+  ],
   locations: [],
 }
 
@@ -67,14 +69,23 @@ function setup(
     data: { name: data.name ?? '真相逼近', lines: data.lines ?? LINES },
     selected: false,
   } as unknown as NodeProps<DialogueFlowNode>
-  const { container, unmount } = render(
+  const { container, unmount, rerender } = render(
     <ReactFlowProvider>
       <NodeEditContext.Provider value={api}>
         <DialogueNode {...props} />
       </NodeEditContext.Provider>
     </ReactFlowProvider>,
   )
-  return { api, container, unmount }
+  /** 模拟设定集投影更新，保留同一对白与说话人引用。 */
+  const rerenderSettings = (settings: ProjectSettings) =>
+    rerender(
+      <ReactFlowProvider>
+        <NodeEditContext.Provider value={{ ...api, settings }}>
+          <DialogueNode {...props} />
+        </NodeEditContext.Provider>
+      </ReactFlowProvider>,
+    )
+  return { api, container, unmount, rerenderSettings }
 }
 
 describe('DialogueNode（气泡流卡）', () => {
@@ -93,12 +104,38 @@ describe('DialogueNode（气泡流卡）', () => {
     expect(screen.getByText('VO')).toBeTruthy()
   })
 
-  it('说话人头像：命中设定集渲染渐变头像；失效引用 ✕ 并加「已删除角色」前缀', () => {
+  it('说话人头像：命中设定集渲染中性头像；失效引用 ✕ 并加「已删除角色」前缀', () => {
     const { container } = setup()
     const avatar = container.querySelector('.pw-av-sm:not(.pw-av-invalid)')
     expect(avatar?.textContent).toBe('林')
+    expect((avatar as HTMLElement).style.background).toBe('')
     expect(container.querySelector('.pw-av-invalid')?.textContent).toBe('✕')
     expect(screen.getByText('已删除角色：')).toBeTruthy()
+  })
+
+  it('人物改名、删除及恢复时，同一说话人引用保持实时解析和失效提示', () => {
+    const { container, rerenderSettings } = setup()
+    rerenderSettings({
+      ...SETTINGS,
+      characters: [{ ...SETTINGS.characters[0], name: '顾宁' }],
+    })
+    expect(container.querySelector('.pw-node-avatar')?.textContent).toBe('顾')
+    rerenderSettings({ ...SETTINGS, characters: [] })
+    expect(container.querySelectorAll('.pw-av-invalid')).toHaveLength(2)
+    expect(screen.getAllByText('已删除角色：')).toHaveLength(2)
+    rerenderSettings(SETTINGS)
+    expect(container.querySelector('.pw-node-avatar')?.textContent).toBe('林')
+    expect(screen.getAllByText('已删除角色：')).toHaveLength(1)
+  })
+
+  it('没有说话人的台词不制造人物头像', () => {
+    const { container } = setup({
+      lines: [
+        { id: 'narration', kind: 'line', side: 'left', text: '雨停了。' },
+      ],
+    })
+    expect(screen.getByText('雨停了。')).toBeTruthy()
+    expect(container.querySelector('.pw-node-avatar')).toBeNull()
   })
 
   it('⚙️ 点击 toggleSettings 且阻止冒泡；openSettingsId 命中时展开设置面板', () => {

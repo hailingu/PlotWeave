@@ -31,7 +31,7 @@ afterEach(cleanup)
 
 const SETTINGS: ProjectSettings = {
   characters: [
-    { id: 'c1', name: '林晚', gradient: 'g1' },
+    { id: 'c1', name: '林晚', gradient: 'linear-gradient(#a700ab, #047ad2)' },
     { id: 'c2', name: '陈默', gradient: 'g2' },
   ],
   locations: [{ id: 'l1', name: '天台' }],
@@ -72,14 +72,23 @@ function setup(
     data: { ...DATA, ...data },
     selected: true,
   } as unknown as NodeProps<SceneFlowNode>
-  const { container, unmount } = render(
+  const { container, unmount, rerender } = render(
     <ReactFlowProvider>
       <NodeEditContext.Provider value={api}>
         <SceneNode {...props} />
       </NodeEditContext.Provider>
     </ReactFlowProvider>,
   )
-  return { api, container, unmount }
+  /** 模拟设定集投影更新，保留当前节点的人物 id 引用。 */
+  const rerenderSettings = (settings: ProjectSettings) =>
+    rerender(
+      <ReactFlowProvider>
+        <NodeEditContext.Provider value={{ ...api, settings }}>
+          <SceneNode {...props} />
+        </NodeEditContext.Provider>
+      </ReactFlowProvider>,
+    )
+  return { api, container, unmount, rerenderSettings }
 }
 
 describe('SceneNode（索引卡）', () => {
@@ -108,16 +117,32 @@ describe('SceneNode（索引卡）', () => {
     expect(screen.getByText('📍 未指定')).toBeTruthy()
   })
 
-  it('角色头像串：命中渲染渐变头像，失效 ✕；无角色不渲染头像区', () => {
+  it('角色头像串：命中渲染中性头像，失效 ✕；无角色不渲染头像区', () => {
     const { container, unmount } = setup()
     const avatars = container.querySelectorAll('.pw-avs .pw-av')
     expect(avatars).toHaveLength(2)
     expect(avatars[0].textContent).toBe('林')
+    expect((avatars[0] as HTMLElement).style.background).toBe('')
     expect(avatars[1].textContent).toBe('✕')
     unmount()
 
     const bare = setup({ characterIds: [] })
     expect(bare.container.querySelector('.pw-avs')).toBeNull()
+  })
+
+  it('设定集人物改名、删除及恢复时，同一引用的头像随投影更新', () => {
+    const { container, rerenderSettings } = setup()
+    const renamed: ProjectSettings = {
+      ...SETTINGS,
+      characters: [{ ...SETTINGS.characters[0], name: '顾宁' }],
+    }
+    rerenderSettings(renamed)
+    expect(container.querySelector('.pw-node-avatar')?.textContent).toBe('顾')
+    rerenderSettings({ ...SETTINGS, characters: [] })
+    expect(container.querySelectorAll('.pw-av-invalid')).toHaveLength(2)
+    rerenderSettings(SETTINGS)
+    expect(container.querySelector('.pw-node-avatar')?.textContent).toBe('林')
+    expect(container.querySelectorAll('.pw-av-invalid')).toHaveLength(1)
   })
 
   it('⚙️ 点击 toggleSettings；openSettingsId 命中时展开设置面板', () => {

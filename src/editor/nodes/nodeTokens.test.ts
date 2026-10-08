@@ -1,6 +1,6 @@
-/** 原生内容卡的颜色配对与外置端口样式合同（docs/ui-design.md §2.3／§4.3／§4.5）。
+/** 原生内容卡的颜色配对、头像与外置端口样式合同（docs/ui-design.md §2.3／§4.3／§4.5／§4.6）。
  * 解析真实 CSS，验证语义色、尺寸稳定和箭头布局；实际像素几何由浏览器补足。
- * 角色头像沿用用户内容配色，不纳入确定性颜色配对；普通边与常态装饰描边
+ * 卡片人物头像采用中性色并纳入文字配对；普通边与常态装饰描边
  * 不要求 3:1，增强对比度下边与端口必须达到此值。
  */
 import { readFileSync } from 'node:fs'
@@ -67,6 +67,17 @@ function style(selector: string, property: string, sheet = css): string {
 }
 
 describe('原生内容卡语义颜色', () => {
+  it('卡片人物头像为 19pt 中性圆形，卡片外头像不改动', () => {
+    const selector = '.pw-card .pw-node-avatar'
+    expect(style(selector, 'background')).toBe('var(--node-fill)')
+    expect(style(selector, 'color')).toBe('var(--node-text)')
+    expect(style(selector, 'width')).toBe('19px')
+    expect(style(selector, 'height')).toBe('19px')
+    expect(style(selector, 'border-radius')).toBe('50%')
+    expect(style(selector, 'font-size')).toBe('11px')
+    expect(style('.pw-av', 'color')).toBe('var(--on-saturated)')
+  })
+
   it.each(ENVS)(
     '$scheme / $contrast：正文、次级文字与选中标签均达到 4.5:1',
     (env) => {

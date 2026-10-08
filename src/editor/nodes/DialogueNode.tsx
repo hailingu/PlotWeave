@@ -14,7 +14,7 @@ import { NodeKind } from './NodeKind'
  * 名称双击内联改名；⚙️ 打开设置面板（§4.3，编辑即命令）。
  */
 
-/** 角色头像；设定集条目已删除时回落 ✕ 占位（DialogueNode 拆分，issue #99）。 */
+/** 中性说话人头像；设定集条目已删除时回落 ✕ 占位（issue #99）。 */
 function SpeakerAvatar({
   settings,
   speaker,
@@ -24,11 +24,12 @@ function SpeakerAvatar({
 }) {
   const avatar = resolveCharacterAvatar(settings, speaker)
   return avatar ? (
-    <span className="pw-av pw-av-sm" style={{ background: avatar.gradient }}>
-      {avatar.label}
-    </span>
+    <span className="pw-av pw-av-sm pw-node-avatar">{avatar.label}</span>
   ) : (
-    <span className="pw-av pw-av-sm pw-av-invalid" title="设定集条目已删除">
+    <span
+      className="pw-av pw-av-sm pw-node-avatar pw-av-invalid"
+      title="设定集条目已删除"
+    >
       ✕
     </span>
   )
