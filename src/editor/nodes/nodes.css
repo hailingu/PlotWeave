@@ -39,6 +39,10 @@
   flex: none;
   display: block;
 }
+.pw-node-glyph {
+  display: block;
+  flex: none;
+}
 .pw-node-detail {
   font-size: 11px;
   white-space: nowrap;
@@ -135,18 +139,32 @@
   font-size: 12px;
   color: var(--node-secondary);
 }
-.pw-index-ie {
+.pw-index-ie,
+.pw-index-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  margin: 0;
+  border: none;
+  min-width: 0;
+  min-height: 20px;
+  max-width: 100%;
   background: var(--node-fill);
-  border-radius: 5px;
-  padding: 1px 7px;
+  color: var(--node-secondary);
+  border-radius: 6px;
+  padding: 2px 6px;
   font-size: 11px;
+  line-height: 16px;
+}
+.pw-index-ie {
   font-weight: 600;
 }
-.pw-index-wx {
-  border: 1px solid var(--node-border);
-  border-radius: 99px;
-  padding: 1px 8px;
-  font-size: 10px;
+.pw-index-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pw-index-syn {
   margin: 12px 0 0;
@@ -333,8 +351,12 @@
   flex-wrap: wrap;
 }
 .pw-shot-ref {
+  margin: 0;
+  border: none;
+  min-width: 0;
   font-size: 11px;
   background: var(--node-fill);
+  color: var(--node-secondary);
   border-radius: 6px;
   padding: 3px 8px;
   display: inline-flex;
@@ -350,6 +372,10 @@
 .pw-shot-ref-broken,
 .pw-image-status-err {
   color: var(--danger);
+}
+.pw-shot-ref-broken {
+  display: inline-flex;
+  align-items: center;
 }
 .pw-shot-ref-add {
   background: transparent;

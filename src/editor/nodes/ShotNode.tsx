@@ -7,14 +7,19 @@ import type { AssetRef } from '../../model/document'
 import type { ShotFlowNode } from './types'
 import { NodePort } from './NodePort'
 import { NodeKind } from './NodeKind'
+import { NodeGlyph } from './NodeGlyph'
 
-/** 引用位 chip 的图标：角色垫图 / 场景底图 / 音频。 */
-const REF_ICONS = { character: '👤', location: '🏞', audio: '🎵' } as const
+/** 引用位名称独立于装饰图标，保留辅助技术可读的引用类型。 */
+const REF_LABELS = {
+  character: '角色垫图',
+  location: '场景底图',
+  audio: '音频',
+} as const
 
 /** 引用位缩略图（§8.1）：image/* 资产经项目资产门面解析媒体 URL 懒渲染；
  * 解析失败/非图片不渲染图，chip 回退纯文本。生命周期（issue #131）：
  * 换绑即清旧预览——读取在途或失败都不得以旧资产的图冒充当前引用
- *（alt 已是新资产，图文错配即「A 冒充 B」）；失败以 ⚠ 标记可定位
+ *（alt 已是新资产，图文错配即「A 冒充 B」）；失败以线条警告标记可定位
  *（title 带 relPath），img 加载/解码失败同款转失败态。
  * 换绑的清理时点（PR #197 评审）：调用方以 asset.id 作 key 重挂载本
  * 组件——初始态（无图）随首帧提交，不依赖 passive effect（其晚于
@@ -34,7 +39,7 @@ function RefThumb({
         className="pw-shot-ref-broken"
         title={`媒体不可读（${asset.relPath}）`}
       >
-        ⚠
+        <NodeGlyph name="warning" />
       </span>
     )
   if (!url) return null
@@ -64,15 +69,19 @@ function RefChip({
       : undefined
   const usableAsset = typeof asset?.mime === 'string' ? asset : undefined
   const unavailableReason = asset === undefined ? '缺失' : '不可用'
+  const label = reference.label ?? reference.assetId ?? ''
 
   return (
-    <span className="pw-shot-ref">
+    <fieldset
+      className="pw-shot-ref"
+      aria-label={`${REF_LABELS[reference.kind]}：${label}`}
+    >
       {reference.assetId !== undefined && usableAsset === undefined && (
         <span
           className="pw-shot-ref-broken"
           title={`引用资产${unavailableReason}（${reference.assetId}）`}
         >
-          ⚠
+          <NodeGlyph name="warning" />
         </span>
       )}
       {usableAsset?.mime.startsWith('image/') && (
@@ -82,8 +91,9 @@ function RefChip({
           asset={usableAsset}
         />
       )}
-      {REF_ICONS[reference.kind]} {reference.label ?? reference.assetId ?? ''}
-    </span>
+      <NodeGlyph name={reference.kind} />
+      {label}
+    </fieldset>
   )
 }
 

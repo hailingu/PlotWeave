@@ -3,10 +3,11 @@ import { useNodeEdit } from '../nodeEdit'
 import { SCENE_SHOT_HANDLE } from '../graphRules'
 import { NodeSettingsPanel, EditableName } from './settings/NodeSettingsPanel'
 import { NodeSettingsGear } from './settings/NodeSettingsGear'
-import { resolveCharacterAvatar, resolveLocationName } from '../settings'
+import { resolveCharacterAvatar } from '../settings'
 import type { SceneFlowNode } from './types'
 import { NodePort } from './NodePort'
 import { NodeKind } from './NodeKind'
+import { SceneMetadata } from './SceneMetadata'
 
 /**
  * 场景内容卡（docs/ui-design.md §4.2）：类型与编号、名称、地点摘要、
@@ -104,26 +105,6 @@ export function SceneNode({ id, data, selected }: NodeProps<SceneFlowNode>) {
         position={Position.Bottom}
         label="场景分镜出口"
       />
-    </div>
-  )
-}
-
-/** 场景摘要实时解析地点引用，删除地点仍显示可识别的失效状态。 */
-function SceneMetadata({ data }: { readonly data: SceneFlowNode['data'] }) {
-  const { settings } = useNodeEdit()
-  const locationName = data.locationId
-    ? resolveLocationName(settings, data.locationId)
-    : null
-  const invalidLocation = Boolean(data.locationId) && locationName === null
-  return (
-    <div className="pw-index-meta">
-      <span className="pw-index-ie">{data.interior ? '内' : '外'}</span>
-      <span className={invalidLocation ? 'pw-invalid' : undefined}>
-        {invalidLocation ? '⚠ 未指定' : `📍 ${locationName ?? '未指定'}`}
-      </span>
-      <span className="pw-index-sep">·</span>
-      <span>{data.time}</span>
-      {data.weather && <span className="pw-index-wx">{data.weather}</span>}
     </div>
   )
 }

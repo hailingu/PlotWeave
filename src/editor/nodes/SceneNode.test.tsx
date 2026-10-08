@@ -102,19 +102,27 @@ describe('SceneNode（索引卡）', () => {
   it('meta 行：外景 chip、地点名解析、时间与可选天气', () => {
     setup()
     expect(screen.getByText('外')).toBeTruthy()
-    expect(screen.getByText('📍 天台')).toBeTruthy()
-    expect(screen.getByText('🌙 夜')).toBeTruthy()
-    expect(screen.getByText('🌧 雨')).toBeTruthy()
+    expect(screen.getByText('天台')).toBeTruthy()
+    expect(screen.getByText('夜')).toBeTruthy()
+    expect(screen.getByText('雨')).toBeTruthy()
+    for (const name of ['地点：天台', '时间：夜', '天气：雨']) {
+      const tag = screen.getByRole('group', { name })
+      expect(tag.querySelector('svg')?.getAttribute('stroke')).toBe(
+        'currentColor',
+      )
+      expect(tag.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+    }
   })
 
-  it('地点引用失效（设定集已删）→ ⚠ 未指定 带失效样式；未指定地点 → 📍 未指定', () => {
+  it('地点引用失效仍有警告与失效样式，未指定地点使用常态标签', () => {
     const { container, unmount } = setup({ locationId: 'ghost' })
     const bad = container.querySelector('.pw-invalid')
-    expect(bad?.textContent).toBe('⚠ 未指定')
+    expect(bad?.textContent).toBe('未指定')
+    expect(screen.getByTitle('地点引用已失效')).toBeTruthy()
     unmount()
 
     setup({ locationId: undefined })
-    expect(screen.getByText('📍 未指定')).toBeTruthy()
+    expect(screen.getByRole('group', { name: '地点：未指定' })).toBeTruthy()
   })
 
   it('角色头像串：命中渲染中性头像，失效 ✕；无角色不渲染头像区', () => {

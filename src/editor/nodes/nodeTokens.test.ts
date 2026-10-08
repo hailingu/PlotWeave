@@ -1,4 +1,4 @@
-/** 原生内容卡的颜色配对、头像与外置端口样式合同（docs/ui-design.md §2.3／§4.3／§4.5／§4.6）。
+/** 原生内容卡的颜色配对、头像、标签与外置端口样式合同（docs/ui-design.md §2.3／§4.3／§4.5／§4.6／§4.7）。
  * 解析真实 CSS，验证语义色、尺寸稳定和箭头布局；实际像素几何由浏览器补足。
  * 卡片人物头像采用中性色并纳入文字配对；普通边与常态装饰描边
  * 不要求 3:1，增强对比度下边与端口必须达到此值。
@@ -67,6 +67,17 @@ function style(selector: string, property: string, sheet = css): string {
 }
 
 describe('原生内容卡语义颜色', () => {
+  it('场景信息和引用标签共用中性底、次级文字及圆角矩形（§4.7）', () => {
+    for (const selector of ['.pw-index-chip', '.pw-shot-ref']) {
+      expect(style(selector, 'background')).toBe('var(--node-fill)')
+      expect(style(selector, 'color')).toBe('var(--node-secondary)')
+      expect(style(selector, 'border-radius')).toBe('6px')
+      expect(style(selector, 'margin')).toBe('0')
+      expect(style(selector, 'border')).toBe('none')
+      expect(style(selector, 'min-width')).toBe('0')
+    }
+  })
+
   it('卡片人物头像为 19pt 中性圆形，卡片外头像不改动', () => {
     const selector = '.pw-card .pw-node-avatar'
     expect(style(selector, 'background')).toBe('var(--node-fill)')
