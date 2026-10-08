@@ -4,6 +4,18 @@
 
 日期：2026-10-04。基线：本地 `dev` 的 `752cd5c`，已合入 `codex/swiftui-react-flow` 的 `08653d2`。本记录对应所有者“补充 swiftui-react-flow 里和 dev 上对比缺失的功能”的任务，沿用[迁移计划](swiftui-react-flow-migration-plan.md)的单写入者、持久化和数据隔离合同。
 
+## 画布控件去重与 macOS 风格统一（2026-10-08）
+
+Swift 原生生产画布不再显示左下角重复的放大、缩小和适配按钮；底部 SwiftUI 缩放栏保留。顶部自动排布／六方向对齐及左下锁定／网格吸附均保留，后者改为横向胶囊。两组 Web 控件采用中性半透明材质、圆角按钮和单色图标，统一尺寸并移除硬分隔线；吸附开启使用中性底色，减少透明度与增强对比度时退化为实色。浏览器／Tauri 的缩放入口与样式保持。
+
+这是可逆的呈现调整，沿用现有真实行为与 CSS 语义回归。生产修改前在 [UI 状态矩阵 C6–C8](ui-design.md#37-对齐吸附与-json-导出的状态回归矩阵) 记录了宿主差异、保留交互及辅助显示偏好；验证结果已回填。不增加命令、文档状态、存储、重试或并发通道，也不增加动效，因此这些维度不扩展组合。
+
+仓库根目录使用 Node 24.18.0，`npm run format:check && npm run lint && npm run check:size && npm run typecheck:strict && npm run build && npm test` 全部通过：693 个维护文件、65 个排除项，208 个测试文件／3043 tests。聚焦 `npm test -- src/editor/EditorCanvasRegion.alignment.test.tsx src/editor/EditorCanvasRegion.keyboard.test.tsx src/editor/EditorCanvasRegion.renderIsolation.test.tsx src/editor/nativeCanvas/nativeEditorShell.test.tsx src/editor/useEditorPersistence.test.tsx src/styles/sheetTokens.test.ts src/moduleGraph.test.ts` 通过 7 文件／168 tests。首次全量运行有 17 项进程身份／监督相关测试被沙箱的 `ps` 限制阻断，沙箱外同一 `npm test` 全绿。
+
+`npm run build:native-canvas` 通过，保留现有大 chunk 提示。临时本机预览直接挂载生产 `EditorView` 和合成节点，保存回调仅收集内存值，宿主服务为显式夹具，不读取用户项目或调用模型。通过可见按钮驱动对齐、吸附开关、锁定与现有原生缩放命令，读取真实节点／视口样式并核对双外观和辅助显示属性；这是 Web 控件预览，不代表原生窗口最终玻璃合成、真实系统偏好切换或 VoiceOver 已验收。
+
+文档没有配置的自动语义检查，已对照实现、状态矩阵和交叉引用结构化复核，`git diff --check` 通过。临时预览、验证构建及生成资源清理，任务前已有画布产物恢复。未修改 Swift／Rust 源码，未运行无改动的 Xcode／Cargo 路由；未提交、推送、执行覆盖率、SonarQube 或 PR CI。
+
 ## 原生应用图标修复：状态与不变量（2026-10-07）
 
 所有者截图显示原生版本启动后 Dock 使用占位图标。检查实际 Debug bundle，未声明 `CFBundleIconFile`，Resources 也没有图标。以下矩阵在工程配置修改前记录。现已复用 `src-tauri/icons/icon.icns`，工程通过资源引用打包同一文件；`native/macos/Info.plist` 声明图标，Debug／Release 均由 Xcode 合并生成其余应用元数据。[Apple 图标键合同](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html)规定系统从主资源目录解析该声明；[清单合并规则](https://developer.apple.com/documentation/bundleresources/managing-your-app-s-information-property-list)说明显式清单与生成字段的合并。

@@ -84,6 +84,7 @@ private struct NativeNodeCreationMenu: View {
                 Button(label) { state.sendEditor("editor.create", args: ["nodeType": .string(type)]) }
             }
         }
+        .menuIndicator(.hidden)
         .disabled(state.busy)
     }
 }

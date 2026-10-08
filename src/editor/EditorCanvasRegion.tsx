@@ -21,6 +21,7 @@ import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPersistence } from './useEditorPersistence'
 import type { CanvasView } from './useCanvasView'
 import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
+import './canvasControls.css'
 
 /** 横纵轴吸附间距与背景点阵共用画布单位，缩放时保持同一网格。 */
 const CANVAS_SNAP_GRID: [number, number] = [CANVAS_GRID_SIZE, CANVAS_GRID_SIZE]
@@ -72,9 +73,10 @@ export interface EditorCanvasRegionProps {
 function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
   const { project, doc } = props
   const [snapToGrid, setSnapToGrid] = useState(true)
+  const swiftHost = isSwiftHost()
   return (
     <div
-      className="canvas-root"
+      className={swiftHost ? 'canvas-root is-swift' : 'canvas-root'}
       ref={props.canvasRef}
       onDragOver={props.onCanvasDragOver}
       onDrop={props.onCanvasDrop}
@@ -124,6 +126,7 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
           onAlignNodes={props.onAlignNodes}
         />
         <CanvasLayoutControl
+          nativeZoom={swiftHost}
           snapToGrid={snapToGrid}
           onToggleSnap={() => setSnapToGrid((enabled) => !enabled)}
         />
@@ -155,18 +158,26 @@ function requestNodeInspector(
  * EditorCanvasRegion 引用。 */
 export const EditorCanvasRegion = memo(EditorCanvasRegionImpl)
 
-/** 缩放／适配／锁定与网格吸附继续使用左下角 React Flow 控件。 */
+/** 原生底栏拥有缩放与适配；锁定和吸附仍复用 React Flow 的会话交互。 */
 function CanvasLayoutControl({
+  nativeZoom,
   snapToGrid,
   onToggleSnap,
 }: {
+  /** 仅 Swift 底栏提供缩放，其他宿主保留 Web 入口。 */
+  readonly nativeZoom: boolean
   readonly snapToGrid: boolean
   readonly onToggleSnap: () => void
 }) {
   const snapLabel = `网格吸附：${snapToGrid ? '开' : '关'}`
   return (
     /* Controls 不转发 role；清空其无 role 容器的默认标签，保留各按钮名称。 */
-    <Controls aria-label="">
+    <Controls
+      aria-label=""
+      showZoom={!nativeZoom}
+      showFitView={!nativeZoom}
+      orientation={nativeZoom ? 'horizontal' : 'vertical'}
+    >
       <button
         type="button"
         className="react-flow__controls-button"
