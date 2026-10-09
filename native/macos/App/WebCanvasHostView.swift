@@ -28,6 +28,7 @@ struct WebCanvasHostView: NSViewRepresentable {
         )
     }
 
+    /// Creates one retained canvas; Debug opts in to public WebKit timeline inspection.
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(
@@ -39,6 +40,9 @@ struct WebCanvasHostView: NSViewRepresentable {
         webView.identifier = NSUserInterfaceItemIdentifier("plotweave.canvas")
         webView.navigationDelegate = context.coordinator
         webView.allowsMagnification = false
+        #if DEBUG
+        webView.isInspectable = true
+        #endif
         context.coordinator.loadCanvas(into: webView)
         context.coordinator.startAppearanceSync()
         return webView

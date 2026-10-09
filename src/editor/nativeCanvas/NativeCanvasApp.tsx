@@ -1,3 +1,4 @@
+import { Profiler, useRef } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -14,6 +15,11 @@ import {
 import { useDemoEditor } from './useDemoEditor'
 import { DEMO_GRAPH_LABEL } from './demoGraph'
 import { useNativeCanvasLifecycle } from './useNativeCanvasLifecycle'
+import { useCanvasPerformance } from '../useCanvasPerformance'
+import {
+  CanvasPerformancePanel,
+  CanvasPerformanceToggle,
+} from '../CanvasPerformancePanel'
 
 /**
  * P1 原生视觉首片的画布演示页（docs/swiftui-react-flow-migration-plan.md
@@ -62,40 +68,82 @@ const DEMO_IMAGE_GEN_API: ImageGenApi = {
 /** 装配演示会话、宿主握手与外观同步，复用编辑器画布能力。 */
 export function NativeCanvasApp() {
   const editor = useDemoEditor()
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const perf = useCanvasPerformance({
+    canvas: 'demo',
+    nodeCount: editor.nodes.length,
+    edgeCount: editor.edges.length,
+    onNodesChange: editor.onNodesChange,
+    canvasRef,
+  })
 
   useNativeCanvasLifecycle()
 
   return (
     <div style={VIEWPORT_STYLE}>
-      <div className="canvas-root" style={{ position: 'relative' }}>
+      <div
+        className="canvas-root"
+        ref={canvasRef}
+        data-canvas-effects={perf.renderingMode}
+        style={{ position: 'relative' }}
+      >
         <ImageGenContext.Provider value={DEMO_IMAGE_GEN_API}>
           <NodeEditContext.Provider value={editor.nodeEditApi}>
-            <ReactFlow
-              nodes={editor.nodes}
-              edges={editor.edges}
-              nodeTypes={canvasNodeTypes}
-              edgeTypes={canvasEdgeTypes}
-              proOptions={{ hideAttribution: true }}
-              onNodesChange={editor.onNodesChange}
-              onEdgesChange={editor.onEdgesChange}
-              onConnect={editor.onConnect}
-              isValidConnection={editor.isValidConnection}
-              /* 演示页无命令栈，禁用内置 Delete（删除走节点设置面板 ⧉/🗑） */
-              deleteKeyCode={null}
-              fitView
-            >
-              <Background
-                variant={BackgroundVariant.Dots}
-                gap={CANVAS_DOT_GAP}
-                size={1}
-                color="var(--canvas-dot)"
-              />
-              <Controls showInteractive={false} />
-            </ReactFlow>
+            <Profiler id="demo-canvas" onRender={perf.onRender}>
+              <DemoCanvas editor={editor} perf={perf} />
+            </Profiler>
           </NodeEditContext.Provider>
         </ImageGenContext.Provider>
         <div style={BADGE_STYLE}>{DEMO_GRAPH_LABEL} · P1 视觉首片 · 不落盘</div>
       </div>
     </div>
+  )
+}
+
+/** 演示入口的框架接线与诊断共用同一挂载树，开关不重新创建画布。 */
+function DemoCanvas({
+  editor,
+  perf,
+}: {
+  readonly editor: ReturnType<typeof useDemoEditor>
+  readonly perf: ReturnType<typeof useCanvasPerformance>
+}) {
+  return (
+    <ReactFlow
+      nodes={editor.nodes}
+      edges={editor.edges}
+      nodeTypes={canvasNodeTypes}
+      edgeTypes={canvasEdgeTypes}
+      proOptions={{ hideAttribution: true }}
+      onNodesChange={perf.onNodesChange}
+      {...(perf.onNodeDragStart && { onNodeDragStart: perf.onNodeDragStart })}
+      {...(perf.onNodeDragStop && { onNodeDragStop: perf.onNodeDragStop })}
+      {...(perf.onNodeDrag && { onNodeDrag: perf.onNodeDrag })}
+      onEdgesChange={editor.onEdgesChange}
+      onConnect={editor.onConnect}
+      isValidConnection={editor.isValidConnection}
+      /* 演示页无命令栈，禁用内置 Delete（删除走节点设置面板 ⧉/🗑） */
+      deleteKeyCode={null}
+      fitView
+    >
+      <Background
+        variant={BackgroundVariant.Dots}
+        gap={CANVAS_DOT_GAP}
+        size={1}
+        color="var(--canvas-dot)"
+      />
+      <Controls showInteractive={false}>
+        <CanvasPerformanceToggle
+          enabled={perf.enabled}
+          onToggle={perf.toggle}
+        />
+      </Controls>
+      <CanvasPerformancePanel
+        enabled={perf.enabled}
+        report={perf.report}
+        renderingMode={perf.renderingMode}
+        onToggleEffects={perf.toggleEffects}
+      />
+    </ReactFlow>
   )
 }

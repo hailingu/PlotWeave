@@ -70,6 +70,8 @@ open -n native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app
 
 `build:native` 依次构建画布资源与原生应用。`open -n` 启动本次构建的新实例；重新构建后已运行的窗口不会自动替换资源。单独 `xcodebuild build` 不会重建画布资源，缺失时应用显示诊断；Xcode ⌘R 调试前先运行 `npm run build:native-canvas`。资源使用 IIFE 经典脚本与独立 CSS 适配 WKWebView 的 `file://` 加载，独立入口包含 React Flow 基础样式。
 
+排查拖动渲染耗时时可运行 `PLOTWEAVE_CANVAS_PROFILE=1 npm run build:native`，随后退出旧实例、启动新构建并开启画布左下角性能诊断。该显式模式使用 React 生产 profiling renderer，报告区分编辑器整体与画布子树；普通构建保留默认禁用 Profiler 的行为。指标边界、复测方式与测试证据见[画布性能诊断](canvas-performance-diagnostics.md)。
+
 本地原生数据根使用 Application Support 下的 `BundleID + ".development"`，当前为 `dev.plotweave.PlotWeaveNative.development`；首次真实请求才打开目录。它不读取旧 Tauri 数据根或历史 Keychain。测试注入临时根、合成密钥与传输，不使用该真实开发目录；请勿同时启动多个实例写同一根，本次实现仍以单用户单实例为边界。
 
 原生路由验证在仓库根目录执行 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`。回归覆盖真实 WKWebView 生产页面／夹具、会话桥、存储、媒体、设置、模型传输与退出；不能只检查资源入包。真实公网 TLS 信任链、模型计费、实际系统面板、视觉、中文输入法、VoiceOver 与触控板性能仍未验收，详见[功能补齐记录](../swiftui-react-flow-feature-parity.md)。`native/macos/build/` 与 `native/macos/App/WebCanvas/` 均为忽略的生成产物；纯验证输出在任务完成前删除，本地运行构建使用完后删除。

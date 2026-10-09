@@ -131,6 +131,44 @@ struct ShellWebCanvasLifecycleTests {
         #expect(hasBridge == true)
     }
 
+    /// Inspector access must opt in for Debug without opening Release pages;
+    /// the real shell keeps the configured WebView alive across panel updates.
+    @Test func canvasInspectionFollowsNativeBuildConfiguration() async throws {
+        let layout = ShellLayoutState()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(
+            rootView: NativeShellRoot(
+                layout: layout, appearance: CanvasAppearanceState(), demoMode: true
+            )
+        )
+        window.orderFront(nil)
+        defer { window.close() }
+
+        let webView = try await waitForWebView(in: window)
+        try await waitForReadyCanvas(webView)
+        #if DEBUG
+        #expect(webView.isInspectable, "Debug canvas must allow WebKit timeline recording")
+        #else
+        #expect(!webView.isInspectable, "Release canvas must retain WebKit's closed default")
+        #endif
+        let identity = ObjectIdentifier(webView)
+        layout.toggleInspector()
+        try await settle()
+        #expect(ObjectIdentifier(try await waitForWebView(in: window)) == identity)
+        #if DEBUG
+        #expect(webView.isInspectable)
+        #else
+        #expect(!webView.isInspectable)
+        #endif
+        try await waitForReadyCanvas(webView)
+    }
+
     /// Reads the semantic attribute the web side applies from host sync.
     private func hostColorScheme(_ webView: WKWebView) async throws -> String? {
         try await webView.evaluateJavaScript(

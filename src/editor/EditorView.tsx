@@ -14,6 +14,7 @@ import { NativeImageBridge } from './nativeCanvas/NativeImageBridge'
 import { ImageGenProvider } from './imagegen/ImageGenProvider'
 import { NodeEditContext } from './nodeEdit'
 import { EditorLayout } from './EditorLayout'
+import { EditorPerformanceBoundary } from './EditorPerformanceBoundary'
 import {
   useEditorController,
   type EditorController,
@@ -51,7 +52,9 @@ interface EditorViewProps {
 export function EditorView(props: EditorViewProps) {
   return (
     <ReactFlowProvider>
-      <EditorWindow {...props} />
+      <EditorPerformanceBoundary>
+        <EditorWindow {...props} />
+      </EditorPerformanceBoundary>
     </ReactFlowProvider>
   )
 }

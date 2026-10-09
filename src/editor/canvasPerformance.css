@@ -1,0 +1,58 @@
+/* 性能面板使用不透明语义面，不增加拖动期间的玻璃合成开销。 */
+.canvas-performance {
+  max-width: min(28rem, 70vw);
+  padding: 0.75rem;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface-window);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  user-select: text;
+}
+
+.canvas-performance p {
+  margin: 0.4rem 0;
+}
+.canvas-performance summary {
+  cursor: pointer;
+}
+.canvas-performance pre {
+  max-height: 18rem;
+  overflow: auto;
+  margin-bottom: 0;
+  font-size: inherit;
+}
+
+.canvas-performance-toggle svg[fill='none'] {
+  fill: none;
+}
+
+.canvas-effects-toggle {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* 诊断对照只去特效，不改变卡片尺寸、端口、连线或命中区域。 */
+.canvas-root[data-canvas-effects='reduced-effects'] .pw-card {
+  box-shadow: none;
+}
+
+.canvas-root[data-canvas-effects='reduced-effects'] .pw-card,
+.canvas-root[data-canvas-effects='reduced-effects'] .pw-card * {
+  transition-property: none;
+}
+
+/* 原生分支的特异性保证两种样式加载顺序均胜出；原生系统玻璃不受影响。 */
+.canvas-root.is-swift[data-canvas-effects='reduced-effects']
+  .react-flow__controls,
+.canvas-root[data-canvas-effects='reduced-effects'] .react-flow__controls {
+  background: var(--surface-window);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}

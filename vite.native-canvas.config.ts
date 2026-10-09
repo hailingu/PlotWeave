@@ -27,10 +27,22 @@ function fileCanvasEntry(): Plugin {
  * 打平进 app bundle，无 assets/ 子目录）。输出目录
  * native/macos/App/WebCanvas 为一次性构建产物（gitignore），构建命令见
  * package.json 的 build:native-canvas 脚本；主应用构建（vite.config.ts）
- * 不受影响。
+ * 不受影响。PLOTWEAVE_CANVAS_PROFILE=1 显式启用生产 Profiler；两种
+ * React DOM 入口必须解析到同一 renderer，保证原生命令的 flushSync 一致。
  */
-export default defineConfig({
+export default defineConfig(() => ({
   plugins: [react(), fileCanvasEntry()],
+  resolve: {
+    alias:
+      process.env.PLOTWEAVE_CANVAS_PROFILE === '1'
+        ? [
+            {
+              find: /^react-dom(?:\/client)?$/,
+              replacement: 'react-dom/profiling',
+            },
+          ]
+        : [],
+  },
   base: './',
   /* 演示页无 favicon 等公共资源需求，避免把 public/ 复制进 app bundle */
   publicDir: false,
@@ -51,4 +63,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))
