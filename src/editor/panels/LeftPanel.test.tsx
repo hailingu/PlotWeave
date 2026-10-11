@@ -380,6 +380,79 @@ const mkProps = (nodes: CanvasNode[], contentNodes: CanvasNode[]) =>
     },
   }) as Parameters<typeof LeftPanel>[0]
 
+describe('大纲反向滚动的可见性', () => {
+  it('折叠期间保留当前高亮，但首次选中和换选均不滚动', () => {
+    const scroll = vi.mocked(Element.prototype.scrollIntoView).mockClear()
+    const props = mkProps(nodes, nodes)
+    const { rerender } = render(
+      <LeftPanel {...props} open={false} selectedId="s1" />,
+    )
+    expect(
+      document.querySelector('.pw-panel-left')?.getAttribute('aria-hidden'),
+    ).toBe('true')
+    expect(document.querySelector('.pw-outline-on')?.textContent).toContain(
+      '场一',
+    )
+    expect(scroll).not.toHaveBeenCalled()
+    rerender(<LeftPanel {...props} open={false} selectedId="b1" />)
+    expect(document.querySelector('.pw-outline-on')?.textContent).toContain(
+      '节拍一',
+    )
+    expect(scroll).not.toHaveBeenCalled()
+  })
+
+  it('重新展开跟随隐藏期间的最新选择，清空后没有旧目标', () => {
+    const scroll = vi.mocked(Element.prototype.scrollIntoView).mockClear()
+    const props = mkProps(nodes, nodes)
+    const { rerender } = render(<LeftPanel {...props} selectedId="s1" />)
+    expect(scroll.mock.contexts[0]).toBe(row('场 01 · 场一'))
+    scroll.mockClear()
+    rerender(<LeftPanel {...props} open={false} selectedId="s1" />)
+    rerender(<LeftPanel {...props} open={false} selectedId="b1" />)
+    expect(scroll).not.toHaveBeenCalled()
+    rerender(<LeftPanel {...props} selectedId="b1" />)
+    expect(scroll).toHaveBeenCalledExactlyOnceWith({ block: 'nearest' })
+    expect(scroll.mock.contexts[0]).toBe(row('节拍 · 节拍一'))
+    rerender(<LeftPanel {...props} />)
+    expect(document.querySelector('.pw-outline-on')).toBeNull()
+    expect(scroll).toHaveBeenCalledTimes(1)
+  })
+
+  it('只在当前大纲页跟随选择，同选中位置帧不重复滚动', () => {
+    const scroll = vi.mocked(Element.prototype.scrollIntoView).mockClear()
+    const props = mkProps(nodes, nodes)
+    const { rerender } = render(<LeftPanel {...props} selectedId="s1" />)
+    fireEvent.click(screen.getByRole('button', { name: '设定集' }))
+    scroll.mockClear()
+    rerender(<LeftPanel {...props} selectedId="b1" />)
+    expect(scroll).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '大纲' }))
+    expect(scroll.mock.contexts[0]).toBe(row('节拍 · 节拍一'))
+    rerender(
+      <LeftPanel
+        {...props}
+        selectedId="b1"
+        nodes={nodes.map((node) => ({
+          ...node,
+          position: { x: node.position.x + 10, y: 0 },
+        }))}
+      />,
+    )
+    expect(scroll).toHaveBeenCalledTimes(1)
+  })
+
+  it('无选择或大纲没有该目标时不滚动、不产生高亮', () => {
+    const scroll = vi.mocked(Element.prototype.scrollIntoView).mockClear()
+    const props = mkProps(nodes, nodes)
+    const { rerender } = render(<LeftPanel {...props} />)
+    rerender(<LeftPanel {...props} selectedId="missing" />)
+    rerender(<LeftPanel {...props} open={false} selectedId="missing" />)
+    rerender(<LeftPanel {...props} selectedId="missing" />)
+    expect(document.querySelector('.pw-outline-on')).toBeNull()
+    expect(scroll).not.toHaveBeenCalled()
+  })
+})
+
 describe('大纲行序的拖拽跟随（issue #157 评审 4027623775）', () => {
   it('同 x 相等帧切换 id 决胜；越过 A 后行序翻转为真实 x 序', () => {
     const A = beat('n-a', '节拍A', 100) // id 字典序小于 n-b

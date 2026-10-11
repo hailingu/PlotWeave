@@ -55,7 +55,7 @@ interface LeftPanelProps {
   /** 大纲 ⇄ 画布联动（§3.5）：点击大纲行选中并居中该节点；可显式
    * undefined = 未接线（issue #231）。 */
   readonly onLocate?: ((id: string) => void) | undefined
-  /** 画布当前选中节点 id：大纲行反向高亮并滚动到可见；可显式
+  /** 画布当前选中节点 id：大纲行反向高亮，展开时滚动到可见；可显式
    * undefined = 无选中（issue #231）。 */
   readonly selectedId?: string | undefined
   /** 项目设定集（§5）：设定集分段的数据源。 */
@@ -333,19 +333,19 @@ function OutlineGroupBlock({
   )
 }
 
-/** 反向联动（LeftPanel 拆分，issue #99）：画布选中变化时大纲行滚动到可
- * 见（不抢横向滚动）。 */
+/** 反向联动：只让展开的大纲跟随当前选择，隐藏期间不触发布局／滚动。 */
 function useOutlineScrollFollow(
+  open: boolean,
   tab: LeftTab,
   selectedId: string | undefined,
   outlineRef: RefObject<HTMLElement>,
 ) {
   useEffect(() => {
-    if (tab !== 'outline' || !selectedId) return
+    if (!open || tab !== 'outline' || !selectedId) return
     outlineRef.current
       ?.querySelector('.pw-outline-on')
       ?.scrollIntoView({ block: 'nearest' })
-  }, [selectedId, tab, outlineRef])
+  }, [open, selectedId, tab, outlineRef])
 }
 
 /** 大纲分页主体（LeftPanel 拆分，issue #99）：原生 section + aria-label
@@ -444,7 +444,7 @@ export function LeftPanel({
   const groups = useOutlineGroups(nodes, contentNodes, edges, episodeTitles)
   const outlineRef = useRef<HTMLElement>(null)
   const dnd = useOutlineDnD(onOutlineDrop)
-  useOutlineScrollFollow(tab, selectedId, outlineRef)
+  useOutlineScrollFollow(open, tab, selectedId, outlineRef)
 
   return (
     <aside
