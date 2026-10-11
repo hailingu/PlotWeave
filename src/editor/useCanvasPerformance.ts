@@ -95,13 +95,24 @@ function useMeasuredDragLifecycle(
     input
   const start = useCallback<OnNodeDrag<CanvasNode>>(
     (event, node, nodes) => {
+      const callbackAt = performance.now()
       recorder.start(
         { nodeCount, edgeCount, draggedNodeCount: nodes.length },
         renderingMode,
         primaryElement(canvasRef, node),
       )
+      const readyAt = performance.now()
       try {
-        onNodeDragStart?.(event, node, nodes)
+        try {
+          onNodeDragStart?.(event, node, nodes)
+        } finally {
+          recorder.recordStartup(
+            event.timeStamp,
+            callbackAt,
+            readyAt,
+            performance.now(),
+          )
+        }
       } catch (error) {
         recorder.finish('interrupted')
         throw error

@@ -60,6 +60,35 @@ function ReactPerformanceSummary({
   )
 }
 
+/** 启动统计独立于位置回调，普通生产构建也可定位首次初始化的开销。 */
+function DragStartupSummary({
+  startup,
+}: {
+  readonly startup: CanvasPerformanceReport['startup']
+}) {
+  if (!startup) return null
+  return (
+    <>
+      <p>
+        启动事件到回调{' '}
+        {startup.inputDelayMs === null
+          ? '未采到'
+          : `${startup.inputDelayMs.toFixed(1)}ms`}
+      </p>
+      <p>
+        诊断初始化 {startup.diagnosticsMs.toFixed(1)}ms · 业务启动{' '}
+        {startup.handlerMs.toFixed(1)}ms
+      </p>
+      <p>
+        启动到首位置{' '}
+        {startup.firstPositionMs === null
+          ? '未采到'
+          : `${startup.firstPositionMs.toFixed(1)}ms`}
+      </p>
+    </>
+  )
+}
+
 /** 分开显示事件到回调和回调到 DOM；无有效时钟样本不显示零延迟。 */
 function DragLatencySummary({
   report,
@@ -131,6 +160,7 @@ function CanvasPerformancePanelImpl({
               · 超过 32ms：{report.frames.over32Ms}
             </p>
             <ReactPerformanceSummary report={report} />
+            <DragStartupSummary startup={report.startup} />
             <DragLatencySummary report={report} />
             <details>
               <summary>查看 / 复制 JSON</summary>

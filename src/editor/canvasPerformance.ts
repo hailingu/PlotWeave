@@ -21,7 +21,7 @@ interface CanvasSize {
 
 /** 消费者可见的脱敏报告；null 明确表示能力不可用或没有 React 样本。 */
 export interface CanvasPerformanceReport extends CanvasSize {
-  version: 4
+  version: 5
   canvas: 'editor' | 'demo'
   renderingMode: 'standard' | 'reduced-effects'
   outcome: 'completed' | 'interrupted' | 'disabled'
@@ -35,6 +35,13 @@ export interface CanvasPerformanceReport extends CanvasSize {
   longTasks: TimingSummary | null
   input: CanvasDragLatencyReport['input']
   dom: CanvasDragLatencyReport['dom']
+  /** 仅开始回调的阶段计时；首位置包含后续用户停顿，不等同 CPU 耗时。 */
+  startup: {
+    inputDelayMs: number | null
+    diagnosticsMs: number
+    handlerMs: number
+    firstPositionMs: number | null
+  } | null
 }
 
 /** 一段采样独占其 rAF 与 observer，过期回调通过会话身份隔离。 */
@@ -45,6 +52,7 @@ interface DragSession {
   frameId: number | null
   observer: PerformanceObserver | null
   latency: ReturnType<typeof createCanvasDragLatency>
+  startupAt: number | null
 }
 
 /** 创建无样本的时间汇总。 */
@@ -67,7 +75,7 @@ function newReport(
   renderingMode: CanvasPerformanceReport['renderingMode'],
 ): CanvasPerformanceReport {
   return {
-    version: 4,
+    version: 5,
     canvas,
     renderingMode,
     nodeCount: size.nodeCount,
@@ -91,6 +99,7 @@ function newReport(
     longTasks: null,
     input: null,
     dom: null,
+    startup: null,
   }
 }
 
@@ -140,10 +149,32 @@ class CanvasPerformanceRecorder {
       frameId: null,
       observer: null,
       latency: createCanvasDragLatency(primaryElement),
+      startupAt: null,
     }
     this.session = session
     this.observeLongTasks(session)
     this.scheduleFrame(session)
+  }
+
+  /** hook 在业务 start 的 finally 中记录阶段，异常报告也保留耗时且不留源事件。 */
+  recordStartup(
+    eventAt: number,
+    callbackAt: number,
+    readyAt: number,
+    handlerEndedAt: number,
+  ): void {
+    const session = this.session
+    if (!session) return
+    session.startupAt = callbackAt
+    session.report.startup = {
+      inputDelayMs:
+        Number.isFinite(eventAt) && eventAt >= 0 && eventAt <= callbackAt
+          ? callbackAt - eventAt
+          : null,
+      diagnosticsMs: Math.max(0, readyAt - callbackAt),
+      handlerMs: Math.max(0, handlerEndedAt - readyAt),
+      firstPositionMs: null,
+    }
   }
 
   /** 框架拖动回调带来真实事件时间与最新坐标，只读主节点，不改变更新调度。 */
@@ -151,7 +182,15 @@ class CanvasPerformanceRecorder {
     event: MouseEvent | TouchEvent,
     position: { x: number; y: number },
   ): void {
-    this.session?.latency.move(event, position)
+    const session = this.session
+    if (!session) return
+    if (session.report.startup && session.startupAt !== null) {
+      session.report.startup.firstPositionMs ??= Math.max(
+        0,
+        performance.now() - session.startupAt,
+      )
+    }
+    session.latency.move(event, position)
   }
 
   /** 同步计时保留原回调的结果与异常；没有活动段时完全直通。 */

@@ -69,5 +69,8 @@ it('开启后从演示画布拖动生成脱敏性能报告', async () => {
   expect(report.changes.position).toBeGreaterThan(0)
   expect(report.input?.events).toBeGreaterThan(0)
   expect(report.dom?.updates).toBeGreaterThan(0)
+  expect(report.version).toBe(5)
+  expect(report.startup?.firstPositionMs).toBeGreaterThanOrEqual(0)
+  expect(screen.getByText(/诊断初始化/)).toBeTruthy()
   expect(JSON.stringify(report)).not.toContain('demo-beat')
 })

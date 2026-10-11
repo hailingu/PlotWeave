@@ -60,7 +60,7 @@ describe('拖动性能采样器', () => {
       'reduced-effects',
       'standard',
     ])
-    expect(reports[0]?.version).toBe(4)
+    expect(reports[0]?.version).toBe(5)
     recorder.dispose()
   })
 
@@ -75,7 +75,7 @@ describe('拖动性能采样器', () => {
     expect(reports).toEqual([])
     recorder.finish('completed')
     expect(reports[0]).toMatchObject({
-      version: 4,
+      version: 5,
       react: { samples: 2, totalMs: 5, maxMs: 3, maxBaseMs: 6 },
       reactEditor: { samples: 2, totalMs: 25, maxMs: 15, maxBaseMs: 30 },
     })
