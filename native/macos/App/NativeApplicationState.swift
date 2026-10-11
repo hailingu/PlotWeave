@@ -7,6 +7,16 @@ import Observation
 final class NativeApplicationState {
     /// Only validated, monotonically ordered snapshots are exposed to native presentation.
     private(set) var projection: HostJSON = .object([:])
+    /// Domain values share the validated owner while observation stays local to their consumers.
+    private var appProjection: HostJSON = .null
+    /// Graph chrome changes do not invalidate unrelated navigation or model settings.
+    private var editorProjection: HostJSON = .null
+    /// AI consumers observe their own projection and current project identity.
+    private var aiProjection: HostJSON = .null
+    /// Image-job updates are independent from graph selection and history.
+    private var imageProjection: HostJSON = .null
+    /// Provider settings remain a read-only projection rather than an editable native document.
+    private var settingsProjection: HostJSON = .null
     /// A command failure remains visible until the next explicit action or page generation.
     private(set) var error: String?
     /// Native actions may await Web-owned saves; presentation disables conflicting controls.
@@ -21,34 +31,37 @@ final class NativeApplicationState {
     @ObservationIgnored private var pending = 0
 
     /// App projection describes navigation and project metadata, never a writable document.
-    var app: HostJSON { projection["app"] ?? .null }
+    var app: HostJSON { appProjection }
     /// Editor projection is visible only when it targets the currently open project.
     var editor: HostJSON {
-        let value = projection["editor"] ?? .null
+        let value = editorProjection
         return value["projectId"]?.string == projectId ? value : .null
     }
     /// AI projection is bound to the current project and carries no provider credentials.
     var ai: HostJSON {
-        let value = projection["ai"] ?? .null
+        let value = aiProjection
         return value["projectId"]?.string == projectId ? value : .null
     }
     /// Image jobs/models are read-only, and never survive a change of project identity.
     var image: HostJSON {
-        let value = projection["image"] ?? .null
+        let value = imageProjection
         return value["projectId"]?.string == projectId ? value : .null
     }
     /// Settings projection omits encrypted and plaintext credentials.
-    var settings: HostJSON { projection["settings"] ?? .null }
-    var projectId: String? { app["project"]?["id"]?.string }
-    var projectName: String { app["project"]?["name"]?.string ?? "PlotWeave" }
-    var route: String { app["route"]?.string ?? "loading" }
+    var settings: HostJSON { settingsProjection }
+    /// Identity changes revalidate retained feature projections without subscribing to unrelated app fields.
+    private(set) var projectId: String?
+    /// Window titles update only when the actual projected project name changes.
+    private(set) var projectName = "PlotWeave"
+    /// Navigation geometry does not subscribe to editor selection, history or background-job updates.
+    private(set) var route = "loading"
 
     /// Starts one page generation before observing its projection stream.
     func beginSession(_ sessionId: String) {
         guard sessionId != activeSession else { return }
         activeSession = sessionId
         lastSequence = 0
-        projection = .object([:])
+        replaceProjection(.object([:]))
         error = nil
         pending = 0
         busy = false
@@ -72,15 +85,28 @@ final class NativeApplicationState {
         if let app = decoded["app"], !["home", "editor", "settings"].contains(app["route"]?.string ?? "") {
             throw HostFailure(code: "PW_INVALID_PROJECTION", message: "原生界面收到无效的导航状态")
         }
-        projection = decoded
+        replaceProjection(decoded)
         lastSequence = sequence
+    }
+
+    /// Publish complete validated or reset values synchronously; Equatable observation skips unchanged domains.
+    private func replaceProjection(_ value: HostJSON) {
+        appProjection = value["app"] ?? .null
+        projectId = appProjection["project"]?["id"]?.string
+        projectName = appProjection["project"]?["name"]?.string ?? "PlotWeave"
+        route = appProjection["route"]?.string ?? "loading"
+        editorProjection = value["editor"] ?? .null
+        aiProjection = value["ai"] ?? .null
+        imageProjection = value["image"] ?? .null
+        settingsProjection = value["settings"] ?? .null
+        projection = value
     }
 
     /// A failed page cannot retain active edit controls or present an empty replacement document.
     func invalidate(_ message: String) {
         activeSession = nil
         coordinator = nil
-        projection = .object([:])
+        replaceProjection(.object([:]))
         pending = 0
         busy = false
         error = message

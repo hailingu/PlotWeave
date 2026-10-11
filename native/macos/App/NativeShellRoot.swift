@@ -27,6 +27,7 @@ struct NativeShellRoot: View {
         _windowPresentation = State(initialValue: windowPresentation)
     }
 
+    /// Compose the retained canvas and native panels from navigation, visibility and presentation state.
     var body: some View {
         @Bindable var layout = layout
         @Bindable var application = application
@@ -54,9 +55,8 @@ struct NativeShellRoot: View {
                 .toolbar { NativeInspectorToolbar(state: application, layout: layout) }
         }
         .navigationTitle(application.projectName)
-        .onChange(of: application.projection) { previous, current in
-            revealRequestedNodeInspector(previous: previous, current: current)
-        }
+        .background(NativeInspectorRequestObserver(state: application, layout: layout, available: editorPanelsAvailable)
+            .frame(width: 0, height: 0))
         .sheet(isPresented: $application.exportVisible) {
             NativeExportView(state: application, services: services ?? .shared, projectId: application.projectId ?? "")
         }
@@ -80,9 +80,36 @@ struct NativeShellRoot: View {
         .onDisappear { appearance.stopObserving() }
     }
 
-    /// Only new edit requests between valid snapshots of one project reveal the inspector; route and page restoration do not replay targets.
+    /// Project panels belong to an active editor; the isolated canvas fixture retains panel lifecycle coverage.
+    private var editorPanelsAvailable: Bool {
+        demoMode || (application.route == "editor" && application.projectId != nil)
+    }
+
+    /// Initial loading uses the same welcome geometry; isolated editor fixtures keep their existing window contract.
+    private var welcomeAvailable: Bool { !demoMode && ["loading", "home"].contains(application.route) }
+
+}
+
+/// Request observation stays in a leaf view so editor projections do not invalidate the entire shell composition.
+private struct NativeInspectorRequestObserver: View {
+    /// The application remains the ordered snapshot owner.
+    let state: NativeApplicationState
+    /// Explicit requests preserve the user's existing native visibility preference.
+    let layout: ShellLayoutState
+    /// Nonediting routes retain their original guard against replaying properties.
+    let available: Bool
+
+    /// A noninteractive retained observer keeps ordinary graph updates out of the root's dependencies.
+    var body: some View {
+        Color.clear.allowsHitTesting(false)
+            .onChange(of: state.projection) { previous, current in
+                revealRequestedNodeInspector(previous: previous, current: current)
+            }
+    }
+
+    /// Only new edit requests between valid snapshots of one project reveal the inspector; restoration never replays targets.
     private func revealRequestedNodeInspector(previous: HostJSON, current: HostJSON) {
-        guard editorPanelsAvailable,
+        guard available,
               previous["app"]?["route"]?.string == "editor", current["app"]?["route"]?.string == "editor",
               let project = current["app"]?["project"]?["id"]?.string,
               previous["app"]?["project"]?["id"]?.string == project,
@@ -97,13 +124,5 @@ struct NativeShellRoot: View {
         let changedTarget = previousEditor["editingNodeId"]?.string != target
         if newRequest || changedTarget { layout.inspectorVisible = true }
     }
-
-    /// Project panels belong to an active editor; the isolated canvas fixture retains panel lifecycle coverage.
-    private var editorPanelsAvailable: Bool {
-        demoMode || (application.route == "editor" && application.projectId != nil)
-    }
-
-    /// Initial loading uses the same welcome geometry; isolated editor fixtures keep their existing window contract.
-    private var welcomeAvailable: Bool { !demoMode && ["loading", "home"].contains(application.route) }
 
 }
