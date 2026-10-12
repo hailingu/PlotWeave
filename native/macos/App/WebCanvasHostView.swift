@@ -108,6 +108,18 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
     private var mediaScheme: NativeMediaScheme?
     /// Current page UUID, advertised through the document-start marker.
     var sessionId: String { router.sessionId }
+    /// Production native request IDs remain monotonic for the retained document, independently of mounted presentation owners.
+    private var nativeIntentOrdinal = 0
+
+    /// Allocates a canonical JavaScript-safe identity; only a real document load resets the retirement sequence.
+    func nextNativeIntentId() throws -> String {
+        guard router.isActive else { throw HostFailure(code: "PW_STALE_SESSION", message: "原生命令所属页面已失效") }
+        guard nativeIntentOrdinal < 9_007_199_254_740_991 else {
+            throw HostFailure(code: "PW_NATIVE_INTENT_SEQUENCE_EXHAUSTED", message: "原生命令身份空间已耗尽，请保存并重新加载页面")
+        }
+        nativeIntentOrdinal += 1
+        return "native:\(nativeIntentOrdinal)"
+    }
     /// The native application registers a current-page barrier before delivering quit to Web save owners.
     var drainNativeIntents: (() async throws -> Void)?
     /// Final approval must also reject native actions admitted after quit event delivery.
@@ -179,6 +191,7 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         self.webView = webView
         mediaScheme?.cancelAll()
         router.beginSession()
+        nativeIntentOrdinal = 0
         services.connect(self)
         installHostScript(in: webView.configuration.userContentController)
         loadedReloadToken = state.reloadToken

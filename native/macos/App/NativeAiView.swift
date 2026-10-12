@@ -6,6 +6,8 @@ struct NativeAiView: View {
     let projectId: String
     @State private var draft = ""
     @State private var confirmClear = false
+    /// This presentation token permits only the current submission to consume an unchanged draft.
+    @State private var pendingSend: UUID?
     private var ai: HostJSON { state.ai }
     private var busy: Bool { ai["busy"]?.bool == true }
     private var ready: Bool { ai["ready"]?.bool == true }
@@ -28,6 +30,7 @@ struct NativeAiView: View {
             composer
         }
         .padding(14)
+        .onDisappear { pendingSend = nil }
         .confirmationDialog("清空当前 AI 会话？", isPresented: $confirmClear) {
             Button("清空会话", role: .destructive) { send("ai.clear", args: ["confirmed": .bool(true)]) }
         } message: { Text("未确认的改动预览也会清除，此操作无法撤销。") }
@@ -88,15 +91,26 @@ struct NativeAiView: View {
                     Button("取消请求", systemImage: "stop.circle") { send("ai.cancel") }
                 } else {
                     Button("发送", systemImage: "paperplane") {
-                        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !text.isEmpty else { return }
-                        draft = ""
-                        send("ai.send", args: ["text": .string(text)])
+                        sendDraft()
                     }
                     .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(!ready || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!ready || pendingSend != nil || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
+        }
+    }
+
+    /// Rejected sends retain their prompt; a successful Web acknowledgment consumes only the exact submitted snapshot.
+    private func sendDraft() {
+        let submitted = draft
+        let text = submitted.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard pendingSend == nil, ready, !busy, !text.isEmpty else { return }
+        let token = UUID()
+        pendingSend = token
+        state.send("ai.send", args: ["projectId": .string(projectId), "text": .string(text)]) { result in
+            guard pendingSend == token else { return }
+            pendingSend = nil
+            if case .success = result, draft == submitted { draft = "" }
         }
     }
 

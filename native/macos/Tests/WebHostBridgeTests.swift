@@ -6,6 +6,29 @@ import WebKit
 /// Real WebKit exercises session trust and projection/intent invalidation at their host entry points.
 @MainActor
 struct WebHostBridgeTests {
+    /// Native identities belong to the retained page, survive application-state reconnects, and reset only on real reload.
+    @Test func nativeIntentIdentityUsesCurrentPageOrdinal() async throws {
+        let fixture = try WebFixture()
+        defer { fixture.close() }
+        try await fixture.waitUntilReady()
+        try await fixture.recordNativeIds()
+        let first = NativeApplicationState()
+        first.connect(fixture.coordinator)
+        _ = try await first.request("fixture.first")
+        let reconnected = NativeApplicationState()
+        reconnected.connect(fixture.coordinator)
+        _ = try await reconnected.request("fixture.second")
+        #expect(try await fixture.webView.evaluateJavaScript("window.nativeIds") as? [String] == ["native:1", "native:2"])
+        let previousSession = fixture.coordinator.sessionId
+        fixture.coordinator.loadCanvas(into: fixture.webView)
+        try await fixture.waitForCurrentDocument()
+        #expect(fixture.coordinator.sessionId != previousSession)
+        try await fixture.recordNativeIds()
+        reconnected.connect(fixture.coordinator)
+        _ = try await reconnected.request("fixture.reloaded")
+        #expect(try await fixture.webView.evaluateJavaScript("window.nativeIds") as? [String] == ["native:1"])
+    }
+
     /// A dead page cannot publish a read projection or accept a native edit after crash/dismantle.
     @Test func invalidationStopsProjectionAndNativeIntents() async throws {
         let fixture = try WebFixture()
@@ -216,6 +239,31 @@ struct WebHostBridgeTests {
             configuration.userContentController.add(coordinator, name: WebCanvasCoordinator.bridgeName)
             webView.navigationDelegate = coordinator
             coordinator.loadCanvas(into: webView)
+        }
+
+        /// Observes production native IDs through the actual page handler, without invoking any business service.
+        func recordNativeIds() async throws {
+            _ = try await webView.evaluateJavaScript("""
+                window.nativeIds = [];
+                (() => {
+                  const original = window.__pwNativeIntent;
+                  window.__pwNativeIntent = async request => {
+                    window.nativeIds.push(request.requestId); return await original(request);
+                  };
+                })(); null
+                """)
+        }
+
+        /// A direct coordinator reload must await the new document marker, rather than reuse the previous ready state.
+        func waitForCurrentDocument() async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while ContinuousClock.now < deadline {
+                let session = try await webView.evaluateJavaScript("window.__pwNativeHost?.sessionId") as? String
+                if session == coordinator.sessionId,
+                   try await webView.evaluateJavaScript("typeof window.__pwNativeIntent") as? String == "function" { return }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            throw HostFailure(code: "PW_TEST_DOCUMENT_TIMEOUT", message: "隔离 WK 重载未进入当前页面")
         }
 
         /// A synthetic native request remains inside the real WK promise until this fixture explicitly releases it.

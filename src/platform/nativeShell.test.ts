@@ -39,6 +39,177 @@ function request(command: string, requestId = 'r1', sessionId = 'page-a') {
   return { protocolVersion: 1, sessionId, requestId, command, args: {} }
 }
 
+/** Production native identities are allocated monotonically by the current page coordinator. */
+function orderedRequest(
+  ordinal: number,
+  command = 'editor.patch',
+  sessionId = 'page-a',
+) {
+  return request(command, `native:${ordinal}`, sessionId)
+}
+
+it('keeps an older pending identity replayable across later completion retirement and rejects conflicting reuse', async () => {
+  installHost()
+  let finish!: () => void
+  let mutations = 0
+  cleanups.push(
+    registerNativeIntentHandler('editor', (_command, args) => {
+      mutations++
+      return args.wait
+        ? new Promise<void>((resolve) => {
+            finish = resolve
+          })
+        : null
+    }),
+  )
+  const payload = { ...orderedRequest(1), args: { wait: true } }
+  const first = hostWindow.__pwNativeIntent?.(payload)
+  await vi.waitFor(() => expect(mutations).toBe(1))
+  for (let ordinal = 2; ordinal <= 4098; ordinal++) {
+    expect(
+      await hostWindow.__pwNativeIntent?.(orderedRequest(ordinal)),
+    ).toEqual({ ok: null })
+  }
+  const duplicate = hostWindow.__pwNativeIntent?.(payload)
+  expect(
+    await hostWindow.__pwNativeIntent?.({ ...payload, args: { wait: false } }),
+  ).toMatchObject({ error: { code: 'PW_REQUEST_CONFLICT' } })
+  finish()
+  expect(await duplicate).toEqual(await first)
+  expect(mutations).toBe(4098)
+  expect(await hostWindow.__pwNativeIntent?.(orderedRequest(2))).toMatchObject({
+    error: { code: 'PW_NATIVE_INTENT_RETIRED' },
+  })
+  expect(await hostWindow.__pwNativeIntent?.(orderedRequest(4099))).toEqual({
+    ok: null,
+  })
+  expect(await hostWindow.__pwNativeIntent?.(payload)).toMatchObject({
+    error: { code: 'PW_NATIVE_INTENT_RETIRED' },
+  })
+  expect(mutations).toBe(4099)
+}, 15000)
+
+it('rejects actual in-flight capacity and admits an explicit retry after completion without repeating the retired action', async () => {
+  installHost()
+  const completions: Array<() => void> = []
+  cleanups.push(
+    registerNativeIntentHandler(
+      'editor',
+      () =>
+        new Promise<void>((resolve) => {
+          completions.push(resolve)
+        }),
+    ),
+  )
+  const pending = Array.from({ length: 4096 }, (_, index) =>
+    hostWindow.__pwNativeIntent?.(orderedRequest(index + 1)),
+  )
+  expect(
+    await hostWindow.__pwNativeIntent?.(orderedRequest(4097)),
+  ).toMatchObject({ error: { code: 'PW_REQUEST_LIMIT' } })
+  await vi.waitFor(() => expect(completions).toHaveLength(4096))
+  completions[0]?.()
+  expect(await pending[0]).toEqual({ ok: null })
+  const retry = hostWindow.__pwNativeIntent?.(orderedRequest(4097))
+  await vi.waitFor(() => expect(completions).toHaveLength(4097))
+  completions.forEach((resolve) => resolve())
+  expect(await retry).toEqual({ ok: null })
+  await Promise.all(pending)
+  expect(await hostWindow.__pwNativeIntent?.(orderedRequest(1))).toMatchObject({
+    error: { code: 'PW_NATIVE_INTENT_RETIRED' },
+  })
+  expect(completions).toHaveLength(4097)
+}, 15000)
+
+it.each([
+  'native:0',
+  'native:-1',
+  'native:01',
+  'native:1.0',
+  'native:NaN',
+  'native:9007199254740992',
+])('rejects a malformed reserved identity %s before mutation', async (id) => {
+  installHost()
+  const action = vi.fn()
+  cleanups.push(registerNativeIntentHandler('editor', action))
+  expect(
+    await hostWindow.__pwNativeIntent?.(request('editor.patch', id)),
+  ).toMatchObject({ error: { code: 'PW_INVALID_NATIVE_INTENT' } })
+  expect(action).not.toHaveBeenCalled()
+})
+
+it('a real page identity resets retirement and an old late completion cannot retire current results', async () => {
+  installHost()
+  let finish!: () => void
+  let value = ''
+  cleanups.push(
+    registerNativeIntentHandler('editor', (_command, args) => {
+      value = String(args.value)
+      return args.wait
+        ? new Promise<void>((resolve) => {
+            finish = resolve
+          })
+        : null
+    }),
+  )
+  const old = hostWindow.__pwNativeIntent?.({
+    ...orderedRequest(1),
+    args: { wait: true, value: 'old' },
+  })
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+  installHost('page-b')
+  expect(
+    await hostWindow.__pwNativeIntent?.({
+      ...orderedRequest(1, 'editor.patch', 'page-b'),
+      args: { value: 'new' },
+    }),
+  ).toEqual({ ok: null })
+  finish()
+  expect(await old).toMatchObject({ error: { code: 'PW_STALE_SESSION' } })
+  expect(
+    await hostWindow.__pwNativeIntent?.({
+      ...orderedRequest(1, 'editor.patch', 'page-b'),
+      args: { value: 'new' },
+    }),
+  ).toEqual({ ok: null })
+  expect(value).toBe('new')
+})
+
+it('continues editing and navigation beyond the retained page result window without replaying retired mutations', async () => {
+  installHost()
+  let value = 0
+  let route = 'editor'
+  cleanups.push(
+    registerNativeIntentHandler('editor', (_command, args) => {
+      value = Number(args.value)
+    }),
+  )
+  cleanups.push(
+    registerNativeIntentHandler('app', () => {
+      route = 'home'
+    }),
+  )
+  for (let ordinal = 1; ordinal <= 4097; ordinal++) {
+    const reply = await hostWindow.__pwNativeIntent?.({
+      ...orderedRequest(ordinal),
+      args: { value: ordinal },
+    })
+    expect(reply).toEqual({ ok: null })
+  }
+  expect(value).toBe(4097)
+  expect(
+    await hostWindow.__pwNativeIntent?.({
+      ...orderedRequest(1),
+      args: { value: 1 },
+    }),
+  ).toMatchObject({ error: { code: 'PW_NATIVE_INTENT_RETIRED' } })
+  expect(value).toBe(4097)
+  expect(
+    await hostWindow.__pwNativeIntent?.(orderedRequest(4098, 'app.home')),
+  ).toEqual({ ok: null })
+  expect(route).toBe('home')
+}, 15000)
+
 describe('native shell intent ownership', () => {
   it('shares an in-flight result and preserves completion without repeating a mutation', async () => {
     installHost()

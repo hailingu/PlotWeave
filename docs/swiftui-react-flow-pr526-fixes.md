@@ -154,3 +154,19 @@
 - 修复后集中 `NativeProductionLifecycleTests`、`WebHostBridgeTests`、`HostQuitTests`、`NativeWindowLifecycleTests`、`NativeApplicationStateTests` 和 `NativeSettingsDraftLifecycleTests` **21 tests／6 suites 全通过，TEST SUCCEEDED**（10.043 秒）。三种生产闸门验证桥前／fingerprint 最后字段实际落盘、失败时 false／诊断保留及明确重试 true；宿主最终批准验证晚到意图被拒绝、取消可达和后续重新批准，取消旧 delivery 回归不重放事件。原页面失效／重连／身份回归仍通过；未单独调用真实系统菜单或注入真实计费请求。
 - 源码 224／215／380 行，测试 279／285 行，修改单元低于 80 代码行；无配置复杂度工具，人工复核同步登记点、两个原生入口、弱页归属、await 前后取消检查与最终批准的主线程同步守卫。持久化、UI、P3 与 F05 已同步，文档无自动语义检查；Prettier 与 `git diff --check` 通过。
 - 仓库根完整 native Scope Routing（与 R28 的完整命令相同）**726 维护文件、403 画布模块、214 tests／51 suites 全通过，TEST SUCCEEDED**（79.420 秒）。最终提交／推送门禁与 CI 在 PR 按最终 commit 绑定；测试只使用注入服务根和合成字段，不触达真实数据、Keychain 或模型。P5 人工验收和真实 WebKit 进程 kill 仍保留既有缺口。
+
+## 原生请求退役与 AI 发送草稿
+
+`b8c83fa` 的一轮后续评审指出两条独立问题，以下矩阵在生产修改前记录。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 实现前选定验证／缺口 |
+| --- | --- | --- | --- | --- |
+| R30 | 同一保留页面累计超过 4096 次字段编辑后导航；旧已退役 ID 重放；早请求仍在途而后请求已完成；身份冲突、请求满载与新页面 | 长期编辑／导航继续接收；近期重复共享结果，退役重复明确拒绝且不重做；在途不丢失，真正满载才拒绝；真实页面更新后重置 | coordinator 为当前页所有生产原生意图分配单调 ID；Web 维护有界结果和退役水位，保证每个身份至多执行一次，项目往返不重置该水位。既有 Web→Swift opaque 请求容量合同保持独立 | 超过 4096 次真实 SHA admission 后的可观察编辑／导航、旧重放不改变结果、乱序完成及在途重复、冲突／非法 ID／容量恢复／新页；真实 WK 观察生产 ID 和 reload 归属。无限计数溢出明确拒绝，不模拟数千年连续操作 |
+| R31 | 真实原生编辑框输入→发送；桥或 Web owner 拒绝／延迟成功；等待期间用户修改文字或重复发送；面板离开／页面更换 | 拒绝保留原稿并展示错误、允许明确重试；仅成功回执且当前草稿仍等于提交快照时清空；迟到结果不清除新输入，等待期间不重复提交 | NativeAiView 拥有未提交草稿与当前提交 token；NativeApplicationState 同步登记 future 并报告结果，Web AI owner 继续拥有用户消息和回合，不新增重试或第二线程 | 真实 SwiftUI TextEditor／发送按钮，隔离 WK 的拒绝／成功闸门，修改后的草稿／重复提交／离开重挂；既有 Web busy／model／unmount admission 回归复用。实际计费请求和 IME 保留缺口 |
+
+- Web 旧实现最小 R30 为 **1 failed／9 passed**：第 4097 个有序字段意图返回 `PW_REQUEST_LIMIT`。生产 Swift 身份观察经夹具就绪纠正后也先红：当前页重连与真实 reload 两处仍是 UUID 而非有序身份。原生 AI 初次 AX 骨架／窗口尺寸及 WK 重载未等待新文档的夹具错误不算行为红灯；修正后 **9 tests／2 suites、4 处预期问题**：AI 拒绝后文字为空／重试禁用，以及两个生产 ID 断言。SwiftUI AX 在动作同步禁用按钮时可返回失败；实际 visible error 证明动作进入生产边界，未送达仍会在有界等待失败。
+- R30 将 `native:<正安全整数>` 的分配放在 coordinator，真实 `loadCanvas` 新 session 才重置；Web 只退役已完成有序记录并保留一个水位，缓存始终最多 4096 条。在途重复在水位判断前共享原结果，近期冲突继续拒绝，退役身份明确不重做。旧式 opaque 意图与 Web→Swift router 原有容量保持为独立边界，未新增协议字段、命令、存储 schema 或自动重试。
+- R31 复用 `NativeApplicationState.send` 的同步登记和错误报告，增加 presentation completion；旧页只能报告失败，不能成功消费当前草稿。原生 AI 用提交 token 和原稿快照等待回执，拒绝不清稿、等待期间禁用重复提交、离开取消该 presentation token；用户改过文字则成功也不清稿。既有 Web Promise 等待回合落定，模型失败／取消合同保持。
+- 集中 Web `npx vitest run src/platform/nativeShell.test.ts src/editor/nativeCanvas/nativeAiShell.test.tsx` **22 tests／2 files 通过**：超过窗口的编辑／导航、退役重复无副作用、旧在途共享及冲突、满载恢复、非法身份／新页隔离与实际 SHA admission；既有 AI busy、模型资格、即时 reservation、卸载和晚回复回归复用。原生集中四套件 **16 tests／4 suites 全通过，TEST SUCCEEDED**（11.432 秒），含真实 TextEditor 的桥拒绝、两种 Web 拒绝后明确重试、成功清稿／新输入／重挂三种条件，以及实际 WK 页面身份重连／reload、生产退出最后字段落盘与投影身份。只用合成提示和本地页，无真实模型、用户数据或 Keychain。
+- 仓库根完整 native 路由 **727 维护文件、403 画布模块、218 tests／52 suites 全通过，TEST SUCCEEDED**（81.895 秒）。前端完整路由的静态／严格类型／构建通过；首轮沙箱测试 **17 failed／3120 passed** 均属既有钩子夹具的 `ps` 进程查询被拒绝（`spawnSync ps EPERM`），系统权限下保持原断言重跑为 **219 files／3137 tests 全通过**（52.47 秒）。源文件 285／230／233／393 行、两份 Swift 测试 231／333 行，新增或修改单元低于 80 代码行；人工复核退役／在途顺序、真实页面重置和两个发送入口的所有权，无配置复杂度检测工具。桥合同、UI、迁移 P3/P4 与 AI 数据模型已同步；文档无自动语义检查，结构化复核和 Prettier／diff 检查通过。
+- 未逐个注入完整回合中的真实付费提供商异常、中文 IME 或物理 WebKit kill；上述 admission 失败采用实际 WK 返回合成结构化错误，Web 模型／busy／卸载资格由既有 owner 回归覆盖。真实页重新加载后 UI token 的迟到 callback 交叉场景未单独注入；page/session 失效和 UI 离开重挂分别有回归，回执的成功代次检查及提交 token 守卫已结构化复核。原有独立宿主请求容量边界及 P5 人工验收保持明确。

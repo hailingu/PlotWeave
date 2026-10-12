@@ -325,6 +325,10 @@ F05 还覆盖 [PR #526 R29](swiftui-react-flow-pr526-fixes.md#原生意图进入
 
 同一会话请求去重覆盖在途和完成结果，不自动重试删除、复制或计费请求。媒体字节通过 Swift 资源服务／`WKURLSchemeHandler`，不进入 JSON 或 base64 命令回执。宿主事件由 `__pwDispatchHostEvent` 投递 `app-quit-requested`、`library-diagnostics`，监听建立后才确认退出就绪。Swift 的 `app_exit` 可选布尔 `cancel:true` 是幂等失败回执，不要求监听就绪；缺省／`false` 保持批准，非法类型返回 `PW_INVALID_REQUEST`。只有 Swift 失败路径发送该参数，Tauri 保持原有载荷。
 
+原生→Web 的生产意图由当前 coordinator 分配规范 `native:<正安全整数>` requestId，跨项目／面板往返及 presentation owner 重连递增，只有实际文档加载更新 session 时归零。Web 保留至多 4096 条在途／近期结果；容量满时只退役已完成的有序身份，并推进退役水位。在途重复继续共享结果，已退役身份返回 `PW_NATIVE_INTENT_RETIRED` 而不重做；参数冲突保持 `PW_REQUEST_CONFLICT`。真正全在途或旧式 opaque 身份占满时返回 `PW_REQUEST_LIMIT`，等待完成后用户可明确重试；计数达到 JavaScript 安全整数边界明确拒绝。旧式 opaque 意图与独立 Web→Swift router 的既有 4096 身份容量合同保持，不能把这次有序意图退役当作两方向容量都已改造。协议版本、既有命令及磁盘 schema 不变，见 [PR #526 R30](swiftui-react-flow-pr526-fixes.md#原生请求退役与-ai-发送草稿)。
+
+原生 AI 的未发送文字在拒绝时保留并显示诊断，明确重试才再次提交；发送同步登记原生 future，等待期间禁止重复发送。成功回执只清除与提交快照相同的草稿，用户新输入或离开重挂的草稿不被迟到回执消费。该回执沿既有 `ai.send` Promise 等待回合完成，模型失败／取消仍由现有 Web 线程处理；没有增加自动计费重试或第二会话，见 [PR #526 R31](swiftui-react-flow-pr526-fixes.md#原生请求退役与-ai-发送草稿)。
+
 ## 验证证据
 
 验证环境为 macOS 26.6.2／Xcode 27.0／Swift 6.4／SDK 27.0、Node 24.18.0；工作分支 `codex/swiftui-react-flow`，合并基线 `08653d2`，功能补齐为当前未提交工作树。测试使用临时数据根、合成密钥与注入传输，未读写真实 Tauri 数据或调用付费模型。新原生数据根由 bundle ID 派生为 `dev.plotweave.PlotWeaveNative.development`。

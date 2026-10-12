@@ -126,8 +126,8 @@ final class NativeApplicationState {
         error = message
     }
 
-    /// Sends one explicit action; failures remain visible and side effects are never automatically retried.
-    func send(_ command: String, args: [String: HostJSON] = [:]) {
+    /// Registers one explicit action synchronously; an optional presentation acknowledgment follows its validated completion.
+    func send(_ command: String, args: [String: HostJSON] = [:], onCompletion: (@MainActor (Result<HostJSON, Error>) -> Void)? = nil) {
         let session = activeSession
         let blocksUI = command.hasPrefix("app.") || ["settings.close", "settings.retry"].contains(command)
         error = nil
@@ -141,8 +141,17 @@ final class NativeApplicationState {
                     self.busy = self.pending > 0
                 }
             }
-            do { _ = try await intent.value }
-            catch { if self.activeSession == session { self.error = error.localizedDescription } }
+            do {
+                let value = try await intent.value
+                guard self.activeSession == session else {
+                    onCompletion?(.failure(HostFailure(code: "PW_STALE_SESSION", message: "页面会话已更改，本次结果未知。")))
+                    return
+                }
+                onCompletion?(.success(value))
+            } catch {
+                if self.activeSession == session { self.error = error.localizedDescription }
+                onCompletion?(.failure(error))
+            }
         }
     }
 
@@ -198,7 +207,7 @@ final class NativeApplicationState {
     private func dispatch(_ command: String, args: [String: HostJSON], coordinator: WebCanvasCoordinator, session: String) async throws -> HostJSON {
         guard activeSession == session else { throw HostFailure(code: "PW_STALE_SESSION", message: "页面会话已更改，本次结果未知。") }
         let request: [String: Any] = [
-            "protocolVersion": 1, "sessionId": session, "requestId": UUID().uuidString,
+            "protocolVersion": 1, "sessionId": session, "requestId": try coordinator.nextNativeIntentId(),
             "command": command, "args": HostJSON.object(args).webValue
         ]
         let reply = try HostJSON(webValue: await coordinator.sendNativeIntent(request: request))

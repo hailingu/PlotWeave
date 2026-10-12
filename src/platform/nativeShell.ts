@@ -1,7 +1,7 @@
 /**
  * Read-only native shell projections and native intents. Feature action owners
  * register here; this transport never keeps an editable document or invokes
- * storage directly. Same-page intent results are retained to prevent replay.
+ * storage directly. Bounded same-page results and a retirement watermark prevent replay.
  */
 
 /** Stable failure envelope shared with the Swift command boundary. */
@@ -25,6 +25,8 @@ type ShellWindow = Window & {
 interface IntentEntry {
   fingerprint: Promise<string | null>
   result: Promise<unknown>
+  ordinal: number | null
+  settled: boolean
 }
 
 const handlers = new Map<string, IntentHandler>()
@@ -34,6 +36,30 @@ let sequence = 0
 let admission: Promise<void> = Promise.resolve()
 let projections: Record<string, unknown> = {}
 const INTENT_LIMIT = 4096
+let retiredThrough = 0
+
+/** Reserved production IDs carry a canonical safe ordinal; legacy opaque IDs retain their bounded contract. */
+function intentOrdinal(id: string): number | null | undefined {
+  if (!id.startsWith('native:')) return null
+  const ordinal = Number(id.slice('native:'.length))
+  return Number.isSafeInteger(ordinal) &&
+    ordinal > 0 &&
+    id === `native:${ordinal}`
+    ? ordinal
+    : undefined
+}
+
+/** Retires only completed ordered entries; the watermark rejects evicted IDs while pending results remain replayable. */
+function admitResult(): boolean {
+  if (results.size < INTENT_LIMIT) return true
+  for (const [id, entry] of results) {
+    if (!entry.settled || entry.ordinal === null) continue
+    results.delete(id)
+    retiredThrough = Math.max(retiredThrough, entry.ordinal)
+    return true
+  }
+  return false
+}
 
 /** Narrows decoded JSON objects at the message trust boundary. */
 function record(value: unknown): Record<string, unknown> | null {
@@ -58,6 +84,7 @@ function alignSession(session: string): void {
   if (activeSession === session) return
   activeSession = session
   results.clear()
+  retiredThrough = 0
   projections = {}
   sequence = 0
   admission = Promise.resolve()
@@ -150,18 +177,42 @@ async function receiveIntent(payload: unknown): Promise<unknown> {
   const args = request.args === undefined ? {} : record(request.args)
   if (!args) return failure('PW_INVALID_NATIVE_INTENT', '命令参数必须是对象。')
   alignSession(session)
+  const ordinal = intentOrdinal(request.requestId)
+  if (ordinal === undefined)
+    return failure('PW_INVALID_NATIVE_INTENT', '原生命令的顺序身份无效。')
   const command = request.command
   const previous = results.get(request.requestId)
   if (previous) return replayIntent(session, previous, command, args)
+  if (ordinal !== null && ordinal <= retiredThrough)
+    return failure('PW_NATIVE_INTENT_RETIRED', '这条命令已退役，不能重复执行。')
   const domain = command.split('.')[0] ?? ''
   const handler = handlers.get(domain)
   if (!handler)
     return failure('PW_INTENT_UNAVAILABLE', '当前界面无法执行这条命令。')
-  if (results.size >= INTENT_LIMIT)
+  if (!admitResult())
     return failure(
       'PW_REQUEST_LIMIT',
-      '当前会话请求过多，请保存后重新打开项目。',
+      '当前未完成或旧式请求过多，请等待后明确重试。',
     )
+  return startIntent(
+    session,
+    request.requestId,
+    ordinal,
+    command,
+    args,
+    handler,
+  )
+}
+
+/** Reserves identity synchronously and orders digest admission while feature-owned completions remain concurrent. */
+function startIntent(
+  session: string,
+  requestId: string,
+  ordinal: number | null,
+  command: string,
+  args: Record<string, unknown>,
+  handler: IntentHandler,
+): Promise<unknown> {
   // Insert before invoking the handler so a synchronous reentrant request also
   // observes the same result rather than repeating the side effect.
   const fingerprint = Promise.resolve().then(() => fingerprintOf(command, args))
@@ -178,11 +229,20 @@ async function receiveIntent(payload: unknown): Promise<unknown> {
         'PW_INTENT_CRYPTO_UNAVAILABLE',
         '无法验证请求身份，本次命令未执行。',
       )
-    if (handlers.get(domain) !== handler)
+    if (handlers.get(command.split('.')[0] ?? '') !== handler)
       return failure('PW_INTENT_UNAVAILABLE', '当前界面无法执行这条命令。')
     return executeIntent(session, handler, command, args)
   })
-  results.set(request.requestId, { fingerprint, result })
+  const entry = { fingerprint, result, ordinal, settled: false }
+  results.set(requestId, entry)
+  void result.then(
+    () => {
+      entry.settled = true
+    },
+    () => {
+      entry.settled = true
+    },
+  )
   return result
 }
 
