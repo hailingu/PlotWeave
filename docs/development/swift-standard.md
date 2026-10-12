@@ -111,8 +111,11 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   those gaps in [Feature Parity](../swiftui-react-flow-feature-parity.md).
 - The shared scheme's `TestAction` supplies `PLOTWEAVE_NATIVE_TEST_HOST=1`
   before application bootstrap, independently of `LaunchAction`. The app
-  selects its memory fixture from that flag, not loaded-bundle discovery;
-  `NativeLaunchModeTests` checks both the policy and the real test environment
+  selects an inert test-host window from that flag, not loaded-bundle discovery.
+  Bootstrap mounts no shell, split view, inspector or WKWebView; individual
+  integration tests explicitly own and dispose their real shell/canvas fixtures.
+  `NativeLaunchModeTests` checks the policy, real test environment and absence
+  of an automatically mounted canvas
   ([PR #526 evidence](../swiftui-react-flow-pr526-fixes.md)). Ordinary launches
   retain the production entry point.
 - Run the app-hosted target with `-parallel-testing-enabled NO`, as specified

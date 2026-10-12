@@ -30,14 +30,14 @@
 //! /`copyProjectAssets`。`saveProject` 的可选 `expectExisting` 布尔值与
 //! Tauri 保存契约一致：为真时已删除的副本不可被迟到保存重新创建。
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
 use cap_std::fs::Dir as CapDir;
@@ -69,7 +69,8 @@ unsafe impl Send for Job {}
 /// C ABI 句柄：单工作线程（持受信根克隆）+ 请求 id 分配 + 取消登记。
 pub struct PwCore {
     sender: Mutex<Option<Sender<Job>>>,
-    cancelled: Arc<Mutex<HashSet<u32>>>,
+    /// 仅保留未派发 id；false 为待执行，true 为已取消，派发前原子移除。
+    pending: Arc<Mutex<HashMap<u32, bool>>>,
     next_id: AtomicU32,
     worker: Option<JoinHandle<()>>,
 }
@@ -79,16 +80,16 @@ impl PwCore {
     fn start(data_root: &Path) -> Option<PwCore> {
         let root = Arc::new(core_store::open_projects_root(data_root).ok()?);
         let (sender, receiver) = channel::<Job>();
-        let cancelled: Arc<Mutex<HashSet<u32>>> = Arc::new(Mutex::new(HashSet::new()));
+        let pending = Arc::new(Mutex::new(HashMap::new()));
         let worker_root = Arc::clone(&root);
-        let worker_cancelled = Arc::clone(&cancelled);
+        let worker_pending = Arc::clone(&pending);
         let worker = std::thread::Builder::new()
             .name("pw-ffi-worker".into())
-            .spawn(move || worker_loop(worker_root, receiver, worker_cancelled))
+            .spawn(move || worker_loop(worker_root, receiver, worker_pending))
             .ok()?;
         Some(PwCore {
             sender: Mutex::new(Some(sender)),
-            cancelled,
+            pending,
             next_id: AtomicU32::new(0),
             worker: Some(worker),
         })
@@ -96,20 +97,35 @@ impl PwCore {
 }
 
 /// 工作线程主循环：sender 全部释放且队列排空后退出；退出前所有任务均获回执。
-fn worker_loop(root: Arc<CapDir>, receiver: Receiver<Job>, cancelled: Arc<Mutex<HashSet<u32>>>) {
+fn worker_loop(
+    root: Arc<CapDir>,
+    receiver: Receiver<Job>,
+    pending: Arc<Mutex<HashMap<u32, bool>>>,
+) {
     while let Ok(job) = receiver.recv() {
-        handle_job(&root, &cancelled, job);
+        handle_job(&root, &pending, job);
     }
 }
 
 /// 单任务处理：取消门（未派发）→ 执行（panic 包裹）→ 回执。
-fn handle_job(root: &CapDir, cancelled: &Mutex<HashSet<u32>>, job: Job) {
-    if cancelled.lock().unwrap().remove(&job.id) {
+fn handle_job(root: &CapDir, pending: &Mutex<HashMap<u32, bool>>, job: Job) {
+    // 在执行与回调前释放资格和锁；已派发的取消不能留下未来请求的墓碑。
+    let cancelled = state_guard(pending).remove(&job.id).unwrap_or(false);
+    if cancelled {
         deliver(job, PW_STATUS_CANCELLED, None);
         return;
     }
     let (status, text) = execute(root, &job.request);
     deliver(job, status, text);
+}
+
+/// FFI 内存登记与提交口仅执行 infallible 容器操作；持锁期间不调用内核或宿主。
+/// 中毒时保留状态并诊断恢复；core 的同类内核为 crate-private，不能跨 crate 复用。
+fn state_guard<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
+    state.lock().unwrap_or_else(|poisoned| {
+        eprintln!("[lock] PW_FFI_STATE_RECOVERED: poisoned in-memory state retained");
+        poisoned.into_inner()
+    })
 }
 
 /// 执行一层：内核 panic 不得跨 FFI（§4.3），转为 ERROR 回执。
@@ -258,7 +274,7 @@ pub unsafe extern "C" fn pw_core_free(core: *mut PwCore) {
         return;
     }
     let mut core = Box::from_raw(core);
-    *core.sender.lock().unwrap() = None;
+    *state_guard(&core.sender) = None;
     if let Some(worker) = core.worker.take() {
         let _ = worker.join();
     }
@@ -296,10 +312,18 @@ pub unsafe extern "C" fn pw_request_submit(
         callback: completion,
         context,
     };
-    let guard = core.sender.lock().unwrap();
-    match guard.as_ref() {
-        Some(sender) if sender.send(job).is_ok() => id,
-        _ => 0,
+    let guard = state_guard(&core.sender);
+    // 登记和发送共用取消门的锁，工作线程不可能先派发、后留下陈旧登记。
+    let mut pending = state_guard(&core.pending);
+    pending.insert(id, false);
+    if guard
+        .as_ref()
+        .is_some_and(|sender| sender.send(job).is_ok())
+    {
+        id
+    } else {
+        pending.remove(&id);
+        0
     }
 }
 
@@ -314,7 +338,9 @@ pub unsafe extern "C" fn pw_request_cancel(core: *mut PwCore, request_id: u32) {
     if core.is_null() || request_id == 0 {
         return;
     }
-    (*core).cancelled.lock().unwrap().insert(request_id);
+    if let Some(cancelled) = state_guard(&(*core).pending).get_mut(&request_id) {
+        *cancelled = true;
+    }
 }
 
 /// 释放 Rust 分配的结果字符串；NULL 容忍。
@@ -334,6 +360,53 @@ pub unsafe extern "C" fn pw_string_free(string: *mut c_char) {
 mod tests {
     use super::*;
 
+    /// 没有工作线程的关闭提交口用于检查失败发送后的状态清理，不访问业务磁盘。
+    fn closed_core() -> PwCore {
+        PwCore {
+            sender: Mutex::new(None),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            next_id: AtomicU32::new(0),
+            worker: None,
+        }
+    }
+
+    /// 未知／已派发取消及发送失败不能留下资格；锁中毒恢复保留已提交的内存状态。
+    #[test]
+    fn registry_is_bounded_by_queued_requests_and_recovers_poison() {
+        let mut core = closed_core();
+        unsafe { pw_request_cancel(&mut core, 1) };
+        assert!(state_guard(&core.pending).is_empty());
+        let request = CString::new(r#"{"op":"listProjects"}"#).unwrap();
+        assert_eq!(
+            unsafe { pw_request_submit(&mut core, request.as_ptr(), record, std::ptr::null_mut()) },
+            0
+        );
+        assert!(state_guard(&core.pending).is_empty());
+        let pending = Arc::clone(&core.pending);
+        assert!(std::thread::spawn(move || {
+            let mut guard = pending.lock().unwrap();
+            guard.insert(7, false);
+            panic!("FFI 状态中毒注入");
+        })
+        .join()
+        .is_err());
+        unsafe { pw_request_cancel(&mut core, 7) };
+        let mut outcome = (PW_STATUS_OK, Some("init".to_string()));
+        handle_job(
+            &CapDir::open_ambient_dir(std::env::temp_dir(), cap_std::ambient_authority()).unwrap(),
+            &core.pending,
+            Job {
+                id: 7,
+                request: "invalid".into(),
+                callback: record,
+                context: &mut outcome as *mut _ as *mut c_void,
+            },
+        );
+        assert_eq!(outcome, (PW_STATUS_CANCELLED, None));
+        unsafe { pw_request_cancel(&mut core, 7) };
+        assert!(state_guard(&core.pending).is_empty());
+    }
+
     extern "C" fn record(_id: u32, status: u8, result: *mut c_char, ctx: *mut c_void) {
         let slot = unsafe { &mut *(ctx as *mut (u8, Option<String>)) };
         slot.0 = status;
@@ -351,11 +424,11 @@ mod tests {
     /// 取消门：已登记取消的任务不执行内核，回执 CANCELLED + NULL 结果。
     #[test]
     fn cancelled_job_skips_kernel_and_reports_null() {
-        let cancelled = Mutex::new(HashSet::from([7u32]));
+        let pending = Mutex::new(HashMap::from([(7u32, true)]));
         let mut outcome = (PW_STATUS_OK, Some("init".to_string()));
         handle_job(
             &CapDir::open_ambient_dir(std::env::temp_dir(), cap_std::ambient_authority()).unwrap(),
-            &cancelled,
+            &pending,
             Job {
                 id: 7,
                 request: "{\"op\":\"listProjects\"}".into(),
@@ -365,7 +438,7 @@ mod tests {
         );
         assert_eq!(outcome.0, PW_STATUS_CANCELLED);
         assert!(outcome.1.is_none());
-        assert!(cancelled.lock().unwrap().is_empty(), "取消登记须随门消耗");
+        assert!(state_guard(&pending).is_empty(), "取消资格须随派发消耗");
     }
 
     /// panic 不跨 FFI：注入 panic 的操作转为 ERROR 回执。

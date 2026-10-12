@@ -45,6 +45,48 @@ struct NativePreferencesTests {
         #expect((try FileManager.default.attributesOfItem(atPath: backup.path)[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     }
 
+    /// Every non-object root is corruption for reads; explicit recovery preserves the exact original bytes.
+    @Test(arguments: ["[]", "null", "true", "7", "\"scalar\""])
+    func nonObjectRootsRejectBothReadersAndBackUpBeforeRecovery(json: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let damaged = Data(json.utf8)
+        try damaged.write(to: fixture.file)
+        do {
+            _ = try await fixture.prefs.invoke(command: "load_prefs", args: [:])
+            Issue.record("Non-object settings must reject instead of becoming defaults")
+        } catch let error as HostFailure { #expect(error.code == "PW_PREFS_CORRUPT") }
+        do {
+            _ = try await fixture.prefs.providerSecret("openai")
+            Issue.record("Secret reads must retain the same corruption boundary")
+        } catch let error as HostFailure { #expect(error.code == "PW_PREFS_CORRUPT") }
+        #expect(try Data(contentsOf: fixture.file) == damaged)
+        let recovered = Self.settings(key: Self.v2)
+        _ = try await fixture.prefs.invoke(command: "save_prefs", args: ["prefs": recovered])
+        let digest = SHA256.hash(data: damaged).map { String(format: "%02x", $0) }.joined()
+        let backup = fixture.root.appendingPathComponent("settings-corrupt-" + digest + ".bak")
+        #expect(try Data(contentsOf: backup) == damaged)
+        #expect((try FileManager.default.attributesOfItem(atPath: backup.path)[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        #expect(try await fixture.prefs.invoke(command: "load_prefs", args: [:]) == recovered)
+    }
+
+    /// Save cannot create corruption or mutate existing damage before validating an incoming root.
+    @Test func nonObjectWritesPreserveHealthyAndDamagedOriginals() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        for original in [Data("{}".utf8), Data("null".utf8)] {
+            try original.write(to: fixture.file)
+            for value: HostJSON in [.array([]), .null, .bool(true), .number(7), .string("scalar")] {
+                do {
+                    _ = try await fixture.prefs.invoke(command: "save_prefs", args: ["prefs": value])
+                    Issue.record("Non-object settings writes must be rejected")
+                } catch let error as HostFailure { #expect(error.code == "PW_PREFS_INVALID") }
+                #expect(try Data(contentsOf: fixture.file) == original)
+                #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path) == ["settings.json"])
+            }
+        }
+    }
+
     /// Cap and no-follow failures cannot be mistaken for a first launch or overwrite an external file.
     @Test func oversizedAndSymlinkPrefsRemainUnreadableAndUnmodified() async throws {
         let fixture = try Fixture()

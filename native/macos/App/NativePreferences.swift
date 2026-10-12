@@ -61,7 +61,11 @@ actor NativePreferences {
         let root = try capability()
         guard try root.metadata(Self.file) != nil else { return .object([:]) }
         let bytes = try root.read(Self.file, maxBytes: Self.maximum)
-        do { return try JSONDecoder().decode(HostJSON.self, from: bytes) }
+        do {
+            let value = try JSONDecoder().decode(HostJSON.self, from: bytes)
+            guard value.object != nil else { throw invalid() }
+            return value
+        }
         catch { throw HostFailure(code: "PW_PREFS_CORRUPT", message: "设置文件损坏，请先备份原文件后恢复设置") }
     }
 
@@ -105,6 +109,7 @@ actor NativePreferences {
 
     /// Pretty JSON remains opaque and is rejected before any original settings can change.
     private func encode(_ value: HostJSON) throws -> Data {
+        guard value.object != nil else { throw HostFailure(code: "PW_PREFS_INVALID", message: "设置内容必须是 JSON 对象") }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         let bytes: Data

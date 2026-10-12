@@ -16,7 +16,12 @@ struct PlotWeaveNativeApp: App {
 
     var body: some Scene {
         Window("PlotWeave", id: "main") {
-            NativeShellRoot(demoMode: Self.isHostedTest, application: application)
+            if Self.isHostedTest {
+                Text("原生回归测试宿主")
+                    .frame(width: 320, height: 240)
+            } else {
+                NativeShellRoot(application: application)
+            }
         }
         .windowToolbarStyle(.unified)
         .commands {
@@ -38,7 +43,7 @@ struct PlotWeaveNativeApp: App {
         }
     }
 
-    /// Hosted tests launch only the in-memory fixture, never a page that auto-opens application data.
+    /// Hosted tests bootstrap an inert window; individual tests own and dispose every shell and canvas fixture.
     private static var isHostedTest: Bool {
         NativeLaunchMode.usesFixture(environment: ProcessInfo.processInfo.environment)
     }

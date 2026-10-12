@@ -198,9 +198,10 @@ fn ai_session_and_asset_ops_roundtrip() {
 fn cancel_is_safe_for_unknown_and_settled_requests() {
     let fx = Fixture::new("cancel");
     // 未知 id：安全 no-op，不影响后续请求
-    unsafe { plotweave_ffi::pw_request_cancel(fx.core, 999_999) };
+    unsafe { plotweave_ffi::pw_request_cancel(fx.core, 1) };
     let id = fx.submit("{\"op\":\"listProjects\"}");
-    let (_done, status, _text) = fx.receiver.recv_timeout(Duration::from_secs(20)).unwrap();
+    let (done, status, _text) = fx.receiver.recv_timeout(Duration::from_secs(20)).unwrap();
+    assert_eq!(done, id);
     assert_eq!(status, plotweave_ffi::PW_STATUS_OK);
     // 已完成请求的取消同样 no-op，不得重复回执
     unsafe { plotweave_ffi::pw_request_cancel(fx.core, id) };
@@ -208,6 +209,73 @@ fn cancel_is_safe_for_unknown_and_settled_requests() {
         .receiver
         .recv_timeout(Duration::from_millis(300))
         .is_err());
+}
+
+/// 完成回调的闸门把工作线程停在已派发状态，确定性地保留后续排队请求。
+struct PausedCompletion {
+    sender: mpsc::Sender<Completion>,
+    release: mpsc::Receiver<()>,
+}
+
+/// 先交付已执行请求的结果，再等待测试释放；不在任何 core 锁内阻塞。
+extern "C" fn paused_completion(id: u32, status: u8, result: *mut c_char, context: *mut c_void) {
+    let paused = unsafe { &*(context as *const PausedCompletion) };
+    record_completion(
+        id,
+        status,
+        result,
+        &paused.sender as *const _ as *mut c_void,
+    );
+    paused
+        .release
+        .recv_timeout(Duration::from_secs(20))
+        .unwrap();
+}
+
+/// 已派发／未来 id 的取消不留墓碑；重复取消只影响排队请求，free 排空一次回执。
+#[test]
+fn only_queued_requests_cancel_and_free_drains_each_receipt_once() {
+    let mut fx = Fixture::new("queued-cancel");
+    let (release, gate) = mpsc::channel();
+    let paused = PausedCompletion {
+        sender: fx.sender.clone(),
+        release: gate,
+    };
+    let request = CString::new(r#"{"op":"listProjects"}"#).unwrap();
+    let first = unsafe {
+        plotweave_ffi::pw_request_submit(
+            fx.core,
+            request.as_ptr(),
+            paused_completion,
+            &paused as *const _ as *mut c_void,
+        )
+    };
+    let (done, status, _) = fx.receiver.recv_timeout(Duration::from_secs(20)).unwrap();
+    assert_eq!((done, status), (first, plotweave_ffi::PW_STATUS_OK));
+    let cancelled = fx.submit(r#"{"op":"createProject","name":"不得创建"}"#);
+    let ready = fx.submit(r#"{"op":"listProjects"}"#);
+    unsafe {
+        plotweave_ffi::pw_request_cancel(fx.core, first);
+        plotweave_ffi::pw_request_cancel(fx.core, cancelled);
+        plotweave_ffi::pw_request_cancel(fx.core, cancelled);
+        plotweave_ffi::pw_request_cancel(fx.core, ready + 1);
+        plotweave_ffi::pw_request_cancel(fx.core, 0);
+    }
+    let future = fx.submit(r#"{"op":"listProjects"}"#);
+    release.send(()).unwrap();
+    unsafe { plotweave_ffi::pw_core_free(fx.core) };
+    fx.core = std::ptr::null_mut();
+    let outcomes: Vec<_> = fx.receiver.try_iter().collect();
+    assert_eq!(outcomes.len(), 3, "free 返回前每个排队请求恰有一次回执");
+    assert_eq!(
+        outcomes[0],
+        (cancelled, plotweave_ffi::PW_STATUS_CANCELLED, None)
+    );
+    for (outcome, id) in outcomes[1..].iter().zip([ready, future]) {
+        assert_eq!((outcome.0, outcome.1), (id, plotweave_ffi::PW_STATUS_OK));
+        let value: serde_json::Value = serde_json::from_str(outcome.2.as_ref().unwrap()).unwrap();
+        assert_eq!(value["ok"], serde_json::json!([]), "取消的创建不能落盘");
+    }
 }
 
 #[test]

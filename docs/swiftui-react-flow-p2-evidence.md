@@ -1,5 +1,7 @@
 # SwiftUI/AppKit + React Flow 改造：P2 证据记录
 
+> 2026-10-12，[PR #526 续修矩阵 R10](swiftui-react-flow-pr526-fixes.md)：历史 C ABI 的取消资格改为仅登记未派发请求，提交／发送、取消与派发共用状态锁；未知、已派发与已落定 id 不留墓碑，发送失败和派发清除登记。确定性阻塞回调回归验证重复排队取消、未来 id 不受影响、取消创建不落盘及 free 排空一次回执。当前 Swift 应用仍不链接该 ABI，下方历史数量及执行结果保持原义。
+
 > 配套：[改造计划](swiftui-react-flow-migration-plan.md)（§7.3 证据模板、§6 状态矩阵）。本页只记录已实际执行的验证；未执行的检查明确标注原因。P1 及之前的证据见 [P1 证据记录](swiftui-react-flow-p1-evidence.md)。
 
 > 当前工具链同步（2026-10-07）：Xcode 27.0 / macOS SDK 27.0 与 `xcode-27` CI 配置见 [Xcode 27 工具链记录](swiftui-react-flow-p1-evidence.md#xcode-27-工具链同步2026-10-07)。下方 2026-09-15 与 2026-10-04 的版本、CI 配置及验证结果保留为历史证据。
