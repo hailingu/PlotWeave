@@ -43,13 +43,13 @@ struct HostQuitTests {
         #expect(result == .terminate)
     }
 
-    /// Reloaded pages must register a new listener; previous approval authority does not carry over.
-    @Test func reconnectRetainsIntentButRemovesOldListenerAuthority() {
+    /// Replacing a ready page cancels its pending quit; previous approval authority does not carry over.
+    @Test func reconnectCancelsIntentAndRemovesOldListenerAuthority() {
         let quit = HostQuitController()
         quit.acknowledgeListener()
         quit.request(.terminate)
         quit.resetListener()
         #expect(throws: HostFailure.self) { try quit.approve() }
-        #expect(quit.pendingIntent == .terminate)
+        #expect(quit.pendingIntent == nil)
     }
 }

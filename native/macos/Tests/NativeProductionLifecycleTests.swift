@@ -71,17 +71,23 @@ struct NativeProductionLifecycleTests {
         _ = try await mounted.state.request("editor.create", args: ["projectId": .string(id), "nodeType": .string("scene")])
         try await wait { mounted.state.editor["nodes"]?.arrayValue?.count == 1 }
         let approvals = ApprovalLog()
-        let delegate = NativeApplicationDelegate(quit: fixture.quit, terminateApplication: { approvals.count += 1 })
+        var replies: [Bool] = []
+        let delegate = NativeApplicationDelegate(quit: fixture.quit, terminateApplication: {}, replyToTermination: { approved in
+            replies.append(approved)
+            if approved { approvals.count += 1 }
+        })
         delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
-        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateCancel)
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
         try await wait { mounted.state.app["error"]?.string?.contains("已阻止退出") == true }
         #expect(approvals.count == 0)
         #expect(mounted.window.isVisible)
-        #expect(fixture.quit.pendingIntent == .terminate)
+        #expect(fixture.quit.pendingIntent == nil)
+        #expect(replies == [false])
         try FileManager.default.removeItem(at: file)
         try FileManager.default.moveItem(at: backup, to: file)
-        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateCancel)
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
         try await wait { approvals.count == 1 }
+        #expect(replies == [false, true])
         #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
         let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
         #expect(saved["graph"]?["nodes"]?.arrayValue?.count == 1)

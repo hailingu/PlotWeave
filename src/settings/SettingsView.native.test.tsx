@@ -645,17 +645,28 @@ it('quit reports settings save failure and preserves the latest edit for a succe
     await Promise.resolve()
   })
   await waitFor(() => expect(exit.result.current).toContain('应用设置保存失败'))
+  await waitFor(() =>
+    expect(native).toHaveBeenCalledWith(
+      expect.objectContaining({ command: 'app_exit', args: { cancel: true } }),
+    ),
+  )
   expect(
-    native.mock.calls.some(([payload]) => payload.command === 'app_exit'),
+    native.mock.calls.some(
+      ([payload]) =>
+        payload.command === 'app_exit' && payload.args?.cancel !== true,
+    ),
   ).toBe(false)
   await act(async () => {
     quitHost()
     await Promise.resolve()
   })
   await waitFor(() =>
-    expect(native).toHaveBeenCalledWith(
-      expect.objectContaining({ command: 'app_exit' }),
-    ),
+    expect(
+      native.mock.calls.some(
+        ([payload]) =>
+          payload.command === 'app_exit' && payload.args?.cancel !== true,
+      ),
+    ).toBe(true),
   )
   expect(stored.defaultChat).toBe('openai:gpt-4o')
 })

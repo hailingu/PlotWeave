@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-/** Swift 窗口关闭和应用退出复用三源固定点冲刷，不绕过失败或未就绪监听。 */
+/** Swift 窗口关闭和应用退出复用四源固定点冲刷，失败取消系统退出并保留诊断。 */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { useExitFlush } from './useExitFlush'
@@ -36,7 +36,11 @@ vi.mock('@tauri-apps/api/core', () => {
 })
 
 let commands: string[] = []
-let onRequest: (command: string) => unknown = () => ({ ok: null })
+let requests: Array<{ command: string; args?: Record<string, unknown> }> = []
+let onRequest: (
+  command: string,
+  args?: Record<string, unknown>,
+) => unknown = () => ({ ok: null })
 
 /** 真实事件入口只属于当前页面，载荷的退出意图由原生宿主持有。 */
 function quit() {
@@ -48,6 +52,7 @@ function quit() {
 
 beforeEach(() => {
   commands = []
+  requests = []
   onRequest = () => ({ ok: null })
   for (const pending of [hasCanvas, hasProject, hasAi])
     pending.mockReset().mockReturnValue(false)
@@ -63,9 +68,16 @@ beforeEach(() => {
     webkit: {
       messageHandlers: {
         plotweaveHost: {
-          postMessage: async ({ command }: { command: string }) => {
+          postMessage: async ({
+            command,
+            args,
+          }: {
+            command: string
+            args?: Record<string, unknown>
+          }) => {
             commands.push(command)
-            return onRequest(command)
+            requests.push({ command, ...(args && { args }) })
+            return onRequest(command, args)
           },
         },
       },
@@ -122,19 +134,31 @@ it('保存失败保留窗口并提示，用户重试退出成功后才放行', a
     await Promise.resolve()
   })
   await vi.waitFor(() => expect(view.result.current).toContain('已阻止退出'))
-  expect(commands).not.toContain('app_exit')
+  await vi.waitFor(() =>
+    expect(requests).toContainEqual({
+      command: 'app_exit',
+      args: { cancel: true },
+    }),
+  )
+  expect(
+    requests.filter(
+      ({ command, args }) => command === 'app_exit' && args?.cancel !== true,
+    ),
+  ).toEqual([])
   hasProject.mockReturnValue(false)
   flushProject.mockResolvedValue([])
   await act(async () => {
     quit()
     await Promise.resolve()
   })
-  await vi.waitFor(() => expect(commands).toContain('app_exit'))
+  await vi.waitFor(() =>
+    expect(requests).toContainEqual({ command: 'app_exit' }),
+  )
 })
 
 it('原生退出拒绝转为可见诊断，没有未处理拒绝', async () => {
-  onRequest = (command) =>
-    command === 'app_exit'
+  onRequest = (command, args) =>
+    command === 'app_exit' && args?.cancel !== true
       ? { error: { code: 'PW_EXIT_FAILED', message: 'exit denied' } }
       : { ok: null }
   const view = renderHook(() => useExitFlush())
@@ -146,6 +170,60 @@ it('原生退出拒绝转为可见诊断，没有未处理拒绝', async () => {
     await Promise.resolve()
   })
   await vi.waitFor(() => expect(view.result.current).toContain('exit denied'))
+  await vi.waitFor(() =>
+    expect(requests).toContainEqual({
+      command: 'app_exit',
+      args: { cancel: true },
+    }),
+  )
+})
+
+it('监听初始化失败报告取消，原始诊断保留', async () => {
+  onRequest = (command) =>
+    command === 'acknowledge_quit_listener'
+      ? { error: { code: 'PW_ACK_FAILED', message: 'ack failed' } }
+      : { ok: null }
+  const view = renderHook(() => useExitFlush())
+  await vi.waitFor(() => expect(view.result.current).toContain('ack failed'))
+  await vi.waitFor(() =>
+    expect(requests).toContainEqual({
+      command: 'app_exit',
+      args: { cancel: true },
+    }),
+  )
+})
+
+it('取消传输也失败时同时保留保存阻断和取消失败诊断', async () => {
+  hasProject.mockReturnValue(true)
+  flushProject.mockResolvedValue(['p1'])
+  onRequest = (command) =>
+    command === 'app_exit'
+      ? { error: { code: 'PW_CANCEL_FAILED', message: 'cancel failed' } }
+      : { ok: null }
+  const view = renderHook(() => useExitFlush())
+  await vi.waitFor(() =>
+    expect(commands).toContain('acknowledge_quit_listener'),
+  )
+  quit()
+  await vi.waitFor(() => expect(view.result.current).toContain('cancel failed'))
+  expect(view.result.current).toContain('已阻止退出')
+})
+
+it('冲刷抛错同样取消本次系统退出，仍保留错误', async () => {
+  hasCanvas.mockReturnValue(true)
+  flushCanvas.mockRejectedValue(new Error('flush failed'))
+  const view = renderHook(() => useExitFlush())
+  await vi.waitFor(() =>
+    expect(commands).toContain('acknowledge_quit_listener'),
+  )
+  quit()
+  await vi.waitFor(() => expect(view.result.current).toContain('flush failed'))
+  await vi.waitFor(() =>
+    expect(requests).toContainEqual({
+      command: 'app_exit',
+      args: { cancel: true },
+    }),
+  )
 })
 
 it('重复退出请求共用在途冲刷，卸载后的完成不能授权关闭新会话', async () => {

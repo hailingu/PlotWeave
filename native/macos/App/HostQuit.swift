@@ -7,16 +7,18 @@ final class HostQuitController {
     enum Intent: Equatable { case close, terminate }
     /// Process-wide production lifecycle; tests inject an independent controller.
     static let shared = HostQuitController()
-    /// Pending user intent is retained across startup and listener re-registration.
+    /// Startup intent survives first connection; a replaced ready page loses its old pending authority.
     private(set) var pendingIntent: Intent?
     /// No event is emitted before the Web confirms its listener is installed.
-    private var listenerReady = false
+    private(set) var listenerReady = false
     /// Event delivery is owned by this controller and replaced on a new connection.
     private var eventTask: Task<Void, Never>?
     /// Main-actor event adapter keeps WebKit references on the UI owner rather than background services.
     var sendEvent: ((String, HostJSON) async throws -> Void)?
     /// Final system mutation is invoked only for an already-pending, successfully flushed intent.
     var onApproved: ((Intent) -> Void)?
+    /// Failure cancels only the pending user's intent; native termination replies remain owned by the delegate.
+    var onCancelled: ((Intent) -> Void)?
 
     /// Records user intent before any asynchronous bridge work; retries are explicit user actions.
     func request(_ intent: Intent) {
@@ -24,8 +26,12 @@ final class HostQuitController {
         if listenerReady { emitRequested() }
     }
 
-    /// Keeps startup requests buffered until the current page registers the quit listener.
-    func resetListener() { listenerReady = false }
+    /// Startup buffering survives first connection; replacement of a ready page cancels its outstanding decision.
+    func resetListener() {
+        if listenerReady { cancel() }
+        listenerReady = false
+        eventTask?.cancel()
+    }
 
     /// The acknowledgement releases one buffered request after listener registration.
     func acknowledgeListener() {
@@ -42,16 +48,31 @@ final class HostQuitController {
             throw HostFailure(code: "PW_QUIT_LISTENER_NOT_READY", message: "画布尚未注册退出保存监听")
         }
         pendingIntent = nil
+        eventTask?.cancel()
         onApproved?(intent)
     }
 
-    /// Failures retain the pending intent and window; the next explicit close/quit retries the flush.
+    /// Failure is idempotent, preserves the window and never requires a working flush listener.
+    func cancel() {
+        guard let intent = pendingIntent else { return }
+        pendingIntent = nil
+        eventTask?.cancel()
+        onCancelled?(intent)
+    }
+
+    /// Delivery failures settle the native decision; cancelled old deliveries cannot reject a newer intent.
     private func emitRequested() {
-        guard let sendEvent else { return }
+        let deliver = sendEvent
         eventTask?.cancel()
         eventTask = Task { @MainActor in
-            do { try await sendEvent("app-quit-requested", .object([:])) }
-            catch { NSLog("PlotWeave quit bridge delivery failed: %@", error.localizedDescription) }
+            do {
+                guard let deliver else { throw HostFailure(code: "PW_PAGE_UNAVAILABLE", message: "退出事件传输不可用") }
+                try await deliver("app-quit-requested", .object([:]))
+            } catch {
+                guard !Task.isCancelled else { return }
+                NSLog("PlotWeave quit bridge delivery failed: %@", error.localizedDescription)
+                cancel()
+            }
         }
     }
 }
@@ -71,23 +92,29 @@ final class NativeApplicationDelegate: NSObject, NSApplicationDelegate, NSWindow
     /// Approved actions consume one close/termination permit.
     private var permitClose = false
     private var permitTerminate = false
+    /// Only an actual terminateLater return authorizes one deferred AppKit reply.
+    private var awaitingTermination = false
     /// Executes only an approved system termination; isolated tests observe it without quitting their host.
     private var terminateApplication: () -> Void = { NSApp.terminate(nil) }
+    /// Tests observe AppKit's deferred decision without actually terminating their process.
+    private var replyToTermination: (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
 
     /// SwiftUI's delegate adaptor constructs NSObject through its actual zero-argument initializer.
     override init() { quit = .shared; attachExistingMainWindow = true; super.init() }
 
     /// Real-window tests use an isolated controller without changing the running app's exit lifecycle.
-    init(quit: HostQuitController, terminateApplication: (() -> Void)? = nil) {
+    init(quit: HostQuitController, terminateApplication: (() -> Void)? = nil, replyToTermination: ((Bool) -> Void)? = nil) {
         self.quit = quit
         attachExistingMainWindow = false
         super.init()
         if let terminateApplication { self.terminateApplication = terminateApplication }
+        if let replyToTermination { self.replyToTermination = replyToTermination }
     }
 
     /// Attaches the single main window and supplies the controller's final AppKit action.
     func applicationDidFinishLaunching(_ notification: Notification) {
         quit.onApproved = { [weak self] intent in self?.finish(intent) }
+        quit.onCancelled = { [weak self] intent in self?.cancel(intent) }
         NotificationCenter.default.addObserver(
             self, selector: #selector(attachMainWindow(_:)),
             name: NSWindow.didBecomeMainNotification, object: nil
@@ -134,14 +161,15 @@ final class NativeApplicationDelegate: NSObject, NSApplicationDelegate, NSWindow
         window = nil
     }
 
-    /// Cancels the current system quit while the Web flushes, keeping AppKit's normal event loop usable on failure.
+    /// Ready pages defer the original system sequence; startup cannot enter a modal wait before a listener exists.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if permitTerminate || closedAfterFlush && window == nil { return .terminateNow }
+        awaitingTermination = quit.listenerReady
         quit.request(.terminate)
-        return .terminateCancel
+        return awaitingTermination ? .terminateLater : .terminateCancel
     }
 
-    /// Successful flush starts a fresh permitted termination; failed saves never leave AppKit awaiting a deferred reply.
+    /// Successful flush approves the original system sequence; only an already-cancelled startup quit is restarted.
     private func finish(_ intent: HostQuitController.Intent) {
         switch intent {
         case .close:
@@ -149,8 +177,18 @@ final class NativeApplicationDelegate: NSObject, NSApplicationDelegate, NSWindow
             window?.performClose(nil)
         case .terminate:
             permitTerminate = true
-            terminateApplication()
+            if awaitingTermination {
+                awaitingTermination = false
+                replyToTermination(true)
+            } else { terminateApplication() }
         }
+    }
+
+    /// Failed save, delivery or page replacement completes a deferred system decision exactly once.
+    private func cancel(_ intent: HostQuitController.Intent) {
+        guard intent == .terminate, awaitingTermination else { return }
+        awaitingTermination = false
+        replyToTermination(false)
     }
 
     /// Releases the notification subscription when the application owner is discarded.

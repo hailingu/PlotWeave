@@ -21,7 +21,7 @@
 
 历史 FFI `saveProject` 的可选布尔 `expectExisting` 沿用 Tauri 保存的存在性约束：缺省 `false` 保留初次创建，`true` 在共享操作锁内确认目标仍存在，删除后的迟到请求返回失败且不得重建项目；非法字段类型拒绝。保存 NotFound 不携带 `[project_not_found]` 码，该码仅由加载入口返回。调用方仍须维护项目保存/删除协调，FFI guard 不替代会话排序；兼容性回归见[P2 合并同步](../swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)。当前 Swift 在自己的 actor 内实现同一存在性约束，并未接入该历史调用路径。
 
-Swift 正常退出的系统决定由 `NativeApplicationDelegate` 拥有：[PR #526](https://github.com/hailingu/PlotWeave/pull/526) 修复后，⌘Q／Dock 请求先返回 `terminateCancel`，同时将意图交给 `HostQuitController` 缓冲／投递。前端固定点冲刷成功并调用既有 `app_exit` 后，原生才重新发起带批准许可的 `NSApplication.terminate`。保存、桥投递或监听初始化失败时不留下 AppKit `terminateLater` 模态等待，窗口仍可编辑、诊断与失败快照保留，用户重试仍走同一道屏障；已冲刷关窗后的应用退出继续直接放行。未变更桥命令、Tauri 路径或磁盘合同；真实 Dock／菜单手势和系统注销保留人工验收缺口。
+Swift 正常退出的系统决定由 `NativeApplicationDelegate` 拥有：[PR #526](https://github.com/hailingu/PlotWeave/pull/526) 修复后，监听已就绪时保留 AppKit `terminateLater`，固定点冲刷成功回复 `true`，失败回复 `false` 并保留窗口、诊断和最新失败快照。仅 Swift 的既有 `app_exit` 增加可选布尔 `cancel`：`true` 幂等取消当前意图，不要求监听已就绪；缺省／`false` 保持成功批准，非法类型拒绝。Web 保存失败、抛错、批准失败和初始化失败均通过此信号完成取消；原生事件投递失败或替换已就绪页面也取消旧决定，已取消的旧投递不能拒绝新意图。监听未就绪的系统请求先取消并缓冲启动意图，避免等待尚不存在的监听；成功系统序列继续原来的成功回复，不一律取消后重发。Tauri 载荷与磁盘合同保持；取消信号自身失败须同时保留原错误与取消诊断。真实 Dock／菜单手势和系统注销仍待人工验收。
 
 命令产出的文档变更，经防抖持久化回调落到以下布局。
 

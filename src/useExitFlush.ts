@@ -17,7 +17,7 @@ import {
 } from './projectStore/saveChain'
 import { IPC_COMMANDS } from './ipc/commands'
 import { ipcInvoke } from './ipc/invoke'
-import { detectHostKind } from './platform/hostEnvironment'
+import { detectHostKind, type HostKind } from './platform/hostEnvironment'
 import { listenHostEvent } from './platform/hostEvents'
 import {
   flushPendingSettingsSaves,
@@ -52,7 +52,7 @@ function blockedMessage(
 async function drainBeforeExit(
   onBlocked: (message: string | null) => void,
   onClean: () => Promise<unknown>,
-): Promise<void> {
+): Promise<boolean> {
   for (;;) {
     await flushPendingCanvasSaves()
     const projects = await flushPendingProjectSaves()
@@ -60,12 +60,122 @@ async function drainBeforeExit(
     const settings = await flushPendingSettingsSaves()
     if (projects.length > 0 || sessions.length > 0 || settings > 0) {
       onBlocked(blockedMessage(projects.length, sessions.length, settings))
-      return
+      return false
     }
     if (!hasPendingSaves()) break
   }
   onBlocked(null)
   await onClean()
+  return true
+}
+
+/** 一页独占退出冲刷、失败回执与监听资源，销毁后不再批准任何退出。 */
+type ExitBarrier = {
+  disposed: () => boolean
+  register: (unlisten: () => void) => void
+  request: (exit: () => Promise<unknown>, flush?: boolean) => Promise<void>
+  onQuit: () => void
+  initializationFailed: (error: unknown) => Promise<void>
+  dispose: () => void
+}
+
+/** 保存协调与系统退出回执的生命周期；Swift 失败显式取消，Tauri 保持原有屏障。 */
+function createExitBarrier(
+  host: HostKind,
+  onBlocked: (message: string | null) => void,
+): ExitBarrier {
+  let disposed = false
+  let quitting: Promise<void> | null = null
+  let diagnostic: string | null = null
+  const unlistens: Array<() => void> = []
+  const report = (message: string | null) => {
+    diagnostic = message
+    if (!disposed) onBlocked(message)
+  }
+  const cancelExit = async () => {
+    if (host !== 'swift' || disposed) return
+    try {
+      await ipcInvoke(IPC_COMMANDS.appExit, { cancel: true })
+    } catch (error) {
+      report(
+        `${diagnostic ?? '退出未完成'}；取消系统退出失败：${String(error)}`,
+      )
+    }
+  }
+  const request = async (exit: () => Promise<unknown>, flush = false) => {
+    let clean = false
+    try {
+      const onClean = async () => {
+        if (!disposed) await exit()
+      }
+      if (flush || hasPendingSaves())
+        clean = await drainBeforeExit(report, onClean)
+      else {
+        await onClean()
+        clean = true
+      }
+    } catch (error) {
+      report(`退出失败，已保留窗口：${String(error)}。请核对保存状态后重试退出`)
+    } finally {
+      if (!clean) await cancelExit()
+    }
+  }
+  return {
+    disposed: () => disposed,
+    register: (unlisten) => {
+      if (disposed) unlisten()
+      else unlistens.push(unlisten)
+    },
+    request,
+    onQuit: () => {
+      if (disposed || quitting !== null) return
+      quitting = request(() => ipcInvoke(IPC_COMMANDS.appExit)).finally(() => {
+        quitting = null
+      })
+    },
+    initializationFailed: async (error) => {
+      const recovery =
+        host === 'swift'
+          ? '请修复后重试退出'
+          : '已缓冲的退出请求未丢弃，请重试退出或重启应用'
+      report(`退出冲刷初始化失败：${String(error)}。${recovery}`)
+      await cancelExit()
+    },
+    dispose: () => {
+      disposed = true
+      unlistens.forEach((unlisten) => unlisten())
+    },
+  }
+}
+
+/** 先建立页面监听再确认就绪；部分完成资源保留至卸载，失败经同一回执通道落定。 */
+async function installExitListeners(
+  host: HostKind,
+  barrier: ExitBarrier,
+): Promise<void> {
+  try {
+    if (host === 'tauri') {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      if (barrier.disposed()) return
+      const appWindow = getCurrentWindow()
+      barrier.register(
+        await appWindow.onCloseRequested(async (event) => {
+          if (!hasPendingSaves()) return
+          event.preventDefault()
+          await barrier.request(() => appWindow.destroy(), true)
+        }),
+      )
+    }
+    if (barrier.disposed()) return
+    barrier.register(
+      await listenHostEvent('app-quit-requested', barrier.onQuit),
+    )
+    if (barrier.disposed()) return
+    // 先监听后确认：原生侧可在确认请求中立即重放启动间隙的退出意图。
+    await ipcInvoke(IPC_COMMANDS.acknowledgeQuitListener)
+  } catch (error) {
+    await barrier.initializationFailed(error)
+  }
 }
 
 /** 返回退出被阻止时的诊断；Swift 的窗口关闭与应用退出共享宿主退出意图。 */
@@ -74,68 +184,9 @@ export function useExitFlush(): string | null {
   useEffect(() => {
     const host = detectHostKind()
     if (host === 'browser') return
-    let disposed = false
-    let quitting: Promise<void> | null = null
-    const unlistens: Array<() => void> = []
-    const register = (unlisten: () => void) => {
-      if (disposed) unlisten()
-      else unlistens.push(unlisten)
-    }
-    const onBlocked = (message: string | null) => {
-      if (!disposed) setBlocked(message)
-    }
-    const requestExit = async (exit: () => Promise<unknown>, flush = false) => {
-      try {
-        const onClean = async () => {
-          if (!disposed) await exit()
-        }
-        if (flush || hasPendingSaves())
-          await drainBeforeExit(onBlocked, onClean)
-        else await onClean()
-      } catch (error) {
-        onBlocked(
-          `退出失败，已保留窗口：${String(error)}。请核对保存状态后重试退出`,
-        )
-      }
-    }
-    const onQuit = () => {
-      if (disposed || quitting !== null) return
-      quitting = requestExit(() => ipcInvoke(IPC_COMMANDS.appExit)).finally(
-        () => {
-          quitting = null
-        },
-      )
-    }
-    void (async () => {
-      try {
-        if (host === 'tauri') {
-          const { getCurrentWindow } = await import('@tauri-apps/api/window')
-          if (disposed) return
-          const appWindow = getCurrentWindow()
-          register(
-            await appWindow.onCloseRequested(async (event) => {
-              if (!hasPendingSaves()) return
-              event.preventDefault()
-              await requestExit(() => appWindow.destroy(), true)
-            }),
-          )
-        }
-        if (disposed) return
-        register(await listenHostEvent('app-quit-requested', onQuit))
-        if (disposed) return
-        // 先监听后确认：原生侧可在确认请求中立即重放启动间隙的退出意图。
-        await ipcInvoke(IPC_COMMANDS.acknowledgeQuitListener)
-      } catch (error) {
-        // 部分就绪的关闭屏障保留至卸载，初始化失败不能使关闭绕过冲刷。
-        onBlocked(
-          `退出冲刷初始化失败：${String(error)}。已缓冲的退出请求未丢弃，请重试退出或重启应用`,
-        )
-      }
-    })()
-    return () => {
-      disposed = true
-      unlistens.forEach((unlisten) => unlisten())
-    }
+    const barrier = createExitBarrier(host, setBlocked)
+    void installExitListeners(host, barrier)
+    return barrier.dispose
   }, [])
   return blocked
 }

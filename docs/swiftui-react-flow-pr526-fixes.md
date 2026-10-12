@@ -27,8 +27,8 @@
 | R19 | 地址尝试中取消／预算耗尽；策略或 framing 拒绝／HTTP 失败；重定向→下一跳 | 不尝试下一地址、不返回媒体；每跳重新验证全部 DNS，既有五跳／体积上限保持 | 仅 PW_DOWNLOAD_NETWORK 可推进候选，取消与共享截止时间不能因 fallback 重置，安全拒绝不得变成重试 | 新增取消、慢传输超时、终止错误与非 2xx／超大回复回归；沿既有混合 DNS、重定向、HTTP framing 覆盖 |
 | R20 | 持久化主题描述当前原生保存→读者选择实现 owner 与数据根 | 明确直接 Swift 服务已实现，历史 C ABI 未链接；区分当前扁平真源与目录化／索引计划 | 设计文档拥有实现归属说明，不能把未链接 FFI 误写为 Swift 保存尚未可用 | 文档结构化审阅，对照 NativeHostServices、NativeProjectStore／Envelope／Directory 及既有 overview／功能补齐记录；纯文档不制造文本断言测试 |
 | R21 | 保存前校验失败；原子 rename 后同步／复验失败；失败后重读／重试 | 提交前保留旧文档；提交后如实报错且新文档可能已落盘，不假称回滚或成功 | 既有 §10.5 两类失败合同由存储边界拥有；Swift actor／Rust 操作锁串行正常入口，外部媒体篡改不构成跨文件事务 | 复核现有 Rust 真实故障注入回归与 Swift 保存顺序；Swift fsync／写后媒体替换故障注入仍未覆盖，不用 Rust 回归冒充 Swift 证明 |
-| R22 | ⌘Q／Dock 请求到达→保存失败或监听初始化失败；随后用户重试 | 取消当前系统退出，正常事件循环和原窗口保持；失败诊断与未落盘快照可修复，不悬置 AppKit 延迟退出 | NativeApplicationDelegate 拥有系统终止决定；先返回 terminateCancel，HostQuitController 继续持有意图，成功冲刷才重新 terminate | 实现前选定原生委托状态回归与真实 WK→项目文件被目录阻挡→失败诊断→文件恢复→退出重试；三项回归先红六处预期失败，集中 12／4 与完整 204／50 通过；初始化失败覆盖未就绪监听，不引入桥合同变化 |
-| R23 | 启动前退出、关闭升级为退出、重复请求、重连后旧监听失权→当前页批准 | 仍只持有一个意图，未就绪不得批准；批准后再次进入 AppKit 时直接允许；已冲刷关窗后退出不等待销毁页面 | 现有 controller 负责意图／监听，delegate 负责最终系统动作；所有入口共享既有固定点屏障和单次批准 | 扩展集中状态回归并复用 HostQuitTests／NativeWindowLifecycleTests；真实 Dock／菜单手势、系统注销仍为人工缺口 |
+| R22（中间验证，最终见 R24） | ⌘Q／Dock 请求到达→保存失败或监听初始化失败；随后用户重试 | 取消当前系统退出，正常事件循环和原窗口保持；失败诊断与未落盘快照可修复，不悬置 AppKit 延迟退出 | NativeApplicationDelegate 拥有系统终止决定；先返回 terminateCancel，HostQuitController 继续持有意图，成功冲刷才重新 terminate | 实现前选定原生委托状态回归与真实 WK→项目文件被目录阻挡→失败诊断→文件恢复→退出重试；三项回归先红六处预期失败，集中 12／4 与完整 204／50 通过；初始化失败覆盖未就绪监听，不引入桥合同变化 |
+| R23（中间验证，最终见 R25） | 启动前退出、关闭升级为退出、重复请求、重连后旧监听失权→当前页批准 | 仍只持有一个意图，未就绪不得批准；批准后再次进入 AppKit 时直接允许；已冲刷关窗后退出不等待销毁页面 | 现有 controller 负责意图／监听，delegate 负责最终系统动作；所有入口共享既有固定点屏障和单次批准 | 扩展集中状态回归并复用 HostQuitTests／NativeWindowLifecycleTests；真实 Dock／菜单手势、系统注销仍为人工缺口 |
 
 地址依据：[IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/)、[IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/)。单实例边界、付费模型和存储格式不扩展；异步下载沿用既有绝对截止时间、取消和逐跳校验，新增策略不引入重试或共享可写状态。
 
@@ -73,7 +73,23 @@
 
 ## 提交 `ac614d0` 后一轮退出意见处置
 
-- R22–R23 属当前原生退出的真实 P2 缺陷：AppKit 的 [`terminateLater`](https://developer.apple.com/documentation/appkit/nsapplication/terminatereply/terminatelater) 必须收到最终 true／false 回复，旧实现只有成功回执，失败无法完成系统退出决定。复用既有意图缓冲，系统入口直接返回 `terminateCancel`，前端成功冲刷后才经带许可的 `NSApplication.terminate` 重新进入系统入口；失败和桥初始化未就绪均留在正常事件循环。没有增加桥命令、后台重试、保存副本或改变 Tauri 合同。
+最终自查发现 `d81efc3` 一律先取消再重发会中止系统注销／重启／关机序列，因此该中间实现由下述纠正矩阵取代，不作为最终完成方案。前述通过证据只证明当时选定的应用退出路径，不能证明系统终止序列保真。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 实现前选定验证／缺口 |
+| --- | --- | --- | --- | --- |
+| R24 | 监听就绪→系统退出→Web 四类保存失败／抛错／退出批准失败；随后修复并重试 | 首次 terminateLater 最终回复 false，清除旧意图、留窗和诊断；重试成功回复 true，不重新取消成功系统终止序列 | 原生 delegate 拥有 AppKit 回复；Web via Swift-only app_exit 的可选 cancel:true 报告失败，缺省仍批准；Tauri 命令语义不变 | 新增 Swift Web 失败信号回归、真实 WK 文件阻挡恢复、委托 false→true 回归；真实注销不执行，验证同一回调的 AppKit 成功回复合同 |
+| R25 | 监听未就绪时系统退出；监听初始化失败；事件投递失败；旧投递迟到／页面重连 | 未就绪先取消系统请求并保留启动意图；已延迟的桥失败／重连回复 false；旧任务失败不得取消新意图 | controller 负责事件任务取消与监听资格；delegate 只对实际等待的 terminate 回复一次，关窗失败不回复系统退出 | 未就绪、初始化 IPC 拒绝、真实投递失败、幂等取消、旧任务取消和重连回归；取消信号自身失败须保留双重诊断 |
+
+- 中间方案 R22–R23 针对当前原生退出的真实 P2 缺陷：AppKit 的 [`terminateLater`](https://developer.apple.com/documentation/appkit/nsapplication/terminatereply/terminatelater) 必须收到最终 true／false 回复，旧实现只有成功回执，失败无法完成系统退出决定。复用既有意图缓冲，系统入口直接返回 `terminateCancel`，前端成功冲刷后才经带许可的 `NSApplication.terminate` 重新进入系统入口；失败和桥初始化未就绪均留在正常事件循环。没有增加桥命令、后台重试、保存副本或改变 Tauri 合同。
 - 先仅增加测试注入的最终系统动作观察点，生产默认仍调用原先的批准回复；可编译的 **3 tests／2 suites 出现 6 处预期失败**，均为原入口仍返回 `terminateLater`。真实 WK 测试同时观察保存错误、可见窗口、目录阻挡解除后的最新节点落盘与错误清除；不以 mock 调用代替文件结果。
-- 修复后集中选择 `NativeQuitRecoveryTests`、`NativeProductionLifecycleTests`、`HostQuitTests`、`NativeWindowLifecycleTests`，**12 tests／4 suites 全通过**。完整 native 路由的大小检查 **725 维护文件通过**、生产画布 **403 模块构建成功**，**204 tests／50 suites 全通过，TEST SUCCEEDED**。初始化未就绪、事件投递失败、启动缓冲、重复请求、关闭升级退出、重连监听失权、已冲刷关窗后退出与真实 WK 失败恢复均通过。
+- 中间方案集中选择 `NativeQuitRecoveryTests`、`NativeProductionLifecycleTests`、`HostQuitTests`、`NativeWindowLifecycleTests`，**12 tests／4 suites 全通过**。完整 native 路由的大小检查 **725 维护文件通过**、生产画布 **403 模块构建成功**，**204 tests／50 suites 全通过，TEST SUCCEEDED**。初始化未就绪、事件投递失败、启动缓冲、重复请求、关闭升级退出、重连监听失权、已冲刷关窗后退出与真实 WK 失败恢复均通过。
 - 系统终止动作在测试中注入观察回调，避免退出测试宿主；验证批准许可的下一次系统入口为 `terminateNow`，实际 `NSApplication.terminate` 由生产适配执行。真实 Dock／菜单手势和系统注销未执行，保留人工验收缺口。文档结构化审阅同步本主题、持久化 §10.0、UI §12.3、迁移计划与功能 F05；提交／推送门禁和最新 CI 在 PR 绑定实际提交。
+
+## 最终退出纠正验证（R24–R25）
+
+- 纠正保留就绪页面原来的 `terminateLater`／`reply(true)`，避免取消成功系统注销序列。Swift 的既有 `app_exit` 增加可选布尔 `cancel:true`，保存阻断、冲刷抛错、批准失败及初始化失败报告取消；缺省仍批准，非法类型拒绝。原生事件失败和替换就绪页主动取消，旧任务取消后的失败不影响新意图。初次未就绪的系统请求先取消并缓冲；恢复时仍要求当前监听批准。没有新增命令名或改变 Tauri 载荷、磁盘格式、保存 owner。
+- 新 Web 失败信号回归先为 **5 failed／3 passed**；可编译原生选集 **5 tests／2 suites、16 处预期问题**，失败针对延迟回复、幂等取消、重连清除与实际 WK 失败后重试。新增注入只观察最终 AppKit 动作，不执行真实注销或退出测试宿主；夹具前提错误不计作行为红灯。
+- 修复后 Web 四类退出选集 **27 tests／4 files 通过**；原生退出、窗口、实际 WK 四套件 **14 tests 通过**。最终额外的非法取消载荷测试纳入完整 native 路由：**725 文件规模检查、403 模块生产画布构建、207 tests／50 suites 全通过，TEST SUCCEEDED**。真实项目文件阻挡时回复 false、错误可见、窗口仍可用；恢复后回复 true、最新节点实际落盘、错误消除。成功路径使用原 AppKit 回复，不以重新发起 terminate 替代。
+- 旧投递迟到的独立故障闸门未额外注入：取消任务的 catch 在检查 `Task.isCancelled` 后才能拒绝，已结构化复核；页面替换／投递失败和幂等取消由回归覆盖。信号自身传输失败同时保留保存与取消诊断；真实菜单／Dock 手势和系统注销仍是人工验收缺口。
+- `useExitFlush` 提取同页屏障生命周期与监听初始化，新增／修改函数最多 67 代码行；Swift 单元均低于 80，文件低于硬上限。未配置复杂度工具，已人工审阅所有权、嵌套、释放与 await 前后守卫。完整前端路由、提交／推送门禁和最新 CI 结果在 PR 绑定最终提交。
+- 最终前端路由 `npm run format:check && npm run lint && npm run check:size && npm run typecheck:strict && npm run build && npm test` 全通过：**219 files／3127 tests**，五个退出／设置文件 **45 tests** 集中复核通过。首轮全量为 3126 通过／1 失败，原因是更新中的设置夹具在发出退出前等待取消回执；纠正到实际失败事件之后，并将成功断言限定为无 cancel 参数，集中和完整路由重跑通过，不将夹具时序失败视作生产行为红灯。静态与类型无警告，文档结构化核对新失败参数、初始化、重连和成功系统序列；未配置文档自动语义检查。

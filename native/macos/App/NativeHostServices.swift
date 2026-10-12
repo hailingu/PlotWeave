@@ -67,7 +67,7 @@ final class NativeHostServices {
     func perform(_ request: HostRequest) async throws -> HostJSON {
         switch request.command {
         case "acknowledge_quit_listener": quit.acknowledgeListener(); return .null
-        case "app_exit": try quit.approve(); return .null
+        case "app_exit": return try finishQuit(request.args)
         case "system.copyText": return try copyText(request.args)
         case "system.saveText": return try await saveText(request.args)
         default:
@@ -92,6 +92,16 @@ final class NativeHostServices {
             }
             throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "宿主命令尚未接通：\(request.command)")
         }
+    }
+
+    /// Swift's additive failure signal settles AppKit; default app_exit keeps its existing successful-flush meaning.
+    private func finishQuit(_ args: [String: HostJSON]?) throws -> HostJSON {
+        switch args?["cancel"] {
+        case nil, .bool(false): try quit.approve()
+        case .bool(true): quit.cancel()
+        default: throw HostFailure(code: "PW_INVALID_REQUEST", message: "退出 cancel 必须为布尔值")
+        }
+        return .null
     }
 
     /// Native SwiftUI and Web adapters use one library actor, retaining shared locks and diagnostics.
