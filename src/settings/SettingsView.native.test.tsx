@@ -150,6 +150,52 @@ it('native patches compose before React commits and an immediate close persists 
   expect(onClose).toHaveBeenCalledTimes(1)
 })
 
+it.each(['chat-first', 'image-first'])(
+  'single default patches compose before projections return: %s',
+  async (order) => {
+    render(<SettingsView onClose={vi.fn()} />)
+    await waitFor(() => expect(projection()?.phase).toBe('ready'))
+    const patches = [
+      { defaultChat: 'openai:chosen-chat' },
+      { defaultImage: 'openai:chosen-image' },
+    ]
+    if (order === 'image-first') patches.reverse()
+    await act(async () => {
+      for (const patch of patches) {
+        expect(await startIntent('settings.setDefaults', patch)).toEqual({
+          ok: null,
+        })
+      }
+      expect(await startIntent('settings.close')).toEqual({ ok: null })
+    })
+    expect(stored.defaultChat).toBe('openai:chosen-chat')
+    expect(stored.defaultImage).toBe('openai:chosen-image')
+  },
+)
+
+it('explicit null clears only its own default and malformed patches preserve both', async () => {
+  stored.defaultChat = 'openai:kept-chat'
+  stored.defaultImage = 'openai:old-image'
+  render(<SettingsView onClose={vi.fn()} />)
+  await waitFor(() => expect(projection()?.phase).toBe('ready'))
+  for (const patch of [
+    {},
+    { defaultChat: undefined },
+    { defaultImage: 1 },
+    { defaultChat: null, unexpected: true },
+  ]) {
+    expect(await intent('settings.setDefaults', patch)).toMatchObject({
+      error: { code: 'PW_INTENT_FAILED' },
+    })
+  }
+  expect(await intent('settings.setDefaults', { defaultImage: null })).toEqual({
+    ok: null,
+  })
+  expect(await intent('settings.close')).toEqual({ ok: null })
+  expect(stored.defaultChat).toBe('openai:kept-chat')
+  expect(stored.defaultImage).toBeNull()
+})
+
 /** Explicit deferred work exposes close/encryption interleavings without clock sleeps. */
 function deferred<T>() {
   let resolve!: (value: T) => void

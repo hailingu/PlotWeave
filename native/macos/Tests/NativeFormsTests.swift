@@ -79,4 +79,50 @@ struct NativeFormsTests {
         #expect(draft.modelsPatch["key"] == nil)
         #expect(draft.modelsPatch["keyEnc"] == nil)
     }
+
+    /// Clean fields follow authority; dirty model text survives earlier echoes and canonical acknowledgment.
+    @Test func providerProjectionAcknowledgesWithoutReplacingNewerCaretText() throws {
+        let initial = try provider(label: "初始", url: "https://initial.test/v1", models: ["old"])
+        let earlier = try provider(label: "更新", url: "https://next.test/v1", models: ["first"])
+        var draft = NativeProviderDraft(initial)
+        draft.models = " first \n second \n "
+        draft.receive(previous: initial, next: earlier)
+        #expect(draft.label == "更新")
+        #expect(draft.baseUrl == "https://next.test/v1")
+        #expect(draft.models == " first \n second \n ")
+        #expect(draft.modelsPatch == .object(["models": .array([.string("first"), .string("second")])]))
+        let acknowledged = try provider(label: "更新", url: "https://next.test/v1", models: ["first", "second"])
+        draft.receive(previous: earlier, next: acknowledged)
+        #expect(draft.models == " first \n second \n ")
+        let external = try provider(label: "外部", url: "https://external.test/v1", models: ["external"])
+        draft.receive(previous: acknowledged, next: external)
+        #expect(draft.label == "外部")
+        #expect(draft.baseUrl == "https://external.test/v1")
+        #expect(draft.models == "external")
+    }
+
+    /// Ordinary failed drafts remain local while a replacement form starts from the actual authority.
+    @Test func failedProviderDraftSurvivesEchoButDoesNotResurrectAfterRemount() throws {
+        let initial = try provider(label: "初始", url: "https://initial.test/v1", models: ["old"])
+        var draft = NativeProviderDraft(initial)
+        draft.label = "未确认文字"
+        draft.baseUrl = "尚在输入的地址"
+        draft.models = "new\n"
+        draft.receive(previous: initial, next: initial)
+        #expect(draft.label == "未确认文字")
+        #expect(draft.baseUrl == "尚在输入的地址")
+        #expect(draft.models == "new\n")
+        let replacement = NativeProviderDraft(initial)
+        #expect(replacement.label == "初始")
+        #expect(replacement.baseUrl == "https://initial.test/v1")
+        #expect(replacement.models == "old")
+    }
+
+    /// Complete credential-free snapshots isolate provider acknowledgment semantics from services and UI layout.
+    private func provider(label: String, url: String, models: [String]) throws -> NativeProviderProjection {
+        try #require(NativeProviderProjection(.object([
+            "id": .string("fixture"), "label": .string(label), "baseUrl": .string(url),
+            "enabled": .bool(true), "models": .array(models.map(HostJSON.string)), "keyConfigured": .bool(false)
+        ])))
+    }
 }

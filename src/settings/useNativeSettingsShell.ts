@@ -121,20 +121,22 @@ async function setKey(
   patchCurrentProvider(state, provider.id, { keyEnc })
 }
 
-/** Validates native defaults against their wire types and retains the shared setting schema. */
+/** Merges only explicitly selected defaults onto the current owner snapshot; null clears its own field. */
 function setDefaults(state: IntentState, args: Record<string, unknown>): void {
   if (!state.active || state.current.phase !== 'ready' || state.current.closing)
     throw new Error('设置尚未就绪或正在关闭，不能修改。')
-  if (
-    (args.defaultChat !== null && typeof args.defaultChat !== 'string') ||
-    (args.defaultImage !== null && typeof args.defaultImage !== 'string')
-  )
-    throw new Error('默认模型必须是字符串或空值。')
-  commit(state, {
-    ...state.current.settings,
-    defaultChat: args.defaultChat,
-    defaultImage: args.defaultImage,
-  })
+  const keys = Object.keys(args)
+  if (keys.length === 0) throw new Error('默认模型修改不能为空。')
+  const next = { ...state.current.settings }
+  for (const key of keys) {
+    if (key !== 'defaultChat' && key !== 'defaultImage')
+      throw new Error('默认模型修改包含不可编辑字段。')
+    const value = args[key]
+    if (value !== null && typeof value !== 'string')
+      throw new Error('默认模型必须是字符串或空值。')
+    next[key] = value
+  }
+  commit(state, next)
 }
 
 /** Dispatches only settings-owned commands; close awaits the same fixed-point saver as Web. */

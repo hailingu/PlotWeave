@@ -188,3 +188,21 @@ R32 邻接恢复补查（在本分支生产修改前补记）：列表重读连�
 - 集中 `npx vitest run src/App.nativeRecovery.test.tsx src/App.test.tsx src/useHomeActionFeedback.tauri.test.tsx` **77 tests／3 files 通过**，含新增 R32 十二项：五种操作恢复、列表恢复、原稿保存、创建族部分提交／未知、旧身份／成功后身份、并发领取与列表优先级／显式刷新。既有尝试乱序和同文档后台恢复回归保持。原生集中 `ShellHomeNavigationTests`／`NativeHomeViewTests` **21 tests／2 suites，TEST SUCCEEDED**（30.612 秒），实际原生按钮＋生产 WK＋隔离 Swift 磁盘验证修复文件后重新打开原 ID、重命名原稿实际落盘与刷新投影，以及允许／禁止重试的真实 AX 控件。
 - 完整前端路由 `npm run format:check && npm run lint && npm run check:size && npm run typecheck:strict && npm run build && npm test` 通过，**220 files／3149 tests**；完整 native 路由与 R30 的完整命令相同，**729 维护文件、404 画布模块、220 tests／52 suites，TEST SUCCEEDED**（83.730 秒）。`cd crates && npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` 通过，core **130**、FFI **4**、ABI **7** 项；均使用钉版 Node 24.18.0。两份 crate 文档与实际 NativeHostServices、既定迁移决定及 Rust 标准结构化核对，未改变 ABI 或添加文本断言。
 - 修改单元人工复核低于 80 代码行，App 788、恢复适配 99、原生首页 392 行；两份 Swift 测试 266／452、Web 新测试 255 行，文件 cap 检查通过。UI、双向桥与功能补齐合同同步；文档无配置自动语义检查，结构化审阅与 Prettier／diff 检查通过。新原生集成从与 sheet 相同的 app.rename 意图进入，实际 sheet 键入／关闭由呈现和回调归属结构化复核，未单独自动操作该 sheet；传输错误刷新使用 Web 显式 null 路径回归，未独立点击失联页面的刷新控件。真实 IME／VoiceOver、系统 fsync 全阶段注入、计费请求与 P5 人工验收仍保留既有缺口。
+
+## 设置字段与投影回执
+
+`e0de9ee` 的一轮后续评审新增两条独立 P2：默认模型选择携带另一字段的旧快照；服务文字的旧投影覆盖更新的本地输入。以下矩阵在生产修改前记录，复用现有 settings owner、原生表单及保存固定点，不新增配置副本或自动重放。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 实现前选定验证／缺口 |
+| --- | --- | --- | --- | --- |
+| R33 | ready 设置；聊天→图像或图像→聊天连续选择，第一项的投影尚未返回；单字段置空、旧式双字段、非法／空补丁及 closing | 两项选择都保存；缺席字段保留 owner 当前值，显式 null 只清指定项；非法输入无写入，旧式双字段仍有效 | NativeSettingsView 只提交发生选择的字段；useNativeSettingsShell 按当前同步快照合并并在边界校验，现有 close saver 是唯一持久化入口 | 实际原生 Picker＋生产 WK＋隔离 Swift 磁盘延迟投影；真实 Web intent 先红、两顺序／null／旧式／拒绝边界；实际计费模型不调用 |
+| R34 | 服务名称／地址／模型输入新文字；较早投影回执到达→继续输入；最新确认、干净字段外部更新；失败、provider 删除或页面重挂 | 旧回执不替换更新草稿，后续键入基于完整新稿；干净字段接收权威更新，模型确认不消费光标文字的空白；失败保留普通文字，移除／重挂由当前快照重新播种 | NativeProviderSettingsForm 拥有普通输入草稿；只读 provider 是同步基线，Web owner 与既有 saver 继续拥有配置；密钥仍由页级保密生命周期管理 | 实际 NSTextField／模型多行控件与有序投影，继续键入后的真实 Web 及磁盘结果；失败和干净更新邻接、删除／重挂；真实中文 IME、VoiceOver 保留 P5 缺口 |
+
+CI #603 首次执行 frontend 只有临时目录清理 `ENOTEMPTY`（语义断言未失败），native 在首页往返的 AppKit 更新约束发生 NSGenericException；同一提交仅作一次证据重跑，第二次 frontend 220 files／3151 tests、scripts 15 files／314 tests、native 220 tests／52 suites（122.532 秒）和 Rust 全通过。两处根因尚未证明，不将重跑绿色称作根因修复，也未放宽断言、排除测试或增加盲目重试。
+
+- Web 最小单字段回归先红 **3 failed／18 skipped**：两种选择顺序及显式 null 都被旧边界拒绝。真实原生夹具最初的私有 barrier 调用、将 SwiftUI 菜单误认成 NSPopUpButton、未等投影／菜单挂载等错误均排除行为证据。修正后名称／地址有 **4 处预期失败**，旧回执替换新输入，下一次输入的实际磁盘稿件也被截短；默认选择的两种顺序各有 **1 处预期失败**，另一字段实际保存回旧值。
+- `NativeSettingsView` 只提交自身默认选择；`useNativeSettingsShell` 校验存在字段并在同步 owner 快照上合并，缺席保留、null 清除，完整双字段旧载荷仍可用。`NativeProviderDraft.receive` 逐字段比较前一权威值与当前草稿，较早回执不得消费新输入；模型按规范化语义确认并保留原始多行文字。未新增磁盘 schema、依赖、业务命令或自动重放，普通草稿与保密密钥仍分属原 owner。
+- 当前资源下集中原生 `NativeSettingsEditingTests`、`NativeFormsTests`、`NativeSettingsDraftLifecycleTests` **10 tests／3 suites 全通过，TEST SUCCEEDED**（5.069 秒）。真实原生选择器＋生产 WK＋隔离 Swift 磁盘证明两顺序都保存、旧回执后继续输入不截短；模型草稿确认、干净字段外部更新及未确认稿重播种在生产 draft owner 边界验证，原密钥滚动／提交／删除／重挂回归保持。首次绿灯使用旧构建的 Web 命令边界而超时，重建当前画布后通过，不冒充生产回归失败。
+- `npx vitest run src/settings/SettingsView.native.test.tsx` **21 tests／1 file 通过**；新增三项覆盖单字段两顺序、显式 null、空／未知／非法类型，既有完整双字段、未就绪／关闭、失败恢复、并发键／普通字段及退出固定点验证复用。完整前端 Scope Routing 的格式、lint、尺寸、严格类型、生产构建及 **220 files／3154 tests** 通过；完整串行 native Scope Routing 的 **730 维护文件、404 画布模块、224 tests／53 suites，TEST SUCCEEDED**（85.287 秒）。所有服务只使用临时根、合成文字与凭据，无真实配置、Keychain 或计费模型。
+- 原生设置源 407、Web adapter 252 行；新增 Swift 控件测试 228、原生表单测试 128、Web 设置测试 769 行，文件 cap 通过。新增／修改执行单元人工复核低于 80 代码行，无配置复杂度工具；检查两字段键白名单、提交前完整校验、同步快照、三个普通字段比较及真实页投影顺序。Provider 数据模型、UI、迁移 §4.2 与桥合同同步，文档无自动语义检查；结构化复核和 Prettier／diff 检查通过。
+- 实际中文 IME、VoiceOver、模型 DisclosureGroup 多行控件的旧回执交叉操作，以及普通字段真实页面重挂／供应商删除的 UI 组合未新增自动操作；后两者依赖稳定 ForEach 身份／新稿播种与既有生命周期回归，模型旧回执由生产 draft owner 语义测试覆盖。未注入真实 WebKit 进程 kill 或完整系统故障；保留 P5 缺口。Git 门禁及最终 CI 证据按最终提交绑定在 PR。

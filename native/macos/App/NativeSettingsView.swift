@@ -82,9 +82,22 @@ struct NativeProviderDraft {
 
     /// Matches dev's per-line trimming while emitting only the permitted models field.
     var modelsPatch: HostJSON {
-        let items = models.components(separatedBy: .newlines)
+        .object(["models": .array(normalizedModels.map(HostJSON.string))])
+    }
+
+    /// Canonical comparison acknowledges model edits without replacing the user's multiline caret text.
+    private var normalizedModels: [String] {
+        models.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        return .object(["models": .array(items.map(HostJSON.string))])
+    }
+
+    /// A projected change may replace only fields still equal to the prior authority; newer local input wins.
+    mutating func receive(previous: NativeProviderProjection, next: NativeProviderProjection) {
+        if label == previous.label, next.label != previous.label { label = next.label }
+        if baseUrl == previous.baseUrl, next.baseUrl != previous.baseUrl { baseUrl = next.baseUrl }
+        if normalizedModels == previous.models, next.models != previous.models {
+            models = next.models.joined(separator: "\n")
+        }
     }
 
     /// Consumes the secure draft before dispatch so failure replies cannot leave a plaintext cache in the form.
@@ -195,13 +208,12 @@ struct NativeSettingsView: View {
         .disabled(!settings.canMutate(busy: state.busy))
     }
 
-    /// Emits both existing defaults according to the settings action contract; selection does not write locally.
+    /// Emits only the selected default; the Web owner retains the other value even before its projection returns.
     private func modelPicker(_ title: String, value: String?, image: Bool) -> some View {
         Picker(title, selection: Binding(get: { value ?? "" }, set: { selection in
             guard settings.canMutate(busy: state.busy) else { return }
             state.send("settings.setDefaults", args: [
-                "defaultChat": image ? settings.defaultChat.map(HostJSON.string) ?? .null : selection.isEmpty ? .null : .string(selection),
-                "defaultImage": image ? selection.isEmpty ? .null : .string(selection) : settings.defaultImage.map(HostJSON.string) ?? .null
+                image ? "defaultImage" : "defaultChat": selection.isEmpty ? .null : .string(selection)
             ])
         })) {
             Text("未选择").tag("")
@@ -251,9 +263,7 @@ private struct NativeProviderSettingsForm: View {
         }
         .disabled(disabled)
         .onChange(of: provider) { previous, next in
-            if previous.label != next.label { draft.label = next.label }
-            if previous.baseUrl != next.baseUrl { draft.baseUrl = next.baseUrl }
-            if previous.models != next.models { draft.models = next.models.joined(separator: "\n") }
+            draft.receive(previous: previous, next: next)
         }
     }
 
