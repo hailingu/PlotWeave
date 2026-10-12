@@ -50,8 +50,9 @@ struct ShellWebCanvasLifecycleTests {
 
         let webView = try await waitForWebView(in: window)
         try await waitForReadyCanvas(webView)
+        let initialScheme = try await waitForHostColorScheme(webView, expected: "light")
         #expect(
-            try await hostColorScheme(webView) == "light",
+            initialScheme == "light",
             "host appearance must land before the panel toggles"
         )
         try await webView.evaluateJavaScript("window.__pwLifecycleProbe = 314159")
@@ -83,12 +84,7 @@ struct ShellWebCanvasLifecycleTests {
             reduceMotion: true
         )
         appearance.refresh()
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        var pushed = try await hostColorScheme(webView)
-        while pushed != "dark" && ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(50))
-            pushed = try await hostColorScheme(webView)
-        }
+        let pushed = try await waitForHostColorScheme(webView, expected: "dark")
         #expect(pushed == "dark", "appearance pushes must reach the live page")
         let contrast = try await webView.evaluateJavaScript(
             "document.documentElement.getAttribute('data-host-increase-contrast')"
@@ -174,6 +170,17 @@ struct ShellWebCanvasLifecycleTests {
         try await webView.evaluateJavaScript(
             "document.documentElement.getAttribute('data-host-color-scheme')"
         ) as? String
+    }
+
+    /// Node rendering and host appearance have independent completion; wait for the value the caller asserts.
+    private func waitForHostColorScheme(_ webView: WKWebView, expected: String) async throws -> String? {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        var scheme = try await hostColorScheme(webView)
+        while scheme != expected && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+            scheme = try await hostColorScheme(webView)
+        }
+        return scheme
     }
 
     /// Lets SwiftUI apply the layout change before re-asserting identity.

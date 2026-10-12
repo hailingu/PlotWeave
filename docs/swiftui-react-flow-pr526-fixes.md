@@ -206,3 +206,14 @@ CI #603 首次执行 frontend 只有临时目录清理 `ENOTEMPTY`（语义断�
 - `npx vitest run src/settings/SettingsView.native.test.tsx` **21 tests／1 file 通过**；新增三项覆盖单字段两顺序、显式 null、空／未知／非法类型，既有完整双字段、未就绪／关闭、失败恢复、并发键／普通字段及退出固定点验证复用。完整前端 Scope Routing 的格式、lint、尺寸、严格类型、生产构建及 **220 files／3154 tests** 通过；完整串行 native Scope Routing 的 **730 维护文件、404 画布模块、224 tests／53 suites，TEST SUCCEEDED**（85.287 秒）。所有服务只使用临时根、合成文字与凭据，无真实配置、Keychain 或计费模型。
 - 原生设置源 407、Web adapter 252 行；新增 Swift 控件测试 228、原生表单测试 128、Web 设置测试 769 行，文件 cap 通过。新增／修改执行单元人工复核低于 80 代码行，无配置复杂度工具；检查两字段键白名单、提交前完整校验、同步快照、三个普通字段比较及真实页投影顺序。Provider 数据模型、UI、迁移 §4.2 与桥合同同步，文档无自动语义检查；结构化复核和 Prettier／diff 检查通过。
 - 实际中文 IME、VoiceOver、模型 DisclosureGroup 多行控件的旧回执交叉操作，以及普通字段真实页面重挂／供应商删除的 UI 组合未新增自动操作；后两者依赖稳定 ForEach 身份／新稿播种与既有生命周期回归，模型旧回执由生产 draft owner 语义测试覆盖。未注入真实 WebKit 进程 kill 或完整系统故障；保留 P5 缺口。Git 门禁及最终 CI 证据按最终提交绑定在 PR。
+
+## 初始外观的就绪条件
+
+CI #604 的完整原生目标执行 224 tests／53 suites，新增设置回归通过，只有 `ShellWebCanvasLifecycleTests.panelTogglesKeepWebViewAndPageAlive` 的初始 light 断言失败。日志没有返回具体属性值（`<not evaluated>`），不能据此证明根因；代码核对确认原初始就绪只等待九个节点，而 Web 外观消费及 native ready 回推独立完成。以下矩阵在测试调整前记录，只补齐断言的就绪前提，不修改生产外观、窗口或桥行为。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 选定验证／缺口 |
+| --- | --- | --- | --- | --- |
+| R35 | 夹具节点已渲染，初始 host 外观仍可能在途→面板往返→明确 dark／辅助显示回推 | 独立等待实际语义属性 light 后才进行原初始断言；dark 也读取实际值后断言；属性缺失仍在原 5 秒外观期限内失败 | 生产 appearance reader／consumer 拥有外观，测试等待被断言的观察值；九节点、页内哨兵、WK 身份、栏宽及对比度断言保持，失败不重跑／不捕获 JS 错误 | CI 初始断言失败作为真实输入；集中与完整串行 WK 回归；未确定性重现 CI 当时的缺失属性或 Swift Testing 异步宏内部路径，保留根因证据缺口 |
+
+- `waitForHostColorScheme` 复用原 dark 等待的 5 秒／50 毫秒采样；初始 light 先取得实际值再作原断言，错误继续抛出，超时仍返回不匹配值供断言失败。不增加测试重跑、生产延时或宽度稳定等待。集中 `ShellWebCanvasLifecycleTests` **3 tests／1 suite 全通过**（2.737 秒），保持 marker／Debug inspection／页面及面板回归。
+- 仓库根完整串行 native 路由 **730 维护文件、404 画布模块、224 tests／53 suites 全通过，TEST SUCCEEDED**（87.023 秒）。测试文件 225 行，修改单元人工复核低于 80 代码行；没有配置复杂度工具。文档无自动语义检查，已核对失败证据、等待对象、原期限及保留断言；Prettier／diff 检查通过。生产源、前端／Rust、工具链、命令和存储合同未修改，本轮未额外运行其独立完整路由；Git 操作仍要求新生成前端／Rust 覆盖率与完整 Sonar 门禁。
