@@ -236,3 +236,22 @@ CI #604 的完整原生目标执行 224 tests／53 suites，新增设置回归�
 - **验证与缺口**：最终静态检查（格式、ESLint 零警告、尺寸、严格类型）及前端生产构建通过；当前资源的完整串行 native 路由 **737 维护文件、229 tests／54 suites 全通过，TEST SUCCEEDED**（89.927 秒）。画布、AI、生图、App、设置／密钥、桥及退出租约集中 **9 files／172 tests 通过**，完整前端 **223 files／3161 tests 通过**；新 Git 门禁结果按最终提交补入 PR。沙盒禁止 `ps`／testmanagerd 的执行不作为产品失败，正常本机环境完成检查。桥、UI、迁移、持久化、AI 和 Provider 设计已同步；纯文档无自动语义检查，结构化复核身份／水位、唯一状态 owner、失败恢复及引用完成。未新增真实计费模型／生图、真实页面 4096 长会话洪泛、Web AI 最终封口与密钥的实机交叉操作、菜单／Dock／IME／VoiceOver 或进程 kill；前者由确定性边界与既有 owner 回归覆盖，后者仍属 P5 人工缺口，未挂载回合／未提交草稿及强制退出仍保持原边界。
 
 - **末次复核纠正**：首次提交门禁被 Sonar 的七项新代码问题阻止（五处 React setter 命名、Promise await 与 iterable 写法）；仅调整对应表达，退出协调行为保持。调整后集中 5 files／88 tests 与 AI／历史／生图 3 files／81 tests、生产构建及静态检查通过。本机一次误用 CI 的 Xcode 安装路径未启动原生测试，确认默认 Xcode／SDK 均为 27.0 后改用已选工具链；另一次漏串行参数使 54 个共享 NSApplication 套件并行启动、出现 23 issues，不作为完成证据。补回仓库规定的 `-parallel-testing-enabled NO` 后，最终完整 229 tests／54 suites 全通过（89.927 秒），保留全部断言。完整 Git 门禁按最终提交在 PR 记录。
+
+## 导入媒体与索引失败恢复（R38）
+
+第24条 [P2 评审](https://github.com/hailingu/PlotWeave/pull/526#discussion_r4250345857) 指出媒体已落位而索引写入失败时，重复导入留下不可见文件。所有者于 2026-10-13 授权“继续修复并同步合同”，扩展资产 §7.2 的导入恢复；以下矩阵在生产修改前记录。复用既有身份日志、受信目录句柄与隔离统计，不采用按名称删除、不扫描历史孤儿、不重放导入或计费动作。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、owner 与入口 | 实现前选定验证／缺口 |
+| --- | --- | --- | --- | --- |
+| R38a | 正常导入；校验、备份、临时媒体或日志登记失败→明确重试 | 成功媒体和索引一致、事务退役；媒体最终落位前的失败不产生新孤儿 | NativeLibrary 在已持锁期间准备完整索引，媒体临时文件 fsync 后登记真实身份，日志耐久后才 rename | 真实服务、磁盘字节与只读控制目录故障；首次失败行为回归先红 |
+| R38b | 媒体落位→索引提交前失败→列表／再次导入／重启 | 保留原错误；恢复将确认未提交的同一身份隔离，摘要恰一次累计；不继续积累无证据媒体 | NativeLibraryJournal 拥有导入证据与恢复，未解决导入阻止进一步写入；无身份绑定删除能力时隔离区物理保留 | 确定性存储阶段闸门、实际文件占位失败、重复恢复及重试后的新索引／媒体 |
+| R38c | 索引已 rename→目录耐久屏障失败或事务收尾失败→恢复 | 已提交媒体继续可用，核对并同步当前权威索引后才退役证据，不误隔离或回滚 | 失败不等同未提交；实际索引及所有活动文件身份共同决定引用，所有引用入口保持媒体可恢复 | 索引落位后确定性失败、同身份不同 relPath 引用、中断隔离后新增引用仍保留副本统计、真实文件读取；物理断电未验证 |
+| R38d | 索引损坏、规范化会丢弃成员、迁移挂起、媒体身份替换或不可信日志→恢复／新写入 | 原媒体／日志保留，证据警告可见，写入暂停；修复权威状态后明确重试 | 局部视图或无法读取的引用不能证明媒体未提交；恢复不会覆盖后来文件或用新身份清掉旧证据 | 损坏索引、非法成员、替换 inode／symlink、日志异常及恢复后可用性；不自动猜测修复 |
+| R38e | 恢复隔离／日志写失败、journal 半上限、多个待恢复条目→再次恢复 | 保留事务或完整新统计，失败不制造重复计数；容量拒绝先于媒体最终落位 | 同一对象联合持久化事务与统计；导入／删除、列表、媒体打开和项目复制共用同一锁／恢复入口 | 实际目标占位、原生边界回归及 openMedia／source 替代入口；并发由既有 actor＋flock 序列化，无新并发通道 |
+
+本轮仅修改 native 导入与恢复及相关合同，Tauri 历史导入不迁移到新协议；未知旧孤儿的来源无法由本次日志推断，仍须人工核对。
+
+- **先红与邻接先红**：`unwritableControlDirectoryDoesNotAccumulateUnindexedMedia` 通过真实控制目录权限故障在旧实现执行 1 test／1 suite、出现 1 处预期失败，三次失败导入累积最终媒体，原索引保持。修复后，对中断隔离再出现同身份硬链接的邻接转换新增 `activeReferenceAfterInterruptedQuarantineKeepsCleanupVisible`，10 tests／1 suite 出现 6 处预期失败：三次恢复均缺少保留项数／字节。补齐身份核验副本的联合统计后全部通过。首次修复编译曾因 Sendable closure 捕获可变 ID 拒绝，改为固定身份值；编译错误不作为行为红灯。
+- **矩阵对应**：R38a 使用上述权限故障及 `failureAfterRecordingBeforePlacementRetiresWithoutCleanup`，验证日志登记后尚未 rename 的中断不留最终文件；正常成功、校验与损坏备份沿既有 `NativeLibraryTests`／`NativeLibraryRecoveryTests`。R38b 的 `indexFailureReconcilesOnceAcrossRestartAndRetry` 在媒体落位后用实际目录占位阻断索引写，分别以列表／openMedia／source 进入恢复，核对真实新旧字节、重复恢复与再次导入的权威结果。R38c 的 `indexRenameFailureKeepsCommittedMediaAvailable` 在真实 index rename 后、目录 fsync 前注入抛错，证明新索引及媒体保留，不将注入声称为 OS 实际返回 fsync 错误；两个硬链接用例核对跨路径活动身份和额外隔离副本可见。R38d 覆盖语法损坏／非法成员、后来普通文件／symlink、活动引用打不开三类，重复读取不改原索引或证据，进一步导入被拒绝；既有日志异型、迁移超限回归保持。R38e 的 `recoveryJournalFailureRetainsEvidenceAndCountsOnce` 以真实只读控制目录阻断隔离后的日志提交，恢复三次恰累计一次；`oversizedImportJournalRefusesBeforeMediaPlacement` 与既有删除边界共同验证半上限及完整原件保留。
+- **命令与结果**：仓库根执行 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test`，最终 **738 维护文件规模检查、当前画布构建通过，240 tests／55 suites 全通过，TEST SUCCEEDED**（90.481 秒）。相同 Xcode 命令筛选 `NativeLibraryImportRecoveryTests`、`NativeLibraryRecoveryTests`、`NativeLibraryJournalBoundaryTests`、`NativeLibraryTests` 为 **26 tests／4 suites 通过**（3.540 秒）。Node 24.18.0、已选 Xcode 27.0／SDK 27.0；`bash scripts/check-static.sh` 的格式、ESLint 零警告、尺寸与严格类型通过。Git 操作仍另行生成新前端／Rust覆盖率并等待 Sonar，最终提交、门禁与确切 head 的 CI 记录在 PR。
+- **设计与缺口**：资产 §7.2、持久化命令、UI、P4／F07 已同步登记顺序、未知状态保护、共同恢复入口、写入暂停和物理保留。纯文档没有配置自动语义检查，已结构化核对引用／合同／矩阵，Prettier 与 diff 检查通过。最大修改 Swift 源为日志 362 行，新增测试 295 行；修改单元人工复核低于 80 代码行、嵌套在标准内，圈复杂度 `N/A — no configured complexity tool`。没有修改 frontend／Rust 或 CI 配置，未额外执行其独立完整路由；Git 门禁与 PR CI 仍执行相应检查。所有故障只作用于合成临时根，不访问用户数据。真实满卷、物理断电、OS 进程 kill、NSOpenPanel／人工隔离区清理未实测；合成阶段故障、真实权限／目录占位、同卷硬链接和 actor 重启覆盖所选风险，不承诺自动释放隔离空间或修复无证据旧孤儿。

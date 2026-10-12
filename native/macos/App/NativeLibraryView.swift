@@ -108,7 +108,7 @@ struct NativeLibraryView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(selected.name).font(.headline)
                         Text((selected.value["tags"]?.array ?? []).compactMap(\.string).joined(separator: " · ")).foregroundStyle(.secondary)
-                        if selected.value["conflicted"]?.bool == true { Text("删除事务冲突，暂不可用").foregroundStyle(.orange) }
+                        if selected.value["conflicted"]?.bool == true { Text("媒体事务冲突，暂不可用").foregroundStyle(.orange) }
                     }
                     Spacer()
                     Button("添加到分镜") { attach(selected) }.disabled(!canAttach || selected.value["conflicted"]?.bool == true)

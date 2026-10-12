@@ -6,10 +6,17 @@ actor NativeLibrary {
     let root: URL
     private var revision: UInt64 = 0
     private var eventSink: (@Sendable (HostJSON) async -> Void)?
+    private let importCheckpoint: @Sendable (ImportCheckpoint) throws -> Void
     static let maximumBytes = 20 * 1024 * 1024
 
-    /// Construction defers filesystem I/O until an actual request.
-    init(root: URL) { self.root = root }
+    /// Deterministic storage probes distinguish a committed media file from an index rename before directory sync.
+    enum ImportCheckpoint: Sendable { case mediaCommitted, indexRenamed }
+
+    /// Construction defers filesystem I/O; disposable tests may inject storage probes, while production uses no-op checkpoints.
+    init(root: URL, importCheckpoint: @escaping @Sendable (ImportCheckpoint) throws -> Void = { _ in }) {
+        self.root = root
+        self.importCheckpoint = importCheckpoint
+    }
 
     /// Event delivery happens after the library lock is released; consumers order snapshots by revision.
     func connectDiagnostics(_ sink: @escaping @Sendable (HostJSON) async -> Void) { eventSink = sink }
@@ -59,6 +66,7 @@ actor NativeLibrary {
             "kind": .string(kind), "relPath": .string("assets/placeholder"), "source": .string("upload"),
             "createdAt": .string(NativeAssetContract.timestamp()), "tags": .array([])]
         _ = try NativeLibraryIndex.asset(.object(entry))
+        let checkpoint = importCheckpoint
         return try await execute { state, number in
             try state.requireWritable()
             var id: String
@@ -69,8 +77,16 @@ actor NativeLibrary {
             let asset = try NativeLibraryIndex.asset(.object(entry))
             state.index.assets[id] = asset
             let prepared = try state.prepareWrite()
-            try state.directory.directory("assets").writeNew(bytes, name: fileName)
-            try state.directory.write(prepared, name: "library.json")
+            let directory = state.directory
+            let assetID = id
+            let relative = "assets/" + fileName
+            try directory.directory("assets").writeNew(bytes, name: fileName, recordIdentity: { identity in
+                try NativeLibraryJournal.beginImport(assetID: assetID, relative: relative, identity: identity, directory: directory)
+            })
+            try checkpoint(.mediaCommitted)
+            try directory.write(prepared, name: "library.json", afterCommit: { try checkpoint(.indexRenamed) })
+            state.journal = NativeLibraryJournal(directory: directory)
+            try state.journal.recover(directory: directory, index: NativeLibraryIndex(bytes: prepared))
             return state.response(asset, revision: number)
         }
     }

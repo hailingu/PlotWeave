@@ -67,6 +67,29 @@ struct NativeLibraryJournalBoundaryTests {
         #expect(try directory.media(fixture.path, mime: "image/png").read(maxBytes: 20) == Data([1, 2, 3]))
     }
 
+    /// Import reserves the same bounded journal before its media rename even when unrelated conflicts occupy capacity.
+    @Test func oversizedImportJournalRefusesBeforeMediaPlacement() async throws {
+        let fixture = try await seed()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let directory = try NativeDirectory(root: fixture.root).directory("library")
+        let entry = try paddedEntry(fixture, directory: directory, encodedBytes: 540_000)
+        try directory.directory("assets").directory(".trash", create: true).writeNew(Data([9]), name: "test")
+        let raw = try journalData(entry)
+        let journalURL = fixture.root.appendingPathComponent("library/asset-delete-journal.json")
+        let indexURL = fixture.root.appendingPathComponent("library/library.json")
+        let beforeIndex = try Data(contentsOf: indexURL)
+        try raw.write(to: journalURL)
+        let library = NativeLibrary(root: fixture.root)
+        do {
+            _ = try await library.importAsset(name: "new.png", mime: "image/png", kind: "other", bytes: Data([4]))
+            Issue.record("Import must reserve bounded recovery evidence before finalized media")
+        } catch let failure as HostFailure { #expect(failure.code == "PW_STORAGE_REFUSED") }
+        #expect(try directory.directory("assets").entries().filter { $0 != ".trash" }.count == 1)
+        #expect(try Data(contentsOf: journalURL) == raw)
+        #expect(try Data(contentsOf: indexURL) == beforeIndex)
+        #expect(try directory.media(fixture.path, mime: "image/png").read(maxBytes: 20) == Data([1, 2, 3]))
+    }
+
     /// Fixtures start through real import so schema validation and filesystem identities are authoritative.
     private struct Fixture { let root: URL; let id: String; let path: String }
 

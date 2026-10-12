@@ -181,7 +181,7 @@ panic hook 先于 join 错误运行，仍会按默认格式把 panic 载荷写�
 | `register_project_asset_alias(id, blankKey, freshId)` | 当前已实现：登记加载归一化的空白键重发别名，供修复落盘前解析媒体；不接受 relPath，规则见 §7.1 |
 | `copy_project_assets(fromId, toId)` / `verify_project_assets(id, assets)` | 当前已实现：前者经受信句柄复制项目媒体，后者提供加载侧资产实路径复验，供 §7.3 复制与 §11 归一化调用 |
 | `list_library_assets()` | 先按 §7.2 通过受信控制文件与资产目录句柄恢复 `asset-delete-journal.json` 中的未完成事务；存在无法安全自动恢复的身份冲突时保留现场并返回警告；已核验清理项折叠退役后 `cleanupPending` 以单条 routine 摘要（日志内累计计数与字节量级）报告，响应大小不随历史删除总数增长（issue #359）；退役与统计同次原子提交，兼容旧数组/旁路统计一次迁移，任何日志落盘失败均上抛 Err（issue #421）。随后读 `library.json`，迁移并完整归一化 LibraryAsset/AssetGroup 后返回资产库列表（含编组、`cleanupPending` 与其他警告） |
-| `import_library_asset(file, meta)` | 按 §7.2 校验 meta 与完整构造结果后，按 §7.1 通过受信库资产根句柄安全拷贝，完成文件 flush/fsync、原子落位与资产父目录 fsync 后确认可读，再耐久提交新增索引；索引失败时只留下可诊断孤儿文件。meta 含 name/kind/view/groupId/tags |
+| `import_library_asset(file, meta)` | 按 §7.2 校验 meta 与完整构造结果后，按 §7.1 通过受信库资产根句柄安全拷贝，完成文件 flush/fsync、原子落位与资产父目录 fsync 后确认可读，再耐久提交新增索引；Swift 原生导入在媒体最终落位前耐久登记身份日志，索引失败按 §7.2／PR #526 R38 保守恢复：活动引用保留，确认未提交的同身份媒体隔离并以 cleanupPending 显示，未知状态暂停写入；Tauri 历史路径仍保留孤儿文件。meta 含 name/kind/view/groupId/tags |
 | `update_library_asset(assetId, patch)` | 按 §7.2 校验白名单 patch 并复验完整合并结果后修改索引项：改名、改标签、改视角、换编组（只动索引不动文件） |
 | `upsert_library_group(group)` | 按 §7.2 校验完整 AssetGroup 后新增/更新编组；kind 变更不得与成员资产冲突 |
 | `delete_library_group(groupId)` | 要求组存在；原子删除组并剥离成员资产的 groupId，不留下悬空编组引用 |

@@ -16,7 +16,12 @@ struct NativeLibraryOperation {
         original = try directory.metadata("library.json") == nil ? nil : directory.read("library.json", maxBytes: 1_048_576)
         journal = NativeLibraryJournal(directory: directory)
         index = NativeLibraryIndex(bytes: original, allowReissue: !journal.readOnly)
-        if index.changed, !index.damaged, !journal.readOnly, try encodedIndex().count > 1_048_576 {
+        if journal.hasPendingImport, index.changed {
+            migrationSuspended = true
+            index = NativeLibraryIndex(bytes: original, allowReissue: false)
+            index.warnings.append("未完成导入的索引尚需修复，写入已暂停。")
+        }
+        if index.changed, !index.damaged, !journal.readOnly, !migrationSuspended, try encodedIndex().count > 1_048_576 {
             migrationSuspended = true
             index = NativeLibraryIndex(bytes: original, allowReissue: false)
             index.warnings.append("索引迁移结果超过大小上限，写入已暂停。")
@@ -24,7 +29,7 @@ struct NativeLibraryOperation {
         try journal.recover(directory: directory, index: index, complete: !migrationSuspended)
         recovered(self)
         filterMedia()
-        if index.changed, !index.damaged, !journal.readOnly, !migrationSuspended {
+        if index.changed, !index.damaged, !journal.readOnly, !migrationSuspended, !journal.hasPendingImport {
             try directory.write(encodedIndex(), name: "library.json")
         }
     }
@@ -53,7 +58,7 @@ struct NativeLibraryOperation {
 
     /// Read-only recovery and oversized migrations refuse every write entry before media materialization.
     func requireWritable() throws {
-        guard !journal.readOnly, !migrationSuspended else { throw NativeDirectory.refused("素材库写入暂停，请先备份并修复索引或删除日志") }
+        guard !journal.readOnly, !migrationSuspended, !journal.hasPendingImport else { throw NativeDirectory.refused("素材库写入暂停，请先备份并修复索引或恢复日志") }
     }
 
     /// Validates the complete next index and preserves raw corruption before any new media reaches disk.

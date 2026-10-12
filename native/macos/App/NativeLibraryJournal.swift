@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// Identity-bound delete recovery preserves media whenever the index or filesystem evidence is ambiguous.
+/// Identity-bound import and delete recovery preserves media whenever the index or filesystem evidence is ambiguous.
 struct NativeLibraryJournal {
     /// Journal and aggregate cleanup metrics are always persisted as one atomic object.
     var entries: [Entry] = []
@@ -21,6 +21,8 @@ struct NativeLibraryJournal {
         let identity: NativeFileIdentity
         let trashName: String
         var indexUncertain: Bool?
+        /// Import intent uses the same identity-bound recovery ledger before the media's final placement.
+        var importPending: Bool? = nil
 
         /// Validates both paths independently; the quarantine name must be one fixed-directory leaf.
         var valid: Bool {
@@ -106,7 +108,7 @@ struct NativeLibraryJournal {
         let original = entries
         var remaining: [Entry] = []
         for var entry in original {
-            if index.damaged || !complete, index.assets[entry.assetId] == nil {
+            if entry.importPending != true, index.damaged || !complete, index.assets[entry.assetId] == nil {
                 entry.indexUncertain = true
                 remaining.append(entry)
                 conflict(entry, "索引仍损坏，删除状态无法确认")
@@ -114,7 +116,10 @@ struct NativeLibraryJournal {
             }
             entry.indexUncertain = nil
             do {
-                if try recoverEntry(entry, directory: directory, index: index) { remaining.append(entry) }
+                let keep = entry.importPending == true
+                    ? try recoverImport(entry, directory: directory, index: index, complete: complete)
+                    : try recoverEntry(entry, directory: directory, index: index)
+                if keep { remaining.append(entry) }
             } catch {
                 remaining.append(entry)
                 conflict(entry, "媒体恢复失败，请核对隔离区与原文件")
@@ -131,6 +136,81 @@ struct NativeLibraryJournal {
             trashBytes = nil
             try write(directory)
         }
+    }
+
+    /// An unresolved import blocks further writes, so failed recovery cannot accumulate more unindexed media.
+    var hasPendingImport: Bool { entries.contains { $0.importPending == true } }
+
+    /// Persists an import's actual temporary-file identity before any finalized media becomes visible.
+    static func beginImport(assetID: String, relative: String, identity: NativeFileIdentity, directory: NativeDirectory) throws {
+        var journal = NativeLibraryJournal(directory: directory)
+        guard !journal.hasPendingImport else { throw NativeDirectory.refused("未完成导入须先恢复，素材库写入已暂停") }
+        let trash = try directory.directory("assets").directory(".trash", create: true)
+        var metadata = stat()
+        guard fstat(trash.descriptor, &metadata) == 0, UInt64(truncatingIfNeeded: metadata.st_dev) == identity.dev else {
+            throw NativeDirectory.refused("隔离区不在媒体文件系统内")
+        }
+        let token = UUID().uuidString.lowercased()
+        let entry = Entry(id: token, assetId: assetID, relPath: relative, identity: identity, trashName: "assets/.trash/" + token, importPending: true)
+        try journal.requireDeleteHeadroom(adding: entry)
+        journal.entries.append(entry)
+        try journal.write(directory)
+    }
+
+    /// Only a complete unchanged index and every opened active identity can prove an import unreferenced.
+    private mutating func recoverImport(_ entry: Entry, directory: NativeDirectory, index: NativeLibraryIndex, complete: Bool) throws -> Bool {
+        guard complete, !index.damaged, !index.changed else {
+            conflict(entry, "索引不完整，导入提交状态无法确认；写入已暂停")
+            return true
+        }
+        var referenced = false
+        for asset in index.assets.values {
+            guard let path = asset["relPath"]?.string, let mime = asset["mime"]?.string else { throw NativeLibraryIndex.invalid("活动媒体字段无效") }
+            let file = try directory.media(path, mime: mime)
+            if file.identity == entry.identity { referenced = true }
+        }
+        try synchronizeImportDecision(directory, relative: entry.relPath)
+        if referenced { return try retainReferencedImport(entry, directory: directory) }
+        guard index.assets[entry.assetId] == nil else {
+            conflict(entry, "导入身份被其它媒体占用，已保留证据")
+            return true
+        }
+        if let current = try identity(directory: directory, relative: entry.relPath), current != entry.identity {
+            conflict(entry, "导入媒体身份改变，已保留证据")
+            return true
+        }
+        return try recoverEntry(entry, directory: directory, index: index)
+    }
+
+    /// A still-active identity keeps its live reference; any verified extra quarantine name remains visible in cleanup totals.
+    private mutating func retainReferencedImport(_ entry: Entry, directory: NativeDirectory) throws -> Bool {
+        let assets = try directory.directory("assets")
+        guard try assets.metadata(".trash") != nil else { return false }
+        let trash = try assets.directory(".trash")
+        let leaf = trashLeaf(entry)
+        guard try trash.metadata(leaf) != nil else { return false }
+        let file = try NativeMediaFile(descriptor: trash.openFile(leaf), mime: "application/octet-stream")
+        guard file.identity == entry.identity else { throw NativeDirectory.refused("导入隔离媒体身份改变，已保留证据") }
+        retain(file)
+        return false
+    }
+
+    /// A visible index after a failed directory barrier must become durable before recovery retires its evidence.
+    private func synchronizeImportDecision(_ directory: NativeDirectory, relative: String) throws {
+        if try directory.metadata("library.json") != nil {
+            let file = try directory.openFile("library.json")
+            defer { Darwin.close(file) }
+            guard fsync(file) == 0 else { throw NativeDirectory.ioError("同步导入权威索引失败") }
+        }
+        try directory.sync()
+        let (parent, leaf) = try directory.mediaParent(relative)
+        if try parent.metadata(leaf) != nil {
+            let file = try parent.openFile(leaf)
+            defer { Darwin.close(file) }
+            guard fsync(file) == 0 else { throw NativeDirectory.ioError("同步导入媒体失败") }
+        }
+        try parent.sync()
+        if try parent.metadata(".trash") != nil { try parent.directory(".trash").sync() }
     }
 
     /// A delete records identity before moving media; no ordinary unlink can remove the quarantined file.

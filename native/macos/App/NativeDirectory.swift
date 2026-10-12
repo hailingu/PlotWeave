@@ -104,18 +104,27 @@ final class NativeDirectory: Sendable {
         }
     }
 
-    /// Atomic persistence synchronizes contents before rename and the parent directory before success.
-    func write(_ data: Data, name: String, beforeCommit: @Sendable () throws -> Void = {}) throws {
-        try atomicWrite(data, name: name, replace: true, beforeCommit: beforeCommit)
+    /// Atomic persistence synchronizes contents before rename and its parent before success; probes bracket rename and directory sync.
+    func write(_ data: Data, name: String, beforeCommit: @Sendable () throws -> Void = {}, afterCommit: @Sendable () throws -> Void = {}) throws {
+        try atomicWrite(data, name: name, replace: true, beforeCommit: { _ in try beforeCommit() }, afterCommit: afterCommit)
     }
 
     /// Evidence backups require an unoccupied final name, never overwriting another stored original.
     func writeNew(_ data: Data, name: String, beforeCommit: @Sendable () throws -> Void = {}) throws {
-        try atomicWrite(data, name: name, replace: false, beforeCommit: beforeCommit)
+        try atomicWrite(data, name: name, replace: false, beforeCommit: { _ in try beforeCommit() })
+    }
+
+    /// Import recovery records the flushed temporary file's real identity durably before its exclusive final rename.
+    func writeNew(_ data: Data, name: String, recordIdentity: @Sendable (NativeFileIdentity) throws -> Void) throws {
+        try atomicWrite(data, name: name, replace: false) { file in
+            var metadata = stat()
+            guard fstat(file, &metadata) == 0, Self.isRegular(metadata) else { throw Self.refused("导入临时媒体身份不可用") }
+            try recordIdentity(NativeFileIdentity(metadata))
+        }
     }
 
     /// Shared durable write primitive keeps regular writes and exclusive backups identical except for replacement.
-    private func atomicWrite(_ data: Data, name: String, replace: Bool, beforeCommit: @Sendable () throws -> Void) throws {
+    private func atomicWrite(_ data: Data, name: String, replace: Bool, beforeCommit: @Sendable (Int32) throws -> Void, afterCommit: @Sendable () throws -> Void = {}) throws {
         try Self.validateComponent(name)
         if let existing = try metadata(name), !replace || !Self.isRegular(existing) {
             throw Self.refused("写入目标已占用、不是普通文件或为符号链接")
@@ -136,7 +145,7 @@ final class NativeDirectory: Sendable {
         if let existing = try metadata(name), !Self.isRegular(existing) {
             throw Self.refused("写入目标在提交前成为非普通文件")
         }
-        try beforeCommit()
+        try beforeCommit(file)
         let renamed = temporary.withCString { from in
             name.withCString { to in
                 replace ? renameat(descriptor, from, descriptor, to)
@@ -144,6 +153,7 @@ final class NativeDirectory: Sendable {
             }
         }
         guard renamed == 0 else { throw Self.ioError("提交原子写失败") }
+        try afterCommit()
         try sync()
     }
 
