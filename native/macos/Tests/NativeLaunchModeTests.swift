@@ -5,6 +5,11 @@ import WebKit
 
 /// Test-host isolation is decided before XCTest loads its bundle, using the shared scheme's launch contract.
 struct NativeLaunchModeTests {
+    /// AGENTS.md's v0.2.0 release contract applies to the actual application bundle in both build configurations.
+    @Test func applicationBundleUsesDesignatedVersion() {
+        #expect(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == "0.2.0")
+    }
+
     /// The TestAction flag alone must select the isolated host during application bootstrap.
     @Test func testSchemeSelectsFixtureBeforeBundleLoads() {
         #expect(NativeLaunchMode.usesFixture(environment: ["PLOTWEAVE_NATIVE_TEST_HOST": "1"]))

@@ -95,7 +95,7 @@ Swift 原生生产画布不再显示左下角重复的放大、缩小和适配�
 
 中断时状态：仓库根目录按原生路由执行 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test`，692 个维护文件／65 个排除项与 389 模块画布构建通过。默认全量日志 `full-default-final.log` 的 164 tests／44 suites 在工具栏初始夹具和既有退出委托两处失败。夹具补入有界就绪等待及检查器列宽识别后，最新默认 `full-default-verified.log` 仍退出 65：工具栏几何、节点属性请求、退出委托和开页尺寸共四个测试、五项问题；所有断言保留，未将结果报为通过。
 
-完整串行 `full-serial-final.log` 曾 164 tests／44 suites 全通过；后续 `full-serial-confirmed.log` 在带保存视口的开页回归仍失败：画布从首页的 1605×698 像素变为恢复栏位后的 1005×698 像素。因此路由事务修正已消除此前连续动画，尚不能保证所有打开顺序都在最终尺寸后呈现。下一步需处理 `NativeWelcomeWindowController` 恢复编辑窗口透明度与原生／Web 布局就绪之间的事件顺序；该进一步生产改动尚未执行。默认全量的共享 AppKit／SwiftUI 夹具干扰仍是推断，未以该推断豁免新增失败。
+完整串行 `full-serial-final.log` 曾 164 tests／44 suites 全通过；后续 `full-serial-confirmed.log` 在带保存视口的开页回归仍失败：画布从首页的 1605×698 像素变为恢复栏位后的 1005×698 像素。因此路由事务修正已消除此前连续动画，尚不能保证所有打开顺序都在最终尺寸后呈现。当时待处理的是 `NativeWelcomeWindowController` 恢复编辑窗口透明度与原生／Web 布局就绪之间的事件顺序；现已由 [PR #526 R13](swiftui-react-flow-pr526-fixes.md) 在恢复显隐／交互前同步当前 writer 待布局，托管完整 190 项回归通过，其中四种保存视口／编辑尺寸组合均保留首帧稳定断言。完整视觉与性能实机验收仍保留 P5 缺口。默认全量的共享 AppKit／SwiftUI 夹具干扰仍是推断，未以该推断豁免新增失败。
 
 新增与实质修改的执行单元已复核不超过 80 代码行，文件位于大小上限内。文档无配置的自动语义检查，已对照实现、N84–N87、UI §12.1 与最新失败证据结构化复核；Markdown 在仓库 Prettier 排除范围内，本轮不把被忽略的格式命令计为检查通过。`git diff --check` 通过。一次性隔离应用、源文件、编译缓存、验证构建和生成画布已清理，任务前已有构建及资源恢复，保留诊断日志。未运行无改动的前端／Rust 全量、覆盖率、SonarQube 或 PR CI，未提交或推送。
 
@@ -243,7 +243,7 @@ Swift 原生生产画布不再显示左下角重复的放大、缩小和适配�
 | N62 | 有效选择→打开按钮／回车／双击 | 打开该 ID 的既有项目，保留同一 WebView 与保存协调 | 三个入口共用 loading／busy／当前 ID 存在检查；不通过行号打开 | 通过：`selectedWelcomeProjectOpensWithoutCreatingAnother` 用实际 AX 按钮与 Return 事件验证已选 ID、未新增项目、真实磁盘图及同一 WebView；实际鼠标双击独立只读夹具触发打开、显示未连接页面的诊断，验证派发，未单独验证双击的完整存储链。创建沿真实创建回归 |
 | N63 | 选择后→项目移除／重排／加载或操作在途 | 重排保留原 ID；目标消失清除选择；未就绪与在途禁用打开和写操作 | 当前投影拥有身份有效性，过期选择不能悄悄替换为另一项目；菜单确认仍绑定捕获 ID | 通过：`removedSelectionDisablesOpening` 在真实列表重排后保持选择、移除后清空；`loadingDisablesOpening` 和延迟创建回归验证实际 AX 禁用；既有表单测试保留损坏条目、加载／busy 和陈旧确认身份边界 |
 | N64 | 空片库／列表失败／打开失败→重试或创建恢复 | 空态与失败可见，打开失败保留片库；显式重试刷新列表，保留既有打开错误诊断 | 原应用错误、重试与删除确认边界保持；欢迎页不创建第二份可写数据 | 通过：`emptyLibraryDisablesOpening` 验证空列表仍可创建且不可打开；`failedOpeningKeepsWelcomeAndRetryRefreshesSelection` 在原生存储删除目标后验证实际打开失败、首页／WebView 保持、AX 重试移除陈旧行且禁用打开、新建恢复进入新项目。列表读取失败未新增故障注入，沿既有回归和入口结构复核 |
-| N65 | 小窗口／浅深外观→显示品牌、按钮与列表 | 品牌使用现有 app 图标和实际版本；布局受限居中，系统绘制按钮与选中颜色 | 系统语义样式拥有外观适配；原窗口关闭沿退出保存协调，无新增关闭旁路 | 通过：960 × 600 pt 窗口的浅／深实际 AX 按钮均满足 28 × 28 pt 目标下限、名称／help／启用语义；现有真实 bundle 图标回归通过。浅色独立窗口目验品牌与版本 0.1.0、圆角面板、灰色非激活／蓝色激活选中行及文字图标；深色完整目验、VoiceOver、增强对比度／减少透明度保留人工验收缺口 |
+| N65 | 小窗口／浅深外观→显示品牌、按钮与列表 | 品牌使用现有 app 图标和实际版本；布局受限居中，系统绘制按钮与选中颜色 | 系统语义样式拥有外观适配；原窗口关闭沿退出保存协调，无新增关闭旁路 | 通过：960 × 600 pt 窗口的浅／深实际 AX 按钮均满足 28 × 28 pt 目标下限、名称／help／启用语义；现有真实 bundle 图标回归通过。历史浅色独立窗口目验品牌与版本 0.1.0（现已按 [PR #526 R14](swiftui-react-flow-pr526-fixes.md) 修正 Debug／Release 的实际 Bundle 为既定 0.2.0）、圆角面板、灰色非激活／蓝色激活选中行及文字图标；深色完整目验、VoiceOver、增强对比度／减少透明度保留人工验收缺口 |
 
 磁盘格式、网络、并发服务和投影乱序处理未变，沿既有回归，不扩展相关组合。本次不增加 Xcode 的仓库克隆或外部项目导入能力。
 

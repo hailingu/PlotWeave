@@ -1,6 +1,6 @@
 # PR #526 评审与原生 CI 修复（2026-10-12）
 
-范围：[PR #526](https://github.com/hailingu/PlotWeave/pull/526) 的两条初次评审、提交 `c0bce19` 后一轮新增的两条真实缺陷（设置根／历史 ABI 取消），以及 [CI run 38198236563](https://github.com/hailingu/PlotWeave/actions/runs/38198236563)。起始提交 `eb0043214917a73072cbbad407419922111fab20`，既有授权分支 `codex/swiftui-react-flow`。CI 的 frontend／Rust 成功；native 编译成功后，宿主在测试连接建立前触发 `NSGenericException`（窗口约束更新循环），退出码 65。
+范围：[PR #526](https://github.com/hailingu/PlotWeave/pull/526) 的两条初次评审、提交 `c0bce19` 后一轮新增的两条真实缺陷（设置根／历史 ABI 取消）、提交 `9d34d25` 后一轮新增的原生版本配置缺陷，本地覆盖率门禁中复现的 watchdog 测试退出观察失序，以及 [CI run 38198236563](https://github.com/hailingu/PlotWeave/actions/runs/38198236563)。起始提交 `eb0043214917a73072cbbad407419922111fab20`，既有授权分支 `codex/swiftui-react-flow`。CI 的 frontend／Rust 成功；native 编译成功后，宿主在测试连接建立前触发 `NSGenericException`（窗口约束更新循环），退出码 65。
 
 ## 实现前关键状态与不变量矩阵
 
@@ -19,6 +19,8 @@
 | R11 | 节点检查器窄／宽列、浅／深外观；系统使用 overlay／legacy 滚动条 | 文本使用实际可滚动内容宽度，标签与开关尾端对齐；滚动条自身宽度不算可编辑区域 | 检查器字段拥有内容布局，测试通过真实 AX 滚动区域与常驻栏实际宽度验证；不改系统偏好 | 托管 run 38202492214 四种字段宽度误差均为 17 pt；旧断言先红，按实际内容列核对相同填充契约，overlay 不扣栏宽 |
 | R12 | 真实 editor 窗口被屏幕约束后→欢迎卡片→移除 presenter | 同一 writer 恢复原有实际 frame 与标题控件，不假设请求尺寸可放入屏幕 | NativeWelcomeWindowController 不拥有 editor 尺寸；移除回归快照采用已落定实际 frame，既有快速切换回归守护呈现前后 frame 一致 | 托管实际 1024×645、旧断言 1100×750；验证实际 geometry 保真，480×632 欢迎尺寸保持 |
 | R13 | 小屏幕／正常编辑尺寸；欢迎返回 editor 时 split／inspector 仍有待执行布局 | 恢复交互与可见性前完成本窗口的待布局；可见画布尺寸一次落定、同一 WK 和保存 owner 保持 | NativeWelcomeWindowController 拥有 writer 显隐恢复，不能发布旧列几何；普通返回、快速 route supersede、替换窗口与关闭共用恢复入口 | 托管两种视口均先暴露 1024×645 再变 424×625；增加待布局隐藏窗口回归与小尺寸真实 WK 路径，先红后绿；不新增任意延时或放宽尺寸跳变断言 |
+| R14 | Debug／Release 编译实际原生应用→首页读取 Bundle 版本 | CFBundleShortVersionString 为现有应用版本 0.2.0，与前端／Tauri 及已发布版本一致 | 原生 target 配置拥有应用营销版本；首页继续读取实际 Bundle，不硬编码显示或修改既有版本决策 | Debug 实际宿主 Bundle 回归先红；Release 构建后通过 plist 解析器核对真实产物；不涉及写入、恢复、并发或版本升级 |
+| R15 | 独立期限／清理兜底→守卫对测试监督进程发送 SIGKILL→守卫先退出、监督进程随后退出 | 测试等待创建时已登记的真实 exit，断言 SIGKILL 与进程消失；安装组 absent 后哨兵仍存活 | 测试夹具拥有退出观察，不把守卫退出当成其它进程退出屏障；生产守卫、期限与组复用保护不变，正常 release／disconnect 路径仍要求监督进程存活 | 完整覆盖率连续两次因立即查询监督进程得到仍存活而失败；复用既有退出登记，不加睡眠或修改生产守卫，集中与完整门禁复核 |
 
 地址依据：[IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/)、[IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/)。单实例边界、付费模型和存储格式不扩展；异步下载沿用既有绝对截止时间、取消和逐跳校验，新增策略不引入重试或共享可写状态。
 
@@ -41,5 +43,11 @@
 - 提交 `9d34d25` 的 [CI run 38202492214](https://github.com/hailingu/PlotWeave/actions/runs/38202492214)：frontend／Rust 成功，native 已完成全部 **189 tests／48 suites**，测试宿主启动与四条评审回归通过；剩余 **7 项几何失败**（R11 四项、R12 一项、R13 两项）。不以启动成功代替整体 CI 通过。
 - R13 先红：`dismissFlushesPendingLayoutBeforeRestoringInteraction` 的真实 NSView 待布局在 writer 已可见且可交互后才执行，断言 `layoutWasHidden == true` 失败；在同一恢复入口先调用 `layoutSubtreeIfNeeded()`，再恢复 opacity、鼠标和辅助功能状态。新增小尺寸真实 WK 用例保留首帧尺寸与视口变化次数的原有断言；完整路由和托管结果在复核后记录。首次额外滚动条夹具尝试未找到 NSScrollView，且本机再次锁屏导致 AX／WK 访问超时，未将这些夹具前提失败当作行为复现；现改用已有公共 AX 查询，不猜测 SwiftUI 私有 view 类型。
 - R13 后绿：同一路由追加完整 Swift Testing 方法标识 `-only-testing:PlotWeaveNativeTests/NativeWelcomeWindowTests/dismissFlushesPendingLayoutBeforeRestoringInteraction()`，**1 test／1 suite 通过**。未加括号的首次选集执行 0 tests，明确不作为通过证据。本机锁屏仍阻断需要可见桌面的 AX／WK 完整复核；托管 CI 会运行全部目标，最终结果在 PR 中绑定实际提交，不把单项通过称为全量通过。
+
+- R14 先红：实际 app-hosted `applicationBundleUsesDesignatedVersion` 读取到 `0.1.0`，违反仓库既定 `0.2.0`，**1 test／1 suite 预期失败**。修正原生应用 target 的 Debug／Release `MARKETING_VERSION`，首页保持读取 Bundle；Debug 的完整 `NativeLaunchModeTests` **5 tests／1 suite 通过**，实际 Release `xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -configuration Release -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData build` 成功，`plistlib` 读取该应用生成的 Info.plist，断言营销版本为 `0.2.0` 通过。首次直接用 Release 跑 `@testable` 目标因默认未启用 `-enable-testing` 而编译失败，未修改该生产边界；Release 验证采用真实生产产物。没有变更应用版本决策、内部测试 bundle 或发布流程。
+
+- R11–R13 托管复核：提交 `3fa69c8f04fa0cc1a29779ebd20a54dfd6d9dbe8` 的 [CI run 38203944610](https://github.com/hailingu/PlotWeave/actions/runs/38203944610)，frontend／Rust／native 三项 job 均成功，native 完成全部 **190 tests／48 suites，TEST SUCCEEDED**；四种检查器字段、实际窗口 frame、四种保存视口／编辑尺寸组合及待布局先隐藏后恢复回归均通过。本机完整 AX／WK 复核仍受锁屏限制，未把单项本地通过当作全量通过；版本续修后最新提交的完整 CI 结果在 PR 中绑定。
+
+- R15 先红：完整 `npm run test:coverage` 连续两次均为 **218 文件通过／1 文件失败，3123 tests 通过／1 test 失败**，失败点是守卫 exit 后立即查询另一监督进程仍存活。单独旧文件 5 项通过，印证退出事件无跨进程先后屏障的观测窗口。测试复用创建时的真实 exit 登记，等待监督进程实际退出并核对 `SIGKILL`，保留 code 1、进程消失及哨兵存活断言；正常 release／disconnect 保持监督进程存活，不改生产守卫或加睡眠。`npm run check:size && npm test -- scripts` 首次在受限沙箱因 `spawnSync ps EPERM` 出现 17 项环境失败；以门禁正常权限执行相同路由后，大小检查 **723 维护文件通过**，脚本 **15 files／314 tests 全通过**；该完整路由覆盖原有 release／disconnect、超时、进程组复用和 hook 身份场景。
 
 源码、测试及配置均在文件上限内，新增／修改单元未超过 80 代码行；未配置复杂度工具，嵌套与函数跨度已人工审阅。历史 ABI 的未改动 `dispatch` 超过 80 代码行，作为既有债务记录，不在本次取消修复中扩展分发重构。地址策略、日期展示、启动判定、设置根与取消资格各有明确 owner，没有新增服务依赖或可写文档副本。真实公网 TLS、计费、视觉、IME、VoiceOver 与全屏人工验收仍保留原有缺口。提交／推送门禁及修复后托管 CI 的结果在 PR 描述中绑定实际提交，不以历史结果替代。
