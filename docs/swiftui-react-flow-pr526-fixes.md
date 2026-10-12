@@ -18,7 +18,7 @@
 | R10 | 未分配 id→取消→未来分配同 id；排队→重复取消→派发；已派发／落定→取消；发送失败／free 排空 | 未知／已派发／落定取消为 no-op；只有排队请求返回 CANCELLED+NULL；其它成功回执保留，登记随派发或发送失败清除 | 历史 PwCore 队列登记拥有取消资格，提交、取消与派发在同一锁下转换；每个成功提交恰有一次回执，状态不能影响未来 id | ABI 先取消未来 id 先红；阻塞回调建立确定性队列后取消／释放及状态清理回归，不依赖睡眠竞速；当前 Swift 应用不链接该 ABI |
 | R11 | 节点检查器窄／宽列、浅／深外观；系统使用 overlay／legacy 滚动条 | 文本使用实际可滚动内容宽度，标签与开关尾端对齐；滚动条自身宽度不算可编辑区域 | 检查器字段拥有内容布局，测试通过真实 AX 滚动区域与常驻栏实际宽度验证；不改系统偏好 | 托管 run 38202492214 四种字段宽度误差均为 17 pt；旧断言先红，按实际内容列核对相同填充契约，overlay 不扣栏宽 |
 | R12 | 真实 editor 窗口被屏幕约束后→欢迎卡片→移除 presenter | 同一 writer 恢复原有实际 frame 与标题控件，不假设请求尺寸可放入屏幕 | NativeWelcomeWindowController 不拥有 editor 尺寸；移除回归快照采用已落定实际 frame，既有快速切换回归守护呈现前后 frame 一致 | 托管实际 1024×645、旧断言 1100×750；验证实际 geometry 保真，480×632 欢迎尺寸保持 |
-| R13 | 小屏幕／正常编辑尺寸；欢迎返回 editor 时 split／inspector 仍有待执行布局 | 恢复交互与可见性前完成本窗口的待布局；可见画布尺寸一次落定、同一 WK 和保存 owner 保持 | NativeWelcomeWindowController 拥有 writer 显隐恢复，不能发布旧列几何；普通返回、快速 route supersede、替换窗口与关闭共用恢复入口 | 托管两种视口均先暴露 1024×645 再变 424×625；增加待布局隐藏窗口回归与小尺寸真实 WK 路径，先红后绿；不新增任意延时或放宽尺寸跳变断言 |
+| R13 | 小屏幕／正常编辑尺寸；欢迎返回 editor 时 split／inspector 仍有待执行布局 | 恢复交互与可见性前完成本窗口的待布局；可见画布尺寸一次落定、同一 WK 和保存 owner 保持 | NativeWelcomeWindowController 拥有 writer 显隐恢复，不能发布旧列几何；普通返回、快速 route supersede、替换窗口与关闭共用恢复入口 | 托管两种视口均先暴露 1024×645 再变 424×625；增加待布局隐藏窗口回归与小尺寸真实 WK 路径，先红后绿；后续真实 WK 采样明确限定可见页面的绘制帧，并记录原生 bounds 与隐藏状态；不新增任意延时或放宽尺寸跳变断言 |
 | R14 | Debug／Release 编译实际原生应用→首页读取 Bundle 版本 | CFBundleShortVersionString 为现有应用版本 0.2.0，与前端／Tauri 及已发布版本一致 | 原生 target 配置拥有应用营销版本；首页继续读取实际 Bundle，不硬编码显示或修改既有版本决策 | Debug 实际宿主 Bundle 回归先红；Release 构建后通过 plist 解析器核对真实产物；不涉及写入、恢复、并发或版本升级 |
 | R15 | 独立期限／清理兜底→守卫对测试监督进程发送 SIGKILL→守卫先退出、监督进程随后退出 | 测试等待创建时已登记的真实 exit，断言 SIGKILL 与进程消失；安装组 absent 后哨兵仍存活 | 测试夹具拥有退出观察，不把守卫退出当成其它进程退出屏障；生产守卫、期限与组复用保护不变，正常 release／disconnect 路径仍要求监督进程存活 | 完整覆盖率连续两次因立即查询监督进程得到仍存活而失败；复用既有退出登记，不加睡眠或修改生产守卫，集中与完整门禁复核 |
 | R16 | 原生选择多文件→前一导入已落盘→后一读取／导入失败；全成功／取消选择 | 部分成功后列表显示已落盘的真实 ID 与媒体，保留失败提示并结束 busy；全成功无错误，取消不导入 | NativeLibrary actor 拥有权威索引；NativeLibraryModel 仅呈现，不因批次后段失败隐藏已提交项或自动重试 | 注入原生选择结果、真实临时文件与库 actor，分别验证读失败、空文件导入失败、全成功和取消；真实系统面板继续保留人工验收缺口 |
@@ -77,7 +77,7 @@
 
 | ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 实现前选定验证／缺口 |
 | --- | --- | --- | --- | --- |
-| R24 | 监听就绪→系统退出→Web 四类保存失败／抛错／退出批准失败；随后修复并重试 | 首次 terminateLater 最终回复 false，清除旧意图、留窗和诊断；重试成功回复 true，不重新取消成功系统终止序列 | 原生 delegate 拥有 AppKit 回复；Web via Swift-only app_exit 的可选 cancel:true 报告失败，缺省仍批准；Tauri 命令语义不变 | 新增 Swift Web 失败信号回归、真实 WK 文件阻挡恢复、委托 false→true 回归；真实注销不执行，验证同一回调的 AppKit 成功回复合同 |
+| R24 | 监听就绪→系统退出→Web 四类保存失败／抛错／退出批准失败；页面错误投影可能先于原生取消回执；回执落定后修复并重试 | 首次 terminateLater 最终回复 false，清除旧意图、留窗和诊断；重试成功回复 true，不重新取消成功系统终止序列 | 原生 delegate 拥有 AppKit 回复；Web via Swift-only app_exit 的可选 cancel:true 报告失败，缺省仍批准；错误投影不代表退出回执已落定；Tauri 命令语义不变 | 新增 Swift Web 失败信号回归、真实 WK 文件阻挡恢复、委托 false→true 回归；真实 WK 测试须等待错误与 false 回执后再重试；真实注销不执行，验证同一回调的 AppKit 成功回复合同 |
 | R25 | 监听未就绪时系统退出；监听初始化失败；事件投递失败；旧投递迟到／页面重连 | 未就绪先取消系统请求并保留启动意图；已延迟的桥失败／重连回复 false；旧任务失败不得取消新意图 | controller 负责事件任务取消与监听资格；delegate 只对实际等待的 terminate 回复一次，关窗失败不回复系统退出 | 未就绪、初始化 IPC 拒绝、真实投递失败、幂等取消、旧任务取消和重连回归；取消信号自身失败须保留双重诊断 |
 
 - 中间方案 R22–R23 针对当前原生退出的真实 P2 缺陷：AppKit 的 [`terminateLater`](https://developer.apple.com/documentation/appkit/nsapplication/terminatereply/terminatelater) 必须收到最终 true／false 回复，旧实现只有成功回执，失败无法完成系统退出决定。复用既有意图缓冲，系统入口直接返回 `terminateCancel`，前端成功冲刷后才经带许可的 `NSApplication.terminate` 重新进入系统入口；失败和桥初始化未就绪均留在正常事件循环。没有增加桥命令、后台重试、保存副本或改变 Tauri 合同。
@@ -104,3 +104,12 @@
 - 所选文件增加 `O_NONBLOCK`，保持 `O_NOFOLLOW`／`O_CLOEXEC`，并复用 `NativeMediaFile` 的实际 descriptor fstat 普通文件校验、字节上限与释放。没有先检查路径再打开的竞态，也没有新增轮询、超时、后台重试或 Web 文件路径能力。
 - 集中 `NativeLibraryModelTests` **6 tests／1 suite 全通过**：特殊文件用例覆盖 FIFO／目录／symlink × 独立选择／前置普通文件六种组合；权威列表、已提交资产 ID、真实媒体字节一致，错误可见、busy 落定。既有完整／取消选择、后段失败、恢复失败、其它 mutate 和关闭晚选择均保持。完整 native 路由结果在最终提交前记录，系统 NSOpenPanel 仍保留人工缺口。
 - R26 最终完整 native 路由：**725 维护文件规模检查通过、403 模块画布构建成功、208 tests／50 suites 全通过，TEST SUCCEEDED**。本次运行包含最终 R24–R25 退出回复、真实 WK 写失败恢复和图库特殊文件六种输入组合。文档无自动语义检查，结构化审阅同步资产、UI 与 F07；提交／推送门禁和最新 CI 在 PR 绑定最终提交。
+
+## CI 异步回执与绘制帧复核
+
+- 提交 `12a4314` 的 [CI #597](https://github.com/hailingu/PlotWeave/actions/runs/38214133018) 前端／Rust 通过，native **208 tests／50 suites、3 处问题**，均在 `failedQuitSaveCanRecoverWithoutDeferredAppKitTermination`：测试只等待 Web 错误投影，就断言原生意图清除和 false 回执，并过早发起重试。错误投影与 `app_exit(cancel:true)` 是独立异步消息，前者可先抵达；不能用错误已显示代替原生取消已完成。
+- 复用 R24 的真实窗口／项目文件回归，把等待条件同时限定为错误可见、旧意图清除及实际 false 回执；之后才解除文件阻挡并发起新退出。保留原有 12 秒期限、全部失败／成功断言和实际落盘检查，不增加固定睡眠、重试掩盖或生产分支。此轮仅修复测试同步前提；行为红灯采用上述实际 CI 失败，复核结果在提交前记录。
+- 真实 WK 退出集中 **2 tests／1 suite 通过**。随后完整 native **208 tests／50 suites、1 处问题**，退出已通过，但既有 R13 首帧回归在保存视口／1100×750 输入采到 **1605→1005** 的画布宽度变化（高度／transform 保持）。窗口级 `layoutIfNeeded()` 试验集中 **12 tests／2 suites 通过**，全量仍在缺失视口／960×600 输入采到 **1465→865**；增加原生 bounds／隐藏状态诊断后全量通过。集中三次重复的 xcresult 确认 **7 个测试、42 次参数／重复执行通过**，一次按方法筛选实际选中零测试，不计作验证。这些结果不能证明窗口级调用修复了问题，该试验已撤回，不保留额外生产分支。
+- R13／N85 的验证语义是可见画布的绘制帧；原采样只检查窗口 opacity 和 editor 投影，并在任意 JavaScript 任务中读取几何，未区分尚未显示的 WK 页面及其旧 viewport。测试现在还检查 WK 本身可见，并在下一次 `requestAnimationFrame` 回调读取三个节点的实际几何与 transform；其绘制前回调语义见 [MDN](https://developer.mozilla.org/en-US/docs/Web/API/Window/requestAnimationFrame)。首个采样帧仍参与尺寸／视口断言，不等待尺寸相等、忽略头部样本或自动重试；独立 1 秒期限仅使未到达绘制帧明确返回 `PW_CANVAS_FRAME_TIMEOUT`，并取消未执行回调。保留 40 次采样、原 30 毫秒间隔、原有视口条件及同一 WK 身份断言，诊断同时记录原生 bounds 与 hidden。实际物理屏幕逐帧画面未录像，不能将任意任务的旧尺寸直接断定为已显示的生产抖动；完整视觉验收仍为 P5 缺口。
+- 最终回执／绘制帧修正集中 **9 tests／2 suites 全通过**，实际执行首页七项（含四种尺寸／视口组合）和真实 WK 生命周期两项；生产呈现、视口和保存 owner 未再变更。完整 native、提交／推送门禁及最新 CI 在最终提交绑定。
+- 最终完整 native 路由 **725 维护文件检查、403 模块画布构建通过，208 tests／50 suites 全通过，TEST SUCCEEDED**（71.073 秒）。此结果来自撤回窗口级试验后的最终测试源，包含绘制帧采样、实际 WK 文件阻挡恢复和 FIFO 六种输入组合；不将前述失败／零选集算作通过。

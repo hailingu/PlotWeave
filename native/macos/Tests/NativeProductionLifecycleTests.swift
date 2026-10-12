@@ -78,7 +78,11 @@ struct NativeProductionLifecycleTests {
         })
         delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
         #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
-        try await wait { mounted.state.app["error"]?.string?.contains("已阻止退出") == true }
+        // The Web error projection can arrive before its separate cancellation RPC settles AppKit.
+        try await wait {
+            mounted.state.app["error"]?.string?.contains("已阻止退出") == true
+                && fixture.quit.pendingIntent == nil && replies == [false]
+        }
         #expect(approvals.count == 0)
         #expect(mounted.window.isVisible)
         #expect(fixture.quit.pendingIntent == nil)

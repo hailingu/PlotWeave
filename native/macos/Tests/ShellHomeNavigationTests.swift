@@ -15,6 +15,10 @@ struct ShellHomeNavigationTests {
         let size: CGSize
         /// A missing saved viewport may require one initial fit after nodes are measured.
         let transform: String
+        /// Native visibility and bounds distinguish an actual visible relayout from an old hidden Web frame.
+        let nativeSize: CGSize
+        /// Navigation may publish the editor route before SwiftUI reveals the retained canvas.
+        let hidden: Bool
     }
 
     /// Saved restoration and first fit must not expose repeated native canvas relayouts (N85–N86).
@@ -36,7 +40,7 @@ struct ShellHomeNavigationTests {
         _ = try await fixture.state.request("app.open", args: ["id": .string(id)])
         var frames: [CanvasFrame] = []
         for _ in 0..<40 {
-            if fixture.window.alphaValue > 0, fixture.state.route == "editor" {
+            if fixture.window.alphaValue > 0, fixture.state.route == "editor", !webView.isHidden {
                 if let frame = try await canvasFrame(webView) { frames.append(frame) }
             }
             try await Task.sleep(for: .milliseconds(30))
@@ -67,22 +71,33 @@ struct ShellHomeNavigationTests {
         _ = try await store.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(fields)])
     }
 
-    /// Reads actual rendered geometry and viewport rather than counting component executions.
+    /// Measures each visible browser repaint; arbitrary script turns may still see the hidden page's old viewport.
     private func canvasFrame(_ webView: WKWebView) async throws -> CanvasFrame? {
-        guard let values = try await webView.evaluateJavaScript("""
-            (() => {
-                const flow = document.querySelector('.react-flow');
-                const viewport = document.querySelector('.react-flow__viewport');
-                if (!flow || !viewport || document.querySelectorAll('.react-flow__node').length !== 3) return null;
-                const rect = flow.getBoundingClientRect();
-                return [rect.width, rect.height, viewport.style.transform];
-            })()
-            """) as? [Any] else { return nil }
+        guard let values = try await webView.callAsyncJavaScript("""
+            return await new Promise((resolve, reject) => {
+                const frame = requestAnimationFrame(() => {
+                    clearTimeout(deadline);
+                    const flow = document.querySelector('.react-flow');
+                    const viewport = document.querySelector('.react-flow__viewport');
+                    if (!flow || !viewport || document.querySelectorAll('.react-flow__node').length !== 3) {
+                        resolve(null);
+                        return;
+                    }
+                    const rect = flow.getBoundingClientRect();
+                    resolve([rect.width, rect.height, viewport.style.transform]);
+                });
+                const deadline = setTimeout(() => {
+                    cancelAnimationFrame(frame);
+                    reject(new Error('PW_CANVAS_FRAME_TIMEOUT'));
+                }, 1000);
+            });
+            """, arguments: [:], in: nil, contentWorld: .page) as? [Any] else { return nil }
         #expect(values.count == 3)
         let width = try #require(values.first as? Double)
         let height = try #require(values.dropFirst().first as? Double)
         let transform = try #require(values.last as? String)
-        return CanvasFrame(size: CGSize(width: width, height: height), transform: transform)
+        return CanvasFrame(size: CGSize(width: width, height: height), transform: transform,
+                           nativeSize: webView.bounds.size, hidden: webView.isHidden)
     }
 
     /// Each explicit welcome-page entry opens the selected persisted ID through the retained editing session.
