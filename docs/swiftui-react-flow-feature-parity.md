@@ -1,5 +1,7 @@
 # 原生版本功能补齐记录
 
+> 2026-10-12：[PR #526 评审与 CI 修复](swiftui-react-flow-pr526-fixes.md)收紧 Swift 图像下载的特殊用途地址策略，恢复欢迎列表规范毫秒时间的相对展示，并将测试宿主隔离提前到 TestAction。CI／现行原生路由串行执行共享 NSApplication 的完整目标；历史并行失败与各次旧命令仍保留原执行范围。
+
 > 2026-10-07 主目录集成：完整实现从归档快照恢复到当前分支，当前构建与验证结果见[合入记录](swiftui-react-flow-integration.md)。下方各日期结果保留原执行范围。
 
 日期：2026-10-04。基线：本地 `dev` 的 `752cd5c`，已合入 `codex/swiftui-react-flow` 的 `08653d2`。本记录对应所有者“补充 swiftui-react-flow 里和 dev 上对比缺失的功能”的任务，沿用[迁移计划](swiftui-react-flow-migration-plan.md)的单写入者、持久化和数据隔离合同。

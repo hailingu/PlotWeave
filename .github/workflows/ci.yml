@@ -114,4 +114,5 @@ jobs:
       - name: build:native-canvas
         run: npm run build:native-canvas
       - name: Swift 与 WKWebView 回归
-        run: xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test
+        # App-hosted 的窗口、焦点及退出委托共享一个 NSApplication；各套件不能并发改写它。
+        run: xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test

@@ -30,10 +30,9 @@ enum NativeNetworkPolicy {
         if bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 255, bytes[11] == 255 { return publicV4(Array(bytes.suffix(4))) }
         if bytes[0] == 0x20, bytes[1] == 0x02 { return publicV4(Array(bytes[2..<6])) }
         if Array(bytes.prefix(12)) == [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0] { return publicV4(Array(bytes.suffix(4))) }
-        if Array(bytes.prefix(6)) == [0x00, 0x64, 0xff, 0x9b, 0, 1] { return false }
-        if bytes[0] == 0xff || bytes[0] & 0xfe == 0xfc { return false }
-        if bytes[0] == 0xfe, (bytes[1] & 0xc0 == 0x80 || bytes[1] & 0xc0 == 0xc0) { return false }
-        return true
+        if bytes[8] & 0xfd == 0, bytes[9] == 0, bytes[10] == 0x5e, bytes[11] == 0xfe,
+           !publicV4(Array(bytes.suffix(4))) { return false }
+        return publicV6(bytes)
     }
 
     /// Literal classification bypasses DNS entirely, preventing accidental hostname reinterpretation.
@@ -52,14 +51,32 @@ enum NativeNetworkPolicy {
         return ipv6(host) == [UInt8](repeating: 0, count: 15) + [1]
     }
 
-    /// IPv4 public exclusions match the existing generated-image URL contract.
+    /// IANA non-global, deprecated and multicast ranges cannot be pinned image-download destinations.
     private static func publicV4(_ b: [UInt8]) -> Bool {
-        if b[0] == 0 || b[0] == 10 || b[0] == 127 || (224...239).contains(b[0]) { return false }
+        if b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224 { return false }
         if b[0] == 172, (16...31).contains(b[1]) { return false }
         if b[0] == 192, b[1] == 168 { return false }
         if b[0] == 169, b[1] == 254 { return false }
         if b[0] == 100, (64...127).contains(b[1]) { return false }
-        return b != [255, 255, 255, 255]
+        if b[0] == 192, b[1] == 0, b[2] == 0 { return b[3] == 9 || b[3] == 10 }
+        if b[0] == 192, (b[1] == 0 && b[2] == 2) || (b[1] == 88 && b[2] == 99) { return false }
+        if b[0] == 198, (18...19).contains(b[1]) || (b[1] == 51 && b[2] == 100) { return false }
+        return !(b[0] == 203 && b[1] == 0 && b[2] == 113)
+    }
+
+    /// Ordinary IPv6 requires global-unicast space; IANA protocol allocations use their explicit global exceptions.
+    private static func publicV6(_ b: [UInt8]) -> Bool {
+        guard b[0] & 0xe0 == 0x20 else { return false }
+        if b[0] == 0x20, b[1] == 0x01 {
+            if b[2] == 0x0d, b[3] == 0xb8 { return false }
+            if b[2] < 2 {
+                if b[2] == 0, b[3] == 1, b[4..<15].allSatisfy({ $0 == 0 }), (1...3).contains(b[15]) { return true }
+                if b[2] == 0, b[3] == 3 { return true }
+                if Array(b.prefix(6)) == [0x20, 1, 0, 4, 1, 0x12] { return true }
+                return b[2] == 0 && (b[3] & 0xf0 == 0x20 || b[3] & 0xf0 == 0x30)
+            }
+        }
+        return !(b[0] == 0x3f && b[1] == 0xff && b[2] & 0xf0 == 0)
     }
 
     /// Network-order bytes avoid signed integer/endian ambiguity in subnet comparisons.

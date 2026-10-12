@@ -5,6 +5,26 @@ import Testing
 /// Native form rules keep drafts local and enforce the shared projection/intent contracts.
 @MainActor
 struct NativeFormsTests {
+    /// Presentation accepts both stored timestamp forms without changing the metadata or inventing dates for damage.
+    @Test func projectDatesPreserveMillisecondsAndRejectInvalidMetadata() throws {
+        for (timestamp, expected) in [("2026-10-12T03:05:04.123Z", 1_791_774_304.123),
+                                      ("2026-10-12T03:05:04Z", 1_791_774_304.0)] {
+            let project = try #require(NativeProjectProjection(.object([
+                "id": .string("dated"), "name": .string("Date"), "updatedAt": .string(timestamp)
+            ])))
+            let date = try #require(project.updatedDate)
+            #expect(abs(date.timeIntervalSince1970 - expected) < 0.0001)
+            #expect(project.updatedAt == timestamp)
+        }
+        for metadata in [HostJSON.object([:]), .object(["updatedAt": .string("invalid")]),
+                         .object(["updatedAt": .string("2026-10-12T03:05:04.123Z"), "error": .string("损坏")])] {
+            var value = try #require(metadata.object)
+            value["id"] = .string("dated")
+            value["name"] = .string("Date")
+            #expect(NativeProjectProjection(.object(value))?.updatedDate == nil)
+        }
+    }
+
     /// The complete library retains persisted IDs, source ordering and dirty-data diagnostics.
     @Test func homePreservesAllIdentitiesAndUnreadableProjects() {
         let projects = HostJSON.array([

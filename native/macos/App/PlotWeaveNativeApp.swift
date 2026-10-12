@@ -40,6 +40,6 @@ struct PlotWeaveNativeApp: App {
 
     /// Hosted tests launch only the in-memory fixture, never a page that auto-opens application data.
     private static var isHostedTest: Bool {
-        Bundle.allBundles.contains { $0.bundleURL.pathExtension == "xctest" }
+        NativeLaunchMode.usesFixture(environment: ProcessInfo.processInfo.environment)
     }
 }

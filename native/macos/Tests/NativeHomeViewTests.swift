@@ -8,6 +8,32 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct NativeHomeViewTests {
+    /// Canonical millisecond metadata must render the same relative-time field as legacy whole seconds.
+    @Test(arguments: ["2026-10-12T03:05:04.123Z", "2026-10-12T03:05:04Z", "invalid"])
+    func projectTimestampRendersRelativeTime(timestamp: String) async throws {
+        let state = NativeApplicationState()
+        let window = try makeWindow(state: state, projects: [["id": "dated", "name": "时间回归"]])
+        defer { window.close(); window.contentView = nil }
+        try await Task.sleep(for: .milliseconds(300))
+        let original = try await staticTextValues(in: window)
+        try state.receiveProjection([
+            "protocolVersion": 1, "sessionId": "home-controls", "sequence": 2,
+            "projection": ["app": ["route": "home", "loading": false,
+                "projects": [["id": "dated", "name": "时间回归", "updatedAt": timestamp]]]]
+        ])
+        try await Task.sleep(for: .milliseconds(300))
+        let updated = try await staticTextValues(in: window)
+        let metadata = updated.subtracting(original)
+        #expect(metadata.count == (timestamp == "invalid" ? 0 : 1), "Rendered metadata: \(metadata)")
+    }
+
+    /// Relative-date wording is locale-owned; the fixture compares actual accessible fields instead of prose.
+    private func staticTextValues(in window: NSWindow) async throws -> Set<String> {
+        let elements = try await NativeCreationControlFixture.elements(in: window)
+        let texts = elements.filter { NativeCreationControlFixture.string($0, kAXRoleAttribute) == kAXStaticTextRole }
+        return Set(texts.compactMap { NativeCreationControlFixture.string($0, kAXValueAttribute) }.filter { !$0.isEmpty })
+    }
+
     /// Every direct welcome-control fixture uses the owner's fixed Xcode point geometry, including both appearances.
     @Test func welcomeControlsUseOnlyReferenceGeometry() throws {
         let window = try makeWindow()

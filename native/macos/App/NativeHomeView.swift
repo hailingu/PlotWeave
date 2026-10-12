@@ -18,6 +18,16 @@ struct NativeProjectProjection: Identifiable, Equatable {
         updatedAt = value["updatedAt"]?.string
         error = value["error"]?.string
     }
+
+    /// Canonical saved timestamps include milliseconds; legacy whole-second metadata remains displayable.
+    var updatedDate: Date? {
+        guard error == nil, let updatedAt else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: updatedAt) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: updatedAt)
+    }
 }
 
 /// Read-only homepage policy preserves the full ordered library and disables writes during unfinished loads.
@@ -255,8 +265,7 @@ private struct NativeProjectRow: View {
                 if let error = project.error {
                     Label(error, systemImage: "exclamationmark.triangle").font(.caption)
                         .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.orange))
-                } else if let timestamp = project.updatedAt,
-                          let date = ISO8601DateFormatter().date(from: timestamp) {
+                } else if let date = project.updatedDate {
                     Text(date, style: .relative).font(.caption)
                         .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 }

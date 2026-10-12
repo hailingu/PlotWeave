@@ -26,6 +26,8 @@ Swift 6.4 是编译器版本，项目仍采用 Swift 6 语言模式；SDK 27.0 �
 
 原生 CI 使用 `xcode-27` runner；2026-10-07 通过 `DEVELOPER_DIR` 选择 `/Applications/Xcode_27.0.app/Contents/Developer`，在构建前检查 Xcode 精确为 27.0、macOS SDK 精确为 27.0，再执行画布资源构建与现行原生路由。Frontend/Rust jobs 继续使用 `macos-15`。
 
+2026-10-12，[PR #526 修复](swiftui-react-flow-pr526-fixes.md)将测试宿主隔离提前到共享 scheme 的 TestAction 环境，不再依赖 bundle 加载时序；CI 与现行 `native/**` 路由统一追加 `-parallel-testing-enabled NO`。App-hosted 的真实窗口、焦点与退出委托共享 `NSApplication`，各 suite 的 `.serialized` 不隔离兄弟套件；串行执行完整目标，不删除测试或放宽断言。下方旧命令及数值保持各次原始执行状态。
+
 2026-10-04 核对的[官方 xcode-27 镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md)列出默认 Xcode 27.0（`27A266a`）及 macOS SDK 27.0；该镜像运行于 macOS 27.0。本次本地运行系统为 macOS 26.6.2，本地构建／启动结果与托管 CI 结果分别记录。旧 `macos-26` runner 的 Xcode 26.6 约定保留在原合并证据中，现行配置以本记录及 `.github/workflows/ci.yml` 为准。
 
 ## 原始构建、测试与启动记录（2026-10-04）

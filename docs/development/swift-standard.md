@@ -109,6 +109,17 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   Green unit and integration tests do not establish public TLS trust-chain,
   paid-provider, visual, IME, VoiceOver, or performance acceptance; retain
   those gaps in [Feature Parity](../swiftui-react-flow-feature-parity.md).
+- The shared scheme's `TestAction` supplies `PLOTWEAVE_NATIVE_TEST_HOST=1`
+  before application bootstrap, independently of `LaunchAction`. The app
+  selects its memory fixture from that flag, not loaded-bundle discovery;
+  `NativeLaunchModeTests` checks both the policy and the real test environment
+  ([PR #526 evidence](../swiftui-react-flow-pr526-fixes.md)). Ordinary launches
+  retain the production entry point.
+- Run the app-hosted target with `-parallel-testing-enabled NO`, as specified
+  in Scope Routing and CI. Its real AppKit windows share `NSApplication`
+  focus, toolbar layout and close delegates; per-suite `.serialized` does
+  not isolate concurrently executing sibling suites. Serial execution keeps
+  every assertion and test while preventing fixture interference.
 
 ## Before Writing Code
 

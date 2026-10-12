@@ -8,13 +8,13 @@ struct NativePublicDownloadTests {
     /// The resolved public address is the connection endpoint; the original host remains the TLS identity.
     @Test func publicResolutionPinsAddressWithoutReplacingTLSHostname() async throws {
         let seen = Mutex<[NativeDownloadRequest]>([])
-        let download = NativePublicDownload(resolver: { _, _ in ["203.0.113.7", "198.51.100.8"] }, transport: { request in
+        let download = NativePublicDownload(resolver: { _, _ in ["8.8.8.8", "1.1.1.1"] }, transport: { request in
             seen.withLock { $0.append(request) }
             return NativeHTTPReply(status: 200, headers: [:], body: Data("png".utf8))
         })
         let result = try await download.fetch("https://images.example/frame.png", deadline: Self.deadline)
         #expect(result == Data("png".utf8))
-        #expect(seen.withLock { $0.first?.address } == "203.0.113.7")
+        #expect(seen.withLock { $0.first?.address } == "8.8.8.8")
         #expect(seen.withLock { $0.first?.hostname } == "images.example")
         #expect(seen.withLock { $0.first?.url.host } == "images.example")
     }
@@ -22,20 +22,48 @@ struct NativePublicDownloadTests {
     /// One unsafe DNS result refuses the whole set, not just a preferred safe answer.
     @Test func mixedDNSAndPrivateLiteralNeverReachTransport() async throws {
         let calls = Mutex(0)
-        let download = NativePublicDownload(resolver: { _, _ in ["203.0.113.7", "127.0.0.1"] }, transport: { _ in
+        let download = NativePublicDownload(resolver: { _, _ in ["8.8.8.8", "127.0.0.1"] }, transport: { _ in
             calls.withLock { $0 += 1 }
             return NativeHTTPReply(status: 200, headers: [:], body: Data())
         })
-        for url in ["https://images.example/a", "https://10.0.0.1/a", "https://[::ffff:127.0.0.1]/a", "https://[64:ff9b::7f00:1]/a", "http://203.0.113.7/a"] {
+        for url in ["https://images.example/a", "https://10.0.0.1/a", "https://[::ffff:127.0.0.1]/a", "https://[64:ff9b::7f00:1]/a", "http://8.8.8.8/a"] {
             await #expect(throws: HostFailure.self) { try await download.fetch(url, deadline: Self.deadline) }
         }
         #expect(calls.withLock { $0 } == 0)
     }
 
+    /// Direct, mixed-DNS and redirected special-use targets share the same refusal code before connecting.
+    @Test func specialUseTargetsNeverReachAnotherTransportHop() async throws {
+        for address in ["198.18.0.1", "240.0.0.1", "2001:db8::1", "::ffff:198.18.0.1"] {
+            let calls = Mutex(0)
+            let host = address.contains(":") ? "[\(address)]" : address
+            let mixed = NativePublicDownload(resolver: { _, _ in ["8.8.8.8", address] }, transport: { _ in
+                calls.withLock { $0 += 1 }
+                return NativeHTTPReply(status: 200, headers: [:], body: Data([1]))
+            })
+            for url in ["https://images.example/a", "https://\(host)/a"] {
+                do {
+                    _ = try await mixed.fetch(url, deadline: Self.deadline)
+                    Issue.record("Special-use destination returned media: \(address)")
+                } catch let error as HostFailure { #expect(error.code == "PW_NETWORK_REFUSED") }
+            }
+            #expect(calls.withLock { $0 } == 0)
+            let redirect = NativePublicDownload(resolver: { _, _ in ["8.8.8.8"] }, transport: { _ in
+                calls.withLock { $0 += 1 }
+                return NativeHTTPReply(status: 302, headers: ["location": "https://\(host)/a"], body: Data())
+            })
+            do {
+                _ = try await redirect.fetch("https://images.example/a", deadline: Self.deadline)
+                Issue.record("Special-use redirect returned media: \(address)")
+            } catch let error as HostFailure { #expect(error.code == "PW_NETWORK_REFUSED") }
+            #expect(calls.withLock { $0 } == 1)
+        }
+    }
+
     /// Redirects re-enter DNS validation before another connection and cannot cross to an internal target.
     @Test func redirectRevalidatesAllAnswersAndStopsPrivateTarget() async throws {
         let calls = Mutex(0)
-        let download = NativePublicDownload(resolver: { host, _ in host == "images.example" ? ["203.0.113.7"] : ["192.168.1.1"] }, transport: { _ in
+        let download = NativePublicDownload(resolver: { host, _ in host == "images.example" ? ["8.8.8.8"] : ["192.168.1.1"] }, transport: { _ in
             calls.withLock { $0 += 1 }
             return NativeHTTPReply(status: 302, headers: ["location": "https://private.example/a"], body: Data())
         })
@@ -46,14 +74,14 @@ struct NativePublicDownloadTests {
     /// Relative redirects retain the original identity while the existing five-hop ceiling stays bounded.
     @Test func relativeRedirectSucceedsAndCycleIsBounded() async throws {
         let paths = Mutex<[String]>([])
-        let download = NativePublicDownload(resolver: { _, _ in ["203.0.113.7"] }, transport: { request in
+        let download = NativePublicDownload(resolver: { _, _ in ["8.8.8.8"] }, transport: { request in
             paths.withLock { $0.append(request.url.path) }
             return request.url.path == "/a" ? NativeHTTPReply(status: 302, headers: ["location": "/b"], body: Data()) : NativeHTTPReply(status: 200, headers: [:], body: Data([1]))
         })
         #expect(try await download.fetch("https://images.example/a", deadline: Self.deadline) == Data([1]))
         #expect(paths.withLock { $0 } == ["/a", "/b"])
         let calls = Mutex(0)
-        let loop = NativePublicDownload(resolver: { _, _ in ["203.0.113.7"] }, transport: { _ in
+        let loop = NativePublicDownload(resolver: { _, _ in ["8.8.8.8"] }, transport: { _ in
             calls.withLock { $0 += 1 }
             return NativeHTTPReply(status: 302, headers: ["location": "/a"], body: Data())
         })
@@ -64,7 +92,7 @@ struct NativePublicDownloadTests {
     /// Cancelled, expired and oversized work cannot return a successful body to an image writer.
     @Test func cancellationDeadlineAndBodyLimitReject() async throws {
         let calls = Mutex(0)
-        let download = NativePublicDownload(resolver: { _, _ in ["203.0.113.7"] }, transport: { _ in
+        let download = NativePublicDownload(resolver: { _, _ in ["8.8.8.8"] }, transport: { _ in
             calls.withLock { $0 += 1 }
             return NativeHTTPReply(status: 200, headers: [:], body: Data(repeating: 0, count: 5))
         }, maximum: 4)
@@ -72,7 +100,7 @@ struct NativePublicDownloadTests {
         await #expect(throws: HostFailure.self) { try await download.fetch("https://images.example/a", deadline: .now.advanced(by: .seconds(-1))) }
         #expect(calls.withLock { $0 } == 0)
         await #expect(throws: HostFailure.self) { try await download.fetch("https://images.example/a", deadline: Self.deadline) }
-        let slow = NativePublicDownload(resolver: { _, _ in try await Task.sleep(for: .seconds(10)); return ["203.0.113.7"] }, transport: download.transport)
+        let slow = NativePublicDownload(resolver: { _, _ in try await Task.sleep(for: .seconds(10)); return ["8.8.8.8"] }, transport: download.transport)
         let start = ContinuousClock.now
         await #expect(throws: HostFailure.self) { try await slow.fetch("https://images.example/a", deadline: .now.advanced(by: .milliseconds(20))) }
         #expect(start.duration(to: .now) < .seconds(1))
@@ -81,7 +109,7 @@ struct NativePublicDownloadTests {
     /// All non-2xx replies remain visible errors rather than becoming invalid generated files.
     @Test func responseFailureAndMissingRedirectLocationReject() async throws {
         for status in [302, 403] {
-            let download = NativePublicDownload(resolver: { _, _ in ["203.0.113.7"] }, transport: { _ in NativeHTTPReply(status: status, headers: [:], body: Data()) })
+            let download = NativePublicDownload(resolver: { _, _ in ["8.8.8.8"] }, transport: { _ in NativeHTTPReply(status: status, headers: [:], body: Data()) })
             await #expect(throws: HostFailure.self) { try await download.fetch("https://images.example/a", deadline: Self.deadline) }
         }
     }
