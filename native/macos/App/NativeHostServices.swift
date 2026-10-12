@@ -54,6 +54,8 @@ final class NativeHostServices {
         quitPage = coordinator
         quit.sendEvent = { [weak coordinator] name, payload in
             guard let coordinator else { throw HostFailure(code: "PW_PAGE_UNAVAILABLE", message: "画布页面不可用") }
+            if name == "app-quit-requested" { try await coordinator.drainNativeIntents?() }
+            try Task.checkCancellation()
             try await coordinator.dispatchEvent(name, payload: payload)
         }
         if let library {
@@ -109,7 +111,11 @@ final class NativeHostServices {
     /// Swift's additive failure signal settles AppKit; default app_exit keeps its existing successful-flush meaning.
     private func finishQuit(_ args: [String: HostJSON]?) throws -> HostJSON {
         switch args?["cancel"] {
-        case nil, .bool(false): try quit.approve()
+        case nil, .bool(false):
+            guard quitPage?.hasPendingNativeIntents?() != true else {
+                throw HostFailure(code: "PW_NATIVE_INTENTS_PENDING", message: "原生编辑尚未完成，已阻止退出；请等待后重试。")
+            }
+            try quit.approve()
         case .bool(true): quit.cancel()
         default: throw HostFailure(code: "PW_INVALID_REQUEST", message: "退出 cancel 必须为布尔值")
         }

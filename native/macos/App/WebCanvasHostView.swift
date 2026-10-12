@@ -108,6 +108,10 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
     private var mediaScheme: NativeMediaScheme?
     /// Current page UUID, advertised through the document-start marker.
     var sessionId: String { router.sessionId }
+    /// The native application registers a current-page barrier before delivering quit to Web save owners.
+    var drainNativeIntents: (() async throws -> Void)?
+    /// Final approval must also reject native actions admitted after quit event delivery.
+    var hasPendingNativeIntents: (() -> Bool)?
     /// Optional fixture supplied by deterministic native tests.
     private let entryOverride: URL?
     /// Accepted URL is fixed by the host, never supplied by a Web request.

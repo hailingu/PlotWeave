@@ -139,3 +139,18 @@
 - `NativeSettingsView` 以页级 provider ID 字典绑定各卡片 SecureField，移除行级清理；普通字段仍由原草稿拥有。整页 `onDisappear` 清除所有草稿，ready 投影移除供应商时过滤身份，旧行 setter 不能重建已删除 ID；加载态不视作删除。提交先清除页级输入，再复用已有 `takeKeyArguments` 的修剪与消费，不扩展持久／投影合同。
 - 集中命令 `xcodebuild … -parallel-testing-enabled NO -only-testing:PlotWeaveNativeTests/NativeSettingsDraftLifecycleTests -only-testing:PlotWeaveNativeTests/NativeFormsTests test` **6 tests／2 suites 通过，TEST SUCCEEDED**（2.243 秒），包含实际删除首供应商后同 ID 重现不回显，以及提交桥失败后清稿、整页重挂和普通字段 patch 无密钥。仅用合成输入和无 coordinator 的只读状态，未调用真实服务。所有新增／修改 Swift 单元低于 80 代码行，源文件 397 行、测试 140 行；无配置复杂度工具，人工复核生命周期、身份过滤及提交顺序。UI、密钥数据模型、P4 与 F08 已结构化同步；文档无配置自动语义检查。
 - 仓库根完整 native 路由 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test` **全部通过：726 维护文件、403 画布模块、211 tests／51 suites，TEST SUCCEEDED**（75.439 秒）。五份同步文档的 `npx prettier --check` 与 `git diff --check` 通过；最新提交／推送的全门禁和 CI 结果在 PR 按最终提交绑定。真正虚拟化离屏回调、物理字符串零化、IME／VoiceOver 仍不由这些合成窗口回归证明。
+
+## 原生意图进入退出屏障
+
+`f597c64` 的一轮后续评审指出新的独立 P2：原生 `send` 的任务尚未跨桥或等待 Web fingerprint admission 时，保存队列可仍为空；退出可能提前批准。以下矩阵在生产修改前记录，处理当前 PR 内原生编辑与退出的交界，不扩展保存合同或自动重试。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 实现前选定验证／缺口 |
+| --- | --- | --- | --- | --- |
+| R29 | 原生字段提交→立即退出，桥调用或 fingerprint 被确定性闸门挡住；在途请求成功／失败→退出或明确重试；保存冲刷期间出现新原生意图；页面替换／失效 | 退出先等待当前页所有已登记意图，再交给 Web 固定点冲刷；失败取消退出，保留诊断；最终批准仍有原生意图则拒绝并允许重试；旧页不能授权新页退出 | NativeApplicationState 同步登记 send／awaitable request futures，当前 coordinator 负责退出资格；Web 仍拥有图文档和保存队列，批准点必须无未完成原生意图 | 真实生产 WK 的桥前／fingerprint 闸门、失败回执及实际项目磁盘稿件；最终批准期间有在途意图的宿主命令拒绝；重复退出、失败重试与页面代次回归。真实系统菜单／Dock 与物理进程终止保留 P5 缺口 |
+
+- 首次函数选集实际执行 0 项、首次生产夹具未等待打开项目的投影而收到 `PW_STALE_PROJECT`，两者排除行为红灯。修正后旧实现 **9 tests／2 suites、13 处预期问题**：桥前与 fingerprint 两种闸门未放行时提前 true、pending 被消费、磁盘缺少最后字段；失败回执也无法取消已批准的退出；退出投递后新增请求仍可批准。夹具仅在负向观察窗口等待 1 秒，没有增加产品延时、重试或放宽断言。
+- `NativeApplicationState.enqueueNativeIntent` 在 `send` 返回前同步登记 future，awaitable `request` 共用登记；当前页弱 coordinator adapter 先将它们排空，再投递 Web 退出事件，Web 继续拥有文档与保存固定点。任何请求失败取消本次退出，不自动重放失败动作。最终 `app_exit` 若有晚到原生请求，拒绝为 `PW_NATIVE_INTENTS_PENDING`，Web 按原失败通道取消并保留窗口，显式重试重新冲刷；页面代次更新／失效取消并清空旧 futures。
+- 排空新增 await 路径的邻接回归先红：**7 tests／1 suite、1 处预期失败**，取消退出后旧任务仍迟到投递退出事件。排空结束与最终 event adapter 均检查任务取消，阻止旧投递重放。该测试以实际 delivery 返回作为观察点，不靠等待估计事件是否已发生。
+- 修复后集中 `NativeProductionLifecycleTests`、`WebHostBridgeTests`、`HostQuitTests`、`NativeWindowLifecycleTests`、`NativeApplicationStateTests` 和 `NativeSettingsDraftLifecycleTests` **21 tests／6 suites 全通过，TEST SUCCEEDED**（10.043 秒）。三种生产闸门验证桥前／fingerprint 最后字段实际落盘、失败时 false／诊断保留及明确重试 true；宿主最终批准验证晚到意图被拒绝、取消可达和后续重新批准，取消旧 delivery 回归不重放事件。原页面失效／重连／身份回归仍通过；未单独调用真实系统菜单或注入真实计费请求。
+- 源码 224／215／380 行，测试 279／285 行，修改单元低于 80 代码行；无配置复杂度工具，人工复核同步登记点、两个原生入口、弱页归属、await 前后取消检查与最终批准的主线程同步守卫。持久化、UI、P3 与 F05 已同步，文档无自动语义检查；Prettier 与 `git diff --check` 通过。
+- 仓库根完整 native Scope Routing（与 R28 的完整命令相同）**726 维护文件、403 画布模块、214 tests／51 suites 全通过，TEST SUCCEEDED**（79.420 秒）。最终提交／推送门禁与 CI 在 PR 按最终 commit 绑定；测试只使用注入服务根和合成字段，不触达真实数据、Keychain 或模型。P5 人工验收和真实 WebKit 进程 kill 仍保留既有缺口。

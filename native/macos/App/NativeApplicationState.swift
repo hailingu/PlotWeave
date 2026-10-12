@@ -29,6 +29,8 @@ final class NativeApplicationState {
     @ObservationIgnored private var lastSequence = 0.0
     @ObservationIgnored private weak var coordinator: WebCanvasCoordinator?
     @ObservationIgnored private var pending = 0
+    /// Futures are registered before fire-and-forget delivery, so quit cannot pass an empty Web save queue prematurely.
+    @ObservationIgnored private var nativeIntents: [UUID: Task<HostJSON, Error>] = [:]
 
     /// App projection describes navigation and project metadata, never a writable document.
     var app: HostJSON { appProjection }
@@ -60,6 +62,8 @@ final class NativeApplicationState {
     func beginSession(_ sessionId: String) {
         guard sessionId != activeSession else { return }
         activeSession = sessionId
+        nativeIntents.values.forEach { $0.cancel() }
+        nativeIntents.removeAll()
         lastSequence = 0
         replaceProjection(.object([:]))
         error = nil
@@ -71,6 +75,14 @@ final class NativeApplicationState {
     func connect(_ coordinator: WebCanvasCoordinator) {
         self.coordinator = coordinator
         beginSession(coordinator.sessionId)
+        let session = coordinator.sessionId
+        coordinator.hasPendingNativeIntents = { [weak self] in
+            self?.activeSession == session && self?.nativeIntents.isEmpty == false
+        }
+        coordinator.drainNativeIntents = { [weak self] in
+            guard let self else { throw HostFailure(code: "PW_PAGE_UNAVAILABLE", message: "原生编辑会话不可用") }
+            try await self.drainNativeIntents(session: session)
+        }
     }
 
     /// Consumes a validated projection envelope; stale or out-of-order events have no effect.
@@ -105,6 +117,8 @@ final class NativeApplicationState {
     /// A failed page cannot retain active edit controls or present an empty replacement document.
     func invalidate(_ message: String) {
         activeSession = nil
+        nativeIntents.values.forEach { $0.cancel() }
+        nativeIntents.removeAll()
         coordinator = nil
         replaceProjection(.object([:]))
         pending = 0
@@ -118,6 +132,7 @@ final class NativeApplicationState {
         let blocksUI = command.hasPrefix("app.") || ["settings.close", "settings.retry"].contains(command)
         error = nil
         if blocksUI { pending += 1; busy = true }
+        let intent = enqueueNativeIntent(command, args: args)
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
@@ -126,13 +141,47 @@ final class NativeApplicationState {
                     self.busy = self.pending > 0
                 }
             }
-            do { _ = try await self.request(command, args: args) }
+            do { _ = try await intent.value }
             catch { if self.activeSession == session { self.error = error.localizedDescription } }
         }
     }
 
     /// Awaitable action seam serves native preview/import UI while all document mutations stay with their Web owner.
     func request(_ command: String, args: [String: HostJSON] = [:]) async throws -> HostJSON {
+        try await enqueueNativeIntent(command, args: args).value
+    }
+
+    /// Both native action entry points register immediately and retain only their current page's pending completions.
+    private func enqueueNativeIntent(_ command: String, args: [String: HostJSON]) -> Task<HostJSON, Error> {
+        let id = UUID()
+        let session = activeSession
+        let task = Task<HostJSON, Error> { @MainActor [weak self] in
+            guard let self else { throw HostFailure(code: "PW_PAGE_UNAVAILABLE", message: "原生编辑会话不可用") }
+            defer { self.nativeIntents.removeValue(forKey: id) }
+            try Task.checkCancellation()
+            guard self.activeSession == session else {
+                throw HostFailure(code: "PW_STALE_SESSION", message: "页面会话已更改，本次结果未知。")
+            }
+            return try await self.performRequest(command, args: args)
+        }
+        nativeIntents[id] = task
+        return task
+    }
+
+    /// Quit delivery waits to a native fixed point; failures cancel this attempt and no failed future is automatically replayed.
+    private func drainNativeIntents(session: String) async throws {
+        repeat {
+            try Task.checkCancellation()
+            guard activeSession == session else { throw HostFailure(code: "PW_STALE_SESSION", message: "退出对应的编辑会话已失效") }
+            let tasks = Array(nativeIntents.values)
+            for task in tasks { _ = try await task.value }
+        } while !nativeIntents.isEmpty
+        try Task.checkCancellation()
+        guard activeSession == session else { throw HostFailure(code: "PW_STALE_SESSION", message: "退出对应的编辑会话已失效") }
+    }
+
+    /// The Web action remains the sole mutation owner after current-page and project checks.
+    private func performRequest(_ command: String, args: [String: HostJSON]) async throws -> HostJSON {
         guard let coordinator, let session = activeSession else {
             throw HostFailure(code: "PW_PAGE_UNAVAILABLE", message: "画布尚未就绪，请稍后重试。")
         }

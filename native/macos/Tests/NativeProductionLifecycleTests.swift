@@ -100,6 +100,89 @@ struct NativeProductionLifecycleTests {
         await fixture.services.close()
     }
 
+    /// A quit cannot outrun an admitted native mutation, including its asynchronous fingerprint and failed reply.
+    @Test(arguments: ["bridge", "fingerprint", "failure"])
+    func immediateQuitWaitsForNativeMutation(mode: String) async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let metadata = try await projects.invoke(command: "create_project", args: ["name": .string("原生意图退出")])
+        let id = try #require(metadata["id"]?.string)
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let webView = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(webView)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.projectId == id }
+        _ = try await mounted.state.request("editor.create", args: ["projectId": .string(id), "nodeType": .string("scene")])
+        try await wait { mounted.state.editor["nodes"]?.arrayValue?.count == 1 }
+        let node = try #require(mounted.state.editor["nodes"]?.arrayValue?.first?["id"]?.string)
+        try await installIntentGate(webView, mode: mode)
+        var replies: [Bool] = []
+        let delegate = NativeApplicationDelegate(quit: fixture.quit, terminateApplication: {}, replyToTermination: { replies.append($0) })
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        mounted.state.sendEditor("editor.patchNode", args: ["id": .string(node), "patch": .object(["synopsis": .string("最后原生字段")])])
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
+        try await waitForIntentGate(webView)
+        // Observe a blocked future long enough for the old, empty Web save barrier to settle its quit.
+        try await Task.sleep(for: .seconds(1))
+        #expect(replies.isEmpty, "原生意图尚未落定，系统退出不得提前批准")
+        #expect(fixture.quit.pendingIntent == .terminate)
+        _ = try await webView.evaluateJavaScript("window.__pwIntentGate.release(); null")
+        try await wait { replies == (mode == "failure" ? [false] : [true]) }
+        if mode == "failure" {
+            try await wait { mounted.state.error?.contains("PW_FIXTURE_INTENT_FAILURE") == true }
+            #expect(mounted.window.isVisible)
+            #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
+            try await wait { replies == [false, true] }
+        } else {
+            let doc = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+            #expect(doc["graph"]?["nodes"]?.arrayValue?.first { $0["id"]?.string == node }?["data"]?["spec"]?["synopsis"]?.string == "最后原生字段")
+        }
+        #expect(fixture.quit.pendingIntent == nil)
+        await fixture.services.close()
+    }
+
+    /// The real browser delays exactly one synthetic edit either before admission or inside SHA-256 admission.
+    private func installIntentGate(_ webView: WKWebView, mode: String) async throws {
+        _ = try await webView.callAsyncJavaScript("""
+            const original = window.__pwNativeIntent;
+            const digest = crypto.subtle.digest.bind(crypto.subtle);
+            let release;
+            const gate = new Promise(resolve => release = resolve);
+            window.__pwIntentGate = {entered: false, release};
+            if (mode === 'fingerprint') {
+              crypto.subtle.digest = async (...args) => {
+                window.__pwIntentGate.entered = true;
+                await gate;
+                crypto.subtle.digest = digest;
+                return digest(...args);
+              };
+            } else {
+              window.__pwNativeIntent = async request => {
+                if (request.command === 'editor.patchNode') {
+                  window.__pwIntentGate.entered = true;
+                  await gate;
+                  window.__pwNativeIntent = original;
+                  if (mode === 'failure') return {error: {code: 'PW_FIXTURE_INTENT_FAILURE', message: 'PW_FIXTURE_INTENT_FAILURE'}};
+                }
+                return original(request);
+              };
+            }
+            return null;
+            """, arguments: ["mode": mode], in: nil, contentWorld: .page)
+    }
+
+    /// Gate admission is observed in the actual production page, never inferred from a submitted call.
+    private func waitForIntentGate(_ webView: WKWebView) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+        while ContinuousClock.now < deadline {
+            if try await webView.evaluateJavaScript("window.__pwIntentGate.entered") as? Bool == true { return }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        throw HostFailure(code: "PW_FIXTURE_GATE_TIMEOUT", message: "原生意图未进入确定性闸门")
+    }
+
     /// Bounded polling observes actual state transitions and reports a useful last-state failure.
     private func wait(_ predicate: () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(12))

@@ -57,6 +57,63 @@ struct WebHostBridgeTests {
         }
     }
 
+    /// A mutation arriving after quit delivery still blocks final approval, while explicit cancellation remains available.
+    @Test func nativeMutationAfterQuitDeliveryBlocksApproval() async throws {
+        let fixture = try WebFixture()
+        defer { fixture.close() }
+        try await fixture.waitUntilReady()
+        let application = NativeApplicationState()
+        application.connect(fixture.coordinator)
+        var approvals = 0
+        fixture.quit.onApproved = { _ in approvals += 1 }
+        fixture.quit.acknowledgeListener()
+        fixture.quit.request(.terminate)
+        try await fixture.waitForQuitEvent()
+        try await fixture.pauseNativeMutation(application)
+        let exit = HostRequest(protocolVersion: 1, sessionId: fixture.coordinator.sessionId, requestId: "late-approval", command: "app_exit", args: nil)
+        do {
+            _ = try await fixture.services.perform(exit)
+            Issue.record("最终批准不得忽略冲刷期间新增的原生意图")
+        } catch let error as HostFailure { #expect(error.code == "PW_NATIVE_INTENTS_PENDING") }
+        #expect(approvals == 0)
+        #expect(fixture.quit.pendingIntent == .terminate)
+        _ = try await fixture.services.perform(HostRequest(protocolVersion: 1, sessionId: exit.sessionId, requestId: "late-cancel", command: "app_exit", args: ["cancel": .bool(true)]))
+        #expect(fixture.quit.pendingIntent == nil)
+        _ = try await fixture.webView.evaluateJavaScript("window.releaseIntent(); null")
+        _ = try await application.request("fixture.after")
+        fixture.quit.request(.terminate)
+        _ = try await fixture.services.perform(exit)
+        #expect(approvals == 1)
+    }
+
+    /// Cancelling an exit during native admission must not deliver a stale quit after the mutation completes.
+    @Test func cancelledQuitCannotReplayAfterNativeDrain() async throws {
+        let fixture = try WebFixture()
+        defer { fixture.close() }
+        try await fixture.waitUntilReady()
+        let application = NativeApplicationState()
+        application.connect(fixture.coordinator)
+        try await fixture.pauseNativeMutation(application)
+        let drain = fixture.coordinator.drainNativeIntents
+        var waiting = false
+        fixture.coordinator.drainNativeIntents = { waiting = true; try await drain?() }
+        let deliver = fixture.quit.sendEvent
+        var settled = false
+        fixture.quit.sendEvent = { name, payload in
+            defer { settled = true }
+            try await deliver?(name, payload)
+        }
+        fixture.quit.acknowledgeListener()
+        fixture.quit.request(.terminate)
+        try await fixture.wait { waiting }
+        fixture.quit.cancel()
+        _ = try await fixture.webView.evaluateJavaScript("window.releaseIntent(); null")
+        try await fixture.wait { settled }
+        #expect(try await fixture.webView.evaluateJavaScript("window.quitEvents") as? Int == 0)
+        #expect(fixture.quit.pendingIntent == nil)
+        _ = try await application.request("fixture.after")
+    }
+
     /// Delivered quit events lose authority on every page failure, and recovery needs a new explicit user intent.
     @Test(arguments: ["process", "load", "provisional", "detach"], [true, false])
     func pageFailureSettlesPendingQuit(failure: String, listenerReady: Bool) async throws {
@@ -159,6 +216,30 @@ struct WebHostBridgeTests {
             configuration.userContentController.add(coordinator, name: WebCanvasCoordinator.bridgeName)
             webView.navigationDelegate = coordinator
             coordinator.loadCanvas(into: webView)
+        }
+
+        /// A synthetic native request remains inside the real WK promise until this fixture explicitly releases it.
+        func pauseNativeMutation(_ application: NativeApplicationState) async throws {
+            _ = try await webView.evaluateJavaScript("""
+                const original = window.__pwNativeIntent;
+                window.__pwNativeIntent = async request => {
+                  if (request.command === 'fixture.mutate') await new Promise(resolve => window.releaseIntent = resolve);
+                  return original(request);
+                }; null
+                """)
+            application.send("fixture.mutate")
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while try await webView.evaluateJavaScript("typeof window.releaseIntent") as? String != "function", ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try #require(try await webView.evaluateJavaScript("typeof window.releaseIntent") as? String == "function")
+        }
+
+        /// Bounded native-state waits observe entry and completion of the actual owned delivery task.
+        func wait(_ predicate: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while !predicate() && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+            try #require(predicate())
         }
 
         /// Observes the actual script handshake rather than treating navigation completion as readiness.
