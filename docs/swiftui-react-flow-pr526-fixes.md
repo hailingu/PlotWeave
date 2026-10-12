@@ -193,6 +193,8 @@ R32 邻接恢复补查（在本分支生产修改前补记）：列表重读连�
 
 `e0de9ee` 的一轮后续评审新增两条独立 P2：默认模型选择携带另一字段的旧快照；服务文字的旧投影覆盖更新的本地输入。以下矩阵在生产修改前记录，复用现有 settings owner、原生表单及保存固定点，不新增配置副本或自动重放。
 
+本节保留 R33–R34 当时的实现与验证记录。后续第25条新增 A→B→A，使新稿再次等于前一权威值，原值比较保护未覆盖该时序；所有者转 [issue #527](https://github.com/hailingu/PlotWeave/issues/527) 后续修复，当前状态及缺口见 [R39](#服务文字回改缺陷的后续修复r39)。
+
 | ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 实现前选定验证／缺口 |
 | --- | --- | --- | --- | --- |
 | R33 | ready 设置；聊天→图像或图像→聊天连续选择，第一项的投影尚未返回；单字段置空、旧式双字段、非法／空补丁及 closing | 两项选择都保存；缺席字段保留 owner 当前值，显式 null 只清指定项；非法输入无写入，旧式双字段仍有效 | NativeSettingsView 只提交发生选择的字段；useNativeSettingsShell 按当前同步快照合并并在边界校验，现有 close saver 是唯一持久化入口 | 实际原生 Picker＋生产 WK＋隔离 Swift 磁盘延迟投影；真实 Web intent 先红、两顺序／null／旧式／拒绝边界；实际计费模型不调用 |
@@ -255,3 +257,19 @@ CI #604 的完整原生目标执行 224 tests／53 suites，新增设置回归�
 - **矩阵对应**：R38a 使用上述权限故障及 `failureAfterRecordingBeforePlacementRetiresWithoutCleanup`，验证日志登记后尚未 rename 的中断不留最终文件；正常成功、校验与损坏备份沿既有 `NativeLibraryTests`／`NativeLibraryRecoveryTests`。R38b 的 `indexFailureReconcilesOnceAcrossRestartAndRetry` 在媒体落位后用实际目录占位阻断索引写，分别以列表／openMedia／source 进入恢复，核对真实新旧字节、重复恢复与再次导入的权威结果。R38c 的 `indexRenameFailureKeepsCommittedMediaAvailable` 在真实 index rename 后、目录 fsync 前注入抛错，证明新索引及媒体保留，不将注入声称为 OS 实际返回 fsync 错误；两个硬链接用例核对跨路径活动身份和额外隔离副本可见。R38d 覆盖语法损坏／非法成员、后来普通文件／symlink、活动引用打不开三类，重复读取不改原索引或证据，进一步导入被拒绝；既有日志异型、迁移超限回归保持。R38e 的 `recoveryJournalFailureRetainsEvidenceAndCountsOnce` 以真实只读控制目录阻断隔离后的日志提交，恢复三次恰累计一次；`oversizedImportJournalRefusesBeforeMediaPlacement` 与既有删除边界共同验证半上限及完整原件保留。
 - **命令与结果**：仓库根执行 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test`，最终 **738 维护文件规模检查、当前画布构建通过，240 tests／55 suites 全通过，TEST SUCCEEDED**（90.481 秒）。相同 Xcode 命令筛选 `NativeLibraryImportRecoveryTests`、`NativeLibraryRecoveryTests`、`NativeLibraryJournalBoundaryTests`、`NativeLibraryTests` 为 **26 tests／4 suites 通过**（3.540 秒）。Node 24.18.0、已选 Xcode 27.0／SDK 27.0；`bash scripts/check-static.sh` 的格式、ESLint 零警告、尺寸与严格类型通过。Git 操作仍另行生成新前端／Rust覆盖率并等待 Sonar，最终提交、门禁与确切 head 的 CI 记录在 PR。
 - **设计与缺口**：资产 §7.2、持久化命令、UI、P4／F07 已同步登记顺序、未知状态保护、共同恢复入口、写入暂停和物理保留。纯文档没有配置自动语义检查，已结构化核对引用／合同／矩阵，Prettier 与 diff 检查通过。最大修改 Swift 源为日志 362 行，新增测试 295 行；修改单元人工复核低于 80 代码行、嵌套在标准内，圈复杂度 `N/A — no configured complexity tool`。没有修改 frontend／Rust 或 CI 配置，未额外执行其独立完整路由；Git 门禁与 PR CI 仍执行相应检查。所有故障只作用于合成临时根，不访问用户数据。真实满卷、物理断电、OS 进程 kill、NSOpenPanel／人工隔离区清理未实测；合成阶段故障、真实权限／目录占位、同卷硬链接和 actor 重启覆盖所选风险，不承诺自动释放隔离空间或修复无证据旧孤儿。
+
+## 服务文字回改缺陷的后续修复（R39）
+
+第25条 [P2 评审](https://github.com/hailingu/PlotWeave/pull/526#discussion_r4250704597) 是 `795f1cc4f18510d88cf0d578f0b107ddc41e4b2d` 首轮后续评审的新触发条件。原生名称、地址或规范化模型列表 A→B→A 后，新 A 再次等于上一权威值；`NativeProviderDraft.receive` 因值相等接受旧 B 投影，继续键入可能经原 saver 保存非预期文字。这是待修复缺陷，R34 的既有通过用例不能证明该转换正确。
+
+所有者于 **2026-10-13** 明确要求创建后续修复 issue 并准备合并 PR。本条已创建 **[issue #527：P2(settings): 原生字段回改原值时旧投影覆盖新草稿](https://github.com/hailingu/PlotWeave/issues/527)**，保持 open、P2，修复延期到该 issue；本轮仅同步文档和处置记录，没有生产代码／测试／桥合同载荷修改。名称、地址及模型的保护设计要求仍在，尚未加入逐字段编辑身份或确认；issue 中的瞬时确认方案是待设计建议，不是已实现或本轮获准实施的功能。
+
+| 后续 case | 前置状态／动作与顺序 | 后续修复应满足的结果／不变量及 owner | 当前证据与验证缺口 |
+| --- | --- | --- | --- |
+| R39a | ready A→实际输入 B→A→旧 B 投影→继续 C→关闭 | Native 普通字段保留新 A；Web owner／原 saver 最终保存 A+C | 只读核查 `receive` 与三个 binding；独立 ABA 控件／生产 WK／Swift 磁盘回归未执行，留给 #527 先红后绿 |
+| R39b | 模型以不同原文回到规范 A→旧 B→最新确认→外部更新 | 编辑确认与值或规范化相等分开；保留光标原文，确认后干净字段仍跟随 | R34 已有模型语义与干净更新测试，仅证明已选路径；新回改及 IME／VoiceOver 未验证 |
+| R39c | 请求先完成、投影被挡；同值无关投影；React 合并或旧 B 确认 | Native completion 不冒充投影确认；Web 必须把确认与确切快照配对，字段独立；global sequence／session 防乱序保持 | 现有生产 WK 夹具能独立暂停投影／排空请求；新身份合同及合并确认尚未实现／验证 |
+| R39d | 非法元数据、未就绪／closing／不存在 provider、失败或旧式 patch | owner 变更前完整校验；失败保留普通稿，不自动重放；旧式输入兼容 | 当前错误、保存固定点及密钥测试保留；提议的元数据边界未实施，须由 #527 新增语义回归 |
+| R39e | 确认后外部更新；另字段 pending；provider 删除、reload／重挂／session 失效 | 草稿与确认由当前字段／页面 owner 持有，后代不消费旧确认；元数据有界且不写磁盘 | 既有普通稿播种和密钥生命周期证据保留；新确认清理及三字段组合未验证，真实 kill 保留人工缺口 |
+
+命令回执与只读投影独立交付，React 可合并中间状态；仅用请求完成、值再次相等或永久 dirty 都不能同时满足新稿保留和干净外部更新。后续实现须先记录矩阵、观察真实最小先红，再设计有界字段身份与快照配对，完成选定转换、设计同步、前端／原生完整路由及 Git 门禁／CI；具体验收条目在 #527。本轮文档无配置的自动语义检查，也不制造源码或普通文字镜像测试；检查记录及最终文档提交／CI 将补在 PR，基线 CI #607 不作为 ABA 已修复证据。

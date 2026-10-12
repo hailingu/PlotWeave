@@ -325,7 +325,7 @@ F05 还覆盖 [PR #526 R29](swiftui-react-flow-pr526-fixes.md#原生意图进入
 
 **Web 最终退出资格（PR #526 R37）**：Swift 的退出事件同步建立本页 `open→draining→sealed` 租约；`draining` 暂停 Web 输入和新业务意图，已接纳的模型回合、生图、资产导入／编辑、项目动作及 guarded React 状态提交仍完整落定。状态提交在实际 owner 的 effect 确认，保存 effect 随同一次提交登记；单次 IPC 回执、任意等待时间不能代替业务完成。四个保存 owner（画布、项目链、AI、设置／密钥）冲刷到固定点，业务／状态提交也全部空闲时，在同一同步跨度封口并发送既有 `app_exit`。最终阶段持久化状态写入口拒绝 `PW_WEB_EXIT_PENDING`，原生新意图同样明确拒绝；测量与选中仅属会话态。失败解除租约、恢复原输入状态并发送取消退出回执，保留已有失败稿与明确重试；成功保持封口直到页面销毁，旧清理不能释放新租约。Tauri 原有退出合同保持。验证和人工边界见 [R36–R37 状态矩阵](swiftui-react-flow-pr526-fixes.md#反向宿主请求退役与-web-最终退出协调)。
 
-`settings.setDefaults` 的原生→Web 意图接受 `defaultChat`、`defaultImage` 中至少一个字段，每个存在的字段必须是字符串或 null；未知字段、空补丁及类型非法拒绝。缺席字段保留 Web owner 当前同步快照，null 只清指定项，旧式双字段提交保持有效；原生 Picker 只发送自身选择。普通服务草稿只在仍等于前一投影时跟随新的权威字段，旧回执不能覆盖更新输入，模型确认使用逐行规范化语义且保留输入原文。命令名称、版本、磁盘 schema 和唯一 saver 不变，见 [PR #526 R33–R34](swiftui-react-flow-pr526-fixes.md#设置字段与投影回执)。
+`settings.setDefaults` 的原生→Web 意图接受 `defaultChat`、`defaultImage` 中至少一个字段，每个存在的字段必须是字符串或 null；未知字段、空补丁及类型非法拒绝。缺席字段保留 Web owner 当前同步快照，null 只清指定项，旧式双字段提交保持有效；原生 Picker 只发送自身选择。普通服务草稿当前按前一权威值比较决定跟随，已覆盖新稿与该值不同的旧回执；模型使用逐行规范化语义且保留相同确认的输入原文。名称／地址／模型 A→B→A 回改的旧 B 投影仍可能覆盖新 A，后续键入会以 B 为基底；第25条转 [issue #527](https://github.com/hailingu/PlotWeave/issues/527) 待修复，当前没有逐字段编辑确认身份。命令名称、版本、磁盘 schema 和唯一 saver 不变，已实现范围见 [R33–R34](swiftui-react-flow-pr526-fixes.md#设置字段与投影回执)，所有者延期决定及验证缺口见 [R39](swiftui-react-flow-pr526-fixes.md#服务文字回改缺陷的后续修复r39)。
 
 命令通道使用 WebKit 带回执 handler `plotweaveHost`。文档开始时注入 `__pwNativeHost={kind:"swift",protocolVersion:1,sessionId:…}`，会话身份随每次加载更新。请求包含 `protocolVersion`、`sessionId`、`requestId`、`command` 与可选参数对象 `args`；回执为 `{ok:…}` 或 `{error:{code,message}}`。25 条现有业务 snake_case 命令及两条退出命令保持载荷语义；系统文本交付为 `system.copyText` 和 `system.saveText`。
 
