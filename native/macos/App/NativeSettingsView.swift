@@ -99,6 +99,8 @@ struct NativeProviderDraft {
 struct NativeSettingsView: View {
     /// Form writes go through the application owner, never directly to a settings file.
     @Bindable var state: NativeApplicationState
+    /// Unsubmitted keys belong to this page and provider identity, never a virtualized card's lifetime.
+    @State private var keyDrafts: [String: String] = [:]
     /// Derived readiness follows the current settings lifecycle rather than local form state.
     private var settings: NativeSettingsProjection { NativeSettingsProjection(state.settings) }
 
@@ -116,6 +118,12 @@ struct NativeSettingsView: View {
         }
         .frame(minWidth: 500, minHeight: 440)
         .background(Color(nsColor: .windowBackgroundColor))
+        .onDisappear { keyDrafts.removeAll() }
+        .onChange(of: settings.providers) { _, providers in
+            guard settings.phase == "ready" else { return }
+            let ids = Set(providers.map(\.id))
+            keyDrafts = keyDrafts.filter { ids.contains($0.key) }
+        }
     }
 
     /// Page identity and completion share the form's content width rather than opposite window edges.
@@ -143,7 +151,7 @@ struct NativeSettingsView: View {
                 defaults
                 ForEach(settings.providers) { provider in
                     NativeProviderSettingsForm(state: state, provider: provider,
-                        disabled: !settings.canMutate(busy: state.busy))
+                        disabled: !settings.canMutate(busy: state.busy), keyDraft: keyDraft(for: provider.id))
                 }
                 Section {} footer: {
                     Text("远程服务使用 HTTPS；HTTP 仅支持本机回环地址。")
@@ -164,6 +172,14 @@ struct NativeSettingsView: View {
         } else {
             ProgressView("正在加载设置…").frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// Row replacement preserves the page's secure input while ordinary provider fields retain their existing drafts.
+    private func keyDraft(for id: String) -> Binding<String> {
+        Binding(get: { keyDrafts[id] ?? "" }, set: { value in
+            guard settings.providers.contains(where: { $0.id == id }) else { return }
+            keyDrafts[id] = value
+        })
     }
 
     /// Native model rows retain unavailable stored choices until the user explicitly changes them.
@@ -206,15 +222,18 @@ private struct NativeProviderSettingsForm: View {
     let provider: NativeProviderProjection
     /// Readiness gates every writable row without unloading the provider draft.
     let disabled: Bool
-    /// Multiline caret text and an unsubmitted key remain local to this provider identity.
+    /// Ordinary fields retain local caret text; the key field is used only transiently during submission.
     @State private var draft: NativeProviderDraft
+    /// The settings page owns secure input across row disappearance and provider Form reconstruction.
+    @Binding private var keyDraft: String
 
     /// Initial drafts are tied to a stable provider ID through ForEach ownership.
-    init(state: NativeApplicationState, provider: NativeProviderProjection, disabled: Bool) {
+    init(state: NativeApplicationState, provider: NativeProviderProjection, disabled: Bool, keyDraft: Binding<String>) {
         self.state = state
         self.provider = provider
         self.disabled = disabled
         _draft = State(initialValue: NativeProviderDraft(provider))
+        _keyDraft = keyDraft
     }
 
     /// One service card groups compact connection rows, secure entry and the editable model catalog.
@@ -236,7 +255,6 @@ private struct NativeProviderSettingsForm: View {
             if previous.baseUrl != next.baseUrl { draft.baseUrl = next.baseUrl }
             if previous.models != next.models { draft.models = next.models.joined(separator: "\n") }
         }
-        .onDisappear { draft.key = "" }
     }
 
     /// Connection controls keep standard label/value alignment inside a compact semantic text surface.
@@ -266,14 +284,14 @@ private struct NativeProviderSettingsForm: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("API 密钥").font(.headline)
             HStack(spacing: 8) {
-                SecureField("API 密钥", text: $draft.key,
+                SecureField("API 密钥", text: $keyDraft,
                     prompt: Text(provider.keyConfigured ? "输入新密钥以更新" : "输入您的 API 密钥"))
                     .labelsHidden().frame(maxWidth: .infinity)
                     .accessibilityLabel("API 密钥")
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(submitKey)
                 Button("保存", action: submitKey)
-                    .disabled(draft.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if provider.keyConfigured {
                     Button("清除") { state.send("settings.removeKey", args: ["id": .string(provider.id)]) }
                 }
@@ -370,7 +388,10 @@ private struct NativeProviderSettingsForm: View {
 
     /// Plaintext is removed before sending and is never copied into ordinary draft patches.
     private func submitKey() {
-        guard !disabled, let args = draft.takeKeyArguments(id: provider.id) else { return }
+        guard !disabled else { return }
+        draft.key = keyDraft
+        keyDraft = ""
+        guard let args = draft.takeKeyArguments(id: provider.id) else { return }
         state.send("settings.setKey", args: args)
     }
 }

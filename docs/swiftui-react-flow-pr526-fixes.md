@@ -126,3 +126,16 @@
 - `NativeHostServices` 用弱当前 coordinator 身份绑定退出监听；`invalidateQuitListener` 只允许该页取消意图、清除监听与 event adapter。`WebCanvasCoordinator.invalidateSession` 同时撤销 router、媒体、退出和就绪任务；进程终止、两种导航失败、拆除走同一入口，就绪超时和缺失资源也复用。首次连接仍按既有合同保留启动缓冲；已失效页面的缓冲清除，恢复后必须明确重试。没有新增桥命令、保存副本或承诺崩溃后恢复未落盘编辑。
 - 修复后集中退出／实际 WK **20 tests／5 suites 全通过**。页面失效用例覆盖四类入口 × 监听就绪／未就绪八种组合，验证一次 false、无虚构系统回复、清除 pending／listener、重复失效幂等、真实重载后不自动批准、明确重试 true；旧页迟到进程回调不能取消当前页的真实已投递退出。真实 WK 文件阻挡恢复仍通过。公共 delegate 回调按故障入口调用，未用 OS 杀死真正 WebKit 子进程；就绪超时／缺失资源未增加独立时钟或 bundle 注入，已结构化复核统一入口和取消任务守卫。
 - 最终完整 native 路由 **725 维护文件、403 模块构建通过，210 tests／50 suites 全通过，TEST SUCCEEDED**（72.642 秒），包含此前全部退出、窗口绘制帧和所选特殊文件回归。新增／修改 Swift 单元均低于 80 代码行，文件低于硬上限；未配置复杂度工具，人工复核当前页身份、取消顺序及失败入口。文档无自动语义检查，已结构化同步 owner、全部入口、恢复规则与缺口；完整门禁和最新 CI 在 PR 绑定最终提交。
+
+## 设置滚动与密钥草稿
+
+提交 `f597c64` 的 [CI #599](https://github.com/hailingu/PlotWeave/actions/runs/38226506264) 全通过，native **210 tests／50 suites**。读取到基于先前提交的一轮新 P2：grouped Form 的供应商卡片离开渲染范围触发行级 `onDisappear`，清空仍在打开设置页内的未提交密钥；本次按独立滚动触发条件处理。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 实现前选定验证／缺口 |
+| --- | --- | --- | --- | --- |
+| R28 | 设置页输入合成未提交密钥→供应商卡片滚出／返回；同页 ready→loading→ready 替换 Form；提交→桥失败；整页关闭／重开；供应商删除后同 ID 重现 | 滚动或同页供应商区域重建保留输入与 Save 可用；提交前消费明文，桥失败不缓存；整页离开或供应商删除清除草稿，重开或删除后重现不回显 | 设置页拥有按 provider ID 隔离的短期密钥草稿，行呈现不拥有清理权限；持久设置与 IPC 投影仍不包含明文，普通字段 patch 不带 key | 真实 SwiftUI grouped Form／SecureField／NSScrollView 滚动与区域重建、Save 状态，提交失败后清除、删除重现及整页重挂无草稿；合成只读投影，无真实凭据／模型／用户数据；迟到旧行 setter 的身份守卫结构化复核，未独立注入该回调 |
+
+- 本机实际滚动往返未复现行回调清除，不把该通过算作行为红灯；首次滚动坐标／抛错语法的夹具问题亦排除。使用同一已挂载设置页的既有 ready→loading→ready 状态，实际观察供应商 SecureField 全部从原生树移除后恢复，**1 test／1 suite、2 处预期失败**：草稿为空、Save 禁用。输入前已验证真实 SecureField 绑定使 Save 可用，故不是未更新绑定的夹具假象；此结果证明行所有权无法满足同页生命周期，不声称本机已直接复现虚拟化滚动触发行级回调。
+- `NativeSettingsView` 以页级 provider ID 字典绑定各卡片 SecureField，移除行级清理；普通字段仍由原草稿拥有。整页 `onDisappear` 清除所有草稿，ready 投影移除供应商时过滤身份，旧行 setter 不能重建已删除 ID；加载态不视作删除。提交先清除页级输入，再复用已有 `takeKeyArguments` 的修剪与消费，不扩展持久／投影合同。
+- 集中命令 `xcodebuild … -parallel-testing-enabled NO -only-testing:PlotWeaveNativeTests/NativeSettingsDraftLifecycleTests -only-testing:PlotWeaveNativeTests/NativeFormsTests test` **6 tests／2 suites 通过，TEST SUCCEEDED**（2.243 秒），包含实际删除首供应商后同 ID 重现不回显，以及提交桥失败后清稿、整页重挂和普通字段 patch 无密钥。仅用合成输入和无 coordinator 的只读状态，未调用真实服务。所有新增／修改 Swift 单元低于 80 代码行，源文件 397 行、测试 140 行；无配置复杂度工具，人工复核生命周期、身份过滤及提交顺序。UI、密钥数据模型、P4 与 F08 已结构化同步；文档无配置自动语义检查。
+- 仓库根完整 native 路由 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test` **全部通过：726 维护文件、403 画布模块、211 tests／51 suites，TEST SUCCEEDED**（75.439 秒）。五份同步文档的 `npx prettier --check` 与 `git diff --check` 通过；最新提交／推送的全门禁和 CI 结果在 PR 按最终提交绑定。真正虚拟化离屏回调、物理字符串零化、IME／VoiceOver 仍不由这些合成窗口回归证明。

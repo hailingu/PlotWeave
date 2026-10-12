@@ -315,6 +315,8 @@ N71 最小回归先红：1 test／1 suite、5 项预期失败，日志 `/private
 
 单用户单实例范围保持；不引入多写者同步、跨进程冲突仲裁或对同用户攻击者目录替换的额外防御。Windows、旧 macOS、真实模型计费、签名分发不属于本次自动验证。视觉、VoiceOver、真实输入法和触控板性能缺口分别记录，不用通过单测替代。
 
+F08 的原生设置密钥草稿由设置页按 provider ID 持有，卡片离屏或同页 ready→loading→ready 不消费输入；提交前、整页离开及就绪投影确认删除后清除。`NativeSettingsDraftLifecycleTests` 的真实 SecureField／滚动／区域重建／AX Save／删除重现与整页重挂回归，以及普通 patch 无密钥回归，共 **6 tests／2 suites 通过**；本机直接滚动未触发行级清理，不声称直接复现虚拟化回调。证据与责任矩阵见 [PR #526 R28](swiftui-react-flow-pr526-fixes.md#设置滚动与密钥草稿)。
+
 ## 桥合同
 
 命令通道使用 WebKit 带回执 handler `plotweaveHost`。文档开始时注入 `__pwNativeHost={kind:"swift",protocolVersion:1,sessionId:…}`，会话身份随每次加载更新。请求包含 `protocolVersion`、`sessionId`、`requestId`、`command` 与可选参数对象 `args`；回执为 `{ok:…}` 或 `{error:{code,message}}`。25 条现有业务 snake_case 命令及两条退出命令保持载荷语义；系统文本交付为 `system.copyText` 和 `system.saveText`。
