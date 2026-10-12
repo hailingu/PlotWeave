@@ -187,6 +187,7 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
                 allowingReadAccessTo: entry.deletingLastPathComponent()
             )
         } else {
+            invalidateSession()
             state.fail(
                 "未找到画布资源：请先在仓库根目录执行 npm run build:native-canvas，"
                     + "再重新构建应用。"
@@ -221,7 +222,7 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         readyTimeoutTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.readyTimeout))
             guard !Task.isCancelled, let self else { return }
-            self.router.invalidate()
+            self.invalidateSession()
             self.state.fail("画布在 \(Int(Self.readyTimeout)) 秒内未报告就绪。")
         }
     }
@@ -295,6 +296,7 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
     func invalidateSession() {
         mediaScheme?.cancelAll()
         router.invalidate()
+        services.invalidateQuitListener(for: self)
         readyTimeoutTask?.cancel()
     }
 

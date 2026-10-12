@@ -113,3 +113,16 @@
 - R13／N85 的验证语义是可见画布的绘制帧；原采样只检查窗口 opacity 和 editor 投影，并在任意 JavaScript 任务中读取几何，未区分尚未显示的 WK 页面及其旧 viewport。测试现在还检查 WK 本身可见，并在下一次 `requestAnimationFrame` 回调读取三个节点的实际几何与 transform；其绘制前回调语义见 [MDN](https://developer.mozilla.org/en-US/docs/Web/API/Window/requestAnimationFrame)。首个采样帧仍参与尺寸／视口断言，不等待尺寸相等、忽略头部样本或自动重试；独立 1 秒期限仅使未到达绘制帧明确返回 `PW_CANVAS_FRAME_TIMEOUT`，并取消未执行回调。保留 40 次采样、原 30 毫秒间隔、原有视口条件及同一 WK 身份断言，诊断同时记录原生 bounds 与 hidden。实际物理屏幕逐帧画面未录像，不能将任意任务的旧尺寸直接断定为已显示的生产抖动；完整视觉验收仍为 P5 缺口。
 - 最终回执／绘制帧修正集中 **9 tests／2 suites 全通过**，实际执行首页七项（含四种尺寸／视口组合）和真实 WK 生命周期两项；生产呈现、视口和保存 owner 未再变更。完整 native、提交／推送门禁及最新 CI 在最终提交绑定。
 - 最终完整 native 路由 **725 维护文件检查、403 模块画布构建通过，208 tests／50 suites 全通过，TEST SUCCEEDED**（71.073 秒）。此结果来自撤回窗口级试验后的最终测试源，包含绘制帧采样、实际 WK 文件阻挡恢复和 FIFO 六种输入组合；不将前述失败／零选集算作通过。
+
+## 页面进程失效的退出回执
+
+提交 `a4aeca9` 的 [CI #598](https://github.com/hailingu/PlotWeave/actions/runs/38224155233) frontend／Rust／native 全通过，native 为 **208 tests／50 suites**。随后读取到基于 `12a4314` 的新 P2：内容进程收到退出事件后死亡，事件投递本身已成功，页面却无法再发出取消／批准。此独立故障入口属于原退出屏障范围，按该提交的一轮后续意见处理。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 实现前选定验证／缺口 |
+| --- | --- | --- | --- | --- |
+| R27 | 当前页面已收到退出事件→内容进程终止、导航失败或拆除；未就绪启动退出→同类失效；重载→明确重试 | 实际延迟系统决定回复 false 一次、意图和监听资格清除；未进入延迟决定时不虚构系统回复；恢复不自动退出，明确重试成功回复 true | coordinator 拥有页面失效入口，NativeHostServices 只允许当前连接撤销 HostQuitController 的资格；router／媒体／退出在同一失效入口撤销；旧页迟到失败不能取消新页意图 | 真实 WK 收到退出事件后调用公共 delegate 失效回调，四类失效 × 就绪／未就绪，重载和重复取消；同服务替换页后旧回调迟到；真实 OS 杀死 WebKit 子进程未执行，ready timeout／资源缺失复用失效入口并结构化复核 |
+
+- 有效先红：真实 WK 页面已收到退出事件，新增选集 **5 tests／1 suite、40 处问题**，均对应旧实现未撤销退出／监听资格及由此错误批准或恢复；首次夹具直接 load 但未 reset failed phase 的 46 处结果不作为行为证据，已改用实际 `state.retry()`／`reloadIfNeeded`。
+- `NativeHostServices` 用弱当前 coordinator 身份绑定退出监听；`invalidateQuitListener` 只允许该页取消意图、清除监听与 event adapter。`WebCanvasCoordinator.invalidateSession` 同时撤销 router、媒体、退出和就绪任务；进程终止、两种导航失败、拆除走同一入口，就绪超时和缺失资源也复用。首次连接仍按既有合同保留启动缓冲；已失效页面的缓冲清除，恢复后必须明确重试。没有新增桥命令、保存副本或承诺崩溃后恢复未落盘编辑。
+- 修复后集中退出／实际 WK **20 tests／5 suites 全通过**。页面失效用例覆盖四类入口 × 监听就绪／未就绪八种组合，验证一次 false、无虚构系统回复、清除 pending／listener、重复失效幂等、真实重载后不自动批准、明确重试 true；旧页迟到进程回调不能取消当前页的真实已投递退出。真实 WK 文件阻挡恢复仍通过。公共 delegate 回调按故障入口调用，未用 OS 杀死真正 WebKit 子进程；就绪超时／缺失资源未增加独立时钟或 bundle 注入，已结构化复核统一入口和取消任务守卫。
+- 最终完整 native 路由 **725 维护文件、403 模块构建通过，210 tests／50 suites 全通过，TEST SUCCEEDED**（72.642 秒），包含此前全部退出、窗口绘制帧和所选特殊文件回归。新增／修改 Swift 单元均低于 80 代码行，文件低于硬上限；未配置复杂度工具，人工复核当前页身份、取消顺序及失败入口。文档无自动语义检查，已结构化同步 owner、全部入口、恢复规则与缺口；完整门禁和最新 CI 在 PR 绑定最终提交。

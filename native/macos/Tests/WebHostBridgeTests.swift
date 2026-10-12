@@ -57,12 +57,72 @@ struct WebHostBridgeTests {
         }
     }
 
+    /// Delivered quit events lose authority on every page failure, and recovery needs a new explicit user intent.
+    @Test(arguments: ["process", "load", "provisional", "detach"], [true, false])
+    func pageFailureSettlesPendingQuit(failure: String, listenerReady: Bool) async throws {
+        let fixture = try WebFixture()
+        defer { fixture.close() }
+        try await fixture.waitUntilReady()
+        var replies: [Bool] = []
+        let delegate = NativeApplicationDelegate(quit: fixture.quit, terminateApplication: {}, replyToTermination: { replies.append($0) })
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        if listenerReady { fixture.quit.acknowledgeListener() }
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == (listenerReady ? .terminateLater : .terminateCancel))
+        if listenerReady { try await fixture.waitForQuitEvent() }
+        switch failure {
+        case "process": fixture.coordinator.webViewWebContentProcessDidTerminate(fixture.webView)
+        case "load": fixture.coordinator.webView(fixture.webView, didFail: nil, withError: URLError(.networkConnectionLost))
+        case "provisional": fixture.coordinator.webView(fixture.webView, didFailProvisionalNavigation: nil, withError: URLError(.cannotFindHost))
+        default: fixture.coordinator.invalidateSession()
+        }
+        #expect(replies == (listenerReady ? [false] : []))
+        #expect(fixture.quit.pendingIntent == nil)
+        #expect(!fixture.quit.listenerReady)
+        #expect(throws: HostFailure.self) { try fixture.quit.approve() }
+        fixture.coordinator.invalidateSession()
+        #expect(replies == (listenerReady ? [false] : []))
+        fixture.state.retry()
+        fixture.coordinator.reloadIfNeeded(into: fixture.webView)
+        try await fixture.waitUntilReady()
+        fixture.quit.acknowledgeListener()
+        #expect(fixture.quit.pendingIntent == nil)
+        #expect(replies == (listenerReady ? [false] : []))
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
+        try fixture.quit.approve()
+        #expect(replies == (listenerReady ? [false, true] : [true]))
+    }
+
+    /// A late crash from the replaced page cannot reject the replacement's current deferred decision.
+    @Test func oldPageFailureCannotCancelReplacementQuit() async throws {
+        let old = try WebFixture()
+        defer { old.close() }
+        try await old.waitUntilReady()
+        let current = try WebFixture(services: old.services)
+        defer { current.close() }
+        try await current.waitUntilReady()
+        var replies: [Bool] = []
+        let delegate = NativeApplicationDelegate(quit: current.quit, terminateApplication: {}, replyToTermination: { replies.append($0) })
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        current.quit.acknowledgeListener()
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
+        try await current.waitForQuitEvent()
+        old.coordinator.webViewWebContentProcessDidTerminate(old.webView)
+        #expect(current.quit.pendingIntent == .terminate && current.quit.listenerReady)
+        #expect(replies.isEmpty)
+        try current.quit.approve()
+        #expect(replies == [true])
+    }
+
     /// Host-selected temporary HTML keeps trust tests independent of app resources and real data roots.
     @MainActor
     private final class WebFixture {
         let root: URL
         let webView: WKWebView
         let coordinator: WebCanvasCoordinator
+        /// Replacement pages share a service only when a test explicitly selects that lifecycle boundary.
+        let services: NativeHostServices
+        /// Quit authority stays with the service's one controller, independent of fixture page identity.
+        var quit: HostQuitController { services.quit }
         let state = WebCanvasState()
         private let projectionLog: ProjectionLog
         var projections: [[String: Any]] { projectionLog.values }
@@ -73,13 +133,16 @@ struct WebHostBridgeTests {
         }
 
         /// Installs a real reply-capable bridge on a page containing only the versioned test contracts.
-        init() throws {
+        init(services: NativeHostServices? = nil) throws {
+            self.services = services ?? NativeHostServices(dataRoot: nil, quit: HostQuitController())
             root = FileManager.default.temporaryDirectory.appendingPathComponent("pw-web-host-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let entry = root.appendingPathComponent("bridge.html")
             try Data("""
                 <!doctype html><script>
                 window.intentCalls = 0;
+                window.quitEvents = 0;
+                window.__pwDispatchHostEvent = name => { if (name === 'app-quit-requested') window.quitEvents++; };
                 window.__pwNativeIntent = async () => { window.intentCalls++; return {ok: null}; };
                 window.webkit.messageHandlers.canvasHost.postMessage({event: 'ready'});
                 </script>
@@ -90,7 +153,7 @@ struct WebHostBridgeTests {
             projectionLog = log
             coordinator = WebCanvasCoordinator(
                 state: state, appearance: CanvasAppearanceState(), entryURL: entry,
-                services: NativeHostServices(dataRoot: nil, quit: HostQuitController()),
+                services: self.services,
                 onProjection: { body in log.values.append(body) }
             )
             configuration.userContentController.add(coordinator, name: WebCanvasCoordinator.bridgeName)
@@ -105,6 +168,16 @@ struct WebHostBridgeTests {
                 try await Task.sleep(for: .milliseconds(20))
             }
             #expect(state.phase == .ready)
+        }
+
+        /// The real page must receive the quit event before a simulated content-process failure can strand it.
+        func waitForQuitEvent() async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while ContinuousClock.now < deadline {
+                if try await webView.evaluateJavaScript("window.quitEvents") as? Int == 1 { return }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            throw HostFailure(code: "PW_TEST_QUIT_EVENT_TIMEOUT", message: "隔离页面未收到退出事件")
         }
 
         /// Sends the published protocol envelope through WebKit's real message-handler entry.
