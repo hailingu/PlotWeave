@@ -217,3 +217,22 @@ CI #604 的完整原生目标执行 224 tests／53 suites，新增设置回归�
 
 - `waitForHostColorScheme` 复用原 dark 等待的 5 秒／50 毫秒采样；初始 light 先取得实际值再作原断言，错误继续抛出，超时仍返回不匹配值供断言失败。不增加测试重跑、生产延时或宽度稳定等待。集中 `ShellWebCanvasLifecycleTests` **3 tests／1 suite 全通过**（2.737 秒），保持 marker／Debug inspection／页面及面板回归。
 - 仓库根完整串行 native 路由 **730 维护文件、404 画布模块、224 tests／53 suites 全通过，TEST SUCCEEDED**（87.023 秒）。测试文件 225 行，修改单元人工复核低于 80 代码行；没有配置复杂度工具。文档无自动语义检查，已核对失败证据、等待对象、原期限及保留断言；Prettier／diff 检查通过。生产源、前端／Rust、工具链、命令和存储合同未修改，本轮未额外运行其独立完整路由；Git 操作仍要求新生成前端／Rust 覆盖率与完整 Sonar 门禁。
+
+## 反向宿主请求退役与 Web 最终退出协调
+
+所有者在第22、23条评审后授权“继续修复两条并同步相关合同”。以下矩阵先于生产修改记录；R36 扩大原明确保留的 Web→Swift 容量合同，R37 补 Web 写入的最终批准窗口，不混同此前 R30／R29 的原生方向修复。复用现有请求身份、四源保存 owner、失败保稿与明确重试，不增加计费重试、恢复副本或磁盘 schema。
+
+| ID | 前置状态／动作顺序 | 预期可观察结果 | 不变量、owner 与入口 | 选定验证／缺口 |
+| --- | --- | --- | --- | --- |
+| R36a | 规范生产请求累计4096次完成→保存／退出→重放已退役ID | 新命令继续，真实稿件落盘并可批准退出；旧ID明确拒绝，无第二次副作用 | HostCommandRouter 只退役已完成规范身份；invokeSwiftHost 分配现有 sessionId:正整数，不自动重放 | 最小真实 Swift 存储／退出回归先红；近期重复、参数冲突、长期页面接线；不访问用户根 |
+| R36b | 乱序完成、旧请求仍在途、全部在途／opaque满载→新命令→完成／新页 | 在途重复共享；真满载仍拒绝，完成后可明确继续；新页清除旧权威 | 请求窗口有界，退役水位拒绝旧重放但不能丢失在途 Task；实际 loadCanvas 拥有重置 | 确定性入场闸门、非幂等副作用、旧式身份与新session／失效；不调用计费模型 |
+| R37a | Web四源干净或已冲刷→退出开始→最终原生批准仍在途→新Web编辑 | 开始退出即暂停用户输入及新业务操作；最终封口后持久化写入口显式拒绝，状态与脏稿不变 | 页级入场闸 open→draining→sealed；画布状态／viewport／markDirty、AI thread、设置 update 及 App 文档 owner 的最终写入口守卫；原生意图另受入场闸约束 | 真实 useEditorDocument＋useExitFlush 最小先红；干净／脏稿分支、四 owner、原生回执被挡、失败解锁后再次编辑 |
+| R37b | 退出前已接纳的 Web 模型／生图／资产导入／项目动作仍在途→迟到结果写状态→四源保存落定 | 等完整业务操作（含结果交付），提交 React 更新及保存 effect 后再冲刷；只在所有操作及四源都空闲的同步跨度内封口，不丢已接纳结果 | 整体异步业务的入口登记拥有 future，不能以单次 IPC 结束替代；现有 owner 继续唯一持有状态与错误，draining 允许既有工作完成 | 真实资产 drop／文档保存磁盘回归；AI、设置／密钥及项目导航邻接回归；失败保稿／重复退出／卸载释放及明确重试；Dock／IME／VoiceOver 保留 P5 缺口 |
+
+- **R36 红→绿与邻接**：`HostRequestRetirementTests.completedProductionRequestsAllowSaveAndQuit` 在原实现先出现五项预期失败：4097 次真实保存和其后的退出均被容量拒绝，磁盘仍是旧名称、没有批准，旧回放也未退役。修复后以隔离 `NativeHostServices`／真实 `NativeProjectStore` 保存最新稿并批准退出；低序号在途重复与乱序完成、水位重放、4096 全在途拒绝后明确恢复、实际新 session 与非法／最大安全序号共四项新回归。包含既有 opaque 容量与生命周期的集中 **11 tests／3 suites 通过**（1.574 秒），旧式满载合同保持。
+- **R37 红→绿与 owner**：原 `useEditorDocument` 在最终 `app_exit` 回执被挡时仍接受集标题新稿，最小测试先红；最终真实 owner 回归明确拒绝集标题、AI 批次数、完成视口与设置 update，状态及 settings 待存登记不变。真实 Web 资产 drop 从导入／校验 IPC 到实际 React 图和索引提交，再通过生产序列化／保存链写入临时项目文件；批准时磁盘已包含媒体及引用。另以同一次 React 批次“编辑→退出”验证尚未执行保存 effect 的稿件也被等待；最终批准失败释放输入，新稿再次实际保存后明确重试成功。没有用 mocked save 次数代替结果。
+- **实际 WK／Swift 磁盘**：新增 `NativeProductionLifecycleTests.webFinalApprovalSealsCleanAndDrainedDocuments` 两参数路径；使用真实 Web document 键盘删除作为退出前的 Web 写入，带回执 handler 代理只拦最终批准，原始请求／frame／coordinator 原样继续。干净与待冲刷页面都具有实际 inert，最终阶段的新 Web 撤销事件被阻断；放行后 Swift 文件分别保持正确节点数。与 R36 和既有退出失败／原生意图回归集中 **8 tests／2 suites 全通过**（10.675 秒）。夹具曾错误假设默认梗概及 WebKit 属性可写，另曾缺少回执并发注解；修正为明确基线和协议一致代理后通过，这些不属于产品先红证据。
+- **实现边界**：新页级协调器只持有操作／提交 future 和单一租约，无文档副本；完成移除、失败／卸载释放，旧释放不影响新页租约。`useExitGuardedCallback` 以实际提交的修订 effect 确认状态，不能以 Promise 回执或空 `flushSync` 代替；无变化的 App AI 保存保留原“编辑器零额外提交”合同。图测量／选中只更新会话态；真正持久化写入才参与封口。App 798、router 171、新 Swift 请求测试 158、生产生命周期测试 350 行，修改执行单元人工复核低于 80 代码行，未创建检测工具或工程豁免。
+- **验证与缺口**：最终静态检查（格式、ESLint 零警告、尺寸、严格类型）及前端生产构建通过；当前资源的完整串行 native 路由 **737 维护文件、229 tests／54 suites 全通过，TEST SUCCEEDED**（89.927 秒）。画布、AI、生图、App、设置／密钥、桥及退出租约集中 **9 files／172 tests 通过**，完整前端 **223 files／3161 tests 通过**；新 Git 门禁结果按最终提交补入 PR。沙盒禁止 `ps`／testmanagerd 的执行不作为产品失败，正常本机环境完成检查。桥、UI、迁移、持久化、AI 和 Provider 设计已同步；纯文档无自动语义检查，结构化复核身份／水位、唯一状态 owner、失败恢复及引用完成。未新增真实计费模型／生图、真实页面 4096 长会话洪泛、Web AI 最终封口与密钥的实机交叉操作、菜单／Dock／IME／VoiceOver 或进程 kill；前者由确定性边界与既有 owner 回归覆盖，后者仍属 P5 人工缺口，未挂载回合／未提交草稿及强制退出仍保持原边界。
+
+- **末次复核纠正**：首次提交门禁被 Sonar 的七项新代码问题阻止（五处 React setter 命名、Promise await 与 iterable 写法）；仅调整对应表达，退出协调行为保持。调整后集中 5 files／88 tests 与 AI／历史／生图 3 files／81 tests、生产构建及静态检查通过。本机一次误用 CI 的 Xcode 安装路径未启动原生测试，确认默认 Xcode／SDK 均为 27.0 后改用已选工具链；另一次漏串行参数使 54 个共享 NSApplication 套件并行启动、出现 23 issues，不作为完成证据。补回仓库规定的 `-parallel-testing-enabled NO` 后，最终完整 229 tests／54 suites 全通过（89.927 秒），保留全部断言。完整 Git 门禁按最终提交在 PR 记录。

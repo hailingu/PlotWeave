@@ -27,6 +27,7 @@ import { revalidatePendingCard, useAiTurn } from './aiThreadTurn'
 import { AiTopbar } from './AiThreadTopbar'
 import { useNativeAiShell } from '../nativeCanvas/useNativeAiShell'
 import { isSwiftHost } from '../../platform/hostEnvironment'
+import { useExitGuardedCallback } from '../../useExitGuardedCallback'
 
 export { AiSettingsButton } from './AiThreadTopbar'
 
@@ -231,6 +232,7 @@ function useAiThreadMessages(opts: {
       opts.identity?.aiRevision,
     ),
   )
+  const guardedSetThread = useExitGuardedCallback(setThread)
   /** 危险批次的两步确认：处于武装态的会话条目下标，null = 无。 */
   const [armedIdx, setArmedIdx] = useState<number | null>(null)
   /** 会话条目自增 id（组件内稳定 key）：恢复条目已重定基为 1..n，从这里继续。 */
@@ -240,7 +242,7 @@ function useAiThreadMessages(opts: {
 
   /** 会话尾部追加（send 与预览卡回执共用）。 */
   const append = (entries: ThreadEntry[]) =>
-    setThread((t) => [...t, ...entries])
+    guardedSetThread((t) => [...t, ...entries])
 
   /** 执行预览卡：成功 → 置状态并追加回执；失败 → 错误回执（批次未动）。
    * 提交身份带画布确认等待器时标注 uncommitted 并记录执行后批次计数——
@@ -248,7 +250,7 @@ function useAiThreadMessages(opts: {
   const executeCard = (idx: number) =>
     applyCardExecution({
       thread,
-      setThread,
+      setThread: guardedSetThread,
       setArmedIdx,
       entry: thread[idx]!,
       idx,
@@ -258,7 +260,7 @@ function useAiThreadMessages(opts: {
     })
 
   const markDismissed = (idx: number) => {
-    setThread((t) =>
+    guardedSetThread((t) =>
       t.map((e, i) => {
         if (i !== idx || !e.card) return e
         const card = { ...e.card, status: 'dismissed' as const }
@@ -273,13 +275,13 @@ function useAiThreadMessages(opts: {
    * 落盘空会话（重开不复活）。条目 id 计数器继续自增——id 只需实例内
    * 唯一作渲染 key，恢复时本就按位置重定基，无重置必要。 */
   const resetSession = () => {
-    setThread([])
+    guardedSetThread([])
     setArmedIdx(null)
   }
 
   useCanvasCommitConfirmation(
     thread,
-    setThread,
+    guardedSetThread,
     opts.identity?.whenCanvasCommitted,
   )
 

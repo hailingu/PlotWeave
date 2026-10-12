@@ -3,6 +3,7 @@
  * 登记/认领/持有（issue #63 跨卸载交付）、单轮发送与认领条目重定映射。
  * 盒子语义见 ../ai/pendingTurns；纯函数在 aiThreadModel.ts。
  */
+import { useWebExitAction } from '../../useWebExitAction'
 import {
   useEffect,
   useRef,
@@ -356,7 +357,7 @@ export function useAiTurn(opts: UseAiTurnOpts) {
     clearError,
     knowsCanvas,
     setKnowsCanvas,
-    send,
+    send: useWebExitAction(send),
     cancel,
     appendCancelReceipt,
   }

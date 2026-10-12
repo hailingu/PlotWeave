@@ -25,6 +25,11 @@ import type { HistoryCommand } from './history'
 import type { AssetRef } from '../model/document'
 import type { NodeDataPatch } from './nodes/patch'
 import type { CanvasNode, ShotRef } from './nodes/types'
+import {
+  isWebExitPending,
+  runWebOperation,
+  WEB_EXIT_PENDING,
+} from '../webExitFence'
 
 /** useLibraryAssetDrop 的依赖注入：状态读写与命令栈全部来自 EditorView。 */
 export interface LibraryAssetDropDeps {
@@ -129,6 +134,10 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
 
   return useCallback(
     (e: ReactDragEvent) => {
+      if (isWebExitPending()) {
+        onError(WEB_EXIT_PENDING)
+        return
+      }
       const payload = readLibraryAssetPayload(e.dataTransfer)
       if (!payload) return
       e.preventDefault()
@@ -145,21 +154,26 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
         return
       }
       inFlightRef.current.add(nodeId)
-      void importAssetToShotRef(
-        {
-          projectId,
-          nodesRef,
-          applyDataPatch,
-          addAsset,
-          removeAsset,
-          pushHistory,
-          onError,
-        },
-        inFlightRef.current,
-        nodeId,
-        payload,
-        kind,
-      )
+      void runWebOperation(() =>
+        importAssetToShotRef(
+          {
+            projectId,
+            nodesRef,
+            applyDataPatch,
+            addAsset,
+            removeAsset,
+            pushHistory,
+            onError,
+          },
+          inFlightRef.current,
+          nodeId,
+          payload,
+          kind,
+        ),
+      ).catch((error: unknown) => {
+        inFlightRef.current.delete(nodeId)
+        onError(String(error))
+      })
     },
     [
       projectId,

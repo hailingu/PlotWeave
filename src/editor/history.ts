@@ -1,4 +1,9 @@
 import { useCallback, useRef, useState } from 'react'
+import {
+  isWebExitPending,
+  runWebOperation,
+  WEB_EXIT_PENDING,
+} from '../webExitFence'
 
 /**
  * 命令栈：撤销 / 重做（docs/ui-design.md §3.3 左区、§4.3、数据模型 §11–§12）。
@@ -170,8 +175,13 @@ export function useCommandHistory(onRedoError: (message: string) => void) {
 
   /** 重做入口：先走栈（可能因 redoGuard 拒绝放弃），拒绝回投横幅槽。 */
   const onRedo = useCallback(() => {
-    const pending = stack.redo()
-    if (pending === undefined) return
+    if (isWebExitPending()) {
+      onRedoError(WEB_EXIT_PENDING)
+      return
+    }
+    const pending = runWebOperation(async () => {
+      await stack.redo()
+    })
     pending.catch((err: unknown) => {
       onRedoError(
         `重做失败：${err instanceof Error ? err.message : String(err)}（资产文件可能已被外部删改，可恢复后重试）`,

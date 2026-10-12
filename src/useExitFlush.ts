@@ -4,6 +4,12 @@
  * 只在用户退出时对每个登记至多重存一次，不维护恢复副本或定时重试。 */
 import { useEffect, useState } from 'react'
 import {
+  beginWebExitFence,
+  hasPendingWebOperations,
+  WEB_EXIT_PENDING,
+  type WebExitFence,
+} from './webExitFence'
+import {
   flushPendingAiSessionSaves,
   hasPendingAiSessionSaves,
 } from './aiSessionStore'
@@ -52,8 +58,10 @@ function blockedMessage(
 async function drainBeforeExit(
   onBlocked: (message: string | null) => void,
   onClean: () => Promise<unknown>,
+  fence?: WebExitFence,
 ): Promise<boolean> {
   for (;;) {
+    await fence?.wait()
     await flushPendingCanvasSaves()
     const projects = await flushPendingProjectSaves()
     const sessions = await flushPendingAiSessionSaves()
@@ -62,8 +70,9 @@ async function drainBeforeExit(
       onBlocked(blockedMessage(projects.length, sessions.length, settings))
       return false
     }
-    if (!hasPendingSaves()) break
+    if (!hasPendingSaves() && (!fence || !hasPendingWebOperations())) break
   }
+  fence?.seal()
   onBlocked(null)
   await onClean()
   return true
@@ -79,6 +88,18 @@ type ExitBarrier = {
   dispose: () => void
 }
 
+/** 失败回执保留系统窗口；取消传输失败与原始保存诊断一起呈现。 */
+async function cancelSystemExit(
+  diagnostic: string | null,
+  report: (message: string) => void,
+): Promise<void> {
+  try {
+    await ipcInvoke(IPC_COMMANDS.appExit, { cancel: true })
+  } catch (error) {
+    report(`${diagnostic ?? '退出未完成'}；取消系统退出失败：${String(error)}`)
+  }
+}
+
 /** 保存协调与系统退出回执的生命周期；Swift 失败显式取消，Tauri 保持原有屏障。 */
 function createExitBarrier(
   host: HostKind,
@@ -87,6 +108,7 @@ function createExitBarrier(
   let disposed = false
   let quitting: Promise<void> | null = null
   let diagnostic: string | null = null
+  let fence: WebExitFence | undefined
   const unlistens: Array<() => void> = []
   const report = (message: string | null) => {
     diagnostic = message
@@ -94,22 +116,18 @@ function createExitBarrier(
   }
   const cancelExit = async () => {
     if (host !== 'swift' || disposed) return
-    try {
-      await ipcInvoke(IPC_COMMANDS.appExit, { cancel: true })
-    } catch (error) {
-      report(
-        `${diagnostic ?? '退出未完成'}；取消系统退出失败：${String(error)}`,
-      )
-    }
+    await cancelSystemExit(diagnostic, report)
   }
   const request = async (exit: () => Promise<unknown>, flush = false) => {
     let clean = false
     try {
+      if (host === 'swift')
+        fence = beginWebExitFence(() => report(WEB_EXIT_PENDING))
       const onClean = async () => {
         if (!disposed) await exit()
       }
-      if (flush || hasPendingSaves())
-        clean = await drainBeforeExit(report, onClean)
+      if (fence || flush || hasPendingSaves())
+        clean = await drainBeforeExit(report, onClean, fence)
       else {
         await onClean()
         clean = true
@@ -117,7 +135,11 @@ function createExitBarrier(
     } catch (error) {
       report(`退出失败，已保留窗口：${String(error)}。请核对保存状态后重试退出`)
     } finally {
-      if (!clean) await cancelExit()
+      if (!clean || disposed) {
+        fence?.release()
+        fence = undefined
+        if (!clean) await cancelExit()
+      }
     }
   }
   return {
@@ -143,6 +165,7 @@ function createExitBarrier(
     },
     dispose: () => {
       disposed = true
+      fence?.release()
       unlistens.forEach((unlisten) => unlisten())
     },
   }

@@ -22,6 +22,8 @@ import {
   useCreateFamilyAttempts,
 } from './useCreateFamilyAttempts'
 import { useExitFlush } from './useExitFlush'
+import { useWebExitAction } from './useWebExitAction'
+import { useExitGuardedCallback } from './useExitGuardedCallback'
 import { useNativeAppShell } from './useNativeAppShell'
 import { useNativeHomeRecovery } from './useNativeHomeRecovery'
 import { useAppSettingsShortcut } from './useAppSettingsShortcut'
@@ -331,7 +333,10 @@ function useProjectOpenAttempt(
     [latestDoc, setOpenFailure, setOpenProject, unsavedAiSessions],
   )
 
-  return { handleCreateProject, handleOpenProject }
+  return {
+    handleCreateProject: useWebExitAction(handleCreateProject),
+    handleOpenProject: useWebExitAction(handleOpenProject),
+  }
 }
 
 function useOpenProjectActions({
@@ -353,8 +358,9 @@ function useOpenProjectActions({
   readonly feedback: ReturnType<typeof useHomeActionFeedback>
   readonly attempts: ReturnType<typeof useCreateFamilyAttempts>
 }) {
+  const writeOpenProject = useExitGuardedCallback(setOpenProject)
   const { handleCreateProject, handleOpenProject } = useProjectOpenAttempt(
-    setOpenProject,
+    writeOpenProject,
     setOpenFailure,
     refreshProjects,
     unsavedAiSessions,
@@ -366,14 +372,14 @@ function useOpenProjectActions({
   const handleBackHome = useCallback(() => {
     // 常规路径下返回首页即清除带外最新文档；但随后的编辑器卸载冲刷仍会经
     // onSave 闭包复活引用，权威失效点在打开尝试开始处（issue #118 评审）。
+    writeOpenProject(null)
     latestDoc.current = null
-    setOpenProject(null)
     void refreshProjects()
-  }, [latestDoc, refreshProjects, setOpenProject])
+  }, [latestDoc, refreshProjects, writeOpenProject])
 
   const handleEditorRename = useCallback(
     (name: string) => {
-      setOpenProject((project) => {
+      writeOpenProject((project) => {
         if (!project) return project
         // 同步补丁带外最新文档（issue #118 评审）：重挂载种子解析以它优先，
         // 只更新 openProject.doc 会让首次防抖保存之后的改名被旧名回退且
@@ -387,7 +393,7 @@ function useOpenProjectActions({
         return { ...project, doc: { ...project.doc, name } }
       })
     },
-    [latestDoc, setOpenProject],
+    [latestDoc, writeOpenProject],
   )
 
   const handleSaveAiSession = useAiSessionSave(
@@ -498,7 +504,11 @@ function useHomeProjectActions(
     [refreshProjects, unsavedAiSessions, feedback],
   )
 
-  return { handleRenameProject, handleDuplicateProject, handleDeleteProject }
+  return {
+    handleRenameProject: useWebExitAction(handleRenameProject),
+    handleDuplicateProject: useWebExitAction(handleDuplicateProject),
+    handleDeleteProject: useWebExitAction(handleDeleteProject),
+  }
 }
 
 /** 编辑器视图装配（AppView 拆分，PR #199 评审守组件 80 行上限）：带外

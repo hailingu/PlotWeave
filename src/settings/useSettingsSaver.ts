@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AppSettings } from './types'
 import { settingsStore } from './settingsStore'
 import { registerSettingsFlushGate } from './settingsSaveRegistry'
+import { assertWebWriteAllowed } from '../webExitFence'
 
 /** useSettingsSaver 的返回：编辑写入、关闭处理、可见错误与关态。 */
 export interface SettingsSaver {
@@ -180,6 +181,7 @@ export function useSettingsSaver(
 
   const update = useCallback(
     (next: AppSettings) => {
+      assertWebWriteAllowed()
       setSettings(next)
       pendingSaveRef.current = next
       if (saveTimer.current) clearTimeout(saveTimer.current)

@@ -4,6 +4,8 @@
  * storage directly. Bounded same-page results and a retirement watermark prevent replay.
  */
 
+import { isWebExitPending, WEB_EXIT_PENDING } from '../webExitFence'
+
 /** Stable failure envelope shared with the Swift command boundary. */
 interface IntentFailure {
   error: { code: string; message: string }
@@ -102,6 +104,8 @@ async function executeIntent(
   command: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  if (isWebExitPending())
+    return failure('PW_WEB_EXIT_PENDING', WEB_EXIT_PENDING)
   try {
     const value = await handler(command, args)
     return sessionIdentity() === session

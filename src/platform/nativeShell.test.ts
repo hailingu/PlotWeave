@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { webcrypto } from 'node:crypto'
+import { beginWebExitFence } from '../webExitFence'
 import {
   publishNativeProjection,
   registerNativeIntentHandler,
@@ -47,6 +48,28 @@ function orderedRequest(
 ) {
   return request(command, `native:${ordinal}`, sessionId)
 }
+
+it('rejects new native mutations while Web is quitting and admits only a fresh explicit retry after recovery', async () => {
+  installHost()
+  let mutations = 0
+  cleanups.push(
+    registerNativeIntentHandler('editor', () => {
+      mutations += 1
+      return mutations
+    }),
+  )
+  const fence = beginWebExitFence(() => {})
+  cleanups.push(fence.release)
+  const reply = await hostWindow.__pwNativeIntent?.(orderedRequest(1))
+  expect(reply).toMatchObject({ error: { code: 'PW_WEB_EXIT_PENDING' } })
+  expect(mutations).toBe(0)
+  fence.release()
+  expect(await hostWindow.__pwNativeIntent?.(orderedRequest(1))).toEqual(reply)
+  expect(await hostWindow.__pwNativeIntent?.(orderedRequest(2))).toEqual({
+    ok: 1,
+  })
+  expect(mutations).toBe(1)
+})
 
 it('keeps an older pending identity replayable across later completion retirement and rejects conflicting reuse', async () => {
   installHost()

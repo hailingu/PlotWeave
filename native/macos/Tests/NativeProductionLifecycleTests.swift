@@ -173,6 +173,77 @@ struct NativeProductionLifecycleTests {
             """, arguments: ["mode": mode], in: nil, contentWorld: .page)
     }
 
+    /// Web keyboard mutations are saved before quitting; final approval cannot accept another undo.
+    @Test(arguments: [false, true])
+    func webFinalApprovalSealsCleanAndDrainedDocuments(dirty: Bool) async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let metadata = try await projects.invoke(command: "create_project", args: ["name": .string("Web 最终退出")])
+        let id = try #require(metadata["id"]?.string)
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let webView = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(webView)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        _ = try await mounted.state.request("editor.create", args: ["projectId": .string(id), "nodeType": .string("scene")])
+        try await wait { mounted.state.editor["nodes"]?.arrayValue?.count == 1 }
+        let node = try #require(mounted.state.editor["nodes"]?.arrayValue?.first?["id"]?.string)
+        _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string(node)])
+        _ = try await mounted.state.request("editor.patchNode", args: ["projectId": .string(id), "id": .string(node), "patch": .object(["synopsis": .string("Web 基线稿")])])
+        try await waitForDisk(projects, id: id, node: node, synopsis: "Web 基线稿")
+        if dirty {
+            // This genuine document keyboard event uses Web's command history, not a native intent.
+            _ = try await webView.evaluateJavaScript("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'Delete', bubbles:true, cancelable:true})); null")
+            try await wait { mounted.state.editor["nodes"]?.arrayValue?.count == 0 }
+        }
+        let gate = try installExitGate(webView)
+        var approvals = 0
+        fixture.quit.onApproved = { _ in approvals += 1 }
+        fixture.quit.request(.close)
+        try await wait { gate.entered }
+        #expect(approvals == 0)
+        #expect(try await webView.evaluateJavaScript("document.getElementById('root').inert") as? Bool == true)
+        #expect(try await webView.evaluateJavaScript("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true, cancelable:true}))") as? Bool == false)
+        #expect(mounted.state.editor["nodes"]?.arrayValue?.count == (dirty ? 0 : 1))
+        gate.release?()
+        try await wait { approvals == 1 }
+        let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+        #expect(saved["graph"]?["nodes"]?.arrayValue?.count == (dirty ? 0 : 1))
+        #expect(fixture.quit.pendingIntent == nil)
+        await fixture.services.close()
+    }
+
+    /// Holds only the final Web→Swift exit RPC, after the real Web fixed point has finished.
+    private func installExitGate(_ webView: WKWebView) throws -> ExitMessageGate {
+        let coordinator = try #require(webView.navigationDelegate as? WebCanvasCoordinator)
+        let gate = ExitMessageGate(coordinator: coordinator)
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: "plotweaveHost", contentWorld: .page)
+        controller.addScriptMessageHandler(gate, contentWorld: .page, name: "plotweaveHost")
+        return gate
+    }
+
+    /// Delegates actual trusted WK messages unchanged; only final approval waits at a deterministic gate.
+    @MainActor private final class ExitMessageGate: NSObject, WKScriptMessageHandlerWithReply {
+        let coordinator: WebCanvasCoordinator
+        var entered = false
+        var release: (() -> Void)?
+        /// Retains the real page coordinator through the held reply.
+        init(coordinator: WebCanvasCoordinator) { self.coordinator = coordinator }
+        /// Pauses approval before service dispatch, then forwards the same message and completion.
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping @MainActor @Sendable (Any?, String?) -> Void) {
+            let body = message.body as? [String: Any]
+            let args = body?["args"] as? [String: Any]
+            let forward = { self.coordinator.userContentController(controller, didReceive: message, replyHandler: replyHandler) }
+            if body?["command"] as? String == "app_exit", args?["cancel"] as? Bool != true {
+                entered = true
+                release = { self.release = nil; forward() }
+            } else { forward() }
+        }
+    }
+
     /// Gate admission is observed in the actual production page, never inferred from a submitted call.
     private func waitForIntentGate(_ webView: WKWebView) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(8))

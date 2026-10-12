@@ -22,12 +22,16 @@ final class HostCommandRouter {
     private var active = true
     /// In-flight tasks and completed replies share the same request identity cache.
     private var requests: [String: RequestEntry] = [:]
-    /// Full sessions reject new identities instead of evicting records and permitting repeated side effects.
+    /// Recent results and in-flight work share a bound; retired ordered identities cannot execute again.
     private static let capacity = 4096
+    /// Retired production ordinals have no authority even when their result is no longer retained.
+    private var retiredThrough = 0
     /// Key material appears only while executing a request; the identity cache stores its cryptographic digest.
     private struct RequestEntry {
         let fingerprint: Data
         let task: Task<HostJSON, Never>
+        let ordinal: Int?
+        var settled = false
     }
     /// Coordinators apply the same invalidation boundary to native intents and read projections.
     var isActive: Bool { active }
@@ -57,6 +61,7 @@ final class HostCommandRouter {
     private func cancelRequests() {
         for request in requests.values { request.task.cancel() }
         requests.removeAll()
+        retiredThrough = 0
     }
 
     /// Validates trust, protocol and identity before sharing a single execution per request ID.
@@ -88,10 +93,16 @@ final class HostCommandRouter {
             }
             task = existing.task
         } else {
-            guard requests.count < Self.capacity else {
-                return failure("PW_REQUEST_CAPACITY", "当前页面请求身份已达上限，请保存后重新打开")
+            let ordinal: Int?
+            do { ordinal = try requestOrdinal(request.requestId) }
+            catch { return failure("PW_INVALID_REQUEST", "宿主请求身份不是有效安全序号") }
+            if let ordinal, ordinal <= retiredThrough {
+                return failure("PW_HOST_REQUEST_RETIRED", "该宿主请求已退役，不能重复执行；请核对结果。")
             }
-            task = start(request, fingerprint: fingerprint)
+            guard admitRequest() else {
+                return failure("PW_REQUEST_CAPACITY", "当前页面请求仍占满身份窗口，请等待完成后明确重试。")
+            }
+            task = start(request, fingerprint: fingerprint, ordinal: ordinal)
         }
         let reply = await task.value
         guard active, request.sessionId == sessionId else {
@@ -101,9 +112,10 @@ final class HostCommandRouter {
     }
 
     /// Registers work before yielding, so duplicate in-flight deliveries cannot run twice.
-    private func start(_ request: HostRequest, fingerprint: Data) -> Task<HostJSON, Never> {
+    private func start(_ request: HostRequest, fingerprint: Data, ordinal: Int?) -> Task<HostJSON, Never> {
         let service = service
-        let task = Task { @MainActor in
+        let task = Task { @MainActor [weak self] in
+            defer { self?.markSettled(request) }
             do {
                 try Task.checkCancellation()
                 return HostJSON.object(["ok": try await service(request)])
@@ -111,8 +123,37 @@ final class HostCommandRouter {
             catch let error as HostFailure { return error.reply }
             catch { return HostFailure(code: "PW_HOST_ERROR", message: error.localizedDescription).reply }
         }
-        requests[request.requestId] = RequestEntry(fingerprint: fingerprint, task: task)
+        requests[request.requestId] = RequestEntry(fingerprint: fingerprint, task: task, ordinal: ordinal)
         return task
+    }
+
+    /// Current production IDs are canonical session-prefixed safe integers; legacy opaque IDs remain bounded.
+    private func requestOrdinal(_ id: String) throws -> Int? {
+        let prefix = sessionId + ":"
+        guard id.hasPrefix(prefix) else { return nil }
+        let suffix = String(id.dropFirst(prefix.count))
+        guard let ordinal = Int(suffix), ordinal > 0, ordinal <= 9_007_199_254_740_991,
+              suffix == String(ordinal) else {
+            throw HostFailure(code: "PW_INVALID_REQUEST", message: "宿主请求序号无效")
+        }
+        return ordinal
+    }
+
+    /// Capacity pressure retires the oldest completed ordered identity, never an in-flight or opaque entry.
+    private func admitRequest() -> Bool {
+        if requests.count < Self.capacity { return true }
+        let candidate = requests.filter { $0.value.settled && $0.value.ordinal != nil }
+            .min { ($0.value.ordinal ?? Int.max) < ($1.value.ordinal ?? Int.max) }
+        guard let candidate, let ordinal = candidate.value.ordinal else { return false }
+        requests.removeValue(forKey: candidate.key)
+        retiredThrough = max(retiredThrough, ordinal)
+        return true
+    }
+
+    /// Old-page completion cannot settle a newer session's identity after cancellation or replacement.
+    private func markSettled(_ request: HostRequest) {
+        guard request.sessionId == sessionId else { return }
+        requests[request.requestId]?.settled = true
     }
 
     /// Canonical command/args hashing recognizes reordered JSON keys without retaining plaintext secrets.

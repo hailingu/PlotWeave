@@ -321,13 +321,17 @@ F05 还覆盖 [PR #526 R29](swiftui-react-flow-pr526-fixes.md#原生意图进入
 
 ## 桥合同
 
+**Web→Swift 请求窗口（PR #526 R36）**：生产请求沿既有 `sessionId:<正安全整数>` 分配身份；`HostCommandRouter` 至多保留 4096 条在途与近期结果，满载时只退役已完成的规范身份并推进退役水位。查找仍在途的旧身份先于水位判断，乱序完成不会丢失同一 Task；近期重复共享结果、参数冲突返回 `PW_REQUEST_CONFLICT`。已退役身份返回 `PW_HOST_REQUEST_RETIRED`，不再执行副作用；非法规范序号返回 `PW_INVALID_REQUEST`。全在途或旧式 opaque 身份占满仍返回 `PW_REQUEST_CAPACITY`；规范任务完成后用户可明确重试，旧式满载须实际重载页面。项目往返保持原页与序号，只有真正加载新文档才重置，失效页拒绝新操作。未修改命令、协议版本及磁盘 schema，不自动重放未知结果。此授权更新替代 R30 当时保留的反向容量边界。
+
+**Web 最终退出资格（PR #526 R37）**：Swift 的退出事件同步建立本页 `open→draining→sealed` 租约；`draining` 暂停 Web 输入和新业务意图，已接纳的模型回合、生图、资产导入／编辑、项目动作及 guarded React 状态提交仍完整落定。状态提交在实际 owner 的 effect 确认，保存 effect 随同一次提交登记；单次 IPC 回执、任意等待时间不能代替业务完成。四个保存 owner（画布、项目链、AI、设置／密钥）冲刷到固定点，业务／状态提交也全部空闲时，在同一同步跨度封口并发送既有 `app_exit`。最终阶段持久化状态写入口拒绝 `PW_WEB_EXIT_PENDING`，原生新意图同样明确拒绝；测量与选中仅属会话态。失败解除租约、恢复原输入状态并发送取消退出回执，保留已有失败稿与明确重试；成功保持封口直到页面销毁，旧清理不能释放新租约。Tauri 原有退出合同保持。验证和人工边界见 [R36–R37 状态矩阵](swiftui-react-flow-pr526-fixes.md#反向宿主请求退役与-web-最终退出协调)。
+
 `settings.setDefaults` 的原生→Web 意图接受 `defaultChat`、`defaultImage` 中至少一个字段，每个存在的字段必须是字符串或 null；未知字段、空补丁及类型非法拒绝。缺席字段保留 Web owner 当前同步快照，null 只清指定项，旧式双字段提交保持有效；原生 Picker 只发送自身选择。普通服务草稿只在仍等于前一投影时跟随新的权威字段，旧回执不能覆盖更新输入，模型确认使用逐行规范化语义且保留输入原文。命令名称、版本、磁盘 schema 和唯一 saver 不变，见 [PR #526 R33–R34](swiftui-react-flow-pr526-fixes.md#设置字段与投影回执)。
 
 命令通道使用 WebKit 带回执 handler `plotweaveHost`。文档开始时注入 `__pwNativeHost={kind:"swift",protocolVersion:1,sessionId:…}`，会话身份随每次加载更新。请求包含 `protocolVersion`、`sessionId`、`requestId`、`command` 与可选参数对象 `args`；回执为 `{ok:…}` 或 `{error:{code,message}}`。25 条现有业务 snake_case 命令及两条退出命令保持载荷语义；系统文本交付为 `system.copyText` 和 `system.saveText`。
 
 同一会话请求去重覆盖在途和完成结果，不自动重试删除、复制或计费请求。媒体字节通过 Swift 资源服务／`WKURLSchemeHandler`，不进入 JSON 或 base64 命令回执。宿主事件由 `__pwDispatchHostEvent` 投递 `app-quit-requested`、`library-diagnostics`，监听建立后才确认退出就绪。Swift 的 `app_exit` 可选布尔 `cancel:true` 是幂等失败回执，不要求监听就绪；缺省／`false` 保持批准，非法类型返回 `PW_INVALID_REQUEST`。只有 Swift 失败路径发送该参数，Tauri 保持原有载荷。
 
-原生→Web 的生产意图由当前 coordinator 分配规范 `native:<正安全整数>` requestId，跨项目／面板往返及 presentation owner 重连递增，只有实际文档加载更新 session 时归零。Web 保留至多 4096 条在途／近期结果；容量满时只退役已完成的有序身份，并推进退役水位。在途重复继续共享结果，已退役身份返回 `PW_NATIVE_INTENT_RETIRED` 而不重做；参数冲突保持 `PW_REQUEST_CONFLICT`。真正全在途或旧式 opaque 身份占满时返回 `PW_REQUEST_LIMIT`，等待完成后用户可明确重试；计数达到 JavaScript 安全整数边界明确拒绝。旧式 opaque 意图与独立 Web→Swift router 的既有 4096 身份容量合同保持，不能把这次有序意图退役当作两方向容量都已改造。协议版本、既有命令及磁盘 schema 不变，见 [PR #526 R30](swiftui-react-flow-pr526-fixes.md#原生请求退役与-ai-发送草稿)。
+原生→Web 的生产意图由当前 coordinator 分配规范 `native:<正安全整数>` requestId，跨项目／面板往返及 presentation owner 重连递增，只有实际文档加载更新 session 时归零。Web 保留至多 4096 条在途／近期结果；容量满时只退役已完成的有序身份，并推进退役水位。在途重复继续共享结果，已退役身份返回 `PW_NATIVE_INTENT_RETIRED` 而不重做；参数冲突保持 `PW_REQUEST_CONFLICT`。真正全在途或旧式 opaque 身份占满时返回 `PW_REQUEST_LIMIT`，等待完成后用户可明确重试；计数达到 JavaScript 安全整数边界明确拒绝。旧式 opaque 意图保持既有容量边界；独立 Web→Swift router 原保留的容量合同已由下述 R36 更新。协议版本、既有命令及磁盘 schema 不变，见 [PR #526 R30](swiftui-react-flow-pr526-fixes.md#原生请求退役与-ai-发送草稿)。
 
 原生 AI 的未发送文字在拒绝时保留并显示诊断，明确重试才再次提交；发送同步登记原生 future，等待期间禁止重复发送。成功回执只清除与提交快照相同的草稿，用户新输入或离开重挂的草稿不被迟到回执消费。该回执沿既有 `ai.send` Promise 等待回合完成，模型失败／取消仍由现有 Web 线程处理；没有增加自动计费重试或第二会话，见 [PR #526 R31](swiftui-react-flow-pr526-fixes.md#原生请求退役与-ai-发送草稿)。
 
