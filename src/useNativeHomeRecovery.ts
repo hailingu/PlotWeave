@@ -93,7 +93,16 @@ export function useNativeHomeRecovery(input: RecoveryInput) {
     )
       throw new Error('首页恢复操作已开始，请等待当前结果。')
     identity.current.claimed = true
-    await failure.run()
+    try {
+      await failure.run()
+    } finally {
+      // A repeated list diagnostic retains its owner; only its completed read claim can reopen.
+      if (
+        failure.action === 'load' &&
+        recovery?.id === String(identity.current.serial)
+      )
+        identity.current.claimed = false
+    }
   }
   return { error: failure.error, recovery, retry }
 }

@@ -238,6 +238,20 @@ it('同一恢复身份的并发点击只执行一次非幂等操作', async () =
   expect([...documents.keys()]).toEqual(['p1', 'copy'])
 })
 
+it('列表重读连续返回同一诊断后仍允许明确恢复', async () => {
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  store.list.mockRejectedValueOnce(new Error('持续枚举失败'))
+  await intent('app.retry')
+  store.list.mockRejectedValueOnce(new Error('持续枚举失败'))
+  await intent('app.retry', { recoveryId: projection().recovery.id })
+  expect(projection().error).toContain('持续枚举失败')
+  expect(
+    await intent('app.retry', { recoveryId: projection().recovery.id }),
+  ).toHaveProperty('ok')
+  expect(projection().error).toBeNull()
+  expect([...documents.keys()]).toEqual(['p1'])
+})
+
 it('列表诊断优先恢复列表，明确刷新不消费未恢复的变更', async () => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   store.load.mockRejectedValueOnce(new Error('重命名失败'))
@@ -252,4 +266,64 @@ it('列表诊断优先恢复列表，明确刷新不消费未恢复的变更', a
   expect(await intent('app.retry', { recoveryId: old })).toHaveProperty('error')
   await intent('app.retry', { recoveryId: projection().recovery.id })
   expect(documents.get('p1')?.name).toBe('仍保留的稿名')
+})
+
+it('旧读取完成不能释放新变更正在持有的恢复资格', async () => {
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  store.list.mockRejectedValueOnce(new Error('首次读取失败'))
+  await intent('app.retry')
+  const firstId = projection().recovery.id
+  let releaseRead: (() => void) | undefined
+  let releaseDelete: (() => void) | undefined
+  let reading: Promise<unknown> | undefined
+  let deleting: Promise<unknown> | undefined
+  store.list.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        releaseRead = () => resolve([metadata('p1', '原名')])
+      }),
+  )
+  try {
+    await act(async () => {
+      reading = request('app.retry', { recoveryId: firstId })
+      await waitFor(() => expect(releaseRead).toBeTypeOf('function'))
+    })
+    store.delete.mockRejectedValueOnce(new Error('删除失败'))
+    await intent('app.delete', { id: 'p1' })
+    await intent('app.retry', { recoveryId: null })
+    const currentId = projection().recovery.id
+    store.delete.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseDelete = () => {
+            documents.delete('p1')
+            resolve()
+          }
+        }),
+    )
+    await act(async () => {
+      deleting = request('app.retry', { recoveryId: currentId })
+      await waitFor(() => expect(releaseDelete).toBeTypeOf('function'))
+    })
+    await act(async () => {
+      releaseRead?.()
+      await reading
+    })
+    expect(await intent('app.retry', { recoveryId: currentId })).toHaveProperty(
+      'error',
+    )
+    expect(documents.has('p1')).toBe(true)
+    await act(async () => {
+      releaseDelete?.()
+      await deleting
+    })
+    expect(documents.has('p1')).toBe(false)
+    expect(projection().error).toBeNull()
+  } finally {
+    await act(async () => {
+      releaseRead?.()
+      releaseDelete?.()
+      await Promise.all([reading, deleting])
+    })
+  }
 })
