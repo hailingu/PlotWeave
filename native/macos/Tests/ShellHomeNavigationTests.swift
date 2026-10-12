@@ -18,9 +18,9 @@ struct ShellHomeNavigationTests {
     }
 
     /// Saved restoration and first fit must not expose repeated native canvas relayouts (N85–N86).
-    @Test(arguments: [true, false])
-    func openingProjectPresentsStableCanvasGeometry(savedViewport: Bool) async throws {
-        let fixture = Fixture()
+    @Test(arguments: [true, false], [NSSize(width: 1100, height: 750), NSSize(width: 960, height: 600)])
+    func openingProjectPresentsStableCanvasGeometry(savedViewport: Bool, contentSize: NSSize) async throws {
+        let fixture = Fixture(contentSize: contentSize)
         defer { fixture.remove() }
         let id = try await fixture.createProject()
         let webView = try await fixture.waitForReady()
@@ -363,11 +363,11 @@ struct ShellHomeNavigationTests {
         var interactionWindow: NSWindow { presentation.welcomeWindow ?? window }
 
         /// Mounts production code with a disposable native service root.
-        init(inspectorVisible: Bool = true) {
+        init(inspectorVisible: Bool = true, contentSize: NSSize = NSSize(width: 1100, height: 750)) {
             services = NativeHostServices(dataRoot: root, quit: HostQuitController())
             layout.inspectorVisible = inspectorVisible
             // Match the real unified SwiftUI window's full-size content and safe-area behavior.
-            window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 750),
+            window = NSWindow(contentRect: NSRect(origin: .zero, size: contentSize),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.toolbarStyle = .unified

@@ -33,12 +33,25 @@ struct NativeInspectorPresentationTests {
         window.appearance = NSAppearance(named: appearance)
         let input = try await NativeCreationControlFixture.element(in: window, named: "梗概", roles: [kAXTextFieldRole, kAXTextAreaRole])
         let frame = try NativeCreationControlFixture.frame(input)
-        #expect(frame.width >= width - 64)
+        #expect(frame.width >= (try await contentColumnWidth(in: window)) - 64)
         #expect(NativeCreationControlFixture.string(input, kAXValueAttribute) == state.editor["selected"]?["data"]?["synopsis"]?.string)
         let interior = try await NativeCreationControlFixture.element(in: window, named: "内景", roles: [kAXCheckBoxRole])
         #expect(abs(try NativeCreationControlFixture.frame(interior).maxX - frame.maxX) < 2)
         #expect(state.error == nil)
         try savePreview(window, name: "scene-\(Int(width))-\(appearance.rawValue)")
+    }
+
+    /// Legacy scrollers consume their observed width; overlay scrollers leave the content column unchanged.
+    private func contentColumnWidth(in window: NSWindow) async throws -> CGFloat {
+        let elements = try await NativeCreationControlFixture.elements(in: window)
+        let area = try #require(elements.first { NativeCreationControlFixture.string($0, kAXRoleAttribute) == kAXScrollAreaRole })
+        let width = try NativeCreationControlFixture.frame(area).width
+        guard NSScroller.preferredScrollerStyle == .legacy,
+              let bar = elements.first(where: {
+                  NativeCreationControlFixture.string($0, kAXRoleAttribute) == kAXScrollBarRole
+                      && NativeCreationControlFixture.string($0, kAXOrientationAttribute) == kAXVerticalOrientationValue
+              }) else { return width }
+        return width - (try NativeCreationControlFixture.frame(bar).width)
     }
 
     /// Growing a stable-ID list scrolls content without moving or hiding the captured node's actions.

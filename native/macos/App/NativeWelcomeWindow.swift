@@ -190,6 +190,8 @@ final class NativeWelcomeWindowController: NSObject, NSWindowDelegate {
         card.delegate = nil
         card.close()
         card.contentView = nil
+        // Flush pending split/inspector constraints before exposing the retained writer's old column geometry.
+        window?.contentView?.layoutSubtreeIfNeeded()
         window?.alphaValue = writerAlpha
         window?.ignoresMouseEvents = writerIgnoresMouse
         window?.setAccessibilityHidden(writerAccessibilityHidden)

@@ -16,6 +16,9 @@
 | R8 | 共享 TestAction 启动 app-hosted runner→测试连接建立→各测试显式创建真实外壳／WK 夹具 | 自动启动场景仅承载惰性测试宿主，不挂无 owner 的画布／split／inspector；测试拥有每个业务窗口的生命周期 | App 入口只在显式测试标记下使用惰性场景；普通启动仍用 NativeShellRoot，完整业务回归不能被跳过 | 第二次托管 native 仍在 SwiftUI.AppKitWindow（960×632）约束循环中启动失败，排除“仅凭标记和串行即可修复”；补实际宿主无画布回归先红，再复核完整路由与托管 CI |
 | R9 | 已有设置为合法 JSON 但根为数组／null／标量→load_prefs 或 providerSecret；显式有效对象恢复／尝试写非对象 | 两个读取入口均报 PW_PREFS_CORRUPT 且保留原字节；有效恢复先私有备份；非对象写入报 PW_PREFS_INVALID 且不改原件 | NativePreferences actor 拥有健康设置必须是 JSON 对象的不变量；加载、保存与密钥迁移共用边界，未知对象字段仍保留 | 真实临时根的类型表、读取、恢复与无损写拒绝；actor 内无 await，不新增并发或重试状态 |
 | R10 | 未分配 id→取消→未来分配同 id；排队→重复取消→派发；已派发／落定→取消；发送失败／free 排空 | 未知／已派发／落定取消为 no-op；只有排队请求返回 CANCELLED+NULL；其它成功回执保留，登记随派发或发送失败清除 | 历史 PwCore 队列登记拥有取消资格，提交、取消与派发在同一锁下转换；每个成功提交恰有一次回执，状态不能影响未来 id | ABI 先取消未来 id 先红；阻塞回调建立确定性队列后取消／释放及状态清理回归，不依赖睡眠竞速；当前 Swift 应用不链接该 ABI |
+| R11 | 节点检查器窄／宽列、浅／深外观；系统使用 overlay／legacy 滚动条 | 文本使用实际可滚动内容宽度，标签与开关尾端对齐；滚动条自身宽度不算可编辑区域 | 检查器字段拥有内容布局，测试通过真实 AX 滚动区域与常驻栏实际宽度验证；不改系统偏好 | 托管 run 38202492214 四种字段宽度误差均为 17 pt；旧断言先红，按实际内容列核对相同填充契约，overlay 不扣栏宽 |
+| R12 | 真实 editor 窗口被屏幕约束后→欢迎卡片→移除 presenter | 同一 writer 恢复原有实际 frame 与标题控件，不假设请求尺寸可放入屏幕 | NativeWelcomeWindowController 不拥有 editor 尺寸；移除回归快照采用已落定实际 frame，既有快速切换回归守护呈现前后 frame 一致 | 托管实际 1024×645、旧断言 1100×750；验证实际 geometry 保真，480×632 欢迎尺寸保持 |
+| R13 | 小屏幕／正常编辑尺寸；欢迎返回 editor 时 split／inspector 仍有待执行布局 | 恢复交互与可见性前完成本窗口的待布局；可见画布尺寸一次落定、同一 WK 和保存 owner 保持 | NativeWelcomeWindowController 拥有 writer 显隐恢复，不能发布旧列几何；普通返回、快速 route supersede、替换窗口与关闭共用恢复入口 | 托管两种视口均先暴露 1024×645 再变 424×625；增加待布局隐藏窗口回归与小尺寸真实 WK 路径，先红后绿；不新增任意延时或放宽尺寸跳变断言 |
 
 地址依据：[IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/)、[IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/)。单实例边界、付费模型和存储格式不扩展；异步下载沿用既有绝对截止时间、取消和逐跳校验，新增策略不引入重试或共享可写状态。
 
@@ -35,5 +38,8 @@
 - `.github/**` 的 `npx prettier --check .github`、scheme 的 `xmllint --noout native/macos/PlotWeaveNative.xcodeproj/xcshareddata/xcschemes/PlotWeaveNative.xcscheme` 与 `git diff --check` 通过。AGENTS／文档无配置的自动语义检查；结构化审阅已核对路由一致性、矩阵、原生专属网络边界、历史证据及交叉引用。
 - R8／R9 最终完整原生路由：同一现行命令 **189 tests／48 suites 全通过，TEST SUCCEEDED**，大小检查 723 文件与画布构建 403 模块通过。其前一次完整复核受到本机锁屏遮挡，AppKit 报 accessibility element window 低于 shield(2001)，系统锁屏标记为 Yes，窗口／AX 断言失败；保留该失败，解锁后完整重跑通过，不修改断言或放宽窗口契约。
 - R10 完整 crates 路由：在 `crates` 执行 `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，大小、格式、Clippy 零警告通过；core **130**、FFI 单元 **4**、ABI 集成 **7** 全通过。根目录 `npm run format:check` 与 `git diff --check` 通过；文档结构化复核已同步健康设置根、两条读取入口、备份恢复、取消资格与历史 ABI 边界。
+- 提交 `9d34d25` 的 [CI run 38202492214](https://github.com/hailingu/PlotWeave/actions/runs/38202492214)：frontend／Rust 成功，native 已完成全部 **189 tests／48 suites**，测试宿主启动与四条评审回归通过；剩余 **7 项几何失败**（R11 四项、R12 一项、R13 两项）。不以启动成功代替整体 CI 通过。
+- R13 先红：`dismissFlushesPendingLayoutBeforeRestoringInteraction` 的真实 NSView 待布局在 writer 已可见且可交互后才执行，断言 `layoutWasHidden == true` 失败；在同一恢复入口先调用 `layoutSubtreeIfNeeded()`，再恢复 opacity、鼠标和辅助功能状态。新增小尺寸真实 WK 用例保留首帧尺寸与视口变化次数的原有断言；完整路由和托管结果在复核后记录。首次额外滚动条夹具尝试未找到 NSScrollView，且本机再次锁屏导致 AX／WK 访问超时，未将这些夹具前提失败当作行为复现；现改用已有公共 AX 查询，不猜测 SwiftUI 私有 view 类型。
+- R13 后绿：同一路由追加完整 Swift Testing 方法标识 `-only-testing:PlotWeaveNativeTests/NativeWelcomeWindowTests/dismissFlushesPendingLayoutBeforeRestoringInteraction()`，**1 test／1 suite 通过**。未加括号的首次选集执行 0 tests，明确不作为通过证据。本机锁屏仍阻断需要可见桌面的 AX／WK 完整复核；托管 CI 会运行全部目标，最终结果在 PR 中绑定实际提交，不把单项通过称为全量通过。
 
 源码、测试及配置均在文件上限内，新增／修改单元未超过 80 代码行；未配置复杂度工具，嵌套与函数跨度已人工审阅。历史 ABI 的未改动 `dispatch` 超过 80 代码行，作为既有债务记录，不在本次取消修复中扩展分发重构。地址策略、日期展示、启动判定、设置根与取消资格各有明确 owner，没有新增服务依赖或可写文档副本。真实公网 TLS、计费、视觉、IME、VoiceOver 与全屏人工验收仍保留原有缺口。提交／推送门禁及修复后托管 CI 的结果在 PR 描述中绑定实际提交，不以历史结果替代。
