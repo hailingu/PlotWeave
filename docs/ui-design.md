@@ -707,6 +707,8 @@ macOS 惯例 ⌘, 打开设置。当前实现为同一主窗口内切换的设�
 
 ### 12.3 实施记录与验证范围
 
+[PR #526](https://github.com/hailingu/PlotWeave/pull/526) 补齐原生退出失败后的交互恢复：系统退出请求先取消，成功冲刷后才重新放行终止；保存或桥初始化失败时窗口保持可用，用户能修复并重试，不悬置在 AppKit 延迟退出循环。真实 WK 回归验证坏项目文件阻止退出、错误可见、文件恢复后最新编辑落盘；菜单／Dock 手势与系统注销仍待人工验证，详见[退出状态矩阵 R22–R23](swiftui-react-flow-pr526-fixes.md)。
+
 P1 的窗口、标准外壳容器与内存画布为第一阶段，P2 的 Rust 内核／C ABI 为当时的第二阶段，分别见[P1 证据](swiftui-react-flow-p1-evidence.md)与[P2 证据](swiftui-react-flow-p2-evidence.md)。这些历史结果不表示当前应用仍只运行内存演示，也不表示 Swift 依赖该 FFI。
 
 2026-09-15 的资源加载修复保留：`file://` 页面使用 IIFE 经典脚本与普通样式表，独立入口导入 React Flow 基础 CSS；当时真实 WKWebView 回归覆盖 ready、9 个夹具节点及有效定位样式，详见[P1 加载修复](swiftui-react-flow-p1-evidence.md#p1-画布加载超时修复2026-09-15)。当前默认页面已运行生产应用，真实 WKWebView、Swift 服务临时根、注入网络和前端动作回归覆盖会话保留、命令排序、持久化、素材、设置、生成／取消、导出和退出。路由命令见 [AGENTS.md](../AGENTS.md)，当前工具链与本地／CI 证据区分见[工具链记录](swiftui-react-flow-toolchain.md)。

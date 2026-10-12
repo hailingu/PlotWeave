@@ -52,6 +52,44 @@ struct NativeProductionLifecycleTests {
         await fixture.services.close()
     }
 
+    /// A real failed project write preserves the editable window and latest draft until an explicit quit retry saves it.
+    @Test func failedQuitSaveCanRecoverWithoutDeferredAppKitTermination() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let metadata = try await projects.invoke(command: "create_project", args: ["name": .string("退出恢复")])
+        let id = try #require(metadata["id"]?.string)
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        try await waitForHostReady(try #require(findWebView(mounted.window.contentView)))
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        let file = fixture.root.appendingPathComponent("projects/" + id + ".json")
+        let backup = fixture.root.appendingPathComponent("projects/" + id + ".saved")
+        try FileManager.default.moveItem(at: file, to: backup)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+        _ = try await mounted.state.request("editor.create", args: ["projectId": .string(id), "nodeType": .string("scene")])
+        try await wait { mounted.state.editor["nodes"]?.arrayValue?.count == 1 }
+        let approvals = ApprovalLog()
+        let delegate = NativeApplicationDelegate(quit: fixture.quit, terminateApplication: { approvals.count += 1 })
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateCancel)
+        try await wait { mounted.state.app["error"]?.string?.contains("已阻止退出") == true }
+        #expect(approvals.count == 0)
+        #expect(mounted.window.isVisible)
+        #expect(fixture.quit.pendingIntent == .terminate)
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.moveItem(at: backup, to: file)
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateCancel)
+        try await wait { approvals.count == 1 }
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
+        let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+        #expect(saved["graph"]?["nodes"]?.arrayValue?.count == 1)
+        #expect(mounted.state.app["error"] == .null)
+        #expect(fixture.quit.pendingIntent == nil)
+        await fixture.services.close()
+    }
+
     /// Bounded polling observes actual state transitions and reports a useful last-state failure.
     private func wait(_ predicate: () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(12))

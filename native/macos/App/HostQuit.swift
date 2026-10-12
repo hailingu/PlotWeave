@@ -71,12 +71,19 @@ final class NativeApplicationDelegate: NSObject, NSApplicationDelegate, NSWindow
     /// Approved actions consume one close/termination permit.
     private var permitClose = false
     private var permitTerminate = false
+    /// Executes only an approved system termination; isolated tests observe it without quitting their host.
+    private var terminateApplication: () -> Void = { NSApp.terminate(nil) }
 
     /// SwiftUI's delegate adaptor constructs NSObject through its actual zero-argument initializer.
     override init() { quit = .shared; attachExistingMainWindow = true; super.init() }
 
     /// Real-window tests use an isolated controller without changing the running app's exit lifecycle.
-    init(quit: HostQuitController) { self.quit = quit; attachExistingMainWindow = false; super.init() }
+    init(quit: HostQuitController, terminateApplication: (() -> Void)? = nil) {
+        self.quit = quit
+        attachExistingMainWindow = false
+        super.init()
+        if let terminateApplication { self.terminateApplication = terminateApplication }
+    }
 
     /// Attaches the single main window and supplies the controller's final AppKit action.
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -127,14 +134,14 @@ final class NativeApplicationDelegate: NSObject, NSApplicationDelegate, NSWindow
         window = nil
     }
 
-    /// Command-Q and Dock Quit receive an asynchronous AppKit termination decision.
+    /// Cancels the current system quit while the Web flushes, keeping AppKit's normal event loop usable on failure.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if permitTerminate || closedAfterFlush && window == nil { return .terminateNow }
         quit.request(.terminate)
-        return .terminateLater
+        return .terminateCancel
     }
 
-    /// Final close or termination occurs only after a successful Web flush approval.
+    /// Successful flush starts a fresh permitted termination; failed saves never leave AppKit awaiting a deferred reply.
     private func finish(_ intent: HostQuitController.Intent) {
         switch intent {
         case .close:
@@ -142,7 +149,7 @@ final class NativeApplicationDelegate: NSObject, NSApplicationDelegate, NSWindow
             window?.performClose(nil)
         case .terminate:
             permitTerminate = true
-            NSApp.reply(toApplicationShouldTerminate: true)
+            terminateApplication()
         }
     }
 

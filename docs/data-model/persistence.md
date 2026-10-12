@@ -21,7 +21,10 @@
 
 历史 FFI `saveProject` 的可选布尔 `expectExisting` 沿用 Tauri 保存的存在性约束：缺省 `false` 保留初次创建，`true` 在共享操作锁内确认目标仍存在，删除后的迟到请求返回失败且不得重建项目；非法字段类型拒绝。保存 NotFound 不携带 `[project_not_found]` 码，该码仅由加载入口返回。调用方仍须维护项目保存/删除协调，FFI guard 不替代会话排序；兼容性回归见[P2 合并同步](../swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)。当前 Swift 在自己的 actor 内实现同一存在性约束，并未接入该历史调用路径。
 
+Swift 正常退出的系统决定由 `NativeApplicationDelegate` 拥有：[PR #526](https://github.com/hailingu/PlotWeave/pull/526) 修复后，⌘Q／Dock 请求先返回 `terminateCancel`，同时将意图交给 `HostQuitController` 缓冲／投递。前端固定点冲刷成功并调用既有 `app_exit` 后，原生才重新发起带批准许可的 `NSApplication.terminate`。保存、桥投递或监听初始化失败时不留下 AppKit `terminateLater` 模态等待，窗口仍可编辑、诊断与失败快照保留，用户重试仍走同一道屏障；已冲刷关窗后的应用退出继续直接放行。未变更桥命令、Tauri 路径或磁盘合同；真实 Dock／菜单手势和系统注销保留人工验收缺口。
+
 命令产出的文档变更，经防抖持久化回调落到以下布局。
+
 ### 10.1 目录布局
 
 ```

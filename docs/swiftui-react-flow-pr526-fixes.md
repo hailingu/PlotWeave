@@ -27,6 +27,8 @@
 | R19 | 地址尝试中取消／预算耗尽；策略或 framing 拒绝／HTTP 失败；重定向→下一跳 | 不尝试下一地址、不返回媒体；每跳重新验证全部 DNS，既有五跳／体积上限保持 | 仅 PW_DOWNLOAD_NETWORK 可推进候选，取消与共享截止时间不能因 fallback 重置，安全拒绝不得变成重试 | 新增取消、慢传输超时、终止错误与非 2xx／超大回复回归；沿既有混合 DNS、重定向、HTTP framing 覆盖 |
 | R20 | 持久化主题描述当前原生保存→读者选择实现 owner 与数据根 | 明确直接 Swift 服务已实现，历史 C ABI 未链接；区分当前扁平真源与目录化／索引计划 | 设计文档拥有实现归属说明，不能把未链接 FFI 误写为 Swift 保存尚未可用 | 文档结构化审阅，对照 NativeHostServices、NativeProjectStore／Envelope／Directory 及既有 overview／功能补齐记录；纯文档不制造文本断言测试 |
 | R21 | 保存前校验失败；原子 rename 后同步／复验失败；失败后重读／重试 | 提交前保留旧文档；提交后如实报错且新文档可能已落盘，不假称回滚或成功 | 既有 §10.5 两类失败合同由存储边界拥有；Swift actor／Rust 操作锁串行正常入口，外部媒体篡改不构成跨文件事务 | 复核现有 Rust 真实故障注入回归与 Swift 保存顺序；Swift fsync／写后媒体替换故障注入仍未覆盖，不用 Rust 回归冒充 Swift 证明 |
+| R22 | ⌘Q／Dock 请求到达→保存失败或监听初始化失败；随后用户重试 | 取消当前系统退出，正常事件循环和原窗口保持；失败诊断与未落盘快照可修复，不悬置 AppKit 延迟退出 | NativeApplicationDelegate 拥有系统终止决定；先返回 terminateCancel，HostQuitController 继续持有意图，成功冲刷才重新 terminate | 实现前选定原生委托状态回归与真实 WK→项目文件被目录阻挡→失败诊断→文件恢复→退出重试；三项回归先红六处预期失败，集中 12／4 与完整 204／50 通过；初始化失败覆盖未就绪监听，不引入桥合同变化 |
+| R23 | 启动前退出、关闭升级为退出、重复请求、重连后旧监听失权→当前页批准 | 仍只持有一个意图，未就绪不得批准；批准后再次进入 AppKit 时直接允许；已冲刷关窗后退出不等待销毁页面 | 现有 controller 负责意图／监听，delegate 负责最终系统动作；所有入口共享既有固定点屏障和单次批准 | 扩展集中状态回归并复用 HostQuitTests／NativeWindowLifecycleTests；真实 Dock／菜单手势、系统注销仍为人工缺口 |
 
 地址依据：[IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/)、[IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/)。单实例边界、付费模型和存储格式不扩展；异步下载沿用既有绝对截止时间、取消和逐跳校验，新增策略不引入重试或共享可写状态。
 
@@ -68,3 +70,10 @@
 - R20：持久化主题仍称宿主共用 Rust 内核、Swift 保存待 C ABI 接入，属真实文档同步缺陷。修正文档实现归属，逐项明确直接 Swift owner、独立开发根、扁平权威文件、同一 actor 写入／删除屏障、既有 legacy 差异及未验边界；不修改代码或数据格式。
 - R21：“不得在提交后报告失败”的建议与既有 §10.5 合同不一致，按已记录边界处置，保留实现。Rust `persist_project_expect_existing` 与 Swift `saveProject` 均在写后复验；rename 后持久性屏障失败也必须报错。`store::commands::tests::save_directory_sync_failure_reports_error_with_new_doc_committed` 通过真实故障注入验证失败回执、新文档已提交和重试收敛。正常入口在 Swift actor／Rust 操作锁内串行，本地并发攻击者替换树不在现有单实例威胁模型；未新增跨文件事务或删除安全诊断。[资产 §7.1](data-model/assets.md#71-两个作用域)补明“整份拒绝”指提交前复验，避免把失败回执误读成全阶段回滚承诺。
 - 本轮仅规范文档同步与边界澄清，不新增源代码或测试。结构化审阅核对 owner、布局、两类失败、威胁模型、现有回归与未验缺口；没有配置文档自动语义检查。集中执行 `cargo test --manifest-path crates/Cargo.toml --package plotweave-core --lib store::commands::tests::save_directory_sync_failure_reports_error_with_new_doc_committed -- --exact`，**1 项通过、0 失败**，确实执行目标而非零测试选集；完整提交／推送门禁及最新 CI 结果在 PR 绑定实际提交。
+
+## 提交 `ac614d0` 后一轮退出意见处置
+
+- R22–R23 属当前原生退出的真实 P2 缺陷：AppKit 的 [`terminateLater`](https://developer.apple.com/documentation/appkit/nsapplication/terminatereply/terminatelater) 必须收到最终 true／false 回复，旧实现只有成功回执，失败无法完成系统退出决定。复用既有意图缓冲，系统入口直接返回 `terminateCancel`，前端成功冲刷后才经带许可的 `NSApplication.terminate` 重新进入系统入口；失败和桥初始化未就绪均留在正常事件循环。没有增加桥命令、后台重试、保存副本或改变 Tauri 合同。
+- 先仅增加测试注入的最终系统动作观察点，生产默认仍调用原先的批准回复；可编译的 **3 tests／2 suites 出现 6 处预期失败**，均为原入口仍返回 `terminateLater`。真实 WK 测试同时观察保存错误、可见窗口、目录阻挡解除后的最新节点落盘与错误清除；不以 mock 调用代替文件结果。
+- 修复后集中选择 `NativeQuitRecoveryTests`、`NativeProductionLifecycleTests`、`HostQuitTests`、`NativeWindowLifecycleTests`，**12 tests／4 suites 全通过**。完整 native 路由的大小检查 **725 维护文件通过**、生产画布 **403 模块构建成功**，**204 tests／50 suites 全通过，TEST SUCCEEDED**。初始化未就绪、事件投递失败、启动缓冲、重复请求、关闭升级退出、重连监听失权、已冲刷关窗后退出与真实 WK 失败恢复均通过。
+- 系统终止动作在测试中注入观察回调，避免退出测试宿主；验证批准许可的下一次系统入口为 `terminateNow`，实际 `NSApplication.terminate` 由生产适配执行。真实 Dock／菜单手势和系统注销未执行，保留人工验收缺口。文档结构化审阅同步本主题、持久化 §10.0、UI §12.3、迁移计划与功能 F05；提交／推送门禁和最新 CI 在 PR 绑定实际提交。
