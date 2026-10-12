@@ -1,6 +1,6 @@
 # PR #526 评审与原生 CI 修复（2026-10-12）
 
-范围：[PR #526](https://github.com/hailingu/PlotWeave/pull/526) 的两条初次评审、提交 `c0bce19` 后一轮新增的两条真实缺陷（设置根／历史 ABI 取消）、提交 `9d34d25` 后一轮新增的原生版本配置缺陷，本地覆盖率门禁中复现的 watchdog 测试退出观察失序，以及 [CI run 38198236563](https://github.com/hailingu/PlotWeave/actions/runs/38198236563)。起始提交 `eb0043214917a73072cbbad407419922111fab20`，既有授权分支 `codex/swiftui-react-flow`。CI 的 frontend／Rust 成功；native 编译成功后，宿主在测试连接建立前触发 `NSGenericException`（窗口约束更新循环），退出码 65。
+范围：[PR #526](https://github.com/hailingu/PlotWeave/pull/526) 的两条初次评审、提交 `c0bce19` 后一轮新增的两条真实缺陷（设置根／历史 ABI 取消）、提交 `9d34d25` 后一轮新增的原生版本配置缺陷，提交 `3fa69c8` 后一轮新增的部分导入呈现／DNS 候选连接缺陷，本地覆盖率门禁中复现的 watchdog 测试退出观察失序，以及 [CI run 38198236563](https://github.com/hailingu/PlotWeave/actions/runs/38198236563)。起始提交 `eb0043214917a73072cbbad407419922111fab20`，既有授权分支 `codex/swiftui-react-flow`。CI 的 frontend／Rust 成功；native 编译成功后，宿主在测试连接建立前触发 `NSGenericException`（窗口约束更新循环），退出码 65。
 
 ## 实现前关键状态与不变量矩阵
 
@@ -21,6 +21,10 @@
 | R13 | 小屏幕／正常编辑尺寸；欢迎返回 editor 时 split／inspector 仍有待执行布局 | 恢复交互与可见性前完成本窗口的待布局；可见画布尺寸一次落定、同一 WK 和保存 owner 保持 | NativeWelcomeWindowController 拥有 writer 显隐恢复，不能发布旧列几何；普通返回、快速 route supersede、替换窗口与关闭共用恢复入口 | 托管两种视口均先暴露 1024×645 再变 424×625；增加待布局隐藏窗口回归与小尺寸真实 WK 路径，先红后绿；不新增任意延时或放宽尺寸跳变断言 |
 | R14 | Debug／Release 编译实际原生应用→首页读取 Bundle 版本 | CFBundleShortVersionString 为现有应用版本 0.2.0，与前端／Tauri 及已发布版本一致 | 原生 target 配置拥有应用营销版本；首页继续读取实际 Bundle，不硬编码显示或修改既有版本决策 | Debug 实际宿主 Bundle 回归先红；Release 构建后通过 plist 解析器核对真实产物；不涉及写入、恢复、并发或版本升级 |
 | R15 | 独立期限／清理兜底→守卫对测试监督进程发送 SIGKILL→守卫先退出、监督进程随后退出 | 测试等待创建时已登记的真实 exit，断言 SIGKILL 与进程消失；安装组 absent 后哨兵仍存活 | 测试夹具拥有退出观察，不把守卫退出当成其它进程退出屏障；生产守卫、期限与组复用保护不变，正常 release／disconnect 路径仍要求监督进程存活 | 完整覆盖率连续两次因立即查询监督进程得到仍存活而失败；复用既有退出登记，不加睡眠或修改生产守卫，集中与完整门禁复核 |
+| R16 | 原生选择多文件→前一导入已落盘→后一读取／导入失败；全成功／取消选择 | 部分成功后列表显示已落盘的真实 ID 与媒体，保留失败提示并结束 busy；全成功无错误，取消不导入 | NativeLibrary actor 拥有权威索引；NativeLibraryModel 仅呈现，不因批次后段失败隐藏已提交项或自动重试 | 注入原生选择结果、真实临时文件与库 actor，分别验证读失败、空文件导入失败、全成功和取消；真实系统面板继续保留人工验收缺口 |
+| R17 | 写操作失败→重读列表也失败；恢复期间关闭／旧结果迟到；其它 mutate 入口失败 | 列表不可恢复时保留最后有效快照并同时报告刷新失败；关闭后不发布旧结果；其它写入口共用恢复 | Model 的 generation／任务拥有呈现权限，失败重读不创建第二份索引或绕过只读／busy 守卫 | 真实坏目录、延迟选择关闭、失败 mutate 后权威外部更新回归；无数据格式、事务或自动重试变化 |
+| R18 | 全部 DNS 地址已通过公网分类→首个连接失败→后续地址成功／全部连接失败 | 成功返回后续地址媒体；全失败返回网络错误；每次仍使用原 hostname／URL 与同一 hop 截止时间 | NativePublicDownload 拥有逐跳候选选择，NativePinnedHTTP 仍固定地址并验证 TLS；不重新解析或放行混合 DNS | 双栈成功、全地址失败与固定身份／deadline 回归；注入传输，不访问真实公网 |
+| R19 | 地址尝试中取消／预算耗尽；策略或 framing 拒绝／HTTP 失败；重定向→下一跳 | 不尝试下一地址、不返回媒体；每跳重新验证全部 DNS，既有五跳／体积上限保持 | 仅 PW_DOWNLOAD_NETWORK 可推进候选，取消与共享截止时间不能因 fallback 重置，安全拒绝不得变成重试 | 新增取消、慢传输超时、终止错误与非 2xx／超大回复回归；沿既有混合 DNS、重定向、HTTP framing 覆盖 |
 
 地址依据：[IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/)、[IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/)。单实例边界、付费模型和存储格式不扩展；异步下载沿用既有绝对截止时间、取消和逐跳校验，新增策略不引入重试或共享可写状态。
 
@@ -49,5 +53,10 @@
 - R11–R13 托管复核：提交 `3fa69c8f04fa0cc1a29779ebd20a54dfd6d9dbe8` 的 [CI run 38203944610](https://github.com/hailingu/PlotWeave/actions/runs/38203944610)，frontend／Rust／native 三项 job 均成功，native 完成全部 **190 tests／48 suites，TEST SUCCEEDED**；四种检查器字段、实际窗口 frame、四种保存视口／编辑尺寸组合及待布局先隐藏后恢复回归均通过。本机完整 AX／WK 复核仍受锁屏限制，未把单项本地通过当作全量通过；版本续修后最新提交的完整 CI 结果在 PR 中绑定。
 
 - R15 先红：完整 `npm run test:coverage` 连续两次均为 **218 文件通过／1 文件失败，3123 tests 通过／1 test 失败**，失败点是守卫 exit 后立即查询另一监督进程仍存活。单独旧文件 5 项通过，印证退出事件无跨进程先后屏障的观测窗口。测试复用创建时的真实 exit 登记，等待监督进程实际退出并核对 `SIGKILL`，保留 code 1、进程消失及哨兵存活断言；正常 release／disconnect 保持监督进程存活，不改生产守卫或加睡眠。`npm run check:size && npm test -- scripts` 首次在受限沙箱因 `spawnSync ps EPERM` 出现 17 项环境失败；以门禁正常权限执行相同路由后，大小检查 **723 维护文件通过**，脚本 **15 files／314 tests 全通过**；该完整路由覆盖原有 release／disconnect、超时、进程组复用和 hook 身份场景。
+
+- R16–R19 先红：仅增加原生选择注入边界而不改变批次循环后，集中 **17 tests／2 suites，12 项预期问题**：两种后段失败均隐藏已提交项，失败 mutate 未重读，恢复失败未保留双重错误，首个地址网络失败未尝试后续地址，取消中途连接未返回取消码。最初新增选择参数的编译失败不作为行为红灯；上述结果来自可编译的真实持久库与注入传输。
+- R16–R19 后绿：集中 **17 tests／2 suites 全通过，TEST SUCCEEDED**。库资产 ID、媒体字节与重开列表一致，全成功／取消选择、读失败／空文件导入失败、坏目录恢复、其它 mutate 和关闭晚选择均通过；公共地址成功回退、全连接失败、共享 hop deadline、原主机身份、取消、慢传输超时、策略拒绝及 HTTP／体积终止回归通过。恢复重读期间的独立迟到 actor 回执未额外用闸门控制，发布前后 generation／取消守卫已结构化复核，关闭晚选择验证同一任务权限；真实系统面板、真实公网连接仍保留既有验收缺口。
+
+- R1–R19 本机最终完整原生路由：用户确认解锁后，执行现行 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test`，**724 维护文件检查通过、403 模块画布构建成功、201 tests／49 suites 全通过，TEST SUCCEEDED**。真实窗口、AX、WKWebView、设置、部分导入、候选地址和实际 Bundle 版本均执行；此前锁屏失败保留为环境失败证据，未用跳过或放宽断言替代本次完整复核。
 
 源码、测试及配置均在文件上限内，新增／修改单元未超过 80 代码行；未配置复杂度工具，嵌套与函数跨度已人工审阅。历史 ABI 的未改动 `dispatch` 超过 80 代码行，作为既有债务记录，不在本次取消修复中扩展分发重构。地址策略、日期展示、启动判定、设置根与取消资格各有明确 owner，没有新增服务依赖或可写文档副本。真实公网 TLS、计费、视觉、IME、VoiceOver 与全屏人工验收仍保留原有缺口。提交／推送门禁及修复后托管 CI 的结果在 PR 描述中绑定实际提交，不以历史结果替代。

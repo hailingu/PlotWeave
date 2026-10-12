@@ -5,6 +5,82 @@ import Testing
 
 /// Injected DNS/transport policy cases never resolve a real hostname or connect to the internet.
 struct NativePublicDownloadTests {
+    /// A failed approved IPv6 route must not hide bytes available through the next approved address.
+    @Test func approvedAddressFallbackRetainsIdentityAndDeadline() async throws {
+        let seen = Mutex<[NativeDownloadRequest]>([])
+        let download = NativePublicDownload(resolver: { _, _ in ["2606:4700:4700::1111", "8.8.8.8"] }, transport: { request in
+            seen.withLock { $0.append(request) }
+            if request.address.contains(":") { throw HostFailure(code: "PW_DOWNLOAD_NETWORK", message: "连接失败") }
+            return NativeHTTPReply(status: 200, headers: [:], body: Data([7, 8]))
+        })
+        #expect(try await download.fetch("https://images.example/frame.png", deadline: Self.deadline) == Data([7, 8]))
+        let requests = seen.withLock { $0 }
+        #expect(requests.map(\.address) == ["2606:4700:4700::1111", "8.8.8.8"])
+        #expect(requests.allSatisfy { $0.hostname == "images.example" && $0.url.path == "/frame.png" && $0.port == 443 })
+        #expect(requests.first?.deadline == requests.last?.deadline)
+    }
+
+    /// Every approved candidate is tried before the final network failure, with no successful body fabricated.
+    @Test func networkFailuresExhaustApprovedAddresses() async throws {
+        let seen = Mutex<[String]>([])
+        let download = NativePublicDownload(resolver: { _, _ in ["8.8.8.8", "1.1.1.1"] }, transport: { request in
+            seen.withLock { $0.append(request.address) }
+            throw HostFailure(code: "PW_DOWNLOAD_NETWORK", message: "连接失败")
+        })
+        do { _ = try await download.fetch("https://images.example/a", deadline: Self.deadline); Issue.record("Unreachable candidates returned media") }
+        catch let error as HostFailure { #expect(error.code == "PW_DOWNLOAD_NETWORK") }
+        #expect(seen.withLock { $0 } == ["8.8.8.8", "1.1.1.1"])
+    }
+
+    /// A terminal policy, budget or cancellation error cannot become another endpoint attempt.
+    @Test(arguments: ["PW_NETWORK_REFUSED", "PW_MODEL_TIMEOUT", "PW_CANCELLED"])
+    func terminalTransportErrorsDoNotAdvanceAddress(code: String) async throws {
+        let calls = Mutex(0)
+        let download = NativePublicDownload(resolver: { _, _ in ["8.8.8.8", "1.1.1.1"] }, transport: { _ in
+            calls.withLock { $0 += 1 }
+            throw HostFailure(code: code, message: "终止")
+        })
+        do { _ = try await download.fetch("https://images.example/a", deadline: Self.deadline); Issue.record("Terminal error returned media") }
+        catch let error as HostFailure { #expect(error.code == code) }
+        #expect(calls.withLock { $0 } == 1)
+    }
+
+    /// Cancellation during a failed connection and an exhausted shared budget both stop candidate fallback.
+    @Test func cancellationAndSpentBudgetDoNotAdvanceAddress() async throws {
+        let cancelled = Mutex(false)
+        let calls = Mutex(0)
+        let download = NativePublicDownload(resolver: { _, _ in ["8.8.8.8", "1.1.1.1"] }, transport: { _ in
+            calls.withLock { $0 += 1 }
+            cancelled.withLock { $0 = true }
+            throw HostFailure(code: "PW_DOWNLOAD_NETWORK", message: "连接失败")
+        })
+        do { _ = try await download.fetch("https://images.example/a", deadline: Self.deadline, isCancelled: { cancelled.withLock { $0 } }); Issue.record("Cancelled connection returned media") }
+        catch let error as HostFailure { #expect(error.code == "PW_CANCELLED") }
+        #expect(calls.withLock { $0 } == 1)
+        let slow = NativePublicDownload(resolver: download.resolver, transport: { _ in
+            calls.withLock { $0 += 1 }
+            try await Task.sleep(for: .seconds(10))
+            throw HostFailure(code: "PW_DOWNLOAD_NETWORK", message: "连接失败")
+        })
+        let start = ContinuousClock.now
+        do { _ = try await slow.fetch("https://images.example/a", deadline: .now.advanced(by: .milliseconds(20))); Issue.record("Expired connection returned media") }
+        catch let error as HostFailure { #expect(error.code == "PW_MODEL_TIMEOUT") }
+        #expect(calls.withLock { $0 } == 2)
+        #expect(start.duration(to: .now) < .seconds(1))
+    }
+
+    /// HTTP rejection and body bounds are authoritative replies rather than connection failures to retry.
+    @Test(arguments: [403, 200]) func rejectedRepliesDoNotAdvanceAddress(status: Int) async throws {
+        let calls = Mutex(0)
+        let download = NativePublicDownload(resolver: { _, _ in ["8.8.8.8", "1.1.1.1"] }, transport: { _ in
+            calls.withLock { $0 += 1 }
+            return NativeHTTPReply(status: status, headers: [:], body: status == 200 ? Data([1, 2]) : Data())
+        }, maximum: 1)
+        do { _ = try await download.fetch("https://images.example/a", deadline: Self.deadline); Issue.record("Rejected reply returned media") }
+        catch let error as HostFailure { #expect(error.code == (status == 403 ? "PW_DOWNLOAD_STATUS" : "PW_NETWORK_REFUSED")) }
+        #expect(calls.withLock { $0 } == 1)
+    }
+
     /// The resolved public address is the connection endpoint; the original host remains the TLS identity.
     @Test func publicResolutionPinsAddressWithoutReplacingTLSHostname() async throws {
         let seen = Mutex<[NativeDownloadRequest]>([])

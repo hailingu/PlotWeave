@@ -62,13 +62,12 @@ struct NativePublicDownload: Sendable {
             let addresses: [String]
             if NativeNetworkPolicy.isLiteral(host) { addresses = [host] }
             else { addresses = try await NativeDeadline.run(until: deadline) { try await self.resolver(host, deadline) } }
-            guard !addresses.isEmpty, addresses.allSatisfy(NativeNetworkPolicy.isPublic), let selected = addresses.first else {
+            guard !addresses.isEmpty, addresses.allSatisfy(NativeNetworkPolicy.isPublic) else {
                 throw NativeNetworkPolicy.refused("图像主机解析到非公网地址或没有有效地址，已拒绝下载")
             }
             try check(deadline, isCancelled: isCancelled)
-            let input = NativeDownloadRequest(url: current, address: selected, hostname: host, port: port,
-                deadline: min(deadline, .now.advanced(by: .seconds(120))), maximum: maximum)
-            let response = try await NativeDeadline.run(until: input.deadline) { try await self.transport(input) }
+            let response = try await response(url: current, host: host, port: port, addresses: addresses,
+                deadline: deadline, isCancelled: isCancelled)
             try check(deadline, isCancelled: isCancelled)
             guard response.body.count <= maximum else { throw NativeNetworkPolicy.refused("下载图像超过大小上限") }
             if (300...399).contains(response.status) {
@@ -88,6 +87,23 @@ struct NativePublicDownload: Sendable {
 
 /// Monotonic budget and cancellation are checked before every external transition and returned body.
 private extension NativePublicDownload {
+    /// Candidate fallback shares one hop budget and retries only transport network failures, never policy or reply errors.
+    func response(url: URL, host: String, port: UInt16, addresses: [String], deadline: ContinuousClock.Instant,
+                  isCancelled: @Sendable () -> Bool) async throws -> NativeHTTPReply {
+        let hopDeadline = min(deadline, .now.advanced(by: .seconds(120)))
+        for (index, address) in addresses.enumerated() {
+            try check(hopDeadline, isCancelled: isCancelled)
+            let input = NativeDownloadRequest(url: url, address: address, hostname: host, port: port,
+                deadline: hopDeadline, maximum: maximum)
+            do { return try await NativeDeadline.run(until: hopDeadline) { try await self.transport(input) } }
+            catch {
+                try check(hopDeadline, isCancelled: isCancelled)
+                guard let failure = error as? HostFailure, failure.code == "PW_DOWNLOAD_NETWORK", index + 1 < addresses.count else { throw error }
+            }
+        }
+        throw NativeNetworkPolicy.refused("图像主机没有有效连接地址")
+    }
+
     /// Checking after an await prevents an in-flight cancellation from returning bytes to the writer.
     func check(_ deadline: ContinuousClock.Instant, isCancelled: @Sendable () -> Bool) throws {
         try Task.checkCancellation()
