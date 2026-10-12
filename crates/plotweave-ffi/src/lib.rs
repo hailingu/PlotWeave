@@ -1,9 +1,11 @@
-//! PlotWeave 供 Swift 链接的 C ABI 边界（迁移计划 §2.3/§4.3，矩阵 M14）。
+//! PlotWeave 历史 P2 C ABI 边界（迁移计划 §2.3/§4.3，矩阵 M14）。
+//! 当前原生应用由 NativeHostServices 调用独立 Swift 存储／模型服务，
+//! 不链接本 crate（所有者决定 2026-10-04）；本 ABI 保留历史实现与回归。
 //!
 //! 契约要点：
 //! - **窄边界**：业务请求与结果均以 JSON 文本传递（`{"op":...}` →
-//!   `{"ok":...}` / `{"error":"..."}`）；媒体字节不经过本通道（§4.1，后续
-//!   经 WKURLSchemeHandler 的资源协议读取）。
+//!   `{"ok":...}` / `{"error":"..."}`）；媒体字节不经过本通道。当前原生
+//!   WKURLSchemeHandler 使用 Swift 资源服务，独立于此历史 ABI。
 //! - **数据根注入**：`pw_core_new(data_root)` 以宿主提供的路径打开受信
 //!   projects 根（内核 `open_projects_root`：canonicalize、归类与身份绑定）；
 //!   验证应用使用独立数据根（§4.3），打开失败返回 NULL，不伪造句柄。

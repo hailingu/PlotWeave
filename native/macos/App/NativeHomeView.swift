@@ -30,6 +30,33 @@ struct NativeProjectProjection: Identifiable, Equatable {
     }
 }
 
+/// The displayed failure owns its recovery identity; native controls cannot reconstruct failed mutation arguments.
+struct NativeHomeRecovery {
+    /// A changed or cleared owner invalidates earlier button clicks in the Web coordinator.
+    let id: String
+    /// Non-idempotent partial or unknown commits remain visible without a retry control.
+    let canRetry: Bool
+    /// Names the actual recovery action rather than promising an unrelated list refresh.
+    let label: String
+
+    /// Unknown recovery kinds are not actionable, even if a malformed projection advertises retry.
+    init?(_ value: HostJSON?) {
+        guard let id = value?["id"]?.string, !id.isEmpty,
+              let canRetry = value?["canRetry"]?.bool else { return nil }
+        switch value?["action"]?.string {
+        case "load": label = "重新加载"
+        case "open": label = "重试打开"
+        case "create": label = "重试创建"
+        case "rename": label = "重试重命名"
+        case "duplicate": label = "重试复制"
+        case "delete": label = "重试删除"
+        default: return nil
+        }
+        self.id = id
+        self.canRetry = canRetry
+    }
+}
+
 /// Read-only homepage policy preserves the full ordered library and disables writes during unfinished loads.
 struct NativeHomeProjection {
     /// The ordered list is supplied by the application owner, including unreadable projects.
@@ -38,12 +65,15 @@ struct NativeHomeProjection {
     let loading: Bool
     /// List or action failures stay visible without replacing the original list.
     let error: String?
+    /// The Web failure owner alone decides which explicit recovery remains safe.
+    let recovery: NativeHomeRecovery?
 
     /// Reads only expected wire fields and retains server ordering.
     init(_ value: HostJSON) {
         projects = value["projects"]?.array.compactMap(NativeProjectProjection.init) ?? []
         loading = value["loading"]?.bool ?? true
         error = value["error"]?.string
+        recovery = NativeHomeRecovery(value["recovery"])
     }
 
     /// Conflicting navigation and project mutations wait for the current application action.
@@ -157,13 +187,18 @@ struct NativeHomeView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
-    /// List failures stay observable and a retry is an explicit application action.
+    /// The visible owner determines recovery; transport diagnostics offer only an explicit list refresh.
     private func failure(_ message: String) -> some View {
         HStack {
             Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
                 .lineLimit(3).help(message).textSelection(.enabled)
             Spacer()
-            Button("重试") { state.send("app.retry") }.disabled(state.busy)
+            if state.error != nil {
+                Button("刷新列表") { state.send("app.retry", args: ["recoveryId": .null]) }.disabled(state.busy)
+            } else if let recovery = home.recovery, recovery.canRetry {
+                Button(recovery.label) { state.send("app.retry", args: ["recoveryId": .string(recovery.id)]) }
+                    .disabled(state.busy)
+            }
         }
     }
 

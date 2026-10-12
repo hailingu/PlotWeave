@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { ProjectSummary } from './home/projects'
+import type { NativeHomeRecovery } from './useNativeHomeRecovery'
 import { isSwiftHost } from './platform/hostEnvironment'
 import {
   publishNativeProjection,
@@ -15,7 +16,7 @@ interface AppActions {
   delete: (id: string) => Promise<void>
   home: () => void
   settings: () => void
-  retry: () => Promise<void>
+  retry: (recoveryId?: string | null) => Promise<void>
 }
 
 /** Read-only app state rendered by SwiftUI without retaining document ownership. */
@@ -23,6 +24,7 @@ interface NativeAppShellInput {
   projects: ProjectSummary[]
   loading: boolean
   error: string | null
+  recovery: NativeHomeRecovery | null
   settingsOpen: boolean
   project: { id: string; name: string } | null
   actions: AppActions
@@ -59,7 +61,13 @@ function execute(
     case 'app.settings':
       return actions.settings()
     case 'app.retry':
-      return actions.retry()
+      if (
+        args.recoveryId !== undefined &&
+        args.recoveryId !== null &&
+        typeof args.recoveryId !== 'string'
+      )
+        throw new Error('恢复身份无效。')
+      return actions.retry(args.recoveryId)
     default:
       throw new Error('未知的项目导航命令。')
   }
@@ -85,11 +93,13 @@ export function useNativeAppShell(input: NativeAppShellInput): void {
       projects: input.projects,
       loading: input.loading,
       error: input.error,
+      recovery: input.recovery,
     })
   }, [
     input.projects,
     input.loading,
     input.error,
+    input.recovery,
     input.settingsOpen,
     input.project,
   ])

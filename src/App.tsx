@@ -23,6 +23,7 @@ import {
 } from './useCreateFamilyAttempts'
 import { useExitFlush } from './useExitFlush'
 import { useNativeAppShell } from './useNativeAppShell'
+import { useNativeHomeRecovery } from './useNativeHomeRecovery'
 import { useAppSettingsShortcut } from './useAppSettingsShortcut'
 import { isSwiftHost } from './platform/hostEnvironment'
 import { ErrorBanner } from './editor/ErrorBanner'
@@ -269,7 +270,7 @@ function useProjectOpenAttempt(
             detail: createFamilyFailureDetail(outcome, 'create'),
           },
           outcome.commitState === 'absent'
-            ? () => void handleCreateProject()
+            ? () => handleCreateProject()
             : undefined,
         )
       }
@@ -445,7 +446,7 @@ function useHomeProjectActions(
             targetName: name,
             detail: openFailureDetail(err),
           },
-          () => void handleRenameProject(id, name),
+          () => handleRenameProject(id, name),
         )
       }
     },
@@ -466,7 +467,7 @@ function useHomeProjectActions(
           seq,
           { action: 'duplicate', targetId: id, detail },
           outcome.commitState === 'absent'
-            ? () => void handleDuplicateProject(id)
+            ? () => handleDuplicateProject(id)
             : undefined,
         )
         return
@@ -490,7 +491,7 @@ function useHomeProjectActions(
         feedback.fail(
           seq,
           { action: 'delete', targetId: id, detail: openFailureDetail(err) },
-          () => void handleDeleteProject(id),
+          () => handleDeleteProject(id),
         )
       }
     },
@@ -678,6 +679,25 @@ function HomeScreen({
   )
 }
 
+/** Maps only existing App coordination capabilities into native navigation intents. */
+function nativeAppActions(
+  open: ReturnType<typeof useOpenProjectActions>,
+  home: ReturnType<typeof useHomeProjectActions>,
+  settings: () => void,
+  retry: (id?: string | null) => Promise<void>,
+) {
+  return {
+    create: open.handleCreateProject,
+    open: open.handleOpenProject,
+    rename: home.handleRenameProject,
+    duplicate: home.handleDuplicateProject,
+    delete: home.handleDeleteProject,
+    home: open.handleBackHome,
+    settings,
+    retry,
+  }
+}
+
 /**
  * 应用根组件：文档式双界面（docs/ui-design.md §3.1）+ 设置界面——
  * 项目首页 / 编辑器是同一窗口的两种状态，设置页经 ⌘, 叠加打开
@@ -718,6 +738,14 @@ export function App() {
   )
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
   const exitBlocked = useExitFlush()
+  const recovery = useNativeHomeRecovery({
+    exitBlocked,
+    loadError,
+    openFailure,
+    feedback: actionFeedback,
+    refresh: refreshProjects,
+    open: open.handleOpenProject,
+  })
   useNativeAppShell({
     projects,
     loading,
@@ -725,22 +753,14 @@ export function App() {
     project: openProject
       ? { id: openProject.id, name: openProject.doc.name }
       : null,
-    error:
-      exitBlocked ??
-      loadError ??
-      openFailure?.detail ??
-      actionFeedback.failure?.error.detail ??
-      null,
-    actions: {
-      create: open.handleCreateProject,
-      open: open.handleOpenProject,
-      rename: home.handleRenameProject,
-      duplicate: home.handleDuplicateProject,
-      delete: home.handleDeleteProject,
-      home: open.handleBackHome,
-      settings: () => startTransition(() => setSettingsOpen(true)),
-      retry: refreshProjects,
-    },
+    error: recovery.error,
+    recovery: recovery.recovery,
+    actions: nativeAppActions(
+      open,
+      home,
+      () => startTransition(() => setSettingsOpen(true)),
+      recovery.retry,
+    ),
   })
 
   return (
@@ -754,7 +774,7 @@ export function App() {
         openProject={openProject}
         openFailure={openFailure}
         mutationFailure={actionFeedback.failure}
-        onRetryMutation={actionFeedback.retry}
+        onRetryMutation={() => void actionFeedback.retry()}
         settingsOpen={settingsOpen}
         open={open}
         home={home}

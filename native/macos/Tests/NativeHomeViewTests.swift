@@ -191,6 +191,26 @@ struct NativeHomeViewTests {
         #expect(item.keyEquivalentModifierMask == .command)
     }
 
+    /// The native error banner exposes only recovery that the authoritative Web owner explicitly permits.
+    @Test(arguments: [true, false])
+    func recoveryControlMatchesFailureEligibility(canRetry: Bool) async throws {
+        let state = NativeApplicationState()
+        let window = try makeWindow(state: state)
+        defer { window.close(); window.contentView = nil }
+        try state.receiveProjection([
+            "protocolVersion": 1, "sessionId": "home-controls", "sequence": 2,
+            "projection": ["app": ["route": "home", "loading": false, "projects": [],
+                "error": "隔离复制失败", "recovery": ["id": "1", "action": "duplicate", "canRetry": canRetry]]]
+        ])
+        try await Task.sleep(for: .milliseconds(300))
+        let elements = try await NativeCreationControlFixture.elements(in: window)
+        let buttons = elements.filter { NativeCreationControlFixture.string($0, kAXRoleAttribute) == kAXButtonRole }
+        let names = buttons.flatMap { [NativeCreationControlFixture.string($0, kAXTitleAttribute),
+                                      NativeCreationControlFixture.string($0, kAXDescriptionAttribute)].compactMap { $0 } }
+        #expect(names.contains("重试复制") == canRetry)
+        #expect(!names.contains("刷新列表"))
+    }
+
     /// Read-only controls use only the fixed welcome geometry, with no editor-sized or real-data fixture.
     private func makeWindow(
         loading: Bool = false, state: NativeApplicationState = NativeApplicationState(),

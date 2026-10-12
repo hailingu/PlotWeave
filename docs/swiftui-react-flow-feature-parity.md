@@ -329,6 +329,8 @@ F05 还覆盖 [PR #526 R29](swiftui-react-flow-pr526-fixes.md#原生意图进入
 
 原生 AI 的未发送文字在拒绝时保留并显示诊断，明确重试才再次提交；发送同步登记原生 future，等待期间禁止重复发送。成功回执只清除与提交快照相同的草稿，用户新输入或离开重挂的草稿不被迟到回执消费。该回执沿既有 `ai.send` Promise 等待回合完成，模型失败／取消仍由现有 Web 线程处理；没有增加自动计费重试或第二会话，见 [PR #526 R31](swiftui-react-flow-pr526-fixes.md#原生请求退役与-ai-发送草稿)。
 
+PR #526 R32 的首页 `app` 投影增加只读 `recovery={id,action,canRetry}`，错误来源继续由 App 当前优先级选择；原生恢复按钮以 `app.retry({recoveryId})` 调用同一失败 owner 并等待落定。旧身份、已领取身份和非安全重试资格明确拒绝；缺省参数供现有显式入口恢复当前 owner，无错误时刷新列表，显式 `recoveryId:null` 只刷新列表而不重做业务。重命名原参数继续由现有失败闭包保留，创建族部分提交／未知不给盲重试，不新增业务命令或磁盘 schema。参见 [R32 矩阵与验证](swiftui-react-flow-pr526-fixes.md#首页失败恢复与历史-rust-边界文档)。
+
 ## 验证证据
 
 验证环境为 macOS 26.6.2／Xcode 27.0／Swift 6.4／SDK 27.0、Node 24.18.0；工作分支 `codex/swiftui-react-flow`，合并基线 `08653d2`，功能补齐为当前未提交工作树。测试使用临时数据根、合成密钥与注入传输，未读写真实 Tauri 数据或调用付费模型。新原生数据根由 bundle ID 派生为 `dev.plotweave.PlotWeaveNative.development`。

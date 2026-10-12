@@ -130,8 +130,8 @@ struct ShellHomeNavigationTests {
         await fixture.services.close()
     }
 
-    /// A project disappearing after selection surfaces the real storage failure and an explicit retry clears its row.
-    @Test func failedOpeningKeepsWelcomeAndRetryRefreshesSelection() async throws {
+    /// Repairing an unreadable document lets the real native recovery button reopen its original ID.
+    @Test func failedOpeningRetriesOriginalProjectAfterRepair() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
         let id = try await fixture.createProject()
@@ -144,21 +144,42 @@ struct ShellHomeNavigationTests {
         table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         let open = try await NativeCreationControlFixture.button(in: fixture.interactionWindow, named: "打开项目")
         let store = try #require(fixture.services.projectStore)
-        _ = try await store.invoke(command: "delete_project", args: ["id": .string(id)])
+        let file = fixture.root.appendingPathComponent("projects/\(id).json")
+        let original = try Data(contentsOf: file)
+        try Data("invalid fixture document".utf8).write(to: file)
         try NativeCreationControlFixture.press(open)
         try await wait { !fixture.state.busy && (fixture.state.error != nil || NativeHomeProjection(fixture.state.app).error != nil) }
         #expect(fixture.state.route == "home")
         #expect(findWebView(fixture.window.contentView) === webView)
-        let retry = try await NativeCreationControlFixture.button(in: fixture.interactionWindow, named: "重试")
+        try original.write(to: file)
+        let retry = try await NativeCreationControlFixture.button(in: fixture.interactionWindow, named: "重试打开")
         try NativeCreationControlFixture.press(retry)
-        try await wait { !fixture.state.busy && !NativeHomeProjection(fixture.state.app).contains(id: id) }
-        // App retry refreshes the list; the existing open-error owner retains its diagnostic until the next navigation.
-        #expect(NativeHomeProjection(fixture.state.app).error != nil)
-        try await waitForDisabledOpen(in: fixture.interactionWindow)
-        let creation = try await NativeCreationControlFixture.button(in: fixture.interactionWindow)
-        try NativeCreationControlFixture.press(creation)
         try await wait { fixture.state.route == "editor" && !fixture.state.busy }
-        #expect(fixture.state.projectId != id && fixture.state.error == nil)
+        #expect(fixture.state.projectId == id && fixture.state.error == nil)
+        #expect(NativeHomeProjection(fixture.state.app).error == nil)
+        #expect(try await store.invoke(command: "load_project", args: ["id": .string(id)])["project"]?["name"]?.string == "首页集成回归")
+        await fixture.services.close()
+    }
+
+    /// The existing Web failure closure retains a submitted rename after its sheet is gone and retries into real Swift storage.
+    @Test func failedRenameRetriesOriginalDraftIntoNativeStorage() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let id = try await fixture.createProject()
+        _ = try await fixture.waitForReady()
+        let file = fixture.root.appendingPathComponent("projects/\(id).json")
+        let original = try Data(contentsOf: file)
+        try Data("invalid fixture document".utf8).write(to: file)
+        _ = try await fixture.state.request("app.rename", args: ["id": .string(id), "name": .string("保留的重命名原稿")])
+        try await wait { !fixture.state.busy && NativeHomeProjection(fixture.state.app).error != nil }
+        try original.write(to: file)
+        let retry = try await NativeCreationControlFixture.button(in: fixture.interactionWindow, named: "重试重命名")
+        try NativeCreationControlFixture.press(retry)
+        try await wait { !fixture.state.busy && NativeHomeProjection(fixture.state.app).error == nil }
+        let store = try #require(fixture.services.projectStore)
+        #expect(try await store.invoke(command: "load_project", args: ["id": .string(id)])["project"]?["name"]?.string == "保留的重命名原稿")
+        #expect(NativeHomeProjection(fixture.state.app).projects.first { $0.id == id }?.name == "保留的重命名原稿")
+        #expect(fixture.state.route == "home")
         await fixture.services.close()
     }
 
@@ -322,16 +343,6 @@ struct ShellHomeNavigationTests {
         let deadline = ContinuousClock.now.advanced(by: .seconds(12))
         while !predicate() && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(30)) }
         try #require(predicate(), "原生首页状态转换超时")
-    }
-
-    /// Projection receipt can precede SwiftUI's control update; query the refreshed AX button until it becomes unavailable.
-    private func waitForDisabledOpen(in window: NSWindow) async throws {
-        let control = try await NativeCreationControlFixture.button(in: window, named: "打开项目")
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while try NativeCreationControlFixture.isEnabled(control), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(30))
-        }
-        #expect(try !NativeCreationControlFixture.isEnabled(control))
     }
 
     /// Finds the retained host under the real SwiftUI view composition.

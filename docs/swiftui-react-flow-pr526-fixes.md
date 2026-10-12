@@ -170,3 +170,17 @@
 - 集中 Web `npx vitest run src/platform/nativeShell.test.ts src/editor/nativeCanvas/nativeAiShell.test.tsx` **22 tests／2 files 通过**：超过窗口的编辑／导航、退役重复无副作用、旧在途共享及冲突、满载恢复、非法身份／新页隔离与实际 SHA admission；既有 AI busy、模型资格、即时 reservation、卸载和晚回复回归复用。原生集中四套件 **16 tests／4 suites 全通过，TEST SUCCEEDED**（11.432 秒），含真实 TextEditor 的桥拒绝、两种 Web 拒绝后明确重试、成功清稿／新输入／重挂三种条件，以及实际 WK 页面身份重连／reload、生产退出最后字段落盘与投影身份。只用合成提示和本地页，无真实模型、用户数据或 Keychain。
 - 仓库根完整 native 路由 **727 维护文件、403 画布模块、218 tests／52 suites 全通过，TEST SUCCEEDED**（81.895 秒）。前端完整路由的静态／严格类型／构建通过；首轮沙箱测试 **17 failed／3120 passed** 均属既有钩子夹具的 `ps` 进程查询被拒绝（`spawnSync ps EPERM`），系统权限下保持原断言重跑为 **219 files／3137 tests 全通过**（52.47 秒）。源文件 285／230／233／393 行、两份 Swift 测试 231／333 行，新增或修改单元低于 80 代码行；人工复核退役／在途顺序、真实页面重置和两个发送入口的所有权，无配置复杂度检测工具。桥合同、UI、迁移 P3/P4 与 AI 数据模型已同步；文档无自动语义检查，结构化复核和 Prettier／diff 检查通过。
 - 未逐个注入完整回合中的真实付费提供商异常、中文 IME 或物理 WebKit kill；上述 admission 失败采用实际 WK 返回合成结构化错误，Web 模型／busy／卸载资格由既有 owner 回归覆盖。真实页重新加载后 UI token 的迟到 callback 交叉场景未单独注入；page/session 失效和 UI 离开重挂分别有回归，回执的成功代次检查及提交 token 守卫已结构化复核。原有独立宿主请求容量边界及 P5 人工验收保持明确。
+
+## 首页失败恢复与历史 Rust 边界文档
+
+`29deb37` 的一轮后续评审新增两条独立 P2：原生首页重试仅刷新列表；crate 顶层文档仍把历史 C ABI 写成当前 Swift 服务入口。R32 在生产修改前记录；Rust 文档只同步既定所有权，不改变 ABI 合同，不构造 prose 文本断言。
+
+| ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 实现前选定验证／缺口 |
+| --- | --- | --- | --- | --- |
+| R32 | 列表读取／打开／新建／重命名／复制／删除失败→原生点击恢复；重命名 sheet 已关闭；非幂等创建族已部分提交或提交状态未知；旧恢复点击晚于新的失败或成功 | 列表恢复重新读取，打开恢复原 ID，变更恢复原参数并等待其完成；重命名原稿仍由既有回调保留；不可安全重试的失败不显示重试且命令不能重做；旧恢复身份明确拒绝，成功清除对应错误，刷新列表不得冒充变更重试 | App 的现有 openFailure、useHomeActionFeedback 与列表 owner 拥有失败及恢复资格；原生只投影错误来源、恢复资格和身份，app.retry 验证当前身份后调用同一 owner。桥传输错误的刷新与退出保存错误不承诺业务重试；现有尝试序、后台保存恢复和创建族对账继续生效 | 实际 App＋原生 intent 测试六类恢复、目标／原名、部分提交／未知、旧身份及优先级；生产 WK＋隔离 Swift 磁盘和原生按钮验证打开失败修复后重新打开、重命名失败同名重试落盘。既有 Web 尝试乱序与后台恢复测试复用；系统权限／fsync 全阶段注入、真实用户数据和 P5 人工验收不在本次新增验证内 |
+
+- 有效行为先红：隔离首页测试的退出监听前提补齐后，旧实现 **10 failed**，其中最小重命名用例明确观察原稿没有保存，其他用例缺少恢复资格。新增并发邻接用例在无领取守卫时 **1 failed／11 skipped**，两次新传输身份都成功重做同一复制。原生首轮三处夹具错误分别只读取 AXTitle 和平面 name，纠正为公开 AXTitle／AXDescription 与版本化 project.name，不算生产行为证据。
+- `useNativeHomeRecovery` 按既有错误优先级投影来源／资格／身份，`app.retry` 验证身份并同步领取，再等待既有 open 或 mutation callback；后者现在返回原 Promise，Tauri UI 仍由 void 事件入口调用。旧身份、成功后身份和已领取身份拒绝；部分提交／未知的创建族不给重试。原生按钮显示具体恢复动作，桥传输诊断的“刷新列表”明确使用 null 身份，不重放业务。重命名 sheet 保持原呈现，其原参数保存在既有 Web 闭包中，不新增草稿持久化、业务命令或自动重试。
+- 集中 `npx vitest run src/App.nativeRecovery.test.tsx src/App.test.tsx src/useHomeActionFeedback.tauri.test.tsx` **77 tests／3 files 通过**，含新增 R32 十二项：五种操作恢复、列表恢复、原稿保存、创建族部分提交／未知、旧身份／成功后身份、并发领取与列表优先级／显式刷新。既有尝试乱序和同文档后台恢复回归保持。原生集中 `ShellHomeNavigationTests`／`NativeHomeViewTests` **21 tests／2 suites，TEST SUCCEEDED**（30.612 秒），实际原生按钮＋生产 WK＋隔离 Swift 磁盘验证修复文件后重新打开原 ID、重命名原稿实际落盘与刷新投影，以及允许／禁止重试的真实 AX 控件。
+- 完整前端路由 `npm run format:check && npm run lint && npm run check:size && npm run typecheck:strict && npm run build && npm test` 通过，**220 files／3149 tests**；完整 native 路由与 R30 的完整命令相同，**729 维护文件、404 画布模块、220 tests／52 suites，TEST SUCCEEDED**（83.730 秒）。`cd crates && npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` 通过，core **130**、FFI **4**、ABI **7** 项；均使用钉版 Node 24.18.0。两份 crate 文档与实际 NativeHostServices、既定迁移决定及 Rust 标准结构化核对，未改变 ABI 或添加文本断言。
+- 修改单元人工复核低于 80 代码行，App 788、恢复适配 99、原生首页 392 行；两份 Swift 测试 266／452、Web 新测试 255 行，文件 cap 检查通过。UI、双向桥与功能补齐合同同步；文档无配置自动语义检查，结构化审阅与 Prettier／diff 检查通过。新原生集成从与 sheet 相同的 app.rename 意图进入，实际 sheet 键入／关闭由呈现和回调归属结构化复核，未单独自动操作该 sheet；传输错误刷新使用 Web 显式 null 路径回归，未独立点击失联页面的刷新控件。真实 IME／VoiceOver、系统 fsync 全阶段注入、计费请求与 P5 人工验收仍保留既有缺口。
