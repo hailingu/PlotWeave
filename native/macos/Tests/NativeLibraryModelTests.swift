@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import PlotWeaveNative
@@ -5,6 +6,42 @@ import Testing
 /// Native presentation is verified against real selected files and the authoritative persisted library.
 @MainActor
 struct NativeLibraryModelTests {
+    /// Selected special files are rejected without waiting for a writer, while prior imports remain authoritative.
+    @Test(arguments: ["fifo", "directory", "symlink"], [false, true])
+    func selectedSpecialFilesNeverBlockImport(kind: String, includePrior: Bool) async throws {
+        let fixture = try Fixture()
+        let special = fixture.root.appendingPathComponent("special.png")
+        switch kind {
+        case "fifo": try #require(special.path.withCString { mkfifo($0, mode_t(S_IRUSR | S_IWUSR)) } == 0)
+        case "directory": try FileManager.default.createDirectory(at: special, withIntermediateDirectories: false)
+        default: try FileManager.default.createSymbolicLink(at: special, withDestinationURL: fixture.second)
+        }
+        let model = NativeLibraryModel(library: fixture.library, selectFiles: { includePrior ? [fixture.first, special] : [special] })
+        defer { model.close(); fixture.remove() }
+        try await load(model)
+        model.pickFiles(kind: "other")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while model.busy, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        let blocked = model.busy
+        // The old blocking FIFO open must be released even when the regression fails; no orphan thread survives teardown.
+        if blocked, kind == "fifo" {
+            let writer = special.path.withCString { open($0, O_RDWR | O_NONBLOCK | O_CLOEXEC) }
+            try #require(writer >= 0)
+            defer { Darwin.close(writer) }
+            try await settle(model)
+        }
+        #expect(!blocked, "所选特殊文件不得等待 writer 才拒绝")
+        #expect(model.error != nil && model.writable)
+        let authoritative = try await fixture.library.invoke("list_library_assets", args: [:])
+        #expect(model.value["assets"] == authoritative["assets"])
+        let entries = try #require(authoritative["assets"]?["byId"]?.object)
+        #expect(entries.count == (includePrior ? 1 : 0))
+        if includePrior {
+            let media = try await fixture.library.openMedia(id: try #require(entries.keys.first))
+            #expect(try media.read(maxBytes: 10) == Data([1, 2]))
+        }
+    }
+
     /// Later read or import failure must retain the already-committed file in the visible library snapshot.
     @Test(arguments: ["missing.png", "empty.png"])
     func partialImportPublishesCommittedAssets(failingName: String) async throws {

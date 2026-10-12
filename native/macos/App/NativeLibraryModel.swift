@@ -109,12 +109,12 @@ final class NativeLibraryModel {
         completion(false)
     }
 
-    /// Bounded reads run away from the main actor while security-scoped access remains owned through completion.
+    /// Nonblocking no-follow open reaches descriptor-based regular-file validation before bounded background reads.
     private static func selectedBytes(_ url: URL, mime: String) async throws -> Data {
         let work = Task.detached {
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-            let file = url.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+            let file = url.path.withCString { open($0, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC) }
             guard file >= 0 else { throw NativeDirectory.ioError("打开所选素材失败") }
             let media = try NativeMediaFile(descriptor: file, mime: mime)
             return try media.read(maxBytes: NativeLibrary.maximumBytes)

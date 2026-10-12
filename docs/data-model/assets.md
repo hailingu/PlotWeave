@@ -40,7 +40,7 @@ interface AssetRef {
 
 ### 7.2 库资产的分类与编组
 
-**Swift 原生批量导入呈现（[PR #526](https://github.com/hailingu/PlotWeave/pull/526)）**：原生系统选择的文件逐个沿 `NativeLibrary` 落盘，不新增整批事务或自动重试。后段读取或导入失败时，`NativeLibraryModel` 重读权威列表，显示已提交的真实资产并保留失败提示；其他写入口共用失败重读。列表恢复也失败时保留最后有效快照，同时报告原错误与刷新失败，不制造空索引。关闭使旧任务失去发布权限；原生选择注入仅供本机组合和隔离测试，不增加 Web 文件路径入口。见[矩阵 R16–R17](../swiftui-react-flow-pr526-fixes.md)。
+**Swift 原生批量导入呈现（[PR #526](https://github.com/hailingu/PlotWeave/pull/526)）**：原生系统选择的文件逐个沿 `NativeLibrary` 落盘，不新增整批事务或自动重试。后段读取或导入失败时，`NativeLibraryModel` 重读权威列表，显示已提交的真实资产并保留失败提示；其他写入口共用失败重读。列表恢复也失败时保留最后有效快照，同时报告原错误与刷新失败，不制造空索引。关闭使旧任务失去发布权限；原生选择注入仅供本机组合和隔离测试，不增加 Web 文件路径入口。见[矩阵 R16–R17](../swiftui-react-flow-pr526-fixes.md)。 所选 URL 使用 no-follow、非阻塞打开，随后由 `NativeMediaFile` 在实际 descriptor 上核验普通文件；FIFO 不等待 writer、目录／symlink 不读取，失败回到同一列表恢复路径，既有普通文件字节上限与取消保持（[PR #526 R26](../swiftui-react-flow-pr526-fixes.md)）。
 
 **落地状态（#17、#25、#29）**：锚定句柄访问、1 MiB 库索引限读、脏条目隔离、日志驱动删除与恢复、Record 迁移、完整归一化、组命令及库命令重命名均已合入 `dev`。库操作由进程内互斥锁与跨进程文件锁串行化；列表及写入前先恢复未完成事务，返回 `warnings`/`cleanupPending`，只读告警态暂停写入。平台缺少身份绑定清理能力时仍保留隔离文件，不把“事务已实现”解释为“必定立即物理删除”；已核验清理项在下次恢复折叠退役（[issue #359](https://github.com/hailingu/PlotWeave/issues/359)），日志不随生命周期累积。库操作锁的中毒后行为为可验证恢复（[issue #145](https://github.com/hailingu/PlotWeave/issues/145)）：锁不守卫内存状态，磁盘一致性由本节日志可恢复提交协议独立保证。
 

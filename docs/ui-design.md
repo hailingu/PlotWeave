@@ -707,6 +707,8 @@ macOS 惯例 ⌘, 打开设置。当前实现为同一主窗口内切换的设�
 
 ### 12.3 实施记录与验证范围
 
+原生图库所选非普通文件快速拒绝并落定 busy／错误，不等待 FIFO writer；此前成功导入项仍按权威列表显示（[PR #526 R26](swiftui-react-flow-pr526-fixes.md)）。实际系统选择面板继续保留人工验收缺口。
+
 [PR #526](https://github.com/hailingu/PlotWeave/pull/526) 补齐原生退出失败后的交互恢复：就绪页面的保存失败明确取消 AppKit 延迟退出，成功继续原系统退出序列；未就绪的启动请求先取消并缓冲。窗口、诊断和失败快照仍可恢复重试。真实 WK 回归验证坏项目文件阻止退出、失败回复、文件恢复后的最新编辑落盘和成功回复；菜单／Dock 手势与系统注销仍待人工验证，详见[退出状态矩阵 R24–R25](swiftui-react-flow-pr526-fixes.md)。
 
 P1 的窗口、标准外壳容器与内存画布为第一阶段，P2 的 Rust 内核／C ABI 为当时的第二阶段，分别见[P1 证据](swiftui-react-flow-p1-evidence.md)与[P2 证据](swiftui-react-flow-p2-evidence.md)。这些历史结果不表示当前应用仍只运行内存演示，也不表示 Swift 依赖该 FFI。
