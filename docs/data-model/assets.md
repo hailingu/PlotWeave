@@ -6,6 +6,8 @@
 
 ### 7.1 两个作用域
 
+**Swift 原生保存与失败边界（[PR #526](https://github.com/hailingu/PlotWeave/pull/526)）**：当前原生服务由 `NativeProjectStore` 直接保存，`NativeProjectEnvelope` 校验完整信封／资产形状，`NativeDirectory` 按绑定目录句柄执行文件 I/O；原生应用不调用下文的 Rust 服务。项目保存前后均复验真实媒体。下文“失败整份拒绝”指提交前的形状／实路径复验：它不能更新文档。rename 已提交后，父目录持久性屏障或写后资产复验失败仍返回错误，文档可能已是新内容；这与[持久化 §10.5](persistence.md#105-rust-持久化命令tauri-commands)明示的两类失败一致，不是媒体与项目 JSON 的跨文件回滚事务。失败回执不能用于推断磁盘未变，也不能通过删除复验或忽略同步错误伪装成功。正常项目保存、媒体写入和删除由同一 Swift actor 串行；单实例范围及跨进程替换的保留边界见[§10.0](persistence.md#100-swift-原生落地与保留差异)。
+
 - **项目资产**：归属于某个项目，文件存于项目目录内，`project.json` 的 `assets.byId` 只索引本项目资产。项目是**自包含**的——导出、备份、移动项目目录不会丢失任何引用。
 - **个人资产库**：跨项目复用的素材（角色立绘、参考图、常用模板），存于应用级 `library/` 目录，由独立的 `library.json` 索引，不进任何 ProjectDocument。
 

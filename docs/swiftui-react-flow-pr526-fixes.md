@@ -25,6 +25,8 @@
 | R17 | 写操作失败→重读列表也失败；恢复期间关闭／旧结果迟到；其它 mutate 入口失败 | 列表不可恢复时保留最后有效快照并同时报告刷新失败；关闭后不发布旧结果；其它写入口共用恢复 | Model 的 generation／任务拥有呈现权限，失败重读不创建第二份索引或绕过只读／busy 守卫 | 真实坏目录、延迟选择关闭、失败 mutate 后权威外部更新回归；无数据格式、事务或自动重试变化 |
 | R18 | 全部 DNS 地址已通过公网分类→首个连接失败→后续地址成功／全部连接失败 | 成功返回后续地址媒体；全失败返回网络错误；每次仍使用原 hostname／URL 与同一 hop 截止时间 | NativePublicDownload 拥有逐跳候选选择，NativePinnedHTTP 仍固定地址并验证 TLS；不重新解析或放行混合 DNS | 双栈成功、全地址失败与固定身份／deadline 回归；注入传输，不访问真实公网 |
 | R19 | 地址尝试中取消／预算耗尽；策略或 framing 拒绝／HTTP 失败；重定向→下一跳 | 不尝试下一地址、不返回媒体；每跳重新验证全部 DNS，既有五跳／体积上限保持 | 仅 PW_DOWNLOAD_NETWORK 可推进候选，取消与共享截止时间不能因 fallback 重置，安全拒绝不得变成重试 | 新增取消、慢传输超时、终止错误与非 2xx／超大回复回归；沿既有混合 DNS、重定向、HTTP framing 覆盖 |
+| R20 | 持久化主题描述当前原生保存→读者选择实现 owner 与数据根 | 明确直接 Swift 服务已实现，历史 C ABI 未链接；区分当前扁平真源与目录化／索引计划 | 设计文档拥有实现归属说明，不能把未链接 FFI 误写为 Swift 保存尚未可用 | 文档结构化审阅，对照 NativeHostServices、NativeProjectStore／Envelope／Directory 及既有 overview／功能补齐记录；纯文档不制造文本断言测试 |
+| R21 | 保存前校验失败；原子 rename 后同步／复验失败；失败后重读／重试 | 提交前保留旧文档；提交后如实报错且新文档可能已落盘，不假称回滚或成功 | 既有 §10.5 两类失败合同由存储边界拥有；Swift actor／Rust 操作锁串行正常入口，外部媒体篡改不构成跨文件事务 | 复核现有 Rust 真实故障注入回归与 Swift 保存顺序；Swift fsync／写后媒体替换故障注入仍未覆盖，不用 Rust 回归冒充 Swift 证明 |
 
 地址依据：[IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/)、[IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/)。单实例边界、付费模型和存储格式不扩展；异步下载沿用既有绝对截止时间、取消和逐跳校验，新增策略不引入重试或共享可写状态。
 
@@ -60,3 +62,9 @@
 - R1–R19 本机最终完整原生路由：用户确认解锁后，执行现行 `npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test`，**724 维护文件检查通过、403 模块画布构建成功、201 tests／49 suites 全通过，TEST SUCCEEDED**。真实窗口、AX、WKWebView、设置、部分导入、候选地址和实际 Bundle 版本均执行；此前锁屏失败保留为环境失败证据，未用跳过或放宽断言替代本次完整复核。
 
 源码、测试及配置均在文件上限内，新增／修改单元未超过 80 代码行；未配置复杂度工具，嵌套与函数跨度已人工审阅。历史 ABI 的未改动 `dispatch` 超过 80 代码行，作为既有债务记录，不在本次取消修复中扩展分发重构。地址策略、日期展示、启动判定、设置根与取消资格各有明确 owner，没有新增服务依赖或可写文档副本。真实公网 TLS、计费、视觉、IME、VoiceOver 与全屏人工验收仍保留原有缺口。提交／推送门禁及修复后托管 CI 的结果在 PR 描述中绑定实际提交，不以历史结果替代。
+
+## 提交 `148bf0b` 后一轮新增意见处置
+
+- R20：持久化主题仍称宿主共用 Rust 内核、Swift 保存待 C ABI 接入，属真实文档同步缺陷。修正文档实现归属，逐项明确直接 Swift owner、独立开发根、扁平权威文件、同一 actor 写入／删除屏障、既有 legacy 差异及未验边界；不修改代码或数据格式。
+- R21：“不得在提交后报告失败”的建议与既有 §10.5 合同不一致，按已记录边界处置，保留实现。Rust `persist_project_expect_existing` 与 Swift `saveProject` 均在写后复验；rename 后持久性屏障失败也必须报错。`store::commands::tests::save_directory_sync_failure_reports_error_with_new_doc_committed` 通过真实故障注入验证失败回执、新文档已提交和重试收敛。正常入口在 Swift actor／Rust 操作锁内串行，本地并发攻击者替换树不在现有单实例威胁模型；未新增跨文件事务或删除安全诊断。[资产 §7.1](data-model/assets.md#71-两个作用域)补明“整份拒绝”指提交前复验，避免把失败回执误读成全阶段回滚承诺。
+- 本轮仅规范文档同步与边界澄清，不新增源代码或测试。结构化审阅核对 owner、布局、两类失败、威胁模型、现有回归与未验缺口；没有配置文档自动语义检查。集中执行 `cargo test --manifest-path crates/Cargo.toml --package plotweave-core --lib store::commands::tests::save_directory_sync_failure_reports_error_with_new_doc_committed -- --exact`，**1 项通过、0 失败**，确实执行目标而非零测试选集；完整提交／推送门禁及最新 CI 结果在 PR 绑定实际提交。

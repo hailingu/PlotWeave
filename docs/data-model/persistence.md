@@ -4,9 +4,22 @@
 
 ## 十、本地存储体系
 
-**迁移期实现归属**：项目存储内核位于 `crates/plotweave-core/src/store/`，Tauri 命令包装与应用数据根解析位于 `src-tauri/src/store/mod.rs`；宿主注入同一数据根后调用同一校验、原子写、恢复与资产复验内核。Swift 的 C ABI 已落在 `crates/plotweave-ffi/`，尚未链接进原生工程，不能据此宣称原生保存可用。下文的 Tauri 命令和 `app_data_dir` 继续描述可日常使用的实现；新宿主的数据根、密钥身份、`pwmedia`、写入队列与退出屏障须按[改造计划](../swiftui-react-flow-migration-plan.md)验证兼容后再更新，现有磁盘合同保持不变。
+**当前实现归属（2026-10-04 路线修订，[PR #526](https://github.com/hailingu/PlotWeave/pull/526)）**：原生应用由 `NativeHostServices.perform` 将项目 IPC 直接交给 Swift `NativeProjectStore`，已实现创建、列表、加载、保存、删除、AI 会话和资产验证／复制；不经过 Rust 或 C ABI。`NativeDirectory` 拥有句柄相对 no-follow I/O 与原子写，`NativeProjectEnvelope` 拥有信封校验、保存盖戳及摘要投影。Tauri 保留 `crates/plotweave-core/src/store/` 内核和 `src-tauri/src/store/mod.rs` 包装作为行为与磁盘合同回归基线。`crates/plotweave-ffi/` 为历史 P2 能力，未被原生工程链接；不能再用“尚待接入 C ABI”描述当前 Swift 保存状态。
 
-FFI `saveProject` 的可选布尔 `expectExisting` 沿用 Tauri 保存的存在性约束：缺省 `false` 保留初次创建，`true` 在共享操作锁内确认目标仍存在，删除后的迟到请求返回失败且不得重建项目；非法字段类型拒绝。保存 NotFound 不携带 `[project_not_found]` 码，该码仅由加载入口返回。调用方仍须维护项目保存/删除协调，FFI guard 不替代会话排序；兼容性回归见[P2 合并同步](../swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)。
+### 10.0 Swift 原生落地与保留差异
+
+| 责任／边界 | 当前 Swift 实现与保留范围 |
+| --- | --- |
+| 数据根与身份 | 根由宿主注入，Web 请求不能选择目录；开发根为 Application Support 下由 `BundleID + ".development"` 派生的 `dev.plotweave.PlotWeaveNative.development`。测试只用临时根；不自动读取 Tauri 数据或历史 Keychain，发行身份与数据迁移仍为独立决定。 |
+| 项目布局与真源 | 权威文档为 `projects/{id}.json`；媒体与 AI 会话分别为 `projects/{id}/assets/`、`projects/{id}/ai-session.json`。首页每次扫描项目文档，不维护 `index.json`。§10.1 的 `{id}/project.json` 与索引布局仍是演进目标，不因 Swift 服务实现而视为完成。 |
+| 会话与写入 owner | React 继续拥有图文档、撤销、防抖、保存／删除链和退出冲刷；Swift actor 串行执行项目保存、删除及项目媒体事务，`expectExisting` 在同一 actor 内拒绝删除后的迟到保存。原生界面不拥有可写文档副本。 |
+| 文件提交与失败 | 原子写先同步临时文件，rename 后同步父目录；保存前后均按绑定目录句柄复验媒体。提交前拒绝保留旧文档；提交后目录同步或资产复验失败如实报错，新文档可能已经落盘，不保证回滚。两类失败的既有边界见 §10.5 与[资产 §7.1](assets.md#71-两个作用域)。 |
+| 兼容性差异 | v1 文档、AI 会话与资产引用沿用既有格式；脏 legacy 的小数 `updated_at`，Swift 转换为 ISO 时间，旧 Rust `as_u64` 回退空串。该已记录 P2 差异只影响摘要排序，不影响图内容或保存 payload，仍待所有者处置。 |
+| 验证缺口 | 单应用实例范围保持；不承诺跨进程媒体替换与文档之间的事务。Swift 系统 fsync 故障注入、真实系统面板、IME、VoiceOver、视觉、性能与签名分发仍未验收，不能由隔离根测试推定通过。 |
+
+详细落地与缺口见[总体分层](overview.md#二-总体分层)、[功能补齐记录](../swiftui-react-flow-feature-parity.md)及[修复矩阵 R20–R21](../swiftui-react-flow-pr526-fixes.md)。下文明确标注 Tauri／Rust 的实现说明继续描述其基线，不意味着 Swift 调用这些内核；公共文档格式与失败语义仍适用于两条服务路径。
+
+历史 FFI `saveProject` 的可选布尔 `expectExisting` 沿用 Tauri 保存的存在性约束：缺省 `false` 保留初次创建，`true` 在共享操作锁内确认目标仍存在，删除后的迟到请求返回失败且不得重建项目；非法字段类型拒绝。保存 NotFound 不携带 `[project_not_found]` 码，该码仅由加载入口返回。调用方仍须维护项目保存/删除协调，FFI guard 不替代会话排序；兼容性回归见[P2 合并同步](../swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)。当前 Swift 在自己的 actor 内实现同一存在性约束，并未接入该历史调用路径。
 
 命令产出的文档变更，经防抖持久化回调落到以下布局。
 ### 10.1 目录布局
