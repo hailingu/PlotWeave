@@ -82,33 +82,12 @@ const modernFile = () => ({
   assets: { byId: {} },
 })
 
-/** v0 信封：旧扁平格式的节点字段（头像对象、地点字符串）经 Rust 包装。 */
-const legacyFile = () => ({
-  schemaVersion: 0,
-  project: { id: 'p1', name: '旧剧', createdAt: '', updatedAt: UPDATED_ISO },
-  graph: {
-    nodes: [
-      {
-        id: 's1',
-        type: 'scene',
-        position: { x: 0, y: 0 },
-        data: {
-          name: '场一',
-          sceneNo: 1,
-          interior: true,
-          time: '🌙 夜',
-          synopsis: '',
-          characters: [{ label: '林', gradient: 'g' }],
-          location: '天台',
-        },
-      },
-    ],
-    edges: [],
-    viewport: { x: 0, y: 0, zoom: 1 },
-  },
-  settings: { characters: [], locations: [] },
-  episodeTitles: {},
-  assets: { byId: {} },
+/** v1 信封（Rust 形状判型产物）：缺有效版本号按 v1 形状交付并打
+ * versionless 标记——升级回写补盖显式版本号后收敛为净本。 */
+const dirtyOf = (id: string) => ({
+  ...modernFile(),
+  versionless: true,
+  project: { ...modernFile().project, id },
 })
 
 /** issue #134/PR #198 评审共用夹具：列表维护写（示例升级回写/空库播种）
@@ -116,10 +95,6 @@ const legacyFile = () => ({
  * 失败登记、删除墓碑），迟到修复不得覆盖较新内容、清除更新的重试登记
  * 或复活已删对象。 */
 const SID = 'sample-wu-ye-chu-zu-che'
-const legacyOf = () => ({
-  ...legacyFile(),
-  project: { ...legacyFile().project, id: SID },
-})
 const cleanOf = () => ({
   ...modernFile(),
   project: { ...modernFile().project, id: SID },
@@ -132,15 +107,15 @@ const userDocOf = (id: string) =>
     },
     { projectId: id },
   ).content
-/** 一次性栅栏：首次调用挂起至放行并返回待迁移旧格式；此后返回迁移
- * 净本——旧实现回写后重列的升级检查读到净本，不再触发写也不再挂起。 */
+/** 一次性栅栏：首次调用挂起至放行并返回待修复的无版本号 v1；此后返回
+ * 补盖净本——旧实现回写后重列的升级检查读到净本，不再触发写也不再挂起。 */
 const gatedThenCleanLoad = (gate: { fn: (() => void) | null }) => {
   let gated = true
   return () => {
     if (!gated) return cleanOf()
     gated = false
     return new Promise<unknown>((res) => {
-      gate.fn = () => res(legacyOf())
+      gate.fn = () => res(dirtyOf(SID))
     })
   }
 }
@@ -228,7 +203,7 @@ describe('tauriList 维护写：成功维护写不得清除更新的重试登记
     handlers.set('list_projects', () => [meta(SID)])
     handlers.set('load_project', () => {
       loadCalls += 1
-      return loadCalls === 1 ? legacyOf() : cleanOf()
+      return loadCalls === 1 ? dirtyOf(SID) : cleanOf()
     })
     let saveCalls = 0
     handlers.set('save_project', () => {

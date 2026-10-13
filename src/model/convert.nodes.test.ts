@@ -69,7 +69,7 @@ describe('归一化：对白行判别与必填字段（§4.2 DialogueLine，§11
         side: 'up',
         vo: 'false',
       },
-      { id: 'l2', kind: 'action', text: '雨停了', speaker: null }, // null speaker：v0 兼容链产物的合法形态
+      { id: 'l2', kind: 'action', text: '雨停了', speaker: null }, // null speaker：「无说话人」的合法形态
       {
         id: 'l3',
         kind: 'line',

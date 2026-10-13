@@ -39,7 +39,7 @@ Swift 原生服务／保留的 Tauri + Rust 服务
 
 **原生实现（2026-10-04）**：根据[改造计划](../swiftui-react-flow-migration-plan.md)及[功能补齐记录](../swiftui-react-flow-feature-parity.md)，SwiftUI 已承载首页、工具栏、大纲、检查器、设定、图库、AI、导出与设置；原生界面提交编辑意图，React 编辑会话继续拥有文档、图命令、撤销和写入协调，Swift 消费只读投影。Swift 服务承接 25 条业务及两条退出命令，共 27 条既有 snake_case IPC 命令，另提供两条系统文本交付命令。默认入口运行生产会话，`#fixture` 仅为内存演示。P2 的 Rust 项目内核、`isotime` 与 C ABI 仍保留在 `crates/`，并有[历史证据](../swiftui-react-flow-p2-evidence.md)，当前原生应用不链接它们；Tauri 继续作为行为与文件合同回归基线。应用级会话不随原生页面隐藏而丢失，原生项目操作沿用保存／删除协调，不拥有另一份图文档。
 
-**原生存储与验证边界**：Swift 服务使用宿主注入的独立根，生产开发根由 `BundleID + ".development"` 派生，当前为 Application Support 下的 `dev.plotweave.PlotWeaveNative.development`；测试使用临时根及合成机器材料，不读取旧 Tauri 数据或历史 Keychain。ProjectDocument、AI 会话、资产引用与设置密文沿用既有合同，合成 `pw1`／`pw2` 密文读写和迁移已有回归。已知 P2 差异：旧扁平（v0／versionless）项目的异型 `updated_at` 为小数时，Swift 会转换为 ISO 时间，旧 Rust 的 `as_u64` 则回退空串；仅影响这类脏 legacy 的项目摘要排序，不影响图内容或保存 payload，按[功能补齐记录](../swiftui-react-flow-feature-parity.md)保留边界。真实公网 TLS 信任链、计费模型、视觉、中文输入法、VoiceOver 与性能尚未验证，不以临时根和注入传输测试替代。
+**原生存储与验证边界**：Swift 服务使用宿主注入的独立根，生产开发根由 `BundleID + ".development"` 派生，当前为 Application Support 下的 `dev.plotweave.PlotWeaveNative.development`；测试使用临时根及合成机器材料，不读取旧 Tauri 数据或历史 Keychain。ProjectDocument、AI 会话、资产引用与设置密文沿用既有合同，合成 `pw1`／`pw2` 密文读写和迁移已有回归。旧扁平（v0／versionless）格式支持已随 [#519 处置](https://github.com/hailingu/PlotWeave/issues/519)退役：Rust 与 Swift 判型统一拒绝并保留原文件，此前记录的异型 `updated_at` 小数排序差异随之消失（详见[功能补齐记录](../swiftui-react-flow-feature-parity.md)）。真实公网 TLS 信任链、计费模型、视觉、中文输入法、VoiceOver 与性能尚未验证，不以临时根和注入传输测试替代。
 
 下文顺序：先定义数据本身（三~七）与引用规则（八），再定义变更机制（九：命令与撤销），然后是落地（十：存储；十一：加载归一化），最后是建立在命令通道之上的 AI 能力（十二）与演进方向（十三）。
 ## 十三、后续演进预留

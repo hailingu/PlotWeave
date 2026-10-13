@@ -1,6 +1,6 @@
 import Foundation
 
-/// Project envelope compatibility and strict save boundaries mirror the existing persisted v0/v1 contract.
+/// Project envelope parsing and strict save boundaries mirror the persisted v1 contract; the retired v0 flat family is rejected (#519).
 enum NativeProjectEnvelope {
     /// Newly created projects include every v1 bucket and need no normalization repair on first load.
     static func empty(id: String, name: String) -> HostJSON {
@@ -17,18 +17,16 @@ enum NativeProjectEnvelope {
         ])
     }
 
-    /// Shape classification preserves future-version claims and never turns a malformed v1 graph into empty v0.
+    /// Shape classification preserves future-version claims; the retired v0 flat family is rejected outright (#519).
     static func parse(_ value: HostJSON, id: String) throws -> HostJSON {
         guard let fields = value.object else { throw invalid("无法判别文档信封（已保留原文件）") }
         let modern = ["project", "graph", "assets"].filter { fields[$0] != nil }.count
         let legacy = ["name", "updated_at", "nodes", "edges"].filter { fields[$0] != nil }.count
         if let version = fields["schemaVersion"]?.number {
-            guard version >= 0, version <= Double(UInt32.max), version.rounded() == version else {
-                throw invalid("schemaVersion 是非法数值或超出可表示范围（已保留原文件）")
-            }
-            if version == 0 {
-                guard modern == 0 else { throw invalid("文档信封自相矛盾：schemaVersion 0 携带 v1 专属键") }
-                return wrapLegacy(fields, id: id, versionless: false)
+            guard version >= 1, version <= Double(UInt32.max), version.rounded() == version else {
+                throw invalid(version == 0
+                    ? "schemaVersion 0（旧扁平格式）已不再受支持，拒绝加载并保留原文件"
+                    : "schemaVersion 是非法数值或超出可表示范围（已保留原文件）")
             }
             guard legacy == 0 else { throw invalid("文档信封自相矛盾：schemaVersion ≥ 1 携带旧扁平特征键") }
             return modernEnvelope(fields, version: version, versionless: false)
@@ -38,8 +36,8 @@ enum NativeProjectEnvelope {
             throw invalid("schemaVersion 是规范整数字符串而非数值版本号（已保留原文件）")
         }
         if modern > 0, legacy == 0 { return modernEnvelope(fields, version: 1, versionless: true) }
-        if modern == 0, legacy >= 2, fields["nodes"] != nil || fields["edges"] != nil {
-            return wrapLegacy(fields, id: id, versionless: true)
+        if legacy >= 2, fields["nodes"] != nil || fields["edges"] != nil {
+            throw invalid("旧扁平（无有效版本号）文档已不再受支持，拒绝加载并保留原文件")
         }
         throw invalid("无法判别文档信封：v1 与旧扁平特征键混合或均不足（已保留原文件）")
     }
@@ -127,26 +125,6 @@ enum NativeProjectEnvelope {
         if let description = raw["description"] { project["description"] = description }
         var value: [String: HostJSON] = ["schemaVersion": .number(version), "project": .object(project)]
         for key in ["graph", "settings", "episodeTitles", "assets"] { value[key] = fields[key] ?? .null }
-        if versionless { value["versionless"] = .bool(true) }
-        return .object(value)
-    }
-
-    /// Legacy flat graphs are wrapped without fabricating a viewport or mutating their node payloads.
-    private static func wrapLegacy(_ fields: [String: HostJSON], id: String, versionless: Bool) -> HostJSON {
-        var updated = ""
-        if let milliseconds = fields["updated_at"]?.number, milliseconds >= 0, milliseconds <= Double(Int64.max) {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            updated = formatter.string(from: Date(timeIntervalSince1970: milliseconds / 1000))
-        }
-        var value: [String: HostJSON] = [
-            "schemaVersion": .number(0), "project": .object([
-                "id": .string(id), "name": .string(fields["name"]?.string ?? "未命名"),
-                "createdAt": .string(""), "updatedAt": .string(updated)
-            ]), "graph": .object(["nodes": fields["nodes"] ?? .array([]), "edges": fields["edges"] ?? .array([])]),
-            "settings": fields["settings"] ?? .object([:]), "episodeTitles": fields["episodeTitles"] ?? .object([:]),
-            "assets": .object(["byId": .object([:])])
-        ]
         if versionless { value["versionless"] = .bool(true) }
         return .object(value)
     }

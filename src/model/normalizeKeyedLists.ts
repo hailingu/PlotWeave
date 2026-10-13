@@ -19,7 +19,7 @@ const REQUIRED_LISTS: Record<string, string> = {
 /** 对白行成员形状（§4.2 DialogueLine）：判别字段 kind ∈ line/action 且
  * text 必填字符串——text 异型的行进会话后会被 DialogueNode 当 React 子节点
  * 渲染而崩溃，一行坏行不应阻挡整个项目画布打开。id 缺失不致命（列表 key
- * 退化但不崩溃），旧格式的 id 回填由迁移链（legacy.ts）负责，不在此判别。
+ * 退化但不崩溃），id 缺失/空值的重发由 §11.1 第 3 步键控列表 id 规则处置，不在此判别。
  * 可选字段（speaker/side/vo）的值域由 normalizeDialogueLineOptionals 在
  * 成员过滤后逐字段剥离，不在此判别（字段异型不连累整行文本）。 */
 function isDialogueLineShape(item: unknown): boolean {

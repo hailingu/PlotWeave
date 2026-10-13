@@ -76,13 +76,16 @@ fn v1_file_missing_timestamps_pass_through_for_frontend_repair() {
         "episodeTitles": {},
         "assets": { "byId": {} },
     });
-    let file = parse_file("p-1", &v1.to_string()).unwrap();
+    let file = parse_file(&v1.to_string()).unwrap();
     assert!(file.project.updated_at.is_empty());
     assert!(file.project.created_at.is_empty());
 }
 
 #[test]
-fn legacy_flat_file_wraps_as_v0_envelope() {
+fn legacy_flat_envelope_is_rejected() {
+    // 旧扁平格式（无 schemaVersion，顶层 name/updated_at/nodes/edges）已随
+    // v0 支持退役（#519 处置）不再包装交付：拒绝加载并保留原文件——两栈
+    // （Rust/Swift）对异型 updated_at（小数）的排序分歧随之消失
     let legacy = json!({
         "name": "旧项目",
         "updated_at": 1_700_000_000_000u64,
@@ -91,15 +94,8 @@ fn legacy_flat_file_wraps_as_v0_envelope() {
         "settings": { "characters": [], "locations": [] },
         "episodeTitles": { "1": "开端" },
     });
-    let file = parse_file("p-old", &legacy.to_string()).unwrap();
-    assert_eq!(file.schema_version, 0);
-    assert_eq!(file.project.id, "p-old");
-    assert_eq!(file.project.name, "旧项目");
-    assert_eq!(file.project.updated_at, "2023-11-14T22:13:20.000Z");
-    assert_eq!(file.graph["nodes"][0]["id"], json!("a"));
-    // 旧格式无视口：信封不伪造，前端打开时 fitView
-    assert!(file.graph.get("viewport").is_none());
-    assert_eq!(file.episode_titles, json!({ "1": "开端" }));
+    let err = parse_file(&legacy.to_string()).expect_err("旧扁平信封应被拒绝（v0 支持已退役）");
+    assert!(matches!(err.root(), StoreError::CorruptEnvelope(_)));
 }
 
 #[test]
@@ -123,7 +119,7 @@ fn versionless_v1_envelope_classifies_as_v1_and_keeps_graph() {
         "episodeTitles": {},
         "assets": { "byId": {} },
     });
-    let file = parse_file("p-1", &v1.to_string()).unwrap();
+    let file = parse_file(&v1.to_string()).unwrap();
     assert_eq!(file.schema_version, 1);
     assert_eq!(file.graph["nodes"][0]["id"], json!("s1"));
     // 判型打 versionless IPC 标记：载荷额外键让前端 repaired 比较必然
@@ -131,24 +127,21 @@ fn versionless_v1_envelope_classifies_as_v1_and_keeps_graph() {
     assert!(file.versionless);
     let ipc = serde_json::to_value(&file).unwrap();
     assert_eq!(ipc["versionless"], json!(true));
-    // 显式版本不打标记；形状判型（无论判为 v1 还是 v0）都打标记——
-    // 版本主张缺失/异型的判型修复必须可向前端解释（§11 第 0 步「均记录
-    // 警告」，issue #338 评审：v0 迁移回写本身即落定，标记只承载警告）
+    // 显式版本不打标记；形状判型（v1 族）打标记——版本主张缺失/异型的
+    // 判型修复必须可向前端解释（§11 第 0 步「均记录警告」，issue #338
+    // 评审：versionless 标记只承载警告，修复回写本身即落定）
     let explicit = json!({
         "schemaVersion": 1,
         "project": { "id": "p-1", "name": "显式" },
         "graph": { "nodes": [], "edges": [] },
     });
-    assert!(
-        !parse_file("p-1", &explicit.to_string())
-            .unwrap()
-            .versionless
-    );
-    let v0 = json!({
+    assert!(!parse_file(&explicit.to_string()).unwrap().versionless);
+    // 旧扁平形状的判型路径已随 v0 支持退役（#519 处置）：不再包装 v0 信封
+    let legacy = json!({
         "name": "旧项目", "updated_at": 1_700_000_000_000u64,
         "nodes": [], "edges": [],
     });
-    assert!(parse_file("p-1", &v0.to_string()).unwrap().versionless);
+    assert!(parse_file(&legacy.to_string()).is_err());
 }
 
 #[test]
@@ -162,11 +155,11 @@ fn mixed_or_unclassifiable_envelope_is_rejected() {
         "nodes": [],
         "edges": [],
     });
-    assert!(parse_file("p-1", &mixed.to_string()).is_err());
-    assert!(parse_file("p-1", "{}").is_err());
-    assert!(parse_file("p-1", r#"{"foo": 1}"#).is_err());
+    assert!(parse_file(&mixed.to_string()).is_err());
+    assert!(parse_file("{}").is_err());
+    assert!(parse_file(r#"{"foo": 1}"#).is_err());
     // 单个旧扁平键不足以判型
-    assert!(parse_file("p-1", r#"{"nodes": []}"#).is_err());
+    assert!(parse_file(r#"{"nodes": []}"#).is_err());
 }
 
 #[test]
@@ -180,7 +173,7 @@ fn explicit_version_conflicting_with_envelope_family_is_rejected() {
         "graph": { "nodes": [], "edges": [] },
         "assets": { "byId": {} },
     });
-    assert!(parse_file("p-1", &v0_with_v1.to_string()).is_err());
+    assert!(parse_file(&v0_with_v1.to_string()).is_err());
     // 反向冲突：显式 v1 信封携带旧扁平专属键（顶层 name/updated_at/nodes/edges）
     let v1_with_legacy = json!({
         "schemaVersion": 1,
@@ -189,13 +182,9 @@ fn explicit_version_conflicting_with_envelope_family_is_rejected() {
         "name": "旧名",
         "nodes": [],
     });
-    assert!(parse_file("p-1", &v1_with_legacy.to_string()).is_err());
+    assert!(parse_file(&v1_with_legacy.to_string()).is_err());
     // 非数字版本号不可判型
-    assert!(parse_file(
-        "p-1",
-        r#"{"schemaVersion": "1", "project": {}, "graph": {}}"#
-    )
-    .is_err());
+    assert!(parse_file(r#"{"schemaVersion": "1", "project": {}, "graph": {}}"#).is_err());
 }
 
 /// [issue #338]（§11 第 0 步）：schemaVersion 键存在但为无法表达受支持/
@@ -215,8 +204,7 @@ fn heterogeneous_version_value_falls_back_to_v1_shape() {
         let text = format!(
             r#"{{"schemaVersion":{raw},"project":{{"id":"p-1","name":"异型版本"}},"graph":{{"nodes":[{{"id":"s1","type":"scene"}}],"edges":[]}},"assets":{{"byId":{{}}}}}}"#
         );
-        let file =
-            parse_file("p-1", &text).unwrap_or_else(|e| panic!("{label}：应按 v1 形状判型：{e}"));
+        let file = parse_file(&text).unwrap_or_else(|e| panic!("{label}：应按 v1 形状判型：{e}"));
         assert_eq!(file.schema_version, 1, "{label}：判型赋予待修复有效版本 1");
         assert!(file.versionless, "{label}：应打 versionless 修复标记");
         assert_eq!(
@@ -227,11 +215,10 @@ fn heterogeneous_version_value_falls_back_to_v1_shape() {
     }
 }
 
-/// [issue #338]：异型版本值 + 唯一旧扁平形状 → 与缺失版本号同款包装 v0
-/// 信封并打 versionless 标记——形状判型的 v0 同样缺有效版本主张，标记
-/// 供前端记录判型警告（评审修复：§11 第 0 步「均记录警告」）。
+/// [issue #338]：异型版本值 + 唯一旧扁平形状 → 与缺失版本号同款按 v0
+/// 支持退役处置拒绝（#519）：不再包装 v0 信封交付，保留原文件。
 #[test]
-fn heterogeneous_version_value_with_legacy_shape_wraps_as_v0() {
+fn heterogeneous_version_value_with_legacy_shape_is_rejected() {
     let legacy = json!({
         "schemaVersion": null,
         "name": "旧项目",
@@ -239,10 +226,9 @@ fn heterogeneous_version_value_with_legacy_shape_wraps_as_v0() {
         "nodes": [{ "id": "a", "type": "scene", "data": {} }],
         "edges": [],
     });
-    let file = parse_file("p-old", &legacy.to_string()).unwrap();
-    assert_eq!(file.schema_version, 0);
-    assert!(file.versionless);
-    assert_eq!(file.project.name, "旧项目");
+    let err = parse_file(&legacy.to_string())
+        .expect_err("异型版本值 + 旧扁平形状应被拒绝（v0 支持已退役）");
+    assert!(matches!(err.root(), StoreError::CorruptEnvelope(_)));
 }
 
 /// [issue #338]：异型版本值不放宽混合/不足形状的拒绝——形状不足以单独
@@ -256,9 +242,9 @@ fn heterogeneous_version_value_with_mixed_or_insufficient_shape_is_rejected() {
         "nodes": [],
         "edges": [],
     });
-    assert!(parse_file("p-1", &mixed.to_string()).is_err());
+    assert!(parse_file(&mixed.to_string()).is_err());
     // 仅一个异型版本键、无任何家族特征：两组特征均不足
-    assert!(parse_file("p-1", r#"{"schemaVersion": null}"#).is_err());
+    assert!(parse_file(r#"{"schemaVersion": null}"#).is_err());
 }
 
 /// [issue #338]（§11 第 0 步）：带内版本主张非法或非契约载体时直接拒绝，
@@ -276,7 +262,7 @@ fn illegal_version_claims_rejected_without_shape_downgrade() {
         let text = format!(
             r#"{{"schemaVersion":{raw},"project":{{"id":"p-1","name":"非法主张"}},"graph":{{"nodes":[],"edges":[]}}}}"#
         );
-        let err = parse_file("p-1", &text)
+        let err = parse_file(&text)
             .err()
             .unwrap_or_else(|| panic!("{label}：非法版本主张应拒绝"));
         assert!(
@@ -287,8 +273,10 @@ fn illegal_version_claims_rejected_without_shape_downgrade() {
 }
 
 #[test]
-fn explicit_v0_with_legacy_shape_wraps_as_v0_envelope() {
-    // 显式 0 = 旧扁平家族：信封保持扁平形状时与无版本号路径一致包装
+fn explicit_v0_claim_is_rejected() {
+    // 显式 schemaVersion 0（旧扁平家族主张）已随 v0 支持退役（#519 处置）
+    // 统一拒绝——无论信封保持扁平形状还是混入 v1 专属键（两族矛盾见
+    // explicit_version_conflicting_with_envelope_family_is_rejected）
     let legacy = json!({
         "schemaVersion": 0,
         "name": "显式旧版",
@@ -296,10 +284,9 @@ fn explicit_v0_with_legacy_shape_wraps_as_v0_envelope() {
         "nodes": [{ "id": "a", "type": "scene", "data": {} }],
         "edges": [],
     });
-    let file = parse_file("p-old", &legacy.to_string()).unwrap();
-    assert_eq!(file.schema_version, 0);
-    assert_eq!(file.project.name, "显式旧版");
-    assert_eq!(file.graph["nodes"][0]["id"], json!("a"));
+    let err = parse_file(&legacy.to_string())
+        .expect_err("显式 schemaVersion 0 应被拒绝（v0 支持已退役）");
+    assert!(matches!(err.root(), StoreError::CorruptEnvelope(_)));
 }
 
 #[test]
@@ -315,7 +302,7 @@ fn v1_file_with_recoverable_project_metadata_loads_for_frontend_repair() {
         "episodeTitles": {},
         "assets": { "byId": {} },
     });
-    let file = parse_file("p-1", &doc.to_string()).unwrap();
+    let file = parse_file(&doc.to_string()).unwrap();
     // id 缺省同样透传（空串）：前端以受信路径 id 覆盖并按 repaired 回写
     assert!(file.project.id.is_empty());
     assert!(file.project.name.is_empty()); // 名称缺省，前端按回退链修复
@@ -327,7 +314,7 @@ fn v1_file_with_recoverable_project_metadata_loads_for_frontend_repair() {
         "project": { "id": 7, "name": null, "description": 42, "createdAt": 5, "updatedAt": [] },
         "graph": { "nodes": [{ "id": "s1" }], "edges": [] },
     });
-    let file = parse_file("p-1", &doc.to_string()).unwrap();
+    let file = parse_file(&doc.to_string()).unwrap();
     assert!(file.project.id.is_empty());
     assert!(file.project.name.is_empty());
     assert_eq!(file.project.description, Some(json!(42)));
@@ -342,7 +329,7 @@ fn v1_invalid_description_passes_through_for_frontend_repair() {
     // 非字符串 description 原样透传：折叠为 None 会让前端 repaired 检测
     // 看不见缺陷（§11.1「存在但非字符串时剥离并警告」永不触发）
     let text = r#"{"schemaVersion":1,"project":{"id":"p-1","name":"剧","createdAt":"","updatedAt":"","description":42},"graph":{"nodes":[],"edges":[]}}"#;
-    let file = parse_file("p-1", text).expect("解析 v1");
+    let file = parse_file(text).expect("解析 v1");
     assert_eq!(file.project.description, Some(json!(42)));
 }
 
@@ -352,7 +339,7 @@ fn v1_missing_buckets_pass_through_null_for_frontend_repair() {
     // 预补空容器会让 repaired 检测看不见缺陷，缺桶信封永不收敛
     let text =
         r#"{"schemaVersion":1,"project":{"id":"p-1","name":"剧","createdAt":"","updatedAt":""}}"#;
-    let file = parse_file("p-1", text).expect("解析 v1");
+    let file = parse_file(text).expect("解析 v1");
     assert_eq!(file.graph, serde_json::Value::Null);
     assert_eq!(file.settings, serde_json::Value::Null);
     assert_eq!(file.episode_titles, serde_json::Value::Null);
@@ -366,7 +353,7 @@ fn v1_envelope_with_missing_buckets_defaults_empty() {
         "project": { "name": "稀疏文档" },
         "graph": { "nodes": [], "edges": [] },
     });
-    let file = parse_file("p-1", &sparse.to_string()).unwrap();
+    let file = parse_file(&sparse.to_string()).unwrap();
     assert_eq!(file.schema_version, 1);
     // 缺省 id 透传空串：前端以受信路径 id 覆盖并随 repaired 回写落定
     assert_eq!(file.project.id, "");
@@ -386,14 +373,14 @@ fn explicit_schema_version_beyond_u32_is_rejected() {
         "project": { "name": "未来文档" },
         "graph": { "nodes": [], "edges": [] },
     });
-    assert!(parse_file("p-1", &doc.to_string()).is_err());
+    assert!(parse_file(&doc.to_string()).is_err());
     // 可表示范围内的未来版本照旧放行给前端判定
     let doc = json!({
         "schemaVersion": 2,
         "project": { "name": "未来文档" },
         "graph": { "nodes": [], "edges": [] },
     });
-    let file = parse_file("p-1", &doc.to_string()).unwrap();
+    let file = parse_file(&doc.to_string()).unwrap();
     assert_eq!(file.schema_version, 2);
 }
 
@@ -574,13 +561,20 @@ fn list_returns_broken_placeholder_for_corrupt_project() {
 /// 占位行为——正常项目排序与 IPC wire 形状——由上方用例覆盖）。
 #[test]
 fn list_returns_broken_placeholder_for_unclassifiable_or_unreadable() {
-    let cases: [(&str, Vec<u8>, &str); 2] = [
+    let cases: [(&str, Vec<u8>, &str); 3] = [
         (
             "信封两族矛盾（不可判型）",
-            r#"{"schemaVersion":0,"project":{"name":"伪装旧版"},"graph":{"nodes":[]},"assets":{"byId":{}}}"#
+            r#"{"schemaVersion":1,"project":{"name":"伪装新版"},"graph":{"nodes":[]},"name":"旧名"}"#
                 .as_bytes()
                 .to_vec(),
             "信封",
+        ),
+        (
+            "已退役的旧扁平 v0 主张",
+            r#"{"schemaVersion":0,"project":{"name":"伪装旧版"},"graph":{"nodes":[]},"assets":{"byId":{}}}"#
+                .as_bytes()
+                .to_vec(),
+            "不再受支持",
         ),
         ("非 UTF-8 字节", vec![0xff, 0xfe, b'{'], "不可读"),
     ];
@@ -653,26 +647,6 @@ fn load_and_list_read_anchored_tree_after_dir_replacement() {
     assert_eq!(metas.len(), 1);
     assert_eq!(metas[0].name, "正版");
     cleanup_temp(&projects);
-}
-
-/// 旧格式时间戳溢出保护（评审修复，PR #33 第十三轮）：u64 毫秒超 i64::MAX
-/// 时不得经 as 强转成负数、把脏时间戳静默替换成貌似合法的 1969 值——
-/// 检查转换失败即放弃迁移该字段（回退默认，由前端/后续归一化处置）。
-#[test]
-fn wrap_legacy_rejects_overflowing_numeric_timestamp() {
-    let legacy = json!({
-        "name": "旧项目",
-        "updated_at": u64::MAX, // 溢出 i64 的脏时间戳
-    });
-    let wrapped = wrap_legacy("p-1", &legacy);
-    assert_ne!(
-        wrapped.project.updated_at, "1969-12-31T23:59:59.999Z",
-        "溢出时间戳不得静默替换为负瞬间的规范值"
-    );
-    assert!(
-        wrapped.project.updated_at.is_empty(),
-        "溢出时间戳应回退默认而非伪造"
-    );
 }
 
 /// [issue #145](https://github.com/hailingu/PlotWeave/issues/145)：projects

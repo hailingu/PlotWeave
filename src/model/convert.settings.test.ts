@@ -214,7 +214,7 @@ describe('归一化：设定文档 relatedIds 成员校验（§6/§11.1 第 3 �
   })
 })
 
-describe('归一化：设定文档的键修复与 v0 时间戳保真（§6/§11.1 第 3 步/迁移链 ⑤）', () => {
+describe('归一化：设定文档的键修复（§6/§11.1 第 3 步）', () => {
   it('documents 空键重发新键，值内 id 随键；非空键与漂移内嵌 id 以记录键为准改写', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       settings: { documents: Record<string, Record<string, unknown>> }
@@ -235,34 +235,9 @@ describe('归一化：设定文档的键修复与 v0 时间戳保真（§6/§11.
     const again = serializeProject(round.content, 'p-1', NOW)
     expect(again.settings.documents['doc-x'].id).toBe('doc-x')
   })
-
-  it('v0 迁移保留旧档 updatedAt 瞬间：createdAt 缺省与之同刻（⑤），不用迁移时刻', () => {
-    const v0 = {
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2025-12-31T23:59:59.000Z',
-      },
-      graph: { nodes: [], edges: [] },
-      settings: { characters: [], locations: [] },
-      episodeTitles: {},
-      assets: { byId: {} },
-    }
-    const round = parseProject(v0)
-    expect(round.content.createdAt).toBe('2025-12-31T23:59:59.000Z')
-    // 信封 updatedAt 同为旧档瞬间（而非本次转换时刻）
-    const envelope = serializeProject(
-      round.content,
-      'p-old',
-      new Date('2026-09-01T00:00:00.000Z'),
-    )
-    expect(envelope.project.createdAt).toBe('2025-12-31T23:59:59.000Z')
-  })
 })
 
-describe('归一化：空白 id 引用的重发改写贯通与节点时间戳透传（§6/§11.1 第 3 步/迁移链 ⑤/§4.1）', () => {
+describe('归一化：空白 id 引用的重发改写贯通与节点时间戳透传（§6/§11.1 第 3 步/§4.1）', () => {
   it('v1 relatedIds 指向空白键实体：随空键重发改写到新 id，不再提前删除', () => {
     const doc = serializeProject(mkContent(), 'p-1', NOW) as unknown as {
       settings: {
@@ -286,63 +261,6 @@ describe('归一化：空白 id 引用的重发改写贯通与节点时间戳透
       (d) => d.id === 'doc-1',
     )!.relatedIds
     expect(rel).toEqual([{ kind: 'character', id: ch.id }])
-  })
-
-  it('v0 空白实体 id 重发时改写节点引用：characterIds/speaker/locationId 不悬空', () => {
-    const v0 = {
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-      graph: {
-        nodes: [
-          {
-            id: 's1',
-            type: 'scene',
-            position: { x: 0, y: 0 },
-            data: {
-              name: '场一',
-              sceneNo: 1,
-              interior: true,
-              synopsis: '',
-              characterIds: [''],
-              locationId: '',
-            },
-          },
-          {
-            id: 'd1',
-            type: 'dialogue',
-            position: { x: 0, y: 0 },
-            data: {
-              name: '对白',
-              lines: [{ kind: 'line' as const, speaker: '', text: '台词' }],
-            },
-          },
-        ],
-        edges: [],
-      },
-      settings: {
-        characters: [{ id: '', name: '林', gradient: 'g' }],
-        locations: [{ id: '', name: '天台' }],
-      },
-      episodeTitles: {},
-      assets: { byId: {} },
-    }
-    const round = parseProject(v0)
-    const spec = round.content.nodes.find((n) => n.id === 's1')!.data as {
-      characterIds: string[]
-      locationId?: string
-    }
-    expect(spec.characterIds).toHaveLength(1)
-    expect(spec.characterIds[0].startsWith('ch-')).toBe(true)
-    expect(spec.locationId?.startsWith('loc-')).toBe(true)
-    const d1 = round.content.nodes.find((n) => n.id === 'd1')!.data as {
-      lines: Array<{ speaker: string }>
-    }
-    expect(d1.lines[0].speaker.startsWith('ch-')).toBe(true)
   })
 
   it('节点 meta.createdAt/updatedAt 经会话模型往返保留，打开→保存不静默删除', () => {

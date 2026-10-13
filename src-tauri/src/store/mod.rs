@@ -49,7 +49,8 @@ pub async fn create_project(app: AppHandle, name: String) -> Result<ProjectMeta,
     })
     .await
 }
-/// 读取项目完整内容（含画布）；旧扁平格式包装为 v0 信封返回。读取相对
+/// 读取项目完整内容（含画布）；旧扁平 v0 格式已随格式支持退役（#519
+/// 处置）：判型拒绝由核心层统一交付。读取相对
 /// projects_dir 的受信根锚定句柄解析（§10.2），不按路径名重开。
 /// NotFound 出口携带 `[project_not_found] ` 机器码前缀（issue #229）——
 /// 前端空库播种按码分支，不经中文文案；码不上屏，展示层剥离。

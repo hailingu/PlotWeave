@@ -217,7 +217,13 @@ async function send(text = '再丰富点') {
   const input = screen.getByLabelText('AI 对话输入')
   fireEvent.change(input, { target: { value: text } })
   fireEvent.keyDown(input, { key: 'Enter' })
-  await waitFor(() => expect(input).toHaveProperty('disabled', false))
+  // busy 时输入行被卸载换成「取消」按钮，捕获的 input 引用随之游离、
+  // disabled 恒为 false——必须活查询等输入行回来（回合落定），否则
+  // waitFor 空转通过，用例在回合落定前继续（CI run 38372244808 flake）
+  await waitFor(() => {
+    expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
+    screen.getByLabelText('AI 对话输入')
+  })
 }
 
 /** 读取实际 llm_chat IPC 负载，包含 chat.ts 序列化后的消息。 */
@@ -420,6 +426,26 @@ describe('AiThread 恢复待执行卡的校验边界', () => {
         .disabled,
     ).toBe(true)
     expect(reopened.history.canUndo).toBe(false)
+  })
+
+  it('第一轮 llm_chat 迟到宏任务落定时 send 仍等待回合结束再重开会话', async () => {
+    const h = await setup()
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(proposal()), 200)
+        }),
+    )
+    await send('丰富旁白')
+    // send 必须等到回合落定：否则会话保存只含用户消息（无卡），重开
+    // 还会认领在途回合使 busy 复位，第二轮发送成为 no-op——records 读
+    // 到第一轮请求而无批次记录（CI run 38372244808 的 flake 形态）
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    h.unmount()
+    await setup({ session, nodes: [] })
+    invokeMock.mockResolvedValueOnce(proposal())
+    await send()
+    expect(records()).toMatchObject([{ status: 'validation_failed' }])
   })
 
   it.each([false, true])(

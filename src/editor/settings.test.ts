@@ -87,7 +87,7 @@ describe('normalizeSettings（旧文件缺省合并）', () => {
     })
   })
 
-  it('props/documents 契约透传桶：合法数组原样保留，异型丢弃（v0 迁移回写不得丢道具/文档）', () => {
+  it('props/documents 契约透传桶：合法数组原样保留，异型丢弃（归一化不得丢道具/文档）', () => {
     const props = [{ id: 'pr1', name: '旧皮箱' }]
     const documents = [
       { id: 'doc1', title: '人物小传', body: '…', relatedIds: [] },

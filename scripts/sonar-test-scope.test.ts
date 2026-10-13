@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ScriptKind } from 'typescript'
@@ -34,11 +34,12 @@ const testFacilityFiles = [
   'src/styles/sheetTokensEngine.ts',
 ] as const
 
-/** 必须保留在生产源码范围的哨兵（含与测试文件同名的 titleWhitespace）。 */
+/** 必须保留在生产源码范围的哨兵（含与测试文件同名的 titleWhitespace）。
+ * 哨兵必须指向现存文件：模块删除后悬空条目只会空转匹配，削弱守卫
+ * （PR #533 评审 5501107516 的 legacy.ts 发现），由存在性断言拦截。 */
 const productionSentinels = [
   'src/App.tsx',
   'src/model/document.ts',
-  'src/model/legacy.ts',
   'src/model/titleWhitespace.ts',
   'crates/plotweave-core/src/store/persist.rs',
   'crates/plotweave-ffi/src/lib.rs',
@@ -156,6 +157,10 @@ describe('Sonar 测试设施分类契约（issue #311）', () => {
 
   it('生产源码哨兵不被误分类为测试', () => {
     for (const file of productionSentinels) {
+      expect(
+        existsSync(resolve(repositoryRoot, file)),
+        `哨兵指向的文件已不存在（模块删除后条目悬空）：${file}`,
+      ).toBe(true)
       expect(
         matchesAny(testInclusions, file),
         `生产文件不应进入测试范围：${file}`,

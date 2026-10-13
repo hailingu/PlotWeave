@@ -62,6 +62,25 @@ struct NativeProjectStoreTests {
         #expect(rows.first { $0["id"]?.string == "broken" }?["diagnostic"]?.string != nil)
     }
 
+    /// Retired v0 flat envelopes are rejected like corruption (#519): the file stays untouched, listing keeps a diagnostic card, and loading fails.
+    @Test func legacyFlatEnvelopeIsRejectedAndPreserved() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let legacy: HostJSON = .object([
+            "name": .string("旧项目"), "updated_at": .number(1_700_000_000_000),
+            "nodes": .array([]), "edges": .array([])
+        ])
+        try fixture.write("old.json", legacy)
+        let listed = try await fixture.store.invoke(command: "list_projects", args: [:])
+        let row = try #require(listed.arrayValue?.first { $0["id"]?.string == "old" })
+        #expect(row["diagnostic"]?.string != nil)
+        do { _ = try await fixture.store.invoke(command: "load_project", args: ["id": .string("old")]) }
+        catch let failure as HostFailure { #expect(failure.code == "PW_PROJECT_CORRUPT") }
+        // Rejection must not rewrite the file; equality is semantic because JSONEncoder key order is not stable across encodings.
+        let untouched = try JSONDecoder().decode(HostJSON.self, from: Data(contentsOf: fixture.projects.appendingPathComponent("old.json")))
+        #expect(untouched == legacy)
+    }
+
     /// A missing AI file is empty history; invalid AI JSON is reported and never written by a read.
     @Test func aiSessionCorruptionDoesNotFallBackToEmptyWrite() async throws {
         let fixture = try Fixture()

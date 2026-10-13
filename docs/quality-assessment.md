@@ -1,248 +1,162 @@
 # PlotWeave 设计与实现质量评估
 
-本文是对 PlotWeave 设计与实现质量的评估记录：给出分维度评分、综合评级与每条结论的代码证据。它不是工程门禁，不新增规范或契约；其中的缺陷结论供排期参考。
+本文是对 PlotWeave 设计与实现质量的评估记录：给出分维度评分、综合评级与每条结论的证据。它不是工程门禁，不新增规范或契约。缺陷结论供排期参考；已有所有者决策的事项不因本记录而重新成为扣分项。
 
-- **评估基线**：`dev` @ `2c12805`。上一轮基线为 `b59ece3`（综合 9.2 / A），其间 **30 个提交、88 个文件变更**（+5189 / −1838）。
-- **评估性质**：只读审阅 + 亲自运行仓库既有非交互检查；**未修改任何源代码、未提交、未推送**（仅更新本记录文档）。
-- **证据强度分级**：本轮每条结论区分「亲自复核」（我直接读代码/跑命令）、「代理探查」（并行只读探查代理带回并由我抽查承重点）与「台账/文档转述」三种；正文中不单独标注的均为前两种。
-- **相关正文**：[数据模型主题索引](data-model/README.md)、[UI 规格](ui-design.md)、[工程标准](development/software-engineering-standard.md)、门禁文档族（[成本](development/quality-gate-cost.md)、[覆盖](development/quality-gate-enforcement.md)、[推送](development/quality-gate-push.md)、[证据](development/quality-gate-evidence.md)、[生命周期](development/quality-gate-lifecycle.md)）、[测试负载分析](development/test-workload.md)、[重复度政策](development/duplication-policy.md)。
+- **评估基线**：`refactor/retire-v0-flat-format` @ `96fb373ab5ede620ff04e084d3ac8eecde6cba1a`（`96fb373`，2026-10-13）。上一记录基线是 `8c8d655`（综合 9.2 / A），与本轮基线仅相差 1 个文档提交（上一记录本身），代码内容相同——本轮是在同一代码上以更深入的并行审查方法做的重新评估，不是对新代码的跟踪评估。
+- **评估性质**：只读审阅加 issue 建档。五路并行深度审查（前端 / Rust / Swift / 测试体系 / 工程基建与文档），通读或抽查了 60 余个代表性文件的实际内容，并对关键扣分证据做了直接复核（如 library_journal 的 cfg 门控断裂、gate-history 与 git log 的逐提交咬合）。本轮新建 issue [#546](https://github.com/hailingu/PlotWeave/issues/546)–[#553](https://github.com/hailingu/PlotWeave/issues/553)，未修改产品源代码。
+- **证据强度**：文件行数、依赖与断言统计、`git` / `gh` 状态由本次直接核对。覆盖率数值（前端 97.01%、Rust 85.57%）取自最近一次 pre-push 门禁生成的 `coverage/lcov.info` 与 `src-tauri/target/coverage/lcov-rust.info`。本轮**没有**重跑 Prettier、ESLint、`npm test`、`cargo test`、`xcodebuild` 或 Sonar；测试通过性与 Quality Gate 状态引用的是门禁自身证据链（`docs/development/gate-history.jsonl`）。
+- **会话初评修正**：本轮口头初评曾给 **8.9 / A-**。所有者确认 Tauri/Rust 与 Swift 双份实现是为 native 效果的有意设计（与已关闭的 [#518](https://github.com/hailingu/PlotWeave/issues/518) 结论一致），不作为扣分项，撤回相关扣分（合计 −0.6）后为 9.0。随后统一适用本文既有的「所有者已裁决或已记录事项不重复扣分」规则——[#522](https://github.com/hailingu/PlotWeave/issues/522) 残留的登记边界断言、[#468](https://github.com/hailingu/PlotWeave/issues/468) 的函数上限执行方式、与 [#520](https://github.com/hailingu/PlotWeave/issues/520) 威胁模型重叠的密钥内存驻留——撤回三处重复扣分（合计 −1.1，影响三个维度各一档以内）。修正后综合分为 **9.1 / A**。
 
-## 一、评估方法
+## 一、评分口径
 
-1. 亲自按 Scope Routing 运行既有检查（第二节），其中前端套件在**负载**与**空载**各跑一次（原因见第二节末）。
-2. 对上一轮 `§八` 的 7 条处置建议与 4 条「部分修复」判定逐条核对当前代码的落实情况（第四节）。
-3. 三个并行只读探查代理分别覆盖：本窗口修复真实性（10 组提交）、结构与规模事实、产品/文档一致性；其承重结论（元守卫、见证层、看门狗、键盘历史、无障碍 incomplete 口径共 5 处）由我逐一读当前代码复核确认。
-4. 跨轮遗留扣分点（隔离区上限、1 MiB 设置上限、提示注入围栏、`#353` 标签、`ui-design.md` 依赖清单）全部在当前 HEAD 重新定位验证，不沿用失效引用。
-5. 全部规模、覆盖率、测试数由命令实测；issue/PR 状态经 `gh` 实查（开放 issue 与开放 PR 均为 **0**）。
+8 个维度、10 分制、等权。评级带：A+ 9.5–10.0、A 9.0–9.4、A- 8.5–8.9、B+ 8.0–8.4、B 7.5–7.9、B- 7.0–7.4、C+ 6.5–6.9、C 6.0–6.4、C- 5.5–5.9、D 4.0–5.4、E < 4.0。
 
-评分口径（沿用上一轮）：9 个维度、10 分制；A+ 9.5–10.0、A 9.0–9.4、A- 8.5–8.9、B+ 8.0–8.4、B 7.5–7.9、B- 7.0–7.4、C+ 6.5–6.9、C 6.0–6.4、C- 5.5–5.9、D 4.0–5.4、E < 4.0。综合分按权重加权。**扣分只计有真实证据且现实可达的缺陷**；威胁模型明确出界的情形（同用户 TOCTOU、非 Unix 平台）与所有者已决策的披露取舍不计扣分（第七节）。
+扣分只计有真实证据、且在正常使用或已记录脏数据下可达的问题。下列事项不计扣分：
 
-## 二、门禁运行结果（原始证据）
+- 三栈并存与 Tauri/Swift 双份实现。[#518](https://github.com/hailingu/PlotWeave/issues/518) 已关闭，所有者本轮再次确认为刻意设计；具体实现内部的缺陷（如 `lock.rs` 双份拷贝）仍单独计。
+- 同用户替换 `projects/` 树、非 Unix 身份缺口、同用户恶意软件场景（仓库威胁模型已排除；[#520](https://github.com/hailingu/PlotWeave/issues/520) 为已登记边界，密钥派生材料常驻堆内存不擦除与之重叠，不另扣）。
+- 不支持 Windows 的平台选择本身。但代码内部 cfg 门控自相矛盾（注释声称考虑 Windows 语义而实际无法编译）仍计，见 4.3 与 [#546](https://github.com/hailingu/PlotWeave/issues/546)。
+- 门禁不做快速通道、CI 不跑本机 Sonar 的执行约束本身（托管 runner 不可达本机服务，已记录）。但绕过路径在服务端无任何兜底仍计，见 4.5 与 [#548](https://github.com/hailingu/PlotWeave/issues/548)。
+- [#468](https://github.com/hailingu/PlotWeave/issues/468) 已裁决的 80 行函数上限执行方式（评审强制、不建工具、存量不批量迁移）。
+- [#522](https://github.com/hailingu/PlotWeave/issues/522) 已登记归一化层遗留边界断言（6 处 `as unknown as`，位于未信任输入与 JSON 边界）。
+- [#519](https://github.com/hailingu/PlotWeave/issues/519) 的 v0 小数 `updated_at` 排序差异。已知边界，且本分支已让该格式直接被拒绝。
 
-| 检查 | 命令 | 结果 |
-| --- | --- | --- |
-| 前端格式 / 静态质量 | `npx prettier --check .` / `npx eslint . --max-warnings=0` | 均 exit 0，零警告 |
-| 文件规模守卫 | `npm run check:size`（Node 24.18.0） | exit 0，`{"code":"SIZE_CHECK_COMPLETE","checked":530,"excluded":58,"passed":true}` |
-| 严格类型 | `npx tsc --noEmit -p tsconfig.strict.json` | exit 0 |
-| 前端测试（空载） | `npx vitest run` | **190 文件 / 2881 用例全绿**，130.56s |
-| Rust 格式 / 静态质量 | `cargo fmt --check` / `cargo clippy --all-targets -- -D warnings` | 均 exit 0 |
-| Rust 测试 | `cargo test` | **663 + 3 + 2 用例全绿**（0 failed / 0 ignored） |
-| 守卫元检查基线 | `cargo test --lib -- --list` | `module_graph::` 共 **149** 个用例注册 |
-| 门禁台账最新记录 | `docs/development/gate-history.jsonl` | `fe0bcb4`：`qualityGate: OK`、新代码问题 0、前端 **98.15%**、Rust **87.63%** |
+## 二、综合结果
 
-**负载敏感残余必须如实记录**：我在三个探查代理并发运行（含一次全核 cargo 编译）时运行完整前端套件，**4 个文件 / 133 个用例失败**；随后机器空载时同一命令 **190 文件 / 2881 用例全绿**。即失败由并发负载诱发、非逻辑回归——这正是上一轮 `§6.4` 第 1 条判定「容量问题而非缺陷」的同一现象，[#498](https://github.com/hailingu/PlotWeave/issues/498) 已大幅削减其触发面（第五节 6.4），项目自己的 [test-workload.md](development/test-workload.md) 也明确写着「最终版本不再复测冷构建并发，不能据此声称该边界已解决」。因门禁失败会阻塞提交，仍按真实缺陷计扣分（幅度低于上一轮）。
+| 维度 | 评分 | 评级 |
+| --- | ---: | --- |
+| 架构与模块设计 | 9.5 | A+ |
+| 代码质量与类型安全 | 9.4 | A |
+| 健壮性与错误处理 | 9.0 | A |
+| 测试与覆盖率 | 8.6 | A- |
+| 工程基建与质量门禁 | 8.4 | B+ |
+| 文档与治理 | 9.4 | A |
+| 可维护性与一致性 | 9.0 | A |
+| 安全性 | 9.5 | A+ |
+| **综合** | **9.1** | **A** |
 
-**环境说明（不计项目缺陷）**：`npm run check:size` 在 Node 22.11.0 下因 `ERR_UNKNOWN_FILE_EXTENSION` 失败——仓库以 `.nvmrc` 钉定 24.18.0，我的评估 shell 默认 22.11.0；换用 24.18.0 后通过。项目脚本按约定使用 PATH 中 Node，非脚本缺陷。
+等权计算：(9.5 + 9.4 + 9.0 + 8.6 + 8.4 + 9.4 + 9.0 + 9.5) / 8 = 9.10，按一位小数记为 **9.1**。
 
-## 三、规模与基线数据
+与上一记录 9.2 / A 的比较：两轮维度划分不同（上轮 9 维加权、本轮 8 维等权），逐维不可直接对比。综合 −0.1 主要来自本轮更深的基建与测试审查新发现的缺口（[#548](https://github.com/hailingu/PlotWeave/issues/548) 服务端兜底、[#550](https://github.com/hailingu/PlotWeave/issues/550) 视图层回归、[#551](https://github.com/hailingu/PlotWeave/issues/551) 全链路 E2E），不是代码变差。唯一 B+ 是工程基建：门禁设计与执行深度是本轮观察到的最强项之一，失分集中在强制力终点是本机。
 
-| 指标 | 上一轮（b59ece3） | 本轮（2c12805） |
-| --- | --- | --- |
-| 前端测试 | 182 文件 / 2782 用例 | **190 文件 / 2881 用例** |
-| Rust 测试 | 659（654+3+2） | **668（663+3+2）** |
-| `module_graph::` 守卫用例 | 140 | **149**（版本化基线钉死集合） |
-| 前端 / Rust 覆盖率 | 98.15% / 87.17% | **98.15% / 87.63%**（台账 `fe0bcb4`） |
-| 受检文件（规模守卫） | 512 + 57 排除 | **530 + 58 排除**，基线仍为空 |
-| Rust 源码树 | — | 32,926 行；最大文件 `module_graph_tests.rs` **恰 800** |
-| `module_graph` 子系统 | 7049 行 / 27 文件 | **7,260 行 / 31 文件**（`module_graph.rs` 793 + 目录 30 文件 6,467） |
-| 文档 | 28 篇 / 6642 行 | **32 篇 / 7,348 行**；门禁文档族 5 篇 2,397 行 |
-| 开放 issue / PR | 0 / — | **0 / 0** |
+## 三、直接核对的规模
 
-## 四、上一轮结论的处置（全部核对当前代码）
+分析版本上的 `wc -l` 与 grep 统计：
 
-上一轮 `§八` 按性价比列出 7 条建议，另对 `#462`/`#469`/`#471`/`#472` 判「部分修复」。本轮逐条核对：
-
-1. **「验收改为变异判据」（建议 1）——完整落地，质量高于建议**。`#469` 的采集审计被**整体替换**为独立见证层 [audit_witness.rs](../src-tauri/src/module_graph/audit_witness.rs)（文件头亲验：「只从扫描产物与模块树推导必需的文件所有者，**不调用建边解析器**」），检测从「分类」改为**集合差**（[audit.rs](../src-tauri/src/module_graph/audit.rs) `record_path` 亲验：`expected.difference(targets)`，**即使实际目标非空也必须包含所有独立见证**——正是原盲点「祖先回退掩盖缺失子所有者」的根因修复）；glob 引入名现在会建立必需所有者见证，缺失即 `build_graph` 前置 `panic!`。`#471` 的元守卫从「注册数」改为**执行集合精确相等**：[check-rust-module-graph-guard.sh](../scripts/check-rust-module-graph-guard.sh)（亲验 65–82 行）真实执行 `cargo test --lib -- module_graph:: --test-threads=1`，要求**实际通过名称集合**与版本化基线（149 个，`rust-module-graph-guard-baseline.json`）完全一致，且唯一摘要 `0 failed; 0 ignored`；`#[ignore]` 全标记后必然失败。两者都自带变异自测（`rust-module-graph-guard.test.ts` 对 `ignoredTests: 149` 与 `: 1` 双向断言失败；`issue_494_tests.rs` 的 12 个用例在基线内）。
-2. **键盘方向键移动不可撤销（建议 2，P2）——真实修复**。[useNodeDragHistory.ts](../src/editor/useNodeDragHistory.ts)（亲验 57–79 行）在 `onNodesChange` 中捕获 `dragging === false` 的位置变更（方向键正是该形态），非拖拽期间快照前后位置压入一条 `HistoryCommand`；拖拽末帧不双记（`dragStartPos` 守卫）。回归测试用**真实画布 + keydown + 点击撤销/重做按钮**断言 `translate` 恢复（`EditorCanvasRegion.keyboard.test.tsx:147-196`），覆盖四方向 × Shift × 吸附开/关（22/88 与 5/20 单位）、多选一组、保存载荷一致。
-3. **「被推代码可冻结死线」（建议 3）——结构性解决，非仅登记**。#497 把期限移入**独立分离的看门狗进程**：[pre-push-install.mjs](../scripts/pre-push-install.mjs)（亲验 19–30 行）`fork(..., { detached: true })` 先建看门狗，launcher 收到 `start` 握手（看门狗 `ready` 之后才发）才允许 spawn npm——握手前不执行被推树代码；超时由看门狗 TERM→1s→KILL 安装组，且 **SIGKILL 可送达被 SIGSTOP 的监督器**（`finishTermination`），钩子 `wait` 非零返回、推送失败。端到端测试（`pre-push-refs.test.ts:666-719`）以**真实 `git push` + 真实 SIGSTOP 监督器**断言 10 秒内失败、无远端 ref、临时树移除。残余（同用户攻击者可直接杀死看门狗本身）已在 [quality-gate-push.md](development/quality-gate-push.md) §独立安装期限如实登记（「这不是操作系统级隔离」）。
-4. **门禁负载敏感（建议 4）——大幅缓解，残余如实登记**。#498：路由矩阵改用轻量探针（`gate-routing-probe.ts`）替代逐维全量门禁 spawn；共享种子化 Git 夹具消除共享可变状态；去掉「npm 1 秒内启动」的时序假设；恢复默认根覆盖（真实断言扫描器工作目录）。接受证据：连续 5 次完整 coverage 运行 0 失败、中位时长 102.75s（较基线 −31.9%，单机单样本）。**残余由我本轮实测复现**（第二节）。
-5. **无障碍 incomplete 口径（建议 5）——真实修复**。[accessibility.audit.test.tsx](../src/accessibility.audit.test.tsx)（亲验 180–185 行）把 `aria-prohibited-attr` 的 incomplete 结果升级为阻断项，且带变异守卫（注入无 role 的 `aria-label` div 必须失败、补 `role="group"` 必须通过）；其余 incomplete 保持人工（文件头如实声明）。配套修复：吸附开关可访问名随状态（`网格吸附：开/关` + `aria-pressed`），对齐分组从无 role 的 `Controls` 改为 `Panel role="group"`。
-6. **「上限作为一等对象」（建议 6）——未处理**。`module_graph_tests.rs` 仍恰 800 行、`module_graph.rs` 793、`recover_compact_tests.rs` 788；门禁文档族 2,397 行（+5.4%）；`docs/**` 仍在规模守卫之外。无「接近上限」观测信号。计入 6.1/6.5/6.6/6.8 扣分。
-7. **验证与文档小项（建议 7）——大部分落地**：`#502` 为 `exportScriptJson.ts` 新增 291 行直接单测（可选字段 presence-and-value 表、控制字符/星平面转义经真实 `parseProject` 往返、两空格缩进 + 单尾换行的字节契约、`structuredClone` 不变性），并以 `CommandStack.prototype.push` spy + `onSave` mock 在空/可撤销/可重做三种历史状态下证明导出**绝不触发保存或历史**；`#501` 使 `updatedAt` 保留文档时间（见 6.2）；吸附可访问名已修。**仍滞留**：`ui-design.md:338` 依赖清单、`#353` 标签（见 6.6）。
-8. **`#462` 遗留的 macOS 祖先环境（部分修复 → 如实登记）**：#499 把 `quality-gate-push.md` §「不可实现的边界」更新为 macOS 实测口径（`ps -Eww -p <pid>` 开箱即用、#499 报告在三处进程读到令牌变量名、2026-10-03 最小复核确认读取能力），保证范围收窄为「**直接继承**环境」——从「以 Linux 措辞带过」变为与目标平台一致的诚实登记。
-9. **`#472` 总量增长——单文件已拆、总量续增**：族内 5 篇 2,397 行（enforcement 760 / cost 666 / push 610 / evidence 196 / lifecycle 165），窗口 +122 行；docs 总量 32 篇 / 7,348 行（+706）。另新增 test-workload.md 与 duplication-policy.md（均带实测）。
-10. **本窗口其余提交**：#504/#506 去重（Rust 共享夹具净 −484 行；前端 `useAssetMedia` 抽取使 ImageNode/ShotNode 重复度 21.1%/17.9%→0/0，并配 `assetMediaOwnership.test.ts` 防复制回潮）；#490 首个 v0.2.0 源码发行准备；#492 README 产品/开发指引分离。`package.json` / `tauri.conf.json` / `Cargo.toml` 三处版本一致为 0.2.0。
-
-## 五、分维度评分
-
-| # | 维度 | 权重 | 上一轮 | 本轮 | 评级 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 架构与分层设计 | 15% | 9.4 | **9.4** | A |
-| 2 | 数据模型与持久化正确性 | 15% | 9.5 | **9.7** | A |
-| 3 | 可靠性与并发 / 数据安全 | 15% | 9.4 | **9.5** | A |
-| 4 | 测试质量与验证证据 | 15% | 8.6 | **9.6** | A |
-| 5 | 类型安全与代码规模规范 | 10% | 9.6 | **9.6** | A+ |
-| 6 | 文档与设计一致性 | 10% | 8.5 | **9.5** | A |
-| 7 | 安全与隐私 | 10% | 9.2 | **9.3** | A |
-| 8 | 工程治理与流程 | 5% | 9.0 | **9.4** | A |
-| 9 | 产品完成度 / UX / 可访问性 | 5% | 8.8 | **9.5** | A |
-
-**综合评分：9.5 / 10 → 综合评级 A+**（上一轮 9.2 / A）。
-
-> 9.5 恰在 A+ 区间下缘（A+ 9.5–10.0），属**压线晋级**：若对两处主要残余（门禁负载敏感、`module_graph` 守卫子系统规模）从严衡量，则回落为 A 高段。本轮无需像上一轮那样两轮修订——唯一的中途误判（前端套件 133 例失败）由空载复跑澄清为负载诱发，且恰构成 #498 残余的实测证据。
-
-## 六、各维度依据
-
-### 6.1 架构与分层设计 — 9.4 / A
-
-**强项**
-
-- 分层守卫全部在位且经事实核对：[src/moduleGraph.test.ts](../src/moduleGraph.test.ts) 断言运行时图/编译期图均无环、`src/model` 无框架运行时依赖、外壳→功能方向（`shellEditorRuntimeViolations`）；`lib.rs:54` 仍挂载 `#[cfg(test)] mod module_graph`，且挂载本身受元守卫保护。
-- **两个「验证器结构耦合」缺陷按根因修复**（上一轮本维度最重项）：审计见证层独立于建边解析器（见第四节第 1 条）；元守卫以执行集合替代注册计数。二者使该子系统「同类缺陷反复出现」的结构性趋势首次被机制性阻断。
-- #497 的进程拓扑是教科书式修复：期限计时器移出被监督进程的可达范围 + 握手放行 + 失败关闭，而非在原进程内加补丁。
-- #506 的 `useAssetMedia` 抽取（30 行 hook 替换两处相同的 27 行媒体生命周期块）配套**所有权测试**（仅该 hook 可调用 `projectAssets.mediaUrl`），把「不许复制回潮」变成机械约束。
-- 上轮已验证的单一事实源形态延续：`src/ipc/runtime.ts`、`src/ipc/invoke.ts`；JSON 导出复用保存路径序列化器。
-
-**扣分**
-
-1. **`module_graph` 子系统仍是全仓修复密度最高的构件，且本窗口继续增长（−0.3）**：31 文件 / 7,260 行（窗口 +211 行 / +4 文件），累计 11 个 issue（#399/#424/#426/#446/#447/#453/#469/#470/#480/#494/#495）。#494/#495 的新层方向正确，但客观上又为「手写部分 Rust 解析器」追加了三件需同步维护的机械（见证层、版本化基线、元守卫）——边际成本趋势未反转，只是缺陷形态被收窄。守卫自身文档（rust-standard.md）对其能力边界的披露是诚实的。
-2. **上限零余量（−0.2）**：`module_graph_tests.rs` **恰 800 行**（连续两轮）、`module_graph.rs` 793、`recover_compact_tests.rs` 788——任何新增用例都必须先拆分；仍无「接近上限」的观测信号。
-
-### 6.2 数据模型与持久化正确性 — 9.7 / A
-
-**强项**
-
-- **#501 使导出成为纯文档时间的函数**（上一轮本维度最重项 −0.15 的根因修复）：`exportScriptJson.ts:22` 传 `new Date(project.updatedAt ?? project.createdAt ?? 0)`，不读导出时钟；Markdown 路径同步移除 `exportedAt` locale 日期注入，**两条导出路径均字节可复现**。测试钉住三件事：不同系统日期下重复导出**字节一致**（md 与 json 各测）、`JSON → parseProject → 再导出` 不动点、缺 `updatedAt` 时 `createdAt → epoch` 的确定性回退。[project-document.md](data-model/project-document.md) §3.1 与实现逐句一致。
-- `store/`、`prefs/`、`library_journal/`、`seal.rs`、`src/model/` 本窗口无逻辑改动（仅 #504 测试去重），上一轮已验证的迁移回归族、原子写与信任链、凭据 0600、信封判型结论**全部延续**。
-- 台账覆盖 Rust 87.63%（上轮 87.17%），持久化层为未回归提供量化佐证。
-
-**扣分**
-
-1. **叙事顺序可推导但未编码（−0.1）**：导出按会话数组顺序写出，剧本顺序仍需消费者自行由位置 + 边种类/order + `episodeNo` 推导；文件内无「数组顺序 ≠ 叙事顺序」标记（文档对此诚实）。
-2. **超限设置的死路未消除（−0.1）**：`PREFS_MAX_BYTES = 1024 * 1024`（`prefs.rs:53`，亲验）仍阻止所有保存，有移除指引、无应用内重置入口（已登记）。
-3. **非规范 `schemaVersion`（−0.05）**：既有登记边界，未变。
-
-### 6.3 可靠性与并发 / 数据安全 — 9.5 / A
-
-**强项**
-
-- **#497 消除了上一轮「未登记的活性残余」**：监督器被 SIGSTOP 不再冻结期限（独立看门狗 + SIGKILL 可达停止态进程 + 端到端真实推送测试），且看门狗缺失/握手失败均失败关闭——「被中断」「锁泄漏」「挂死」三种失效不再耦合。#465 的受监督终止语义（先整组 TERM、等组长、绝不轻易 KILL、信号先释放锁）继续生效。
-- #498 的种子化夹具消除了 scripts 测试间的共享可变状态（并发正确性维度的隐性收益）。
-- 保存链、原子写、日志折叠归档（身份核验、绝不按名删除）、密钥迁移、`seal.rs` PBKDF2 600k + AAD + `MAX_OPEN_ROUNDS`——零改动延续。
-
-**扣分**
-
-1. **隔离区字节增长仍无上界（−0.25）**：准入闸门仍只按日志大小判定，`cleanup_pending[0].bytes`（`recover_compact_tests.rs:473,505` 亲验）只是可观测性；`assets.md` 已登记为取舍。
-2. **陈旧锁仍需人工介入（−0.15）**：#430 的可执行恢复指引与稳定诊断码在位，锁年龄/PID 自动接管未实现（已披露边界）。
-3. **20 秒「安装未就绪」保护路径从未被故障注入（−0.05）**：`triggerInstallDeadlineWhenReady` 的 `[TEST_INSTALL_NOT_READY]` 分支无失败路径测试（test-workload.md 自述第 55/96 行）。
-
-### 6.4 测试质量与验证证据 — 9.6 / A
-
-**强项**
-
-- 规模与覆盖：前端 **190 文件 / 2881 用例**（空载全绿）、Rust **668**、覆盖率 98.15% / 87.63%，均高于 80% 地板；规模守卫受检 530 文件全过、基线为空。
-- **上一轮的两个「空转验证器」都按变异判据重做并被基线钉死**（第四节第 1 条）——这是本维度从 8.6 跳升的主因：#494 的 12 个新用例与 #495 的 149 个用例集合都在版本化基线内，删挂载、标 `#[ignore]`、替名、掺桩四种破坏路径均被证实会失败。
-- 新增测试普遍是**真实行为测试**：键盘撤销走真实画布 + 原生 keydown + 按钮点击；#497 走真实 `git push` + 真实 SIGSTOP；#500 的变异守卫证明审计两个通道都能失败；#502 的只读断言 spy 的是真实 `CommandStack.prototype.push`。
-- #498 使 scripts 套件的中位 coverage 时长降 31.9% 并恢复默认根覆盖（真实断言扫描器工作目录而非信任环境变量）。
-
-**扣分**
-
-1. **门禁自身命令的负载敏感残余（−0.2）**：我实测并发负载下 4 文件 / 133 用例失败、空载全绿（第二节）。#498 削减了触发面但 test-workload.md 明确「不能据此声称已解决」；实测证实该声明诚实。门禁失败阻塞提交，故仍计扣分。
-2. **负载度量单机单样本（−0.05）**：中位 102.75s 对单一基线，无多机/多次统计。
-3. **其余 incomplete 规则仍不阻断（−0.05）**：仅 `aria-prohibited-attr` 升级，属披露的设计取舍而非隐藏缺陷，小幅计。
-
-### 6.5 类型安全与代码规模规范 — 9.6 / A+
-
-**强项**
-
-- `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` 全过；ESLint 零警告；clippy `--all-targets -D warnings` 干净；规模守卫 530/58 通过且**基线为空**（真实达成而非豁免）。
-- **首次出现主动降重而非被动合规**：#504 Rust 净 −484 行（共享夹具并配 `fixture_ownership_tests.rs` 所有权断言）；#506 前端重复度 21.1%/17.9%→0/0（Sonar CPD 实测记录于 [duplication-policy.md](development/duplication-policy.md)，无新 CPD 排除）。
-
-**扣分**
-
-1. **`docs/**` 仍在规模守卫之外（−0.2）**：`check-file-size.ts:24` 的 `^(src|src-tauri|scripts)` 三树限定未变；`quality-gate-enforcement.md` 以 760 行落在 800 的 95%（连续两轮）。
-2. **源码上限零余量（−0.2）**：`module_graph_tests.rs` 恰 800（同 6.1 第 2 条，此处计权）。
-
-### 6.6 文档与设计一致性 — 9.5 / A
-
-**强项**
-
-- **上一轮本维度最重项「记录的能力强于机制」（−0.35）已消除**：[rust-standard.md](development/rust-standard.md) 对 #494/#495 的描述与机制一致且边界诚实——见证层被明确表述为「有限 oracle，不是第二个 Rust 解析器」，元守卫的「同名空体替换仍是评审关注」如实披露；我核对的四处关键句与当前机制逐一对得上。
-- 三份门禁文档同批更新且互相一致：`quality-gate-push.md` 新增「独立安装期限（issue #497）」（含状态矩阵行与 2026-10-04 验证记录）、macOS 祖先环境边界按目标平台实测口径重写（#499）、「平台支持范围与依赖进程契约（issue #503）」。
-- `project-document.md` §3.1 与 #501 行为逐句一致；`ui-design.md` 状态矩阵扩至 C1–C5 / K1–K4 / J1–J16 并含 #496 键盘移动语义（22/88、5/20、每 keydown 一步、多选一组）。
-- 新增 test-workload.md / duplication-policy.md 均带实测数据与「不宣称已解决」的克制措辞。抽查 14 条跨文档相对链接 0 断链；`package.json`/`tauri.conf.json`/`Cargo.toml` 三处 0.2.0 一致；workflow.md 分支/PR/发行模型与 AGENTS.md 一致；README 能力清单抽查 4 项（对齐/吸附/撤销/导出）与代码相符。
-
-**扣分**
-
-1. **治理文档族继续增长且无机械上限（−0.25）**：族 2,397 行（窗口 +122）、docs 总量 7,348 行（窗口 +706，其中约 2,900+ 行为流程/门禁文档，README 仅 55 行）——流程文档的增长速度持续高于产品文档，无任何总量约束。
-2. **`ui-design.md:338` 依赖清单仍滞后（−0.1，连续两轮，亲验）**：仍写「（节点/连线/设定/资产/集标题/项目名）」，而 `EditorOverlays.tsx:96-99` 的注释与 `useMemo` 依赖实际含项目元数据、`aiRevision`、完成视口，且同文件 J7–J12 行已按新依赖表述——同一文档内部自相矛盾。
-3. **`#353` 已关闭仍带 `known-boundary` 标签（−0.05，连续第四轮，亲验 `gh`：`CLOSED | P3,codebase,known-boundary`）**：标签语义（记录处置而非待修缺陷）与「已修复关闭」结论不符。
-
-### 6.7 安全与隐私 — 9.3 / A
-
-**强项**
-
-- **上一轮「死线可被冻结」的未登记残余（−0.2 项）已消除**（第四节第 3 条）：独立看门狗 + 握手 + SIGKILL 送达停止态进程 + 真实推送端到端测试；残余（攻击者可直接杀看门狗）已登记且杀看门狗=失败关闭，不是绕过。
-- macOS 祖先环境边界从「Linux 措辞带过」修正为目标平台实测口径（#499），保证范围诚实收窄为「直接继承环境」；直接环境的令牌清理（`delete environment.SONAR_TOKEN/PLOTWEAVE_SONAR_TOKEN`）与端到端验证延续。
-- `seal.rs` 密码学参数、prefs no-follow + FIFO 拒绝 + 身份绑定、下载目标分类、`<canvas_digest>` 围栏（`src/editor/panels/aiThreadModel.ts`，亲验定位）——零改动延续。
-
-**扣分**
-
-1. **提示注入仍是缓解而非阻断（−0.35，已登记）**：围栏降低概率，摘要仍以 `system` 角色进入上下文，模型端无强制区分。
-2. **同用户攻击者可读祖先进程环境 / 可杀看门狗（−0.2，已登记）**：对「推送他人分支」场景，环境清理不是决定性防线；文档已如实登记，非隐藏缺陷。
-3. **下载文件名取自未校验自由文本（−0.1）**：`${project.name}-剧本.json` 交 `a.download` 由浏览器净化，仓库侧无净化测试（功能前既有形态）。
-4. **`revokeObjectURL` 时序未实测（−0.05）**、**未迁移 `pw1:` envelope 无 AAD（−0.05）**：既有登记边界。
-
-### 6.8 工程治理与流程 — 9.4 / A
-
-**强项**
-
-- **上一轮最重要的一条治理建议被完整采纳为制度事实**：「凡以『存在某自动化检查』结案的验收，都应写成注入目标缺陷后该检查必须失败」——#494/#495/#497 的修复全部自带变异/端到端失败演示。上一轮「机制存在却拦不住目标缺陷」的两处（−0.25 项）不再存在。
-- 开放 issue 与开放 PR 均为 **0**；本窗口 30 个提交全部 Conventional Commits 且措辞与交付相符；台账最新记录 `fe0bcb4` 全绿（98.15% / 87.63%），pending 文件为空（10 条物化行待随下次变更入库，符合流程）。
-- CI（macos-15 双 job）镜像 Scope Routing 各行并把元守卫纳入 Rust job——上轮落地的接线未回退。
-- #503 把「仅 macOS」从隐含取舍升级为 README/workflow/门禁文档三处一致的明示平台契约，含诊断优先级（`PRE_PUSH_INSTALL_PLATFORM_UNSUPPORTED` vs `PRE_PUSH_INSTALL_TIMEOUT_INVALID`）。
-
-**扣分**
-
-1. **门禁负载敏感的治理残余（−0.15，与 6.4 第 1 条同源、此处计治理面）**：单档统一成本 + 「不可绕过」的规则使该残余在重载时直接放大为提交停摆；test-workload.md 已度量并如实声明未解决。
-2. **治理文档族无规模约束（−0.2，同 6.6 第 1 条，此处计权）**。
-3. **80 行 SHOULD 存量债务仍无落点（−0.1）**：#468 决策要求的「按债务记录」至今无清单、无追踪 issue，存量在决策后不可观测。
-
-### 6.9 产品完成度 / UX / 可访问性 — 9.5 / A
-
-**强项**
-
-- **上一轮本维度最重项（键盘移动不可撤销，P2，−0.35）已修复**且带完整矩阵测试（K1–K4）；撤销/重做对指针与键盘两种移动方式语义一致。
-- 吸附开关可访问名随状态变化（`网格吸附：开/关`）+ `aria-pressed`；对齐分组获得 `role="group"`；审计口径升级后这两处缺口对门禁可见。
-- 两条导出路径均字节可复现（JSON 与 Markdown 口径统一为文档时间）；README 改为「可以做什么」能力清单且抽查与代码相符；v0.2.0 首发三处版本一致，发行说明如实披露「仅源码归档、无签名公证安装包」。
-- 路线图语义从「勾选进度」转为「已交付能力 + 明示边界（不支持 Windows、无安装包）」，不再存在标题与交付的落差面。
-
-**扣分**
-
-1. **默认主题对比度仍以登记边界结案（−0.15，#351）**：`color-contrast` 在合成 DOM 审计中禁用（`accessibility.audit.test.tsx:174`，附恢复前置条件），品牌胶囊基线约 2.49:1。
-2. **首发无签名/公证安装包（−0.15，README:26 如实披露）**：源码归档对目标用户（创作者）可达性有限。
-3. **Shift 框选期间面板对指针失效（−0.1）**：React Flow 内建样式行为，控件仍可键盘到达——属库行为而非本项目缺陷，小幅计。
-4. **窗口级原生质感（`windowEffects`）仍在规划未实现（−0.1）**：`ui-design.md:618` 有完整设计、无实现与追踪 issue。
-
-## 七、明确不计入扣分的项
-
-| 事项 | 不扣分理由 |
+| 对象 | 结果 |
 | --- | --- |
-| 我的评估 shell（Node 22.11.0）导致 `check:size` 报 `ERR_UNKNOWN_FILE_EXTENSION` | 仓库钉定 `.nvmrc` 24.18.0；属评估环境问题，换正确版本即过 |
-| 元守卫无法识别「同名空体替换」 | 脚本头部与 rust-standard.md 均明确声明超出其能力、属评审职责；要求测试枚举证明测试体非空不现实 |
-| 同用户攻击者可直接杀死看门狗 | 等价于失败关闭（exit ≠ 0），非绕过；且已登记「这不是操作系统级隔离」 |
-| 同用户本地 TOCTOU 换 `projects/` 树、非 Unix 平台不可用 | 威胁模型与覆盖范围明文出界（AGENTS.md、#503 平台契约） |
-| epoch 回退时间戳（1970-01-01） | #501 钉住的确定性契约，有测试；「观感奇怪」不构成缺陷 |
-| 折叠计数少计窗口（#421）、`pw1:` 无 AAD | 已登记 P3 边界 |
-| 无导入功能 | 设计非目标；`parseProject` 为事实导入器且格式带 `schemaVersion` |
-| 键盘移动每 keydown 一步（长按产生多步） | K1–K4 矩阵明确该语义且与拖拽「整段一步」并列文档化，属设计选择 |
-| 20s 未就绪保护、单机负载度量等已在 6.3/6.4 小幅计分 | 不重复计权 |
+| 前端 `src/**`（438 个 TS/TSX） | 生产 233 文件约 38,105 行；测试 207 文件约 57,825 行（1.52 : 1）；最大 `src/App.tsx` **798** 行 |
+| `src-tauri/src`（Rust） | 72 文件约 19,583 行（含测试） |
+| `crates/`（plotweave-core + plotweave-ffi） | 22 文件约 6,871 行；Rust 两 workspace 合计 525 个 `#[test]` |
+| `native/macos`（Swift） | App 67 文件 8,709 行；Tests 56 文件 6,977 行、242 个 `@Test`（约 0.8 : 1） |
+| `scripts/`（门禁与守卫脚本） | 17 文件约 6,984 行；脚本自身 Vitest 套件合计超过 200KB |
+| 行覆盖（门禁 lcov 实测） | 前端 **97.01%**（7,952 / 8,197）；Rust **85.57%**（6,598 / 7,711）；门禁下限均为 80% |
+| 开放跟踪 | 评估时开放 issue 19 个、开放 PR 1 个（[#533](https://github.com/hailingu/PlotWeave/pull/533)）；本轮新建 [#546](https://github.com/hailingu/PlotWeave/issues/546)–[#553](https://github.com/hailingu/PlotWeave/issues/553) 后开放 27 个 |
 
-## 八、综合结论
+## 四、分维度结论
 
-**综合评分 9.5 / 10，综合评级 A+（压线）。**
+### 4.1 架构与模块设计 — 9.5 / A+
 
-本窗口（30 提交）的特征是：**上一轮全部 7 条处置建议中的 5 条以等于或优于建议的形态落地，其余 2 条如实推进；两个「验证器的验证」缺陷按变异判据重做；一个 P2 用户可见缺陷（键盘移动不可撤销）修复**。具体地：
+模块边界由机器强制而非约定：[moduleGraph.test.ts](../src/moduleGraph.test.ts) 对真实 `src` 依赖图（TypeScript AST 解析 import/re-export/动态 import，Tarjan SCC 环检测）断言运行时与编译期双图无环；model 层纯度有四层独立守卫（禁框架运行时依赖、运行时与编译期闭包方向、shell→feature 方向），白名单收敛到 2 条且登记理由，守卫本身有合成反例测试防误报。`plotweave-core` 零 Tauri 依赖，`src-tauri/src/store/mod.rs` 是纯适配层；Swift 侧 6 个 actor 域经命令白名单分发（`NativeHostServices.swift:81-109`）。桥接协议为版本化信封 + 会话绑定 + canonical JSON 指纹去重 + 4096 容量窗口与退役防重放（`HostCommandRouter.swift:68-112`），五层防护均有真实 WebKit 测试背书。
 
-- **验证基础设施完成自我纠偏**：独立见证层 + 执行集合元守卫 + 版本化基线，把上一轮「检查存在 ≠ 检查能失败」的批评变成了制度（修复自带失败演示）。这是全项目质量叙事中最重要的一步。
-- **用户可见面显著变好**：键盘移动可撤销、导出字节可复现、无障碍两个静默缺口（分组标签丢失、开关状态不可感知）修复且对审计可见。
-- **安全残余的两处「未登记/错登记」都被消除或纠正**：SIGSTOP 冻结死线结构性解决；macOS 祖先环境按目标平台如实登记。
-- 我亲自运行的完整验证（空载）全部通过，与台账记录一致。
+扣分：
 
-**剩余扣分集中于三类，按性价比排序：**
+- **−0.3** `src/App.tsx` 798 行贴着 800 行上限，编排 7 个以上域 hook 与多个跨页 ref 隧道，是全应用协调中枢。跟踪为 [#545](https://github.com/hailingu/PlotWeave/issues/545)（上一轮已建）。
+- **−0.2** `crates/` 与 `src-tauri/` 双 Cargo workspace 独立解析（两份 Cargo.lock），`plotweave-core` 被双份解析编译，共享依赖版本漂移无机制防护；`native/macos/App/` 67 个文件一层平铺，层边界仅靠命名前缀。前者跟踪为 [#549](https://github.com/hailingu/PlotWeave/issues/549)；后者规模尚可控，不建 issue。
 
-1. **门禁负载敏感残余（6.4/6.8）**：实测复现（负载 133 例失败、空载全绿）。建议沿用 #471 的既有处置形态——把仍依赖墙钟预算的 git-spawn 段落移出门禁并行段落或显式放宽预算，并在多机/多次统计下重测。
-2. **`module_graph` 子系统的规模与零余量（6.1/6.5）**：31 文件 / 7,260 行 / 11 个历史 issue，`module_graph_tests.rs` 连续两轮恰在 800 上限。建议下次触碰时评估「单一解析核心 + 位置解析一次完成」的收敛，或为 800 行上限增加「接近上限」预警（如 ≥90% 即在守卫完成记录中输出提示）。
-3. **治理文档族与产品文档的失衡增长（6.6/6.8）**：族 2,397 行、docs 总量 7,348 行（约 40% 为流程文档），无总量约束；`ui-design.md:338` 陈旧依赖清单与 `#353` 标签跨多轮未处理。建议给 `docs/**` 纳入规模守卫或建立年度「文档债清理」节奏，并顺手清掉两处陈旧项。
+### 4.2 代码质量与类型安全 — 9.4 / A
 
-**结构性格局判断**：上一轮识别的「保证强于机制」模式已在本窗口被系统性地逆转——文档主动把保证收回机制能覆盖的范围（「有限 oracle」「不宣称已解决」「直接继承环境」）。当前项目最值得保持的资产正是这条新纪律：**任何声称「某失效模式不会再发生」的机制，都附带把它要防的缺陷注入后该机制失败的演示**。下一轮评估的观察重点应转向尚未被该纪律覆盖的面积：负载统计的代表性、守卫子系统的收敛、以及产品面向终端用户的分发形态（签名安装包）。
+类型卫生接近满分：生产代码 **0 个 `any`、0 个 `@ts-ignore`**；13 处 `@ts-expect-error` 全部用于负向类型契约测试，用法正当。TS 配置超 strict 标配（`exactOptionalPropertyTypes` + `noUncheckedIndexedAccess` 进门禁）。Swift 侧 **0 个 `try!`、0 个 `as!`、0 个强制解包、0 个 `fatalError`**，27 处 `try?` 逐一抽查全部有正当理由。Rust 生产代码仅 2 处 `#[allow]`；全库 619 处 unwrap 中生产约 50 处，逐一抽查均为已论证的不变量（如 `persist.rs:508` 有祖先循环证明）。`clippy --all-targets -- -D warnings` 覆盖测试 target。
+
+扣分：
+
+- **−0.4** [batchSim.ts](../src/editor/ai/batchSim.ts)（536 行）15 处 `as` 断言加 `Record<string, unknown>` 动态键通用模拟引擎，AI 批量写画布核心路径的正确性靠测试而非类型。跟踪为 [#553](https://github.com/hailingu/PlotWeave/issues/553)。
+- **−0.2** 内联 SVG 图标样板在 6 个文件复制，无共享组件；`NativeModels.swift:120-121` 缩进错位残留、`HostQuit.swift:166` 无括号混合 `||`/`&&`。均为琐碎项，不建 issue。
+
+[#522](https://github.com/hailingu/PlotWeave/issues/522) 残留的 6 处 `as unknown as` 是已登记的加载边界断言，按本文规则不重复扣分。
+
+### 4.3 健壮性与错误处理 — 9.0 / A
+
+持久化正确性达到基础设施级严谨度：原子写四件套（`O_CREAT|O_EXCL` 随机临时名、write+fsync、rename 前复核、父目录 fsync 持久性屏障，`persist.rs:238-303`）；`library_journal` 实现完整可恢复删除提交协议；cap-std 受信句柄 + no-follow + (dev,ino) 身份绑定贯穿全库，且测试与生产共享故障注入路径。手写领域错误 enum + 完整 source 链，错误文案被契约测试逐字钉死。panic 治理成体系：FFI `catch_unwind`（`ffi/lib.rs:134-143`）、worker panic 折叠为结构化诊断（`blocking.rs:18-41`，刻意不打印载荷防密钥泄露）、锁中毒统一恢复。前端 98 个 catch 无一静默吞错（抽查的"空"catch 均有语义注释），保存失败有后台重试链与用户可见上浮。
+
+扣分：
+
+- **−0.5** `library_journal` 在非 Unix 平台无法编译：`recover.rs:20-23` 无条件 import 的符号在 `trash.rs:25-131` 全部是 `#[cfg(unix)]` 且无非 Unix 对应物；`fsync_dir` 非 Unix 变体签名（`Result<(), String>`）与 Unix 变体（`Result<(), LibraryError>`）漂移，且无 `From<String>`。扣分对象是代码内部 cfg 意图与可达性自相矛盾（`persist.rs:294` 等注释声称考虑 Windows 语义），不是平台选择本身；CI 仅 macOS 使该断裂无发现渠道。跟踪为 [#546](https://github.com/hailingu/PlotWeave/issues/546)。
+- **−0.3** `native_quit.rs:92-102` 的 `extern "C" fn should_terminate` 未做 `catch_unwind`，回调内 panic 跨 FFI 边界 unwind 即 abort，可能中断退出屏障的在途保存冲刷——与 FFI 层的细致防护形成落差。跟踪为 [#547](https://github.com/hailingu/PlotWeave/issues/547)。
+- **−0.2** 解析器类代码（`HostJSON`、library_index 迁移链）无 property-based / fuzz 测试，靠手写表驱动用例。建议级，不建 issue。
+
+### 4.4 测试与覆盖率 — 8.6 / A-
+
+体量与质量双高：前端测试：生产 1.52 : 1，Swift 约 0.8 : 1，Rust 525 个 `#[test]`；实测行覆盖前端 97.01%、Rust 85.57%。纪律硬指标全绿：**0 个 skip、0 个 `#[ignore]`、0 个快照、0 个 `.only`、0 个空断言**。真实集成不缺位：Rust 侧 `invoke_responsiveness.rs` 用真实 Wry 子进程断言 150ms 主线程响应预算；Swift 侧 `WebHostBridgeTests` 起真实 WKWebView 验证 iframe 注入拒绝与页面失效闭锁；HTTP 测试用本机真实 TCP/URLSession 夹具。[ipc/commands.test.ts](../src/ipc/commands.test.ts) 对 Rust `generate_handler!` 清单与前端常量做双向一致断言，fail-closed。门禁脚本自身有超过 200KB 的测试套件。
+
+扣分：
+
+- **−0.5** Tauri shell 缺「真实 webview 加载真实前端 bundle 调真实 Rust 命令」的全链路 E2E：前端 8 个 `*.tauri.test.ts` 全部 mock IPC 边界，`invoke_responsiveness` 只从 Rust 侧驱动；native shell 侧已有对应物（`WebCanvasLoadingTests`）而 Tauri 侧没有。跟踪为 [#551](https://github.com/hailingu/PlotWeave/issues/551)。
+- **−0.4** SwiftUI 视图层无直接回归测试：`NativeSettingsView.swift`（407 行）、`NativeHomeView.swift`（392 行）等全靠状态/模型测试间接覆盖，无 snapshot/UI 测试。与 [#523](https://github.com/hailingu/PlotWeave/issues/523) 的一次性验收证据互补。跟踪为 [#550](https://github.com/hailingu/PlotWeave/issues/550)。
+- **−0.3** 覆盖率门禁为全局口径：局部塌陷可被整体均摊掩盖（`src-tauri/src/lib.rs` 45.5%、`media_format.rs` 65.4% 在 85.57% 总量下隐形）；`NativeHostApp.tsx`、`nativeCanvas/main.tsx`、`store/mod.rs` 为 0% 盲区。80% 下限与实测的差距本身是已记录的余量设计，不另扣；此处扣的是口径与盲区。不建 issue。
+- **−0.2** 4 处 10 秒真实时钟服务端夹具（`http_util.rs:344`、`prefs/tests.rs:257,287`、`imagegen/tests.rs:544`）与 1-2ms mtime 排序 sleep（`key_migration_tests.rs:148,154`），CI 高负载下有轻微 flake 面。不建 issue。
+
+### 4.5 工程基建与质量门禁 — 8.4 / B+
+
+设计深度远超普通项目：三钩子分工覆盖 revert/cherry-pick，`prepare-commit-msg` 兜底 `git commit --no-verify`；`pre-push` 按 ref 逐个分析，慢路径在临时 worktree 检出被推提交并 `npm ci` 后跑完整门禁，杜绝「检 A 推 B」；`GIT_NO_REPLACE_OBJECTS=1`、信号进程组分级清理、未分类后缀 fail-closed。证据链闭合：`gate-history.jsonl` 与 git log 逐提交咬合，覆盖率数值随代码漂移，证明是真实重跑。本地门禁与 CI 同口径单一事实源，Node/Rust/Xcode 钉版一致且 CI 有显式断言。已知绕过面（`git am` 等）在 quality-gate-enforcement.md 诚实记录。
+
+扣分：
+
+- **−0.8** 门禁强制力终点是本机：CI 不跑 Sonar（已记录原因）且前端 job 跑 `npm test` 而非 `npm run test:coverage`；hooks 需手动安装。`git push --no-verify` 可让未过 Sonar、覆盖率任意低的代码离机，服务端无任何拦截或告警。扣分对象不是「CI 不跑 Sonar」这一已记录约束，而是服务端兜底（门禁证据核验或分支保护）完全缺失。跟踪为 [#548](https://github.com/hailingu/PlotWeave/issues/548)。
+- **−0.4** `main`/`dev` 未启用 GitHub 分支保护（AGENTS.md 自记 `protected: false`、无 ruleset），「禁止直推」是纯约定，与上一条叠加构成无人值守绕过路径。处置并入 [#548](https://github.com/hailingu/PlotWeave/issues/548) 候选方案，不单开。
+- **−0.3** 无 Dependabot/Renovate，CI 无 `npm audit` / `cargo audit`；react 18、vitest 4、typescript 5.9 等对大版本 Latest 滞后且无自动提醒机制。跟踪为 [#552](https://github.com/hailingu/PlotWeave/issues/552)。
+- **−0.1** ESLint 基线偏温和（recommended 加 2 条 type-aware，靠零警告门禁补偿）；合并提交消息格式不统一（多数为 "Merge pull request #N"，`d3683be` 用 Conventional 消息做合并提交）。不建 issue。
+
+### 4.6 文档与治理 — 9.4 / A
+
+文档是活文档：docs/ 下 19 个主题分层清晰；「改动必须同步设计文档」有真实执行证据（v0 退役后的专项同步提交 `8c8d655`，多份 data-model 文档表述一致并链接同一 issue）；本轮抽查 3 处文档与代码一致性全部通过。Conventional Commits 最近 30 条 0 违规；**0 个 TODO/FIXME 积压**——债务以 issue 编号内联在注释里，几乎每个非显然决策都可溯源。门禁诊断码有契约文档（26 处 PRE_PUSH_ 引用）；密钥封装写明威胁模型边界（`seal.rs:1-21`）。
+
+扣分：
+
+- **−0.4** `vite.config.ts:25` 注释的前端覆盖率基线（98.13%）已漂移到实测 97.01%——门禁不追踪基线，注释陈旧。琐碎编辑项，不建 issue。
+- **−0.2** 注释密度极高（Rust `///` 约占 9%，Swift 几乎每个成员一条）带来注释漂移面；个别跨 actor 契约仅靠注释约束而非代码断言（`NativeProjectStore.swift:58`）。记录，不建 issue。
+
+### 4.7 可维护性与一致性 — 9.0 / A
+
+命名一致性高（hook 统一 `use*`、门面统一 `*Store`、归一化统一 `normalize*`）；文件 800/1800 行上限由工作树与索引双份测量强制执行，当前基线为空即全库无豁免；依赖注入贯穿 Swift 服务层；易漂移逻辑已单一来源化（复制命名规则、LIBRARY_KINDS 展示表）；运行时依赖仅 4 个。
+
+扣分：
+
+- **−0.5** 手写 pub/sub 模式重复且无编译期护栏：`aiSessionStore.ts:26-52` 与 `saveChain.ts:84-105` 各自重造 listener Set 加退订；8 个模块级可变单例（`saveChain.ts:27-75`）靠注释登记归属与生命周期，新增订阅路径没有类型层面保护（测试覆盖厚是缓解项）。不建 issue。
+- **−0.5** `src-tauri/src/lock.rs` 与 `crates/plotweave-core/src/lock.rs` 逐字节相同（58 行，diff 验证），锁中毒恢复策略修订需人工双处同步。并入 [#549](https://github.com/hailingu/PlotWeave/issues/549)。
+
+### 4.8 安全性 — 9.5 / A+
+
+在「本地单用户桌面应用」威胁模型内做得扎实：密钥封装 PBKDF2 600k 轮 + AAD 绑定 + 迭代数 DoS 上界，机器标识不可用硬失败不回退弱材料；桥接五层防护（会话绑定、主框架加入口 URL 双重信任、请求指纹去重、容量窗口、退役防重放）全部落地且有真实 WebKit 测试；HTTP 层 URL 脱敏、跨域重定向剥离 Bearer 有专项测试；O_NOFOLLOW 加身份绑定防 TOCTOU 贯穿 Rust/Swift 双端；CI `contents: read` 最小权限；Sonar 令牌只经 curl stdin、校验字符集后 unset 防子进程继承。
+
+扣分：
+
+- **−0.5** `WebCanvasHostView.swift:176-182` 的 `pushAppearance` 用字符串插值拼 JS（内容来自 JSONEncoder，实际安全），而同文件 `dispatchEvent:304-310` 刻意改用 `arguments:` 传参——同一文件两种严格度不一致，是防御纵深一致性口子而非现实漏洞。不建 issue。
+
+密钥派生材料常驻堆内存不擦除与 [#520](https://github.com/hailingu/PlotWeave/issues/520) 已登记威胁模型边界重叠，按本文规则不重复扣分。
+
+## 五、本轮新建与故意不建的 issue
+
+新建（均按 [issue 规范](development/issue-standard.md)，证据锚定 `96fb373`）：
+
+| Issue | 对应维度 | 原因 |
+| --- | --- | --- |
+| [#546](https://github.com/hailingu/PlotWeave/issues/546) | 4.3 | P2：`library_journal` 非 Unix 编译断裂，cfg 门控与无条件引用自相矛盾 |
+| [#547](https://github.com/hailingu/PlotWeave/issues/547) | 4.3 | P2：`native_quit` 退出回调跨 `extern "C"` 缺 panic 遏制 |
+| [#548](https://github.com/hailingu/PlotWeave/issues/548) | 4.5 | P3：Sonar 与覆盖率门禁服务端无兜底，`push --no-verify` 可完全绕过 |
+| [#549](https://github.com/hailingu/PlotWeave/issues/549) | 4.1 / 4.7 | P3：双 Cargo workspace 独立解析，`lock.rs` 逐字节双份维护 |
+| [#550](https://github.com/hailingu/PlotWeave/issues/550) | 4.4 | P3：SwiftUI 视图层无直接回归测试（与 [#523](https://github.com/hailingu/PlotWeave/issues/523) 的一次性验收互补） |
+| [#551](https://github.com/hailingu/PlotWeave/issues/551) | 4.4 | P3：Tauri shell 缺前端 bundle 到 Rust 命令的全链路 E2E |
+| [#552](https://github.com/hailingu/PlotWeave/issues/552) | 4.5 | P3：CI 缺依赖与供应链检查（npm audit / cargo audit / Dependabot） |
+| [#553](https://github.com/hailingu/PlotWeave/issues/553) | 4.2 | P3：`batchSim.ts` 15 处 `as` 断言，AI 写画布路径类型安全洼地 |
+
+故意不建：
+
+- [#545](https://github.com/hailingu/PlotWeave/issues/545)（`App.tsx` 余量）、[#520](https://github.com/hailingu/PlotWeave/issues/520)（密钥威胁模型边界）、[#521](https://github.com/hailingu/PlotWeave/issues/521)（生产路径 unwrap/expect）、[#523](https://github.com/hailingu/PlotWeave/issues/523)（P5 验收证据）、[#527](https://github.com/hailingu/PlotWeave/issues/527)、[#529](https://github.com/hailingu/PlotWeave/issues/529)、[#525](https://github.com/hailingu/PlotWeave/issues/525)、[#534](https://github.com/hailingu/PlotWeave/issues/534)–[#542](https://github.com/hailingu/PlotWeave/issues/542) 已经开放，不重复建单。
+- [#522](https://github.com/hailingu/PlotWeave/issues/522) 残留边界断言、[#468](https://github.com/hailingu/PlotWeave/issues/468) 函数上限执行方式、三栈并存（[#518](https://github.com/hailingu/PlotWeave/issues/518)）均为所有者已裁决或已记录事项。
+- 覆盖率全局口径与 0% 盲区、手写 pub/sub 重复、property-based 缺位：分别为已记录余量设计、测试厚缓解的低风险项与建议级项，记录于第四节对应维度。
+- SVG 图标复制、`vite.config.ts` 注释基线漂移、合并提交消息格式、真实时钟夹具、ESLint 基线温和：严重度过低，不够 issue 门槛。
+
+## 六、未运行的检查
+
+`docs/**` 没有配置独立的自动化检查。本记录是文档替换，没有产品代码变更，因此评估过程没有运行 Scope Routing 中的前端、Rust 或原生测试命令；覆盖率与门禁状态引用的是门禁自身产物（lcov 与 gate-history.jsonl）。本文件的提交仍须走仓库既有的提交与推送门禁，那不是本评估已经完成的验证。
