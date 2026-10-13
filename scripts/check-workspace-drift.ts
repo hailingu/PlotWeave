@@ -57,54 +57,60 @@ function sameVersions(left: Set<string>, right: Set<string>): boolean {
   )
 }
 
-function main(): void {
-  const closures = new Map<string, PackageVersions>()
-  for (const workspace of workspaces) {
-    let closure: PackageVersions
-    try {
-      closure = parseTreePackages(treeOutput(workspace))
-    } catch (error) {
-      // 采集失败（cargo 不可用、锁失同步等）不得产出半截比较结论。
-      const captured = error as { stderr?: unknown }
-      const stderr = typeof captured.stderr === 'string' ? captured.stderr : ''
-      const message = error instanceof Error ? error.message : String(error)
-      console.error(
-        JSON.stringify({
-          code: 'DRIFT_CARGO_FAILED',
-          workspace,
-          message,
-          stderr,
-        }),
-      )
-      process.exitCode = 1
-      return
-    }
-    // 闭包解析不出根包（如 cargo tree 输出格式变更、经包装器调用）说明
-    // 本次没有可比对的真实解析——两个空闭包会得到 compared: 0 的假通过，
-    // 必须显式失败而非静默放行（评审 5506545630）。
-    if (!closure.has(sharedRootPackage)) {
-      console.error(
-        JSON.stringify({
-          code: 'DRIFT_CLOSURE_INVALID',
-          workspace,
-          root: sharedRootPackage,
-          parsedCount: closure.size,
-        }),
-      )
-      process.exitCode = 1
-      return
-    }
-    closures.set(workspace, closure)
+/**
+ * 采集一个 workspace 中共享内核的依赖闭包并校验可解释性：cargo 失败
+ * （不可用、锁失同步）或闭包解析不出根包（输出格式变更、包装器）都
+ * 留结构化诊断、置非零退出码并返回 null——绝不产出半截比较结论。
+ */
+function collectClosure(workspace: string): PackageVersions | null {
+  let closure: PackageVersions
+  try {
+    closure = parseTreePackages(treeOutput(workspace))
+  } catch (error) {
+    const captured = error as { stderr?: unknown }
+    const stderr = typeof captured.stderr === 'string' ? captured.stderr : ''
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(
+      JSON.stringify({
+        code: 'DRIFT_CARGO_FAILED',
+        workspace,
+        message,
+        stderr,
+      }),
+    )
+    process.exitCode = 1
+    return null
   }
+  // 闭包解析不出根包说明本次没有可比对的真实解析——两个空闭包会得到
+  // compared: 0 的假通过，必须显式失败而非静默放行（评审 5506545630）。
+  if (!closure.has(sharedRootPackage)) {
+    console.error(
+      JSON.stringify({
+        code: 'DRIFT_CLOSURE_INVALID',
+        workspace,
+        root: sharedRootPackage,
+        parsedCount: closure.size,
+      }),
+    )
+    process.exitCode = 1
+    return null
+  }
+  return closure
+}
 
-  const [first, second] = workspaces
-  const firstClosure = closures.get(first)
-  const secondClosure = closures.get(second)
-  if (!firstClosure || !secondClosure) return
-
+/**
+ * 输出两个闭包的漂移诊断并返回汇总：共享包版本集不一致即逐包列出两侧
+ * 版本；仅一侧出现的包是双 workspace feature 统一的结构性差异（如
+ * src-tauri 侧其他依赖为共享包启用的可选特性），警告留痕不计为漂移。
+ */
+function reportClosureDrift(
+  first: string,
+  second: string,
+  firstClosure: PackageVersions,
+  secondClosure: PackageVersions,
+): { compared: number; driftCount: number; sideOnlyCount: number } {
   const sideOnly: { side: string; package: string; versions: string[] }[] = []
   let driftCount = 0
-  let failed = false
   for (const [name, versions] of firstClosure) {
     const other = secondClosure.get(name)
     if (!other) {
@@ -125,7 +131,6 @@ function main(): void {
       }),
     )
     driftCount += 1
-    failed = true
   }
   for (const [name, versions] of secondClosure) {
     if (firstClosure.has(name)) continue
@@ -135,24 +140,36 @@ function main(): void {
       versions: [...versions].sort(),
     })
   }
-  // 仅一侧出现的包是双 workspace feature 统一的结构性差异（如 src-tauri
-  // 侧其他依赖为共享包启用的可选特性）：警告留痕，不计为版本漂移。
   for (const entry of sideOnly) {
     console.log(JSON.stringify({ code: 'DRIFT_SIDE_ONLY', ...entry }))
   }
   const compared = [...firstClosure.keys()].filter((name) =>
     secondClosure.has(name),
   ).length
+  return { compared, driftCount, sideOnlyCount: sideOnly.length }
+}
+
+/** 主流程：采集两侧闭包 → 输出漂移诊断 → 汇总退出状态。 */
+function main(): void {
+  const closures = new Map<string, PackageVersions>()
+  for (const workspace of workspaces) {
+    const closure = collectClosure(workspace)
+    if (!closure) return
+    closures.set(workspace, closure)
+  }
+  const [first, second] = workspaces
+  const firstClosure = closures.get(first)
+  const secondClosure = closures.get(second)
+  if (!firstClosure || !secondClosure) return
+  const summary = reportClosureDrift(first, second, firstClosure, secondClosure)
   console.log(
     JSON.stringify({
       code: 'DRIFT_CHECK_COMPLETE',
-      compared,
-      driftCount,
-      sideOnlyCount: sideOnly.length,
-      passed: !failed,
+      ...summary,
+      passed: summary.driftCount === 0,
     }),
   )
-  process.exitCode = failed ? 1 : 0
+  process.exitCode = summary.driftCount === 0 ? 0 : 1
 }
 
 try {
