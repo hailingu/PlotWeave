@@ -6,6 +6,10 @@
 //! 条目：磁盘一致性由独立协议保证（§7.2 日志可恢复提交、§10.2 原子写）
 //! 或守卫对象为纯内存建议性状态（登记表/取消表/计数闸门，单项 infallible
 //! 操作不会留下结构损坏）。
+//!
+//! 本模块是恢复内核的全仓库单一来源（issue #549）：src-tauri 经
+//! `plotweave_core::lock` 复用，plotweave-ffi 的状态守卫亦委托此处，
+//! 消费方不得再维护同策略拷贝。
 
 use std::sync::{LockResult, MutexGuard};
 
@@ -14,7 +18,7 @@ use std::sync::{LockResult, MutexGuard};
 /// 安全保证锁内数据无结构损坏；各锁的自洽性论证见模块文档与
 /// rust-standard）。`Mutex::lock` 与 `Condvar::wait` 同一 LockResult
 /// 形状，共用本内核。`label` 为锁的领域名（用于诊断）。
-pub(crate) fn recover_guard<'a, T>(
+pub fn recover_guard<'a, T>(
     result: LockResult<MutexGuard<'a, T>>,
     label: &str,
 ) -> MutexGuard<'a, T> {

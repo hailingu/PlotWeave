@@ -67,6 +67,11 @@ jobs:
             crates
       # Tauri 使用的 Rust 内核与历史 P2 C ABI 保留 workspace 路由检查；
       # Swift 原生应用使用独立 Swift 服务，不链接 Rust 或该 C ABI。
+      # 双 workspace 漂移护栏（issue #549）：plotweave-core 闭包共享包
+      # 版本集在两侧一致；--locked 保证检查不改写锁文件（与本地路由检查
+      # 同口径，见 AGENTS.md Scope Routing 的 Rust 行）。
+      - name: 双 workspace 共享依赖版本一致性（issue #549）
+        run: npm run check:workspace-drift
       - name: crates cargo fmt --check
         working-directory: crates
         run: cargo fmt --check

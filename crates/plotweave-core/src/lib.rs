@@ -7,7 +7,9 @@
 //! 与恢复边界（句柄相对、no-follow 归类、原子写、保存边界复验），行为
 //! 与迁出前等价（原测试随迁守护）。
 
-mod lock;
+/// 锁中毒恢复内核的全仓库单一来源（issue #549）：src-tauri 与 plotweave-ffi
+/// 跨 workspace 复用本模块，不再各自维护逐字节拷贝。
+pub mod lock;
 
 pub mod isotime;
 pub mod store;
