@@ -108,9 +108,11 @@ struct NativePublicDownloadTests {
         #expect(calls.withLock { $0 } == 0)
     }
 
-    /// Direct, mixed-DNS and redirected special-use targets share the same refusal code before connecting.
+    /// Direct, all-reserved DNS, mixed-DNS and redirected special-use or reserved-unicast
+    /// targets share the same refusal code before connecting.
     @Test func specialUseTargetsNeverReachAnotherTransportHop() async throws {
-        for address in ["198.18.0.1", "240.0.0.1", "2001:db8::1", "::ffff:198.18.0.1"] {
+        for address in ["198.18.0.1", "240.0.0.1", "2001:db8::1", "::ffff:198.18.0.1",
+                        "3ffe::1", "3000::1", "3fff:1000::1", "2001:1000::1"] {
             let calls = Mutex(0)
             let host = address.contains(":") ? "[\(address)]" : address
             let mixed = NativePublicDownload(resolver: { _, _ in ["8.8.8.8", address] }, transport: { _ in
@@ -123,6 +125,15 @@ struct NativePublicDownloadTests {
                     Issue.record("Special-use destination returned media: \(address)")
                 } catch let error as HostFailure { #expect(error.code == "PW_NETWORK_REFUSED") }
             }
+            #expect(calls.withLock { $0 } == 0)
+            let reservedOnly = NativePublicDownload(resolver: { _, _ in [address] }, transport: { _ in
+                calls.withLock { $0 += 1 }
+                return NativeHTTPReply(status: 200, headers: [:], body: Data([1]))
+            })
+            do {
+                _ = try await reservedOnly.fetch("https://images.example/a", deadline: Self.deadline)
+                Issue.record("Reserved-only DNS returned media: \(address)")
+            } catch let error as HostFailure { #expect(error.code == "PW_NETWORK_REFUSED") }
             #expect(calls.withLock { $0 } == 0)
             let redirect = NativePublicDownload(resolver: { _, _ in ["8.8.8.8"] }, transport: { _ in
                 calls.withLock { $0 += 1 }

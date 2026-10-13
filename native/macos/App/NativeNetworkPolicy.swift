@@ -64,19 +64,75 @@ enum NativeNetworkPolicy {
         return !(b[0] == 203 && b[1] == 0 && b[2] == 113)
     }
 
-    /// Ordinary IPv6 requires global-unicast space; IANA protocol allocations use their explicit global exceptions.
+    /// Ordinary IPv6 qualifies only inside IANA-allocated global unicast prefixes or the
+    /// registry's globally reachable `2001::/23` exceptions; nominal `2000::/3` membership
+    /// alone never authorizes a pinned download endpoint (issue #528).
     private static func publicV6(_ b: [UInt8]) -> Bool {
         guard b[0] & 0xe0 == 0x20 else { return false }
-        if b[0] == 0x20, b[1] == 0x01 {
-            if b[2] == 0x0d, b[3] == 0xb8 { return false }
-            if b[2] < 2 {
-                if b[2] == 0, b[3] == 1, b[4..<15].allSatisfy({ $0 == 0 }), (1...3).contains(b[15]) { return true }
-                if b[2] == 0, b[3] == 3 { return true }
-                if Array(b.prefix(6)) == [0x20, 1, 0, 4, 1, 0x12] { return true }
-                return b[2] == 0 && (b[3] & 0xf0 == 0x20 || b[3] & 0xf0 == 0x30)
-            }
-        }
-        return !(b[0] == 0x3f && b[1] == 0xff && b[2] & 0xf0 == 0)
+        // 2001:db8::/32 documentation is carved out of the allocated 2001:0c00::/23 registry row.
+        if b[0] == 0x20, b[1] == 0x01, b[2] == 0x0d, b[3] == 0xb8 { return false }
+        return globalV6Rows.contains { within(b, $0) }
+    }
+
+    /// Registry rows that may receive pinned downloads: every ALLOCATED prefix of the IANA
+    /// IPv6 Global Unicast registry (page dated 2025-10-10) plus its globally reachable
+    /// exceptions carved inside the IETF `2001::/23` protocol space (special-purpose
+    /// registry). Space of the aggregate `2000::/3` that the registries do not list —
+    /// including `2d00::/8`, `2e00::/7`, `3ffe::/16` and the unallocated `2001::/16` gaps —
+    /// is reserved for future allocation and therefore absent here by design; new registry
+    /// allocations require updating this table and its boundary regression together.
+    private static let globalV6Rows: [(prefix: [UInt8], bits: Int)] = [
+        ([0x20, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01], 128),  // 2001:1::1/128 PCP anycast
+        ([0x20, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02], 128),  // 2001:1::2/128 TURN anycast
+        ([0x20, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03], 128),  // 2001:1::3/128 DNS-SD anycast
+        ([0x20, 0x01, 0x00, 0x03], 32),                   // 2001:3::/32 AMT anycast
+        ([0x20, 0x01, 0x00, 0x04, 0x01, 0x12], 48),       // 2001:4:112::/48 AS112-v6
+        ([0x20, 0x01, 0x00, 0x20], 28),                   // 2001:20::/28 ORCHIDv2
+        ([0x20, 0x01, 0x00, 0x30], 28),                   // 2001:30::/28 drone remote ID
+        ([0x20, 0x01, 0x02, 0x00], 23),                   // 2001:0200::/23 APNIC
+        ([0x20, 0x01, 0x04, 0x00], 23),                   // 2001:0400::/23 ARIN
+        ([0x20, 0x01, 0x06, 0x00], 23),                   // 2001:0600::/23 RIPE NCC
+        ([0x20, 0x01, 0x08, 0x00], 22),                   // 2001:0800::/22 RIPE NCC
+        ([0x20, 0x01, 0x0c, 0x00], 23),                   // 2001:0c00::/23 APNIC (minus documentation)
+        ([0x20, 0x01, 0x0e, 0x00], 23),                   // 2001:0e00::/23 APNIC
+        ([0x20, 0x01, 0x12, 0x00], 23),                   // 2001:1200::/23 LACNIC
+        ([0x20, 0x01, 0x14, 0x00], 22),                   // 2001:1400::/22 RIPE NCC
+        ([0x20, 0x01, 0x18, 0x00], 23),                   // 2001:1800::/23 ARIN
+        ([0x20, 0x01, 0x1a, 0x00], 23),                   // 2001:1a00::/23 RIPE NCC
+        ([0x20, 0x01, 0x1c, 0x00], 22),                   // 2001:1c00::/22 RIPE NCC
+        ([0x20, 0x01, 0x20, 0x00], 19),                   // 2001:2000::/19 RIPE NCC
+        ([0x20, 0x01, 0x40, 0x00], 23),                   // 2001:4000::/23 RIPE NCC
+        ([0x20, 0x01, 0x42, 0x00], 23),                   // 2001:4200::/23 AFRINIC
+        ([0x20, 0x01, 0x44, 0x00], 23),                   // 2001:4400::/23 APNIC
+        ([0x20, 0x01, 0x46, 0x00], 23),                   // 2001:4600::/23 RIPE NCC
+        ([0x20, 0x01, 0x48, 0x00], 23),                   // 2001:4800::/23 ARIN
+        ([0x20, 0x01, 0x4a, 0x00], 23),                   // 2001:4a00::/23 RIPE NCC
+        ([0x20, 0x01, 0x4c, 0x00], 23),                   // 2001:4c00::/23 RIPE NCC
+        ([0x20, 0x01, 0x50, 0x00], 20),                   // 2001:5000::/20 RIPE NCC
+        ([0x20, 0x01, 0x80, 0x00], 19),                   // 2001:8000::/19 APNIC
+        ([0x20, 0x01, 0xa0, 0x00], 20),                   // 2001:a000::/20 APNIC
+        ([0x20, 0x01, 0xb0, 0x00], 20),                   // 2001:b000::/20 APNIC
+        ([0x20, 0x03, 0x00], 18),                         // 2003::/18 RIPE NCC
+        ([0x24, 0x00], 12),                               // 2400::/12 APNIC (2400–240f)
+        ([0x24, 0x10, 0x00], 12),                         // 2410::/12 APNIC (2410–241f)
+        ([0x26, 0x00], 12),                               // 2600::/12 ARIN (2600–260f)
+        ([0x26, 0x10, 0x00], 23),                         // 2610::/23 ARIN
+        ([0x26, 0x20, 0x00], 23),                         // 2620::/23 ARIN
+        ([0x26, 0x30, 0x00], 12),                         // 2630::/12 ARIN (2630–263f)
+        ([0x28, 0x00], 12),                               // 2800::/12 LACNIC (2800–280f)
+        ([0x2a, 0x00], 12),                               // 2a00::/12 RIPE NCC (2a00–2a0f)
+        ([0x2a, 0x10, 0x00], 12),                         // 2a10::/12 RIPE NCC (2a10–2a1f)
+        ([0x2c, 0x00], 12)                                // 2c00::/12 AFRINIC (2c00–2c0f)
+    ]
+
+    /// A row matches when its whole leading bytes equal the address and the boundary byte
+    /// agrees on its significant high bits, mirroring CIDR prefix containment.
+    private static func within(_ address: [UInt8], _ row: (prefix: [UInt8], bits: Int)) -> Bool {
+        let whole = row.bits / 8
+        guard address.prefix(whole).elementsEqual(row.prefix.prefix(whole)) else { return false }
+        let remainder = row.bits % 8
+        guard remainder > 0 else { return true }
+        return address[whole] >> (8 - remainder) == row.prefix[whole] >> (8 - remainder)
     }
 
     /// Network-order bytes avoid signed integer/endian ambiguity in subnet comparisons.
