@@ -187,7 +187,7 @@ pub fn load_project_file(root: &CapDir, id: &str) -> Result<ProjectFile, StoreEr
         Ok(_) => {}
     }
     let text = read_verified_file(root, &name).map_err(|e| e.prefixed("拒绝读取项目文件"))?;
-    parse_file(id, &text).map_err(|e| e.prefixed("项目文件损坏"))
+    parse_file(&text).map_err(|e| e.prefixed("项目文件损坏"))
 }
 /// save_project 的可测内核（给定已验证的 projects 目录）。id 是 IPC 调用方
 /// 传入的不可信参数：词法校验先于任何路径拼接——否则 `../prefs` 式 id 可把

@@ -98,14 +98,14 @@ async function seedFirstRun(): Promise<boolean> {
   return seeded
 }
 
-/** 已知示例的旧格式（schemaVersion 0）迁移与 v1 修复型归一化回写：写回
- * **迁移/修复后的用户内容**——示例可能已被编辑（改名/加场景/资产），用
- * 硬编码种子覆盖会在升级后首次打开首页时静默摧毁这些编辑；演示内容刷新
- * 只经由空库播种路径发生。与 tauriLoad 同款加载侧资产复验（§7.1/§10.5）：
- * 索引资产文件缺失/被换链接时先隔离再回写，回写不被保存边界拒收。
- * 回写经保存链且守卫异步窗口（issue #134，守卫细节见 tryUpgradeSample）。
- * 单例隔离：该示例升级检查失败只跳过该例并留痕，摘要原样保留，版本错误
- * 延迟到该项目被打开时呈现。返回是否发生回写。 */
+/** 已知示例的 v1 修复型归一化回写：写回**修复后的用户内容**——示例可能
+ * 已被编辑（改名/加场景/资产），用硬编码种子覆盖会在升级后首次打开首页时
+ * 静默摧毁这些编辑；演示内容刷新只经由空库播种路径发生。与 tauriLoad
+ * 同款加载侧资产复验（§7.1/§10.5）：索引资产文件缺失/被换链接时先隔离
+ * 再回写，回写不被保存边界拒收。回写经保存链且守卫异步窗口（issue
+ * #134，守卫细节见 tryUpgradeSample）。单例隔离：该示例升级检查失败只
+ * 跳过该例并留痕，摘要原样保留，版本错误延迟到该项目被打开时呈现。
+ * 返回是否发生回写。 */
 async function upgradeKnownSamples(metas: { id: string }[]): Promise<boolean> {
   let repairedAny = false
   for (const meta of metas) {
@@ -144,14 +144,14 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
         assets: (file as { assets?: unknown }).assets ?? {},
       },
     )
-    const { content, migrated, repaired, warnings } = parseProject(file, {
+    const { content, repaired, warnings } = parseProject(file, {
       projectId: id,
       invalidAssetKeys,
     })
     // 归一化/判型警告逐条留痕（与 tauriLoad 同款）：形状判型等修复型回写
     // 不得静默改写版本号等内容（issue #338 评审二轮）
     for (const w of warnings) console.warn(`[projectStore] ${w}`)
-    if (!(migrated || repaired)) return false
+    if (!repaired) return false
     if (saveChainTokenOf(id) !== chainBefore) {
       console.warn(
         '[projectStore] 示例升级窗口内出现新的保存/删除排队，跳过本次回写（下次列表/打开重查）',
@@ -280,10 +280,12 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
       },
     )
     if (saveChainTokenOf(id) !== chainBefore) continue
-    // §11 归一化管线：迁移 + 孤儿边隔离 + 悬空引用标记；
+    // §11 归一化管线：孤儿边隔离 + 悬空引用标记；
     // projectId 为路径给定的受信 id，供 §11.1 元数据修复覆盖 project.id
-    const { content, migrated, repaired, warnings, reissuedAssetAliases } =
-      parseProject(file, { projectId: id, invalidAssetKeys })
+    const { content, repaired, warnings, reissuedAssetAliases } = parseProject(
+      file,
+      { projectId: id, invalidAssetKeys },
+    )
     for (const w of warnings) console.warn(`[projectStore] ${w}`)
     await registerAssetAliases(id, reissuedAssetAliases)
     // 别名登记的异步 IPC 期间可能又有新保存排队（如编辑器卸载冲刷）：
@@ -291,14 +293,14 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
     // 覆盖用户编辑——链身份变化即重启到循环顶（评审修复 P2-6，与读盘
     // 段守卫同款语义；别名登记幂等，重来无副作用）
     if (saveChainTokenOf(id) !== chainBefore) continue
-    // 迁移或修复发生则写回磁盘（下次打开不再迁移/重复修复）。v1 的可修复
-    // 脏数据（空白/重复 id 等）只修在内存时，用户只开不编辑（防抖保存跳过
-    // 首帧）会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id——修复
-    // 必须落定。回写走保存链且完成前不返回（此刻链静止、身份未变，同步段
-    // 内入队不会被插队）：与读取后排队的新保存保持全序，迟到的旧内容不得
+    // 修复发生则写回磁盘（下次打开不再重复修复）。v1 的可修复脏数据
+    // （空白/重复 id 等）只修在内存时，用户只开不编辑（防抖保存跳过首帧）
+    // 会让脏文件长留磁盘，每次打开都重新生成不同的"稳定" id——修复必须
+    // 落定。回写走保存链且完成前不返回（此刻链静止、身份未变，同步段内
+    // 入队不会被插队）：与读取后排队的新保存保持全序，迟到的旧内容不得
     // 覆盖新保存；失败只诊断不阻断（显式 catch，不留未处理拒绝），由链的
     // 重试登记接管——内存已交付修复结果，磁盘保持旧内容，下次打开会重新修复
-    if (migrated || repaired) {
+    if (repaired) {
       await enqueueSave(id, content).catch((err: unknown) => {
         console.error(
           '[projectStore] 迁移/修复回写失败，已登记后台重试（下次打开将重新修复）',

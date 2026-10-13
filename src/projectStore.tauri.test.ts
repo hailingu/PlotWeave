@@ -3,7 +3,7 @@ import type { ProjectContent } from './projectStore'
 
 /** projectStore 的 Tauri 路径：mock IPC，isTauri 判真后动态 import。
  * invoke 按命令名路由，行为由各用例编排。
- * load_project 返回的是 ProjectDocument 信封（Rust 侧已把旧扁平格式包装为 v0）。 */
+ * load_project 返回的是 ProjectDocument 信封（旧扁平 v0 格式已退役，#519）。 */
 
 const handlers = new Map<string, (args: unknown) => unknown>()
 const calls: Array<{ cmd: string; args: unknown }> = []
@@ -81,36 +81,14 @@ const modernFile = () => ({
   assets: { byId: {} },
 })
 
-/** v0 信封：旧扁平格式的节点字段（头像对象、地点字符串）经 Rust 包装。 */
-const legacyFile = () => ({
-  schemaVersion: 0,
-  project: { id: 'p1', name: '旧剧', createdAt: '', updatedAt: UPDATED_ISO },
-  graph: {
-    nodes: [
-      {
-        id: 's1',
-        type: 'scene',
-        position: { x: 0, y: 0 },
-        data: {
-          name: '场一',
-          sceneNo: 1,
-          interior: true,
-          time: '🌙 夜',
-          synopsis: '',
-          characters: [{ label: '林', gradient: 'g' }],
-          location: '天台',
-        },
-      },
-    ],
-    edges: [],
-    viewport: { x: 0, y: 0, zoom: 1 },
-  },
-  settings: { characters: [], locations: [] },
-  episodeTitles: {},
-  assets: { byId: {} },
+/** v1 信封（Rust 形状判型产物）：缺有效版本号按 v1 形状交付并打
+ * versionless 标记——修复回写补盖显式版本号（issue #338）。 */
+const versionlessFile = () => ({
+  ...modernFile(),
+  versionless: true,
 })
 
-describe('tauriLoad：归一化与迁移回写', () => {
+describe('tauriLoad：归一化与修复回写', () => {
   it('episodeTitles 只保留「正整数键 → 非空标题」，标题去空白', async () => {
     handlers.set('load_project', () => ({
       ...modernFile(),
@@ -628,17 +606,12 @@ describe('tauriLoad：归一化与迁移回写', () => {
     })
   })
 
-  it('旧格式（v0）触发迁移并回写 save_project（下次打开不再迁移）', async () => {
-    handlers.set('load_project', () => legacyFile())
+  it('versionless v1 触发修复回写 save_project：补盖显式版本号（下次打开不再修复）', async () => {
+    handlers.set('load_project', () => versionlessFile())
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
     const doc: ProjectContent = await projectStore.load('p1')
-    const scene = doc.nodes[0].data as {
-      characterIds: string[]
-      locationId?: string
-    }
-    expect(scene.characterIds).toHaveLength(1)
-    expect(doc.settings.locations.map((l) => l.name)).toEqual(['天台'])
+    expect(doc.name).toBe('现代剧')
     // 回写是 fire-and-forget（void tauriSave）：轮询等到 save_project 落盘调用
     await vi.waitFor(() => {
       expect(calls.some((c) => c.cmd === 'save_project')).toBe(true)
@@ -646,23 +619,23 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const save = calls.find((c) => c.cmd === 'save_project')
     expect(save).toBeDefined()
     expect((save?.args as { id: string }).id).toBe('p1')
-    // 回写内容为 v1 信封
-    const savedDoc = (
-      save?.args as { doc: { schemaVersion: number; episodeTitles: unknown } }
-    ).doc
-    expect(savedDoc.schemaVersion).toBe(1)
-    expect(savedDoc.episodeTitles).toEqual({})
+    // 回写内容为显式 v1 信封（versionless 标记消失）
+    const savedDoc = save?.args as {
+      doc: { schemaVersion: number; versionless?: boolean }
+    }
+    expect(savedDoc.doc.schemaVersion).toBe(1)
+    expect(savedDoc.doc.versionless).toBeUndefined()
   })
 
-  it('迁移回写先于返回：慢回写在途时 load 不得返回（后续改名保存不被旧内容覆盖）', async () => {
+  it('修复回写先于返回：慢回写在途时 load 不得返回（后续改名保存不被旧内容覆盖）', async () => {
     let releaseWriteback: (() => void) | null = null
-    handlers.set('load_project', () => legacyFile())
+    handlers.set('load_project', () => versionlessFile())
     handlers.set(
       'save_project',
       () =>
         new Promise<void>((resolve) => {
           if (releaseWriteback === null) {
-            // 首个调用 = 迁移回写：挂起模拟慢盘
+            // 首个调用 = 修复回写：挂起模拟慢盘
             releaseWriteback = resolve
             return
           }
@@ -675,7 +648,7 @@ describe('tauriLoad：归一化与迁移回写', () => {
     void loaded.then(() => {
       returned = true
     })
-    // 等到迁移回写已发起并挂起（慢盘）
+    // 等到修复回写已发起并挂起（慢盘）
     await vi.waitFor(() => {
       expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
     })
@@ -694,7 +667,7 @@ describe('tauriLoad：归一化与迁移回写', () => {
   })
 
   it('回写失败：内存副本照常交付，显式诊断且不留未处理拒绝', async () => {
-    handlers.set('load_project', () => legacyFile())
+    handlers.set('load_project', () => versionlessFile())
     handlers.set('save_project', () => {
       throw new Error('目录只读')
     })
@@ -702,7 +675,7 @@ describe('tauriLoad：归一化与迁移回写', () => {
     try {
       const { projectStore } = await load()
       const doc = await projectStore.load('p1')
-      expect(doc.name).toBe('旧剧')
+      expect(doc.name).toBe('现代剧')
       await vi.waitFor(() => {
         expect(
           errSpy.mock.calls.some((c) => String(c[0]).includes('回写失败')),
@@ -954,7 +927,7 @@ describe('tauriList：空库播种与示例升级', () => {
     expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
   })
 
-  it('示例项目仍是旧格式但已被编辑：迁移回写用户内容，不用新种子覆盖', async () => {
+  it('示例项目带可修复脏数据但已被编辑：修复回写用户内容，不用新种子覆盖', async () => {
     handlers.set('list_projects', () => [
       meta('sample-wu-ye-chu-zu-che'),
       meta('user-p1'),
@@ -965,13 +938,13 @@ describe('tauriList：空库播种与示例升级', () => {
       if (id !== 'sample-wu-ye-chu-zu-che') throw new Error('不应读取用户项目')
       loadCalls += 1
       if (loadCalls === 1) {
-        // 用户编辑过的示例（已改名，仍是 v0 旧扁平格式）
+        // 用户编辑过的示例（已改名，版本主张缺失经 Rust 判型交付）
         return {
-          ...legacyFile(),
-          project: { ...legacyFile().project, id, name: '我的修改版' },
+          ...versionlessFile(),
+          project: { ...versionlessFile().project, id, name: '我的修改版' },
         }
       }
-      // 回写后的净本（重列的升级检查读到迁移产物，不再触发写）
+      // 回写后的净本（重列的升级检查读到补盖版本后的产物，不再触发写）
       return {
         ...modernFile(),
         project: { ...modernFile().project, id, name: '我的修改版' },
@@ -980,11 +953,11 @@ describe('tauriList：空库播种与示例升级', () => {
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
     const list = await projectStore.list()
-    // 迁移回写触发重列：示例被读取两次（初检 + 重列复检）、只写一次
+    // 修复回写触发重列：示例被读取两次（初检 + 重列复检）、只写一次
     expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(2)
     const saves = calls.filter((c) => c.cmd === 'save_project')
     expect(saves).toHaveLength(1)
-    // 写回的是迁移后的用户内容，不是硬编码种子的「午夜出租车」
+    // 写回的是修复后的用户内容，不是硬编码种子的「午夜出租车」
     const saved = (
       saves[0].args as {
         doc: { schemaVersion: number; project: { name: string } }

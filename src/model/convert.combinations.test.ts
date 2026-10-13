@@ -131,7 +131,6 @@ describe.each([false, true])(
         const expected = fixture(extensions, reversed)
         const first = parseJsonDocument(serializeProject(expected, 'p-1', NOW))
         expect(first.repaired).toBe(false)
-        expect(first.migrated).toBe(false)
         expect(first.warnings).toEqual([])
         expectPreserved(first.content, expected)
         const next = parseJsonDocument(
@@ -140,7 +139,6 @@ describe.each([false, true])(
         expectPreserved(next.content, expected)
         expect(next.content).toEqual(first.content)
         expect(next.repaired).toBe(false)
-        expect(next.migrated).toBe(false)
       },
     )
 
@@ -150,7 +148,6 @@ describe.each([false, true])(
       const raw = withDamage(serializeProject(expected, 'p-1', NOW), damage)
       const result = parseJsonDocument(raw)
       expect(result.repaired).toBe(true)
-      expect(result.migrated).toBe(false)
       expect(result.warnings.length).toBeGreaterThan(0)
       expectPreserved(result.content, expected)
     })
@@ -167,7 +164,6 @@ describe.each([false, true])(
       expect(next.content).toEqual(repaired.content)
       expectPreserved(next.content, expected)
       expect(next.repaired).toBe(false)
-      expect(next.migrated).toBe(false)
       expect(next.warnings).toEqual([])
     })
   },

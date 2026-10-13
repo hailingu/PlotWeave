@@ -16,7 +16,7 @@ import type { StoryEdge, StoryNode } from './document'
 /** 对白行 speaker 域收口（§4.2，供 normalizeDialogueLineOptionals 调用）：
  * action 行携带 speaker（契约只允许 line 行有说话人——AI 边界已拒新输入，
  * 此为加载/导入侧的对等收口）或异型（非角色 id 字符串）均剥离并警告；
- * null 是 v0 兼容链「无说话人」的合法产物，按缺省保留。 */
+ * null 表示「无说话人」，按缺省保留。 */
 function stripIllegalSpeaker(
   line: Record<string, unknown>,
   nid: string,

@@ -349,7 +349,7 @@ R32 列表重读落定后，相同诊断仍可再次明确恢复；读取领取�
 - 文档：无配置的自动语义检查，已结构化核对实现状态、目录、链接、矩阵与保留边界；补充 `git diff --check`。
 - 未创建提交、推送或 PR；未执行该类操作所需的新 Sonar 门禁与远端 CI。已有合并／工具链结果保留在相应历史证据中，不代替本次功能结果。
 
-已知边界：旧扁平（v0／versionless）项目的异型排序元数据 `updated_at` 为小数时，Swift 转换为 ISO 时间，而旧 Rust `as_u64` 回退空串；影响仅为该脏 legacy 摘要排序，图与保存 payload 不受影响，按 P2 留待所有者处置。系统 fsync 故障注入、真实公网 TLS 信任链、实际保存／导入面板、菜单／Dock、中文输入法、VoiceOver、视觉与性能对照未覆盖。当前能力属于本地验证版本，签名／分发未执行。原生 bundle 的本地 ad-hoc 签名经 `codesign --verify --deep --strict` 检查通过；这不代表公证或发行签名。
+已知边界：旧扁平（v0／versionless）格式支持已随 [#519 处置](https://github.com/hailingu/PlotWeave/issues/519)退役——Rust 与 Swift 判型统一拒绝并保留原文件，此前记录的异型 `updated_at` 小数排序差异不再存在。系统 fsync 故障注入、真实公网 TLS 信任链、实际保存／导入面板、菜单／Dock、中文输入法、VoiceOver、视觉与性能对照未覆盖。当前能力属于本地验证版本，签名／分发未执行。原生 bundle 的本地 ad-hoc 签名经 `codesign --verify --deep --strict` 检查通过；这不代表公证或发行签名。
 
 ### F13 细粒度编辑状态补充
 

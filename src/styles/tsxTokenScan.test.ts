@@ -444,13 +444,6 @@ const TSX_COLOR_EXCEPTIONS: Readonly<
       '装饰图案中间节点色：无既有令牌（新增令牌属设计决策，暂以例外登记，issue #362）',
   },
   {
-    file: 'src/model/legacy.ts',
-    context: 'gradient',
-    value: 'linear-gradient(135deg,#8e8e93,#636366)',
-    reason:
-      '用户内容默认头像渐变：v0 迁移补建实体的兜底配色，持久化为用户数据（#262 边界，评审 4113886895）',
-  },
-  {
     file: 'src/home/projects.ts',
     context: 'cover',
     value: 'linear-gradient(160deg, #2b2f4c, #e0176e)',
