@@ -124,12 +124,17 @@ async function setup(initial = project()) {
   }
 }
 
-/** 等待发送完成，使用生产 UI 输入入口。 */
+/** 等待发送完成，使用生产 UI 输入入口。busy 时输入行被卸载换成
+ * 「取消」按钮，捕获的引用会游离且 disabled 恒为 false——须活查询
+ * 等输入行回来（回合落定），否则 waitFor 空转通过（同 AiThread.context）。 */
 async function send(text: string) {
   const input = screen.getByLabelText('AI 对话输入')
   fireEvent.change(input, { target: { value: text } })
   fireEvent.keyDown(input, { key: 'Enter' })
-  await waitFor(() => expect(input).toHaveProperty('disabled', false))
+  await waitFor(() => {
+    expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
+    screen.getByLabelText('AI 对话输入')
+  })
 }
 
 describe('明确操作先交付预览，再由用户确认', () => {
