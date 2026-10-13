@@ -38,15 +38,17 @@ function isSwiftMarker(
   )
 }
 
+/** 原生宿主标记的属性读取面（issue #522 收口）：全局 window 无索引签名，
+ * 不对整个窗口做类型断言——经 in 判定后按收窄属性读取，缺失即无标记。 */
+function nativeHostMarker(host: object): unknown {
+  return '__pwNativeHost' in host ? host.__pwNativeHost : undefined
+}
+
 /** 识别宿主类别：优先级 tauri > swift > browser；无窗口按纯浏览器。 */
 export function detectHostKind(probe?: HostProbeWindow): HostKind {
-  const w: HostProbeWindow =
-    probe ??
-    (typeof window === 'undefined'
-      ? {}
-      : (window as unknown as HostProbeWindow))
+  const w: object = probe ?? (typeof window === 'undefined' ? {} : window)
   if (isTauriRuntime(w)) return 'tauri'
-  if (isSwiftMarker(w.__pwNativeHost)) return 'swift'
+  if (isSwiftMarker(nativeHostMarker(w))) return 'swift'
   return 'browser'
 }
 

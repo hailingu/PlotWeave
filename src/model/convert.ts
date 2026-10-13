@@ -339,11 +339,17 @@ function assembleLegacyContent(
         record[bucket] = []
       }
     }
+    // 边界（issue 16/#522）：桶成员仍是 JSON 擦除类型的 v0 数组（预检只
+    // 保证容器是数组），实体形状由迁移链 normalizeSettings/reissueEntityIds
+    // 的运行时谓词修复——此处绑定到迁移入站的 ProjectSettings 契约
     settings = record as unknown as ProjectContent['settings']
   }
   return {
     name: env0.project?.name ?? '',
     createdAt: env0.project?.createdAt || undefined,
+    // 边界（issue 16/#522）：v0 成员只修复到「可遍历形态」，此处绑定到
+    // 迁移入站的 SessionNode/SessionEdge 联合——迁移器逐字段经运行时谓词
+    // 读取，产物以 v1 重走完整归一化管线（见上方函数说明的宽化边界）
     nodes: normalizeV0NodeShapes(
       members(asArray(graphRaw.nodes, 'graph.nodes'), 'graph.nodes'),
       warnings,
