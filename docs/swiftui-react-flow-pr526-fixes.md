@@ -32,6 +32,8 @@
 
 地址依据：[IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/)、[IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/)。单实例边界、付费模型和存储格式不扩展；异步下载沿用既有绝对截止时间、取消和逐跳校验，新增策略不引入重试或共享可写状态。
 
+R1–R3 的上述记录覆盖当时已选特殊用途表和下载入口。后续第26条指出名义 `2000::/3` 的保留／未分配空间仍被放行，已建 [issue #528](https://github.com/hailingu/PlotWeave/issues/528) 后续修复；不能将既有绿色表测试解释为完整分配状态正确，当前证据与缺口见 [R40](#ipv6-保留与未分配范围的后续修复r40)。
+
 ## 验证结果
 
 本机环境：Node 24.18.0、Xcode 27.0（27A266a）、macOS SDK 27.0。以下命令均在仓库根目录执行，使用隔离夹具，不访问真实模型服务或用户项目。
@@ -273,3 +275,17 @@ CI #604 的完整原生目标执行 224 tests／53 suites，新增设置回归�
 | R39e | 确认后外部更新；另字段 pending；provider 删除、reload／重挂／session 失效 | 草稿与确认由当前字段／页面 owner 持有，后代不消费旧确认；元数据有界且不写磁盘 | 既有普通稿播种和密钥生命周期证据保留；新确认清理及三字段组合未验证，真实 kill 保留人工缺口 |
 
 命令回执与只读投影独立交付，React 可合并中间状态；仅用请求完成、值再次相等或永久 dirty 都不能同时满足新稿保留和干净外部更新。后续实现须先记录矩阵、观察真实最小先红，再设计有界字段身份与快照配对，完成选定转换、设计同步、前端／原生完整路由及 Git 门禁／CI；具体验收条目在 #527。本轮文档无配置的自动语义检查，也不制造源码或普通文字镜像测试；检查记录及最终文档提交／CI 将补在 PR，基线 CI #607 不作为 ABA 已修复证据。
+
+## IPv6 保留与未分配范围的后续修复（R40）
+
+`2fc5a756e44cccacc0eb632ba2abc488ea6e0b30` 的第一轮后续评审新增第26条 [P2](https://github.com/hailingu/PlotWeave/pull/526#discussion_r4251017464)：`3ffe::1` 通过当前 `NativeNetworkPolicy.publicV6` 的兜底，但 [IANA 全球单播登记](https://www.iana.org/assignments/ipv6-unicast-address-assignments)将 `3ffe::/16` 标为 RESERVED，且 `2000::/3` 中未列的空间保留给未来分配。核查日期 2026-10-13，登记页更新日期 2025-10-10。这是 R1 当时特殊用途表以外的新分配状态触发，已创建开放的 **[P2 缺陷 issue #528](https://github.com/hailingu/PlotWeave/issues/528)**；分类缺陷待修复，合并处置需包含该开放问题。本轮仅同步文档，不修改生产分类器、网络策略测试或下载协议。
+
+| 后续 case | 状态／入口及应维持的不变量 | 当前证据／验证缺口 |
+| --- | --- | --- |
+| R40a | literal 为 RESERVED／未分配的名义全球单播；classifier 必须拒绝，不能因 `2000::/3` 通过放行 | 编译实际 HostJSON 与 NativeNetworkPolicy，`3ffe::1`、`3000::1`、`3fff:1000::1` 均返回 true，缺陷真实复现；非完整分配表测试 |
+| R40b | 已分配公网、特殊用途全球例外及 IPv4 转换表示；合法分类、连接固定与 TLS 原主机身份保持 | 同次实际执行 `2606:4700::1111` true、`fd00::1` false；现有 R1／下载回归保留，不能据两个对照宣称全部合法地址或 IANA 登记均正确 |
+| R40c | 初始 DNS 全保留／混合答案、重定向到保留目标；拒绝先于连接，入口共用 classifier | NativePublicDownload 接线已读；新增保留段的 downloader 回归与真实路由未执行，#528 应以注入解析／传输证明拒绝不连接，同时保留 deadline／取消／大小语义 |
+
+仓库根以 Xcode 27.0／SDK 27.0 执行 `xcrun swiftc -swift-version 6 -module-cache-path /private/tmp/pr526-r40-policy-check/cache native/macos/App/HostJSON.swift native/macos/App/NativeNetworkPolicy.swift /private/tmp/pr526-r40-policy-check/main.swift -o /private/tmp/pr526-r40-policy-check/check`，再运行临时 binary，退出 0。main 仅逐个调用真实生产谓词，不读取源码作普通文字断言、不调用网络／模型或用户数据；临时验证输出清理。上述真实 classification 不是 Swift Testing 新回归、不是已修复证据，也不证明实际 SSRF／内部泄露。当前测试还显式允许 `3fff:1000::1`，后续应一并审阅。
+
+资产 §7.3、功能 F09 和本记录已区分已选特殊用途防线与分配登记缺口。纯文档无配置自动语义检查，检查及最终提交／CI 证据补于 PR；源码路由不因只读分类器核查而宣称重跑，既有 CI #608 首次全绿不代表本缺陷消除。#528 收录最小先红、分配前缀边界、合法例外／转换形式、literal／DNS／重定向、预算／取消和完整 native／Git 门禁／修复 CI 验收；策略表来源和更新机制待后续设计。实际特殊网络路由、真实公网 TLS 与计费模型未测试。
