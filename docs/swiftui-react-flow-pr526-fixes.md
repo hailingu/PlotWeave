@@ -32,7 +32,7 @@
 
 地址依据：[IANA IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/)、[IANA IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/)。单实例边界、付费模型和存储格式不扩展；异步下载沿用既有绝对截止时间、取消和逐跳校验，新增策略不引入重试或共享可写状态。
 
-R1–R3 的上述记录覆盖当时已选特殊用途表和下载入口。后续第26条指出名义 `2000::/3` 的保留／未分配空间仍被放行，已建 [issue #528](https://github.com/hailingu/PlotWeave/issues/528) 后续修复；不能将既有绿色表测试解释为完整分配状态正确，当前证据与缺口见 [R40](#ipv6-保留与未分配范围的后续修复r40)。
+R1–R3 的上述记录覆盖当时已选特殊用途表和下载入口。后续第26条指出名义 `2000::/3` 的保留／未分配空间仍被放行，已建 [issue #528](https://github.com/hailingu/PlotWeave/issues/528) 后续修复并于 2026-10-13 完成（见 R40 修复记录）；不能将既有绿色表测试解释为完整分配状态正确。
 
 ## 验证结果
 
@@ -289,3 +289,14 @@ CI #604 的完整原生目标执行 224 tests／53 suites，新增设置回归�
 仓库根以 Xcode 27.0／SDK 27.0 执行 `xcrun swiftc -swift-version 6 -module-cache-path /private/tmp/pr526-r40-policy-check/cache native/macos/App/HostJSON.swift native/macos/App/NativeNetworkPolicy.swift /private/tmp/pr526-r40-policy-check/main.swift -o /private/tmp/pr526-r40-policy-check/check`，再运行临时 binary，退出 0。main 仅逐个调用真实生产谓词，不读取源码作普通文字断言、不调用网络／模型或用户数据；临时验证输出清理。上述真实 classification 不是 Swift Testing 新回归、不是已修复证据，也不证明实际 SSRF／内部泄露。当前测试还显式允许 `3fff:1000::1`，后续应一并审阅。
 
 资产 §7.3、功能 F09 和本记录已区分已选特殊用途防线与分配登记缺口。纯文档无配置自动语义检查，检查及最终提交／CI 证据补于 PR；源码路由不因只读分类器核查而宣称重跑，既有 CI #608 首次全绿不代表本缺陷消除。#528 收录最小先红、分配前缀边界、合法例外／转换形式、literal／DNS／重定向、预算／取消和完整 native／Git 门禁／修复 CI 验收；策略表来源和更新机制待后续设计。实际特殊网络路由、真实公网 TLS 与计费模型未测试。
+
+### R40 修复记录（2026-10-13，issue #528 授权修复）
+
+`publicV6` 由名义 `2000::/3` 黑名单兜底改为 IANA 登记白名单 `globalV6Rows`（[全球单播分配登记](https://www.iana.org/assignments/ipv6-unicast-address-assignments)全部 ALLOCATED 行＋[特殊用途登记](https://www.iana.org/assignments/iana-ipv6-special-registry)全球可达的 `2001::/23` 例外；核对 2026-10-13，登记页 2025-10-10），`2001:db8::/32` 文档段自 APNIC `2001:0c00::/23` 行内扣除。实现顺序为先红后绿：
+
+- 先红：`nonGlobalIPv6IsRefused` 扩展保留行与 `2001::/16` 间隙（10 项）、新增 `allocatedPrefixBoundariesFollowIanaRegistry`（21 项）、`globalAddressesRemainEligible` 移除 `3fff:1000::1`、`specialUseTargetsNeverReachAnotherTransportHop` 扩展保留目标与全保留 DNS（24 项），旧分类器共 57 项预期失败，方向均为错误放行。
+- 修复后上述全部通过；独立编译真实 `HostJSON`＋`NativeNetworkPolicy` 谓词，`3ffe::1`／`3000::1`／`3fff:1000::1` 输出 false，`2606:4700::1111`（true）与 `fd00::1`（false）对照不变，与 issue #528 复现命令同构。
+- 登记行核对修正两处初始误读：/12 行只覆盖 `X000–X00F` 首段（`2400::/12`＝2400–240f），故 `2410::/12`、`2610::/23`、`2620::/23`、`2630::/12`、`2a10::/12` 为独立登记行需单独收录；`2001:1::1–3` 为 /128 例外。
+- 既有合法分配、全球可达例外、IPv4 转换形式、候选回退、原 hostname TLS 身份、共享 deadline／取消／大小上限回归全部保持；完整 native 路由（`npm run check:size && npm run build:native-canvas && xcodebuild … test`）、Git 静态／覆盖率／Sonar 门禁与绑定修复提交的 CI 证据见修复 PR。
+
+静态表更新机制：IANA 新增分配需人工同步 `globalV6Rows` 并同批更新边界回归（资产 §7.3 已披露），无运行时同步；真实特殊网络路由、真实公网 TLS 与计费模型仍未测试。
