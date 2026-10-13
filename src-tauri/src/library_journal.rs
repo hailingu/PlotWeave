@@ -13,8 +13,9 @@
 //! （删除事务步骤）、archive（旧归档迁移及累计指标校验，issue #421）、
 //! fsync（目录持久性屏障叶子，issue #399 解环拆出）。对外契约保持
 //! `crate::library_journal::{…}` 不变；子模块间依赖单向（transaction →
-//! recover → trash → journal_io → fsync，模块图无环守卫见
-//! src/module_graph.rs），兄弟模块直接互引、不经父级转口。
+//! recover → trash → journal_io → fsync，issue #399 解环后的无环形态由
+//! 评审与 docs/development/rust-standard.md 的退役记录维护），兄弟模块
+//! 直接互引、不经父级转口。
 
 mod archive;
 mod fsync;
