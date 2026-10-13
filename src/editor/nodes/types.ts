@@ -13,8 +13,8 @@ import type { DialogueLine } from '../../model/document'
 /**
  * 画布节点数据模型（docs/ui-design.md §4.2 节点形态）。
  * 分族对齐生产管线「节奏卡 → 索引卡 → 剧本 → 分镜 → AI 燃料 → 渲染」：
- * 编剧侧（纸面浅色）= 节奏卡 / 索引卡 / 对白 / 分支；
- * 生成侧（深色石板）= 分镜卡，未来的渲染节点同族。
+ * 编剧侧 = 节奏卡 / 索引卡 / 对白 / 分支；
+ * 生成侧 = 分镜卡 / 图片；外壳统一中性内容卡，类型靠图标与结构区分。
  *
  * 类型所有权（issue #353 方向一）：data 形状由磁盘格式所有者 src/model/
  * 以最小接口定义（session.ts 的 *SessionData，索引签名对齐 React Flow
@@ -43,7 +43,7 @@ export type SceneNodeData = SceneSessionData
 /** 对白节点（气泡流）：标题统计由 lines 派生（n 人 · m 句）。 */
 export type DialogueNodeData = DialogueSessionData
 
-/** 节奏卡节点（节拍胶囊）：承载节奏而非内容。 */
+/** 节奏卡节点（节拍内容卡）：承载节奏而非内容。 */
 export type BeatNodeData = BeatSessionData
 
 /** 分支节点（岔路路标）：分岔事由为问句，选项右缘各带独立出口端口。 */

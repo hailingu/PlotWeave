@@ -4,7 +4,9 @@
  */
 
 /** IPC 桥属性存在即为 Tauri；无 window 或纯浏览器预览时安全返回 false。
- * __TAURI__ 仅在 withGlobalTauri 开启时注入，不作为运行环境依据。 */
-export function isTauriRuntime(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+ * __TAURI__ 仅在 withGlobalTauri 开启时注入，不作为运行环境依据。
+ * 可传显式窗口形状复用同一探测口径；未传时读取当前全局 window。 */
+export function isTauriRuntime(probe?: object): boolean {
+  const host = probe ?? (typeof window === 'undefined' ? undefined : window)
+  return host !== undefined && '__TAURI_INTERNALS__' in host
 }

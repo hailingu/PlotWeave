@@ -1,8 +1,9 @@
 /** 个人资产库前端门面（docs/ui-design.md §8.1 / 数据模型 §7）。
- * Tauri 环境走 Rust 命令（应用级 library/ 目录，媒体经 pwmedia 自定义
- * 协议按 assetId 懒加载——§7.1 opaque asset URL，relPath 与本机绝对路径
- * 不进入前端媒体链路，issue #26）；
- * 浏览器预览无 IPC，回退为同接口的内存实现（Blob object URL）。
+ * typed IPC 复用命令合同：Swift 宿主由原生库 actor 承接，Tauri 由 Rust
+ * 承接（各宿主独立的应用级 library/ 目录）；媒体经 pwmedia 自定义协议
+ * 按 assetId 懒加载——§7.1 opaque asset URL，relPath 与本机绝对路径
+ * 不进入前端媒体链路，issue #26。宿主错误可见，内存回退仅限纯浏览器
+ * 预览（Blob object URL），Swift 不读取旧 Tauri 数据根。
  * 跨项目复用：库是应用级作用域，与项目内资产互不引用（§7.3 流转
  * 「拖上画布 = 拷贝进项目」由 src/editor/projectAssets.ts 承接）。
  */
@@ -10,7 +11,7 @@
 import { uid } from '../uid'
 import { IPC_COMMANDS } from '../ipc/commands'
 import { ipcInvoke } from '../ipc/invoke'
-import { isTauriRuntime } from '../ipc/runtime'
+import { isBrowserPreviewHost } from '../platform/hostEnvironment'
 import { reportLibraryDiagnostics } from './libraryDiagnosticTransport'
 
 /** 资产库分类（§7）：索引条目的 kind 域；中文标签/图标见 LIBRARY_KINDS。 */
@@ -115,8 +116,6 @@ function normalizeAsset(raw: RawAsset | null): LibraryAsset | null {
   }
 }
 
-const isTauri = isTauriRuntime()
-
 /** 内存回退：blob + object URL，会话内有效。 */
 const memoryAssets = new Map<string, { asset: LibraryAsset; blob: Blob }>()
 /** 内存回退的组存储（§7.2）。 */
@@ -193,7 +192,7 @@ function applyUpdateMeta(
   id: string,
   patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>,
 ): Promise<LibraryAsset> {
-  if (isTauri) {
+  if (!isBrowserPreviewHost()) {
     return (async () => {
       const entry = await ipcInvoke<RawAsset>(IPC_COMMANDS.updateLibraryAsset, {
         id,
@@ -241,7 +240,7 @@ const lastPersistedAssets = new Map<string, LibraryAsset>()
 /** 删除的实际执行体：排队落定后才删除，成功清除快照，失败保持原基线
  * 并交由调用方呈现错误；Tauri 返回的隔离区诊断继续上报。 */
 async function applyRemove(id: string): Promise<void> {
-  if (isTauri) {
+  if (!isBrowserPreviewHost()) {
     const result = await ipcInvoke<LibraryDiagnostics>(
       IPC_COMMANDS.deleteLibraryAsset,
       {
@@ -258,7 +257,7 @@ async function applyRemove(id: string): Promise<void> {
 /** 统一门面：两种环境同签名。 */
 export const libraryStore = {
   list: (): Promise<LibraryAsset[]> =>
-    isTauri
+    !isBrowserPreviewHost()
       ? tauriList()
       : // 克隆返回（评审修复，PR #36 第九轮）：调用方 mutate 列表资产不得
         // 绕过组校验直接改 memoryAssets
@@ -267,7 +266,7 @@ export const libraryStore = {
         ),
 
   put: (file: File, kind: LibraryKind): Promise<LibraryAsset> => {
-    if (isTauri) return tauriPut(file, kind)
+    if (!isBrowserPreviewHost()) return tauriPut(file, kind)
     const id = uid('local-la')
     const asset: LibraryAsset = {
       id,
@@ -323,7 +322,7 @@ export const libraryStore = {
       readonly conflicted?: boolean | undefined
     },
   ): Promise<string> => {
-    if (isTauri) return tauriMediaUrl(asset)
+    if (!isBrowserPreviewHost()) return tauriMediaUrl(asset)
     if (asset.conflicted)
       return Promise.reject(new Error('资产处于删除事务冲突期，媒体不可用'))
     const hit = memoryAssets.get(asset.id)
@@ -333,7 +332,7 @@ export const libraryStore = {
 
   /** 组列表：Tauri 读 library.json 的 groups.byId；内存回退读内存组。 */
   listGroups: (): Promise<AssetGroup[]> => {
-    if (isTauri) {
+    if (!isBrowserPreviewHost()) {
       return (async () => {
         // 完整响应信封（评审修复，PR #36 第一轮）：warnings/cleanupPending
         // 与 tauriList 同款上报——只读组视图不得隐藏修复/隔离诊断
@@ -364,7 +363,7 @@ export const libraryStore = {
 
   /** 组写入：新建/更新编组；改 kind 与成员冲突即拒绝（§7.2）。 */
   upsertGroup: (group: AssetGroup): Promise<AssetGroup> => {
-    if (isTauri) {
+    if (!isBrowserPreviewHost()) {
       return (async () => {
         const result = await ipcInvoke<AssetGroup & LibraryDiagnostics>(
           IPC_COMMANDS.upsertLibraryGroup,
@@ -421,7 +420,7 @@ export const libraryStore = {
 
   /** 组删除：原子删除组并剥离成员资产的 groupId（§7.2）。 */
   deleteGroup: (id: string): Promise<void> => {
-    if (isTauri) {
+    if (!isBrowserPreviewHost()) {
       return (async () => {
         const result = await ipcInvoke<LibraryDiagnostics>(
           IPC_COMMANDS.deleteLibraryGroup,

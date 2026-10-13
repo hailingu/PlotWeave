@@ -289,6 +289,11 @@ it.each([
   ['src/view.tsx', 800],
   ['src/styles/example.css', 800],
   ['src-tauri/src/example.rs', 800],
+  ['crates/plotweave-core/src/example.rs', 800],
+  ['crates/plotweave-ffi/tests/abi.rs', 800],
+  ['native/macos/App/Example.swift', 800],
+  ['native/macos/Tests/ExampleTests.swift', 1800],
+  ['native/macos/App/ExampleTests.swift', 800],
   ['scripts/example.sh', 800],
   ['scripts/example.js', 800],
   ['scripts/example.mjs', 800],
@@ -894,6 +899,8 @@ it.each([
   'scripts/probe-tool',
   'src/probe.snap',
   'src-tauri/probe.html',
+  'crates/plotweave-core/probe.proto',
+  'native/macos/probe.unknown',
 ] as const)(
   '未登记后缀或无后缀的 %s 不能被静默跳过，移除后恢复（#466）',
   (path) => {
@@ -920,11 +927,65 @@ it('仅存在于有效索引的未分类文件同样 fail-closed（#466）', () 
   expect(rejected.stderr).toContain('scripts/probe-tool')
 })
 
-it('登记的排除类别不计行数，但在完成记录的 excluded 计数中可见（#466）', () => {
+it.each(['src/icon.png', 'native/macos/Info.plist'])(
+  '登记的排除类别 %s 不计行数，但在完成记录的 excluded 计数中可见（#466）',
+  (path) => {
+    const root = checkerFixture()
+    write(root, path, '\n'.repeat(2000))
+    const result = runChecker(root)
+    expect(result.status).toBe(0)
+    const records = result.stdout
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        code: 'SIZE_CHECK_COMPLETE',
+        excluded: 2,
+        passed: true,
+      }),
+    )
+  },
+)
+
+it.each([
+  'crates/plotweave-core/src/example.rs',
+  'native/macos/App/Example.swift',
+] as const)('迁出源码 %s 的工作树修复不能掩盖超限索引', (path) => {
+  // 只扩工作树枚举会漏掉提交保留的超限版本；两份内容必须独立受限。
   const root = checkerFixture()
-  write(root, 'src/icon.png', '\n'.repeat(2000))
+  write(root, path, '\n'.repeat(801))
+  git(root, ['add', '--', path])
+  write(root, path, '\n'.repeat(800))
+  const rejected = runChecker(root)
+  expect(rejected.status).toBe(1)
+  expect(
+    rejected.stderr
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line)),
+  ).toContainEqual(
+    expect.objectContaining({
+      code: 'SIZE_LIMIT_EXCEEDED',
+      path,
+      tree: 'index',
+    }),
+  )
+  git(root, ['add', '--', path])
+  expect(runChecker(root).status).toBe(0)
+})
+
+it('crates 锁文件与 native 工程配置作为已登记排除计数', () => {
+  // 漏掉根目录枚举或把工程文件视为未知类别都会违反可见排除契约。
+  const root = checkerFixture()
+  for (const path of [
+    'crates/Cargo.lock',
+    'native/macos/PlotWeaveNative.xcodeproj/project.pbxproj',
+    'native/macos/PlotWeaveNative.xcodeproj/xcshareddata/xcschemes/PlotWeaveNative.xcscheme',
+  ])
+    write(root, path, '\n'.repeat(2000))
   const result = runChecker(root)
-  expect(result.status).toBe(0)
+  expect(result.status, result.stderr).toBe(0)
   const records = result.stdout
     .trim()
     .split('\n')
@@ -932,7 +993,7 @@ it('登记的排除类别不计行数，但在完成记录的 excluded 计数中
   expect(records).toContainEqual(
     expect.objectContaining({
       code: 'SIZE_CHECK_COMPLETE',
-      excluded: 2,
+      excluded: 4,
       passed: true,
     }),
   )

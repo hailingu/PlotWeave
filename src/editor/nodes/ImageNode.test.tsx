@@ -86,7 +86,7 @@ const baseData = (): ImageFlowNode['data'] => ({
 describe('图片节点渲染（§13）', () => {
   it('标题行徽标/尺寸 + Prompt 预览 + 空态占位', () => {
     setup(baseData())
-    expect(screen.getByText('🖼 IMAGE')).toBeTruthy()
+    expect(screen.getByText('IMAGE')).toBeTruthy()
     expect(screen.getByText('1024x1536')).toBeTruthy()
     expect(screen.getByText('雨夜霓虹街道，中景')).toBeTruthy()
     expect(screen.getByText('尚未生成——⚙️ 配置 Prompt 后生成')).toBeTruthy()

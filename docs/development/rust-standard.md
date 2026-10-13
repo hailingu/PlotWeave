@@ -1,9 +1,9 @@
 # Rust Development Standard
 
-**Applies to**: any Rust crate in this repository (`src-tauri/**`). Like the
+**Applies to**: any Rust crate in this repository (`src-tauri/**` and `crates/**`). Like the
 root `AGENTS.md`, this file is written in English for agent interoperability.
 
-**Last reviewed**: 2026-10-03
+**Last reviewed**: 2026-10-04
 
 ## Required Reading
 
@@ -26,6 +26,7 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   PR, and do not add platform targets without a project decision.
 - Verification: from `src-tauri/`, run
   `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
+  From `crates/`, run the same command for the independent kernel/FFI workspace.
   The npm prefix selects the repository-root size guard before Cargo checks,
   including for Rust-only changes (issue #432). Use the Node version pinned by
   `.nvmrc`; CI runs the repository-wide guard, including Rust, in its frontend job.
@@ -36,29 +37,65 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   `unwrap()`/`expect()` in production paths unless the invariant is local,
   explicit, and documented.
 
+## Crate Layout
+
+- `src-tauri/` — the Tauri host application: command wrappers, host-specific
+  adapters (data-root resolution via `AppHandle`), and domains not yet
+  extracted. Persistence and other kernels must not depend on `AppHandle`.
+- `crates/plotweave-core/` — host-agnostic business kernels extracted from
+  `src-tauri` (project storage first, P2 of the native-shell migration): data
+  roots are injected by the caller, no Tauri runtime dependency, kernels stay
+  callable from both the Tauri adapter and the FFI boundary.
+- `crates/plotweave-ffi/` — the historical P2 C ABI boundary for the Swift host: opaque
+  handle, JSON request/response, worker-thread completion callbacks, explicit
+  allocation/free and cancellation contracts (see the crate-level docs of
+  `plotweave-ffi/src/lib.rs`).
+  The current native application uses Swift services and does not link this
+  crate; Tauri/core and ABI regressions remain in the Rust gate's scope.
+- `crates/` forms its own Cargo workspace; run its routed checks from the
+  `crates` directory.
+- Core fault-injection helpers are available through `cfg(test)` or the
+  `test-support` feature. The Tauri host enables that feature only in its
+  dev-dependency for cross-domain integration regressions; the production
+  dependency does not enable it.
+
 ## Test Coverage
 
 Rust coverage is measured and imported into the quality report
 ([issue #169](https://github.com/hailingu/PlotWeave/issues/169)):
 `scripts/rust-coverage.sh` runs `cargo-llvm-cov llvm-cov --lib
---test media_format_leaf --lcov --manifest-path src-tauri/Cargo.toml` and
-validates the report (non-empty,
-has source records, has covered lines), and the quality gate regenerates it
-before every analysis so the report distinguishes measured-uncovered lines
-from unmeasured files. Metric and scope:
+--test media_format_leaf --lcov --manifest-path src-tauri/Cargo.toml` plus
+`cargo-llvm-cov llvm-cov --workspace --lib --test abi --lcov
+--manifest-path crates/Cargo.toml`. It validates each report (non-empty,
+source records and covered lines), then merges them into
+`src-tauri/target/coverage/lcov-rust.info`. Identical source-path/line records
+are counted once, with hits combined across both workspaces. The quality
+gate regenerates this report before every analysis so extracted core and
+FFI source cannot silently leave the measured scope. For historical pushed
+trees checked by the current gate (issue #405), the script follows that
+tree's manifests: a tree predating `crates/Cargo.toml` generates only the
+Tauri report; when the crates manifest exists, both workspace reports are
+mandatory. Metric and scope:
 
 - **口径**：LLVM source-based **line (statement) coverage**, exported as
-  LCOV (`DA`/`LF`/`LH` per file) for the product library `src-tauri/src`
-  exercised by the library test suite (`--lib`) **plus the
+  LCOV (`DA`/`LF`/`LH` per file) for `src-tauri/src`,
+  `crates/plotweave-core/src` and `crates/plotweave-ffi/src`. The Tauri
+  library suite (`--lib`) runs **plus the
   `media_format_leaf` integration target** (`--test media_format_leaf`,
   the issue #146 module-boundary regression; PR #223 review — omitting it
-  left its executed paths invisible to the report).
+  left its executed paths invisible to the report). The independent crates
+  workspace runs its library suites and the FFI `abi` integration target.
+  SonarQube lists all three maintained Rust source roots and both Cargo
+  manifests; the uniform 80% floor applies to the merged report.
 - **分支口径的记录边界**：LLVM branch coverage (`--branch` → LCOV `BRDA`)
   requires the nightly-only `-Z coverage-options=branch` flag; the
   repository pins the stable toolchain (issue #167), so branch coverage is
   not measured. Introducing a nightly coverage toolchain is a project
   decision.
-- **排除范围**：no source file is excluded. `#[cfg(test)]` inline test
+- **排除范围**：no product source file is excluded. Standalone modules
+  enabled only for `cfg(test)` / `test-support` are classified as Sonar
+  test inputs rather than product source; inline test modules retain the
+  existing coverage measurement below. `#[cfg(test)]` inline test
   modules are measured as part of their host files (their lines execute
   under the test suite). The `native_quit` integration fixture is excluded
   (macOS-specific AppKit child-process scenario — platform-specific and

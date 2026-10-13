@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { NodeProps } from '@xyflow/react'
+import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
 import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
 import { projectAssets } from '../projectAssets'
 import type { AssetRef } from '../../model/document'
@@ -78,9 +78,11 @@ function setup(
     selected: false,
   } as unknown as NodeProps<ShotFlowNode>
   const { container } = render(
-    <NodeEditContext.Provider value={api}>
-      <ShotNode {...props} />
-    </NodeEditContext.Provider>,
+    <ReactFlowProvider>
+      <NodeEditContext.Provider value={api}>
+        <ShotNode {...props} />
+      </NodeEditContext.Provider>
+    </ReactFlowProvider>,
   )
   return { api, container }
 }
@@ -96,9 +98,17 @@ describe('ShotNode（监视器卡）', () => {
 
   it('引用位 chip：三类引用各带图标，另含「＋ 引用」占位', () => {
     setup()
-    expect(screen.getByText('👤 林晚垫图')).toBeTruthy()
-    expect(screen.getByText('🏞 天台底图')).toBeTruthy()
-    expect(screen.getByText('🎵 雨声')).toBeTruthy()
+    for (const name of [
+      '角色垫图：林晚垫图',
+      '场景底图：天台底图',
+      '音频：雨声',
+    ]) {
+      const tag = screen.getByRole('group', { name })
+      expect(tag.querySelector('svg')?.getAttribute('stroke')).toBe(
+        'currentColor',
+      )
+      expect(tag.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+    }
     expect(screen.getByText('＋ 引用')).toBeTruthy()
   })
 
@@ -128,7 +138,7 @@ describe('ShotNode（监视器卡）', () => {
     expect(img.getAttribute('src')).toBe('asset://media/pa-1')
     expect(vi.mocked(projectAssets.mediaUrl).mock.calls[0][0]).toBe('p-1')
     // chip 仍带 kind 图标与可辨认文本
-    expect(container.textContent).toContain('👤')
+    expect(screen.getByRole('group', { name: '角色垫图：pa-1' })).toBeTruthy()
     expect(container.textContent).toContain('pa-1')
   })
 })
@@ -175,17 +185,21 @@ function renderShotWithRef(
       selected: false,
     }) as unknown as NodeProps<ShotFlowNode>
   const view = render(
-    <NodeEditContext.Provider value={api}>
-      <ShotNode {...props(assetId)} />
-    </NodeEditContext.Provider>,
+    <ReactFlowProvider>
+      <NodeEditContext.Provider value={api}>
+        <ShotNode {...props(assetId)} />
+      </NodeEditContext.Provider>
+    </ReactFlowProvider>,
   )
   return {
     rerender: (id: string, nextById?: Record<string, AssetRef>) => {
       if (nextById !== undefined) api.assets = { byId: nextById }
       view.rerender(
-        <NodeEditContext.Provider value={api}>
-          <ShotNode {...props(id)} />
-        </NodeEditContext.Provider>,
+        <ReactFlowProvider>
+          <NodeEditContext.Provider value={api}>
+            <ShotNode {...props(id)} />
+          </NodeEditContext.Provider>
+        </ReactFlowProvider>,
       )
     },
   }
@@ -204,7 +218,7 @@ describe('分镜引用资产读取边界（issue #130）', () => {
     (assetId) => {
       renderShotWithRef(assetId, {})
       expect(screen.getByTitle(`引用资产缺失（${assetId}）`)).toBeTruthy()
-      expect(screen.getByText(`👤 ${assetId}`, { exact: false })).toBeTruthy()
+      expect(screen.getByText(assetId)).toBeTruthy()
       expect(screen.getByText('SHOT 03')).toBeTruthy()
       expect(screen.queryByRole('img')).toBeNull()
     },
@@ -242,7 +256,7 @@ describe('分镜引用资产读取边界（issue #130）', () => {
       { audio: { ...refAsset('audio'), mime: 'audio/mpeg' } },
       'audio',
     )
-    expect(screen.getByText('🎵 audio')).toBeTruthy()
+    expect(screen.getByRole('group', { name: '音频：audio' })).toBeTruthy()
     expect(screen.queryByRole('img')).toBeNull()
     expect(screen.queryByTitle(/引用资产/)).toBeNull()
   })
@@ -279,7 +293,7 @@ describe('分镜坏引用的隔离与恢复（issue #130）', () => {
     rerender('pa-1', byId as unknown as Record<string, AssetRef>)
     expect(screen.queryByRole('img')).toBeNull()
     expect(screen.getByTitle(title)).toBeTruthy()
-    expect(screen.getByText(/👤 pa-1/)).toBeTruthy()
+    expect(screen.getByRole('group', { name: '角色垫图：pa-1' })).toBeTruthy()
 
     rerender('pa-1', { 'pa-1': refAsset('pa-1') })
     expect((await screen.findByRole('img')).getAttribute('src')).toBe(

@@ -4,7 +4,31 @@
 
 ## 十、本地存储体系
 
+**当前实现归属（2026-10-04 路线修订，[PR #526](https://github.com/hailingu/PlotWeave/pull/526)）**：原生应用由 `NativeHostServices.perform` 将项目 IPC 直接交给 Swift `NativeProjectStore`，已实现创建、列表、加载、保存、删除、AI 会话和资产验证／复制；不经过 Rust 或 C ABI。`NativeDirectory` 拥有句柄相对 no-follow I/O 与原子写，`NativeProjectEnvelope` 拥有信封校验、保存盖戳及摘要投影。Tauri 保留 `crates/plotweave-core/src/store/` 内核和 `src-tauri/src/store/mod.rs` 包装作为行为与磁盘合同回归基线。`crates/plotweave-ffi/` 为历史 P2 能力，未被原生工程链接；不能再用“尚待接入 C ABI”描述当前 Swift 保存状态。
+
+### 10.0 Swift 原生落地与保留差异
+
+**Web 写入与最终退出（[PR #526 R36–R37](../swiftui-react-flow-pr526-fixes.md#反向宿主请求退役与-web-最终退出协调)）**：Swift 正常退出同步暂停新 Web 输入／业务，既有异步操作完整交付并由实际 React effect 确认状态提交，再等待画布、项目链、AI 与设置／密钥四源固定点；同一同步跨度内确认业务及保存均空闲并封口，之后到原生批准期间持久化 owner 不接受新状态。失败恢复输入、保留最新失败稿并取消系统退出，明确重试可继续。项目创建／打开／重命名／复制／删除、模型回合、生图、资产导入与受保护异步重做都登记完整业务 future，不能只等待底层 IPC。Web→Swift 的规范身份在 4096 条窗口内只退役已完成结果；退役重放明确拒绝而不重复副作用，长期页的正常保存／退出不会因已完成结果累积永久耗尽。旧式 opaque 满载仍需真正重载页面；项目往返不重置，两方向缓存各自拥有水位。
+
+| 责任／边界 | 当前 Swift 实现与保留范围 |
+| --- | --- |
+| 数据根与身份 | 根由宿主注入，Web 请求不能选择目录；开发根为 Application Support 下由 `BundleID + ".development"` 派生的 `dev.plotweave.PlotWeaveNative.development`。测试只用临时根；不自动读取 Tauri 数据或历史 Keychain，发行身份与数据迁移仍为独立决定。 |
+| 项目布局与真源 | 权威文档为 `projects/{id}.json`；媒体与 AI 会话分别为 `projects/{id}/assets/`、`projects/{id}/ai-session.json`。首页每次扫描项目文档，不维护 `index.json`。§10.1 的 `{id}/project.json` 与索引布局仍是演进目标，不因 Swift 服务实现而视为完成。 |
+| 会话与写入 owner | React 继续拥有图文档、撤销、防抖、保存／删除链和退出冲刷；Swift actor 串行执行项目保存、删除及项目媒体事务，`expectExisting` 在同一 actor 内拒绝删除后的迟到保存。原生界面不拥有可写文档副本。 |
+| 文件提交与失败 | 原子写先同步临时文件，rename 后同步父目录；保存前后均按绑定目录句柄复验媒体。提交前拒绝保留旧文档；提交后目录同步或资产复验失败如实报错，新文档可能已经落盘，不保证回滚。两类失败的既有边界见 §10.5 与[资产 §7.1](assets.md#71-两个作用域)。 |
+| 兼容性差异 | v1 文档、AI 会话与资产引用沿用既有格式；脏 legacy 的小数 `updated_at`，Swift 转换为 ISO 时间，旧 Rust `as_u64` 回退空串。该已记录 P2 差异只影响摘要排序，不影响图内容或保存 payload，仍待所有者处置。 |
+| 验证缺口 | 单应用实例范围保持；不承诺跨进程媒体替换与文档之间的事务。Swift 系统 fsync 故障注入、真实系统面板、IME、VoiceOver、视觉、性能与签名分发仍未验收，不能由隔离根测试推定通过。 |
+
+详细落地与缺口见[总体分层](overview.md#二-总体分层)、[功能补齐记录](../swiftui-react-flow-feature-parity.md)及[修复矩阵 R20–R21](../swiftui-react-flow-pr526-fixes.md)。下文明确标注 Tauri／Rust 的实现说明继续描述其基线，不意味着 Swift 调用这些内核；公共文档格式与失败语义仍适用于两条服务路径。
+
+历史 FFI `saveProject` 的可选布尔 `expectExisting` 沿用 Tauri 保存的存在性约束：缺省 `false` 保留初次创建，`true` 在共享操作锁内确认目标仍存在，删除后的迟到请求返回失败且不得重建项目；非法字段类型拒绝。保存 NotFound 不携带 `[project_not_found]` 码，该码仅由加载入口返回。调用方仍须维护项目保存/删除协调，FFI guard 不替代会话排序；兼容性回归见[P2 合并同步](../swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)。当前 Swift 在自己的 actor 内实现同一存在性约束，并未接入该历史调用路径。
+
+Swift 正常退出的系统决定由 `NativeApplicationDelegate` 拥有：[PR #526](https://github.com/hailingu/PlotWeave/pull/526) 修复后，监听已就绪时保留 AppKit `terminateLater`，固定点冲刷成功回复 `true`，失败回复 `false` 并保留窗口、诊断和最新失败快照。仅 Swift 的既有 `app_exit` 增加可选布尔 `cancel`：`true` 幂等取消当前意图，不要求监听已就绪；缺省／`false` 保持成功批准，非法类型拒绝。Web 保存失败、抛错、批准失败和初始化失败均通过此信号完成取消；原生事件投递失败或替换已就绪页面也取消旧决定，已取消的旧投递不能拒绝新意图。当前连接的进程终止、导航失败、拆除、就绪超时或资源缺失经统一页面失效入口取消意图并撤销监听资格；弱 coordinator 身份约束阻止旧页迟到失败取消新页退出。已失效页面的启动缓冲同样清除，重载后须明确重试，见修复矩阵 R27。监听未就绪的系统请求先取消并缓冲启动意图，避免等待尚不存在的监听；成功系统序列继续原来的成功回复，不一律取消后重发。Tauri 载荷与磁盘合同保持；取消信号自身失败须同时保留原错误与取消诊断。真实 Dock／菜单手势和系统注销仍待人工验收。
+
 命令产出的文档变更，经防抖持久化回调落到以下布局。
+
+原生表单的 `send` 和 awaitable `request` 在当前页同步登记在途意图；退出先等待这些请求完成，再投递 Web 保存固定点屏障。请求失败取消本次退出，不自动重做；最终批准仍有冲刷期间新增的原生意图时，以 `PW_NATIVE_INTENTS_PENDING` 拒绝并保持可重试窗口，下一次明确退出重新冲刷。页面更新／失效撤销旧任务归属，取消后的旧投递不会重放退出。该顺序保护尚未跨桥或仍等待 fingerprint 的最后编辑，未将原生表单升级为可写文档 owner；矩阵与真实磁盘证据见 [PR #526 R29](../swiftui-react-flow-pr526-fixes.md#原生意图进入退出屏障)。
+
 ### 10.1 目录布局
 
 ```
@@ -157,7 +181,7 @@ panic hook 先于 join 错误运行，仍会按默认格式把 panic 载荷写�
 | `register_project_asset_alias(id, blankKey, freshId)` | 当前已实现：登记加载归一化的空白键重发别名，供修复落盘前解析媒体；不接受 relPath，规则见 §7.1 |
 | `copy_project_assets(fromId, toId)` / `verify_project_assets(id, assets)` | 当前已实现：前者经受信句柄复制项目媒体，后者提供加载侧资产实路径复验，供 §7.3 复制与 §11 归一化调用 |
 | `list_library_assets()` | 先按 §7.2 通过受信控制文件与资产目录句柄恢复 `asset-delete-journal.json` 中的未完成事务；存在无法安全自动恢复的身份冲突时保留现场并返回警告；已核验清理项折叠退役后 `cleanupPending` 以单条 routine 摘要（日志内累计计数与字节量级）报告，响应大小不随历史删除总数增长（issue #359）；退役与统计同次原子提交，兼容旧数组/旁路统计一次迁移，任何日志落盘失败均上抛 Err（issue #421）。随后读 `library.json`，迁移并完整归一化 LibraryAsset/AssetGroup 后返回资产库列表（含编组、`cleanupPending` 与其他警告） |
-| `import_library_asset(file, meta)` | 按 §7.2 校验 meta 与完整构造结果后，按 §7.1 通过受信库资产根句柄安全拷贝，完成文件 flush/fsync、原子落位与资产父目录 fsync 后确认可读，再耐久提交新增索引；索引失败时只留下可诊断孤儿文件。meta 含 name/kind/view/groupId/tags |
+| `import_library_asset(file, meta)` | 按 §7.2 校验 meta 与完整构造结果后，按 §7.1 通过受信库资产根句柄安全拷贝，完成文件 flush/fsync、原子落位与资产父目录 fsync 后确认可读，再耐久提交新增索引；Swift 原生导入在媒体最终落位前耐久登记身份日志，索引失败按 §7.2／PR #526 R38 保守恢复：活动引用保留，确认未提交的同身份媒体隔离并以 cleanupPending 显示，未知状态暂停写入；Tauri 历史路径仍保留孤儿文件。meta 含 name/kind/view/groupId/tags |
 | `update_library_asset(assetId, patch)` | 按 §7.2 校验白名单 patch 并复验完整合并结果后修改索引项：改名、改标签、改视角、换编组（只动索引不动文件） |
 | `upsert_library_group(group)` | 按 §7.2 校验完整 AssetGroup 后新增/更新编组；kind 变更不得与成员资产冲突 |
 | `delete_library_group(groupId)` | 要求组存在；原子删除组并剥离成员资产的 groupId，不留下悬空编组引用 |

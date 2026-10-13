@@ -22,6 +22,12 @@ import {
   useCreateFamilyAttempts,
 } from './useCreateFamilyAttempts'
 import { useExitFlush } from './useExitFlush'
+import { useWebExitAction } from './useWebExitAction'
+import { useExitGuardedCallback } from './useExitGuardedCallback'
+import { useNativeAppShell } from './useNativeAppShell'
+import { useNativeHomeRecovery } from './useNativeHomeRecovery'
+import { useAppSettingsShortcut } from './useAppSettingsShortcut'
+import { isSwiftHost } from './platform/hostEnvironment'
 import { ErrorBanner } from './editor/ErrorBanner'
 import { displayIpcError } from './ipcError'
 import { useProjectSummaries } from './useProjectSummaries'
@@ -266,7 +272,7 @@ function useProjectOpenAttempt(
             detail: createFamilyFailureDetail(outcome, 'create'),
           },
           outcome.commitState === 'absent'
-            ? () => void handleCreateProject()
+            ? () => handleCreateProject()
             : undefined,
         )
       }
@@ -327,7 +333,10 @@ function useProjectOpenAttempt(
     [latestDoc, setOpenFailure, setOpenProject, unsavedAiSessions],
   )
 
-  return { handleCreateProject, handleOpenProject }
+  return {
+    handleCreateProject: useWebExitAction(handleCreateProject),
+    handleOpenProject: useWebExitAction(handleOpenProject),
+  }
 }
 
 function useOpenProjectActions({
@@ -349,8 +358,9 @@ function useOpenProjectActions({
   readonly feedback: ReturnType<typeof useHomeActionFeedback>
   readonly attempts: ReturnType<typeof useCreateFamilyAttempts>
 }) {
+  const writeOpenProject = useExitGuardedCallback(setOpenProject)
   const { handleCreateProject, handleOpenProject } = useProjectOpenAttempt(
-    setOpenProject,
+    writeOpenProject,
     setOpenFailure,
     refreshProjects,
     unsavedAiSessions,
@@ -362,14 +372,14 @@ function useOpenProjectActions({
   const handleBackHome = useCallback(() => {
     // 常规路径下返回首页即清除带外最新文档；但随后的编辑器卸载冲刷仍会经
     // onSave 闭包复活引用，权威失效点在打开尝试开始处（issue #118 评审）。
+    writeOpenProject(null)
     latestDoc.current = null
-    setOpenProject(null)
     void refreshProjects()
-  }, [latestDoc, refreshProjects, setOpenProject])
+  }, [latestDoc, refreshProjects, writeOpenProject])
 
   const handleEditorRename = useCallback(
     (name: string) => {
-      setOpenProject((project) => {
+      writeOpenProject((project) => {
         if (!project) return project
         // 同步补丁带外最新文档（issue #118 评审）：重挂载种子解析以它优先，
         // 只更新 openProject.doc 会让首次防抖保存之后的改名被旧名回退且
@@ -383,7 +393,7 @@ function useOpenProjectActions({
         return { ...project, doc: { ...project.doc, name } }
       })
     },
-    [latestDoc, setOpenProject],
+    [latestDoc, writeOpenProject],
   )
 
   const handleSaveAiSession = useAiSessionSave(
@@ -442,7 +452,7 @@ function useHomeProjectActions(
             targetName: name,
             detail: openFailureDetail(err),
           },
-          () => void handleRenameProject(id, name),
+          () => handleRenameProject(id, name),
         )
       }
     },
@@ -463,7 +473,7 @@ function useHomeProjectActions(
           seq,
           { action: 'duplicate', targetId: id, detail },
           outcome.commitState === 'absent'
-            ? () => void handleDuplicateProject(id)
+            ? () => handleDuplicateProject(id)
             : undefined,
         )
         return
@@ -487,14 +497,18 @@ function useHomeProjectActions(
         feedback.fail(
           seq,
           { action: 'delete', targetId: id, detail: openFailureDetail(err) },
-          () => void handleDeleteProject(id),
+          () => handleDeleteProject(id),
         )
       }
     },
     [refreshProjects, unsavedAiSessions, feedback],
   )
 
-  return { handleRenameProject, handleDuplicateProject, handleDeleteProject }
+  return {
+    handleRenameProject: useWebExitAction(handleRenameProject),
+    handleDuplicateProject: useWebExitAction(handleDuplicateProject),
+    handleDeleteProject: useWebExitAction(handleDeleteProject),
+  }
 }
 
 /** 编辑器视图装配（AppView 拆分，PR #199 评审守组件 80 行上限）：带外
@@ -544,23 +558,8 @@ function EditorScreen({
   )
 }
 
-function AppView({
-  projects,
-  loading,
-  loadError,
-  onRetryLoad,
-  openProject,
-  openFailure,
-  mutationFailure,
-  onRetryMutation,
-  settingsOpen,
-  open,
-  home,
-  latestAiSession,
-  latestDoc,
-  onOpenSettings,
-  onCloseSettings,
-}: {
+/** Application view assembly shared by web and native shell routes. */
+interface AppViewProps {
   readonly projects: ProjectSummary[]
   readonly loading: boolean
   readonly loadError: string | null
@@ -580,7 +579,43 @@ function AppView({
   readonly latestDoc: LatestDocRef
   readonly onOpenSettings: () => void
   readonly onCloseSettings: () => void
-}) {
+}
+
+function AppView({
+  projects,
+  loading,
+  loadError,
+  onRetryLoad,
+  openProject,
+  openFailure,
+  mutationFailure,
+  onRetryMutation,
+  settingsOpen,
+  open,
+  home,
+  latestAiSession,
+  latestDoc,
+  onOpenSettings,
+  onCloseSettings,
+}: AppViewProps) {
+  if (isSwiftHost()) {
+    return (
+      <Suspense fallback={null}>
+        <div hidden>
+          {settingsOpen && <SettingsView onClose={onCloseSettings} />}
+        </div>
+        {openProject && (
+          <EditorScreen
+            openProject={openProject}
+            open={open}
+            latestAiSession={latestAiSession}
+            latestDoc={latestDoc}
+            onOpenSettings={onOpenSettings}
+          />
+        )}
+      </Suspense>
+    )
+  }
   let view: ReactNode
   if (settingsOpen) {
     view = <SettingsView onClose={onCloseSettings} />
@@ -654,6 +689,25 @@ function HomeScreen({
   )
 }
 
+/** Maps only existing App coordination capabilities into native navigation intents. */
+function nativeAppActions(
+  open: ReturnType<typeof useOpenProjectActions>,
+  home: ReturnType<typeof useHomeProjectActions>,
+  settings: () => void,
+  retry: (id?: string | null) => Promise<void>,
+) {
+  return {
+    create: open.handleCreateProject,
+    open: open.handleOpenProject,
+    rename: home.handleRenameProject,
+    duplicate: home.handleDuplicateProject,
+    delete: home.handleDeleteProject,
+    home: open.handleBackHome,
+    settings,
+    retry,
+  }
+}
+
 /**
  * 应用根组件：文档式双界面（docs/ui-design.md §3.1）+ 设置界面——
  * 项目首页 / 编辑器是同一窗口的两种状态，设置页经 ⌘, 叠加打开
@@ -674,21 +728,7 @@ export function App() {
   const actionFeedback = useHomeActionFeedback()
   const attempts = useCreateFamilyAttempts(readProjects)
 
-  // ⌘,/Ctrl+, 打开设置（macOS 惯例，§8.2）：文档级监听只判键值与修饰
-  // 键，不按焦点目标过滤——输入控件聚焦时同样触发（issue #274）；
-  // aria-modal 弹窗打开时挂起（issue #263 评审）：应用级入口同样服从
-  // 键盘模态边界，编辑器与弹窗不被静默卸载，弹窗关闭后恢复
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === ',' && (e.metaKey || e.ctrlKey)) {
-        if (document.querySelector('dialog[aria-modal="true"]')) return
-        e.preventDefault()
-        startTransition(() => setSettingsOpen(true))
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [])
+  useAppSettingsShortcut(() => startTransition(() => setSettingsOpen(true)))
 
   const open = useOpenProjectActions({
     setOpenProject,
@@ -708,6 +748,31 @@ export function App() {
   )
   /** 退出冲刷屏障：未落盘会话仍在时阻止关闭窗口（见 useExitFlush）。 */
   const exitBlocked = useExitFlush()
+  const recovery = useNativeHomeRecovery({
+    exitBlocked,
+    loadError,
+    openFailure,
+    feedback: actionFeedback,
+    refresh: refreshProjects,
+    open: open.handleOpenProject,
+  })
+  useNativeAppShell({
+    projects,
+    loading,
+    settingsOpen,
+    project: openProject
+      ? { id: openProject.id, name: openProject.doc.name }
+      : null,
+    error: recovery.error,
+    recovery: recovery.recovery,
+    actions: nativeAppActions(
+      open,
+      home,
+      () => startTransition(() => setSettingsOpen(true)),
+      recovery.retry,
+    ),
+  })
+
   return (
     <>
       {exitBlocked !== null && <ErrorBanner message={exitBlocked} />}
@@ -719,7 +784,7 @@ export function App() {
         openProject={openProject}
         openFailure={openFailure}
         mutationFailure={actionFeedback.failure}
-        onRetryMutation={actionFeedback.retry}
+        onRetryMutation={() => void actionFeedback.retry()}
         settingsOpen={settingsOpen}
         open={open}
         home={home}

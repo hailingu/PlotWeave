@@ -171,7 +171,11 @@ fi`,
   writeExecutable(
     resolve(bin, 'cargo-llvm-cov'),
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"`,
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--output-path' ]; then output=$2; break; fi
+  shift
+done
+printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$output"`,
   )
   writeScenarioCargoStub(bin)
   writeExecutable(
@@ -351,6 +355,18 @@ describe(
   { timeout: 30_000 },
   () => {
     it('write 后同树 check 通过（跳过门禁），换树 check 失败（执行门禁）', () => {
+      const { root: outerRoot } = prepareMarkerUnit()
+      writeFileSync(resolve(outerRoot, 'outer.txt'), 'outer staged content\n')
+      expect(
+        spawnSync('git', ['add', 'outer.txt'], {
+          cwd: outerRoot,
+          env: gitFixtureEnvironment(),
+        }).status,
+      ).toBe(0)
+      const outerIndex = resolve(outerRoot, '.git', 'index')
+      const outerIndexBefore = readFileSync(outerIndex)
+      // Git 提交钩子会继承外层索引；夹具暂存必须只改变自身索引。
+      vi.stubEnv('GIT_INDEX_FILE', outerIndex)
       const { root, run } = prepareMarkerUnit()
       expect(run('write').status).toBe(0)
       expect(run('check').status).toBe(0)
@@ -360,7 +376,11 @@ describe(
 
       expect(run('write').status).toBe(0)
       writeFileSync(resolve(root, 'f.txt'), 'changed\n')
-      spawnSync('git', ['add', 'f.txt'], { cwd: root })
+      spawnSync('git', ['add', 'f.txt'], {
+        cwd: root,
+        env: gitFixtureEnvironment(),
+      })
+      expect(readFileSync(outerIndex)).toEqual(outerIndexBefore)
       expect(run('check').status).toBe(1)
     })
   },

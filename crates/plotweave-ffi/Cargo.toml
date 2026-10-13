@@ -1,0 +1,18 @@
+[package]
+name = "plotweave-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "PlotWeave 供 Swift 链接的 C ABI 边界（迁移计划 §2.3/§4.3）"
+
+[lib]
+name = "plotweave_ffi"
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+plotweave-core = { path = "../plotweave-core" }
+cap-std = "4.0.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[dev-dependencies]
+serde_json = "1.0.151"

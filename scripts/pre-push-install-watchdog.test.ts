@@ -13,7 +13,7 @@ const watcherPath = resolve(
 const temporaryDirectories: string[] = []
 const fixtureProcesses: {
   child: ChildProcess
-  completion: Promise<unknown>
+  completion: Promise<unknown[]>
 }[] = []
 
 /** 所有进程均由本测试创建，失败时也等待退出并回收进程。 */
@@ -99,6 +99,16 @@ function processAlive(child: ChildProcess): boolean {
   }
 }
 
+/** issue #497 要求监督进程被 KILL；守卫退出不保证其它进程已退出，复用创建时登记的真实事件。 */
+async function expectKilledSupervisor(child: ChildProcess): Promise<void> {
+  const tracked = fixtureProcesses.find((entry) => entry.child === child)
+  if (!tracked) throw new Error('只能等待本测试登记的进程退出')
+  const [code, signal] = await tracked.completion
+  expect(code).toBeNull()
+  expect(signal).toBe('SIGKILL')
+  expect(processAlive(child)).toBe(false)
+}
+
 /** 延迟真实 launcher 的 close，并把 watchdog 在 ESRCH 后的旧组信号映射到哨兵。 */
 function writeAbsenceWiringProbe(root: string, sentinelPid: number): string {
   const preload = resolve(root, 'absence-wiring.mjs')
@@ -161,7 +171,7 @@ it('监督器确认 ESRCH 后，清理兜底不再信号复用组号（issue #49
   await sendMessage(watcher, 'cleanup')
   const [code] = await completion
   expect(code).toBe(1)
-  expect(processAlive(supervisor)).toBe(false)
+  await expectKilledSupervisor(supervisor)
   expect(processAlive(sentinel)).toBe(true)
 })
 
@@ -175,7 +185,7 @@ it('期限已发 TERM 后收到 absent，仍失败且不再发 KILL（issue #497
   await sendMessage(watcher, 'absent')
   const [code] = await completion
   expect(code).toBe(1)
-  expect(processAlive(supervisor)).toBe(false)
+  await expectKilledSupervisor(supervisor)
   expect(processAlive(sentinel)).toBe(true)
 })
 

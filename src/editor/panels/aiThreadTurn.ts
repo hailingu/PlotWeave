@@ -3,6 +3,7 @@
  * 登记/认领/持有（issue #63 跨卸载交付）、单轮发送与认领条目重定映射。
  * 盒子语义见 ../ai/pendingTurns；纯函数在 aiThreadModel.ts。
  */
+import { useWebExitAction } from '../../useWebExitAction'
 import {
   useEffect,
   useRef,
@@ -301,8 +302,8 @@ export function useAiTurn(opts: UseAiTurnOpts) {
   /** 认领盒子的 canceller（issue #154）：claim 存入、cancel 调用以停止旧轮。 */
   const claimBoxRef = useRef<TurnBox | null>(null)
   useTurnClaimDelivery(opts, heldBox, setBusy, setError, claimBoxRef)
-  const send = async () => {
-    const text = draft.trim()
+  const send = async (submittedDraft?: string) => {
+    const text = (submittedDraft ?? draft).trim()
     if (!text || busy || !opts.activeOption || !opts.activeProvider) return
     // 新一轮：世代 +1、重置取消标志（旧轮迟到的 signal 引用不影响本轮）
     const { generation, signal } = turn.begin()
@@ -356,7 +357,7 @@ export function useAiTurn(opts: UseAiTurnOpts) {
     clearError,
     knowsCanvas,
     setKnowsCanvas,
-    send,
+    send: useWebExitAction(send),
     cancel,
     appendCancelReceipt,
   }

@@ -21,7 +21,7 @@ type BlobHeader = { object: string; size: number; bytes: Buffer }
 const baselinePath = 'scripts/file-size-baseline.json'
 
 /** 规则文本（AGENTS.md）按目录界定维护范围，不限定后缀；枚举路径必须三分类。 */
-const maintainedPattern = /^(src|src-tauri|scripts)\//s
+const maintainedPattern = /^(src|src-tauri|crates|native|scripts)\//s
 
 /** 已知维护源码后缀；新增语言须同步 Scope Routing 与此清单。 */
 const sourceSuffixes = new Set([
@@ -32,6 +32,7 @@ const sourceSuffixes = new Set([
   'cjs',
   'css',
   'rs',
+  'swift',
   'sh',
 ])
 
@@ -41,9 +42,12 @@ const excludedSuffixes = new Set([
   'icns',
   'ico',
   'xml',
+  'plist',
   'json',
   'toml',
   'lock',
+  'pbxproj',
+  'xcscheme',
 ])
 
 /** 受枚举路径的处置：测量、有意排除，或未分类；未分类必须 fail-closed。 */
@@ -58,12 +62,14 @@ function pathSuffix(path: string): string {
   return dot > path.lastIndexOf('/') ? path.slice(dot + 1) : ''
 }
 
-/** 目录范围外不参与（枚举已限定三棵树）；范围内按后缀三分类。 */
+/** 目录范围外不参与；Swift 测试目标按 Tests 目录识别，其余按后缀三分类。 */
 function classifyPath(path: string): PathClass {
   if (!maintainedPattern.test(path)) return { kind: 'excluded' }
   const suffix = pathSuffix(path)
   if (sourceSuffixes.has(suffix)) {
-    return { kind: 'source', limit: /\.test\.tsx?$/.test(path) ? 1800 : 800 }
+    const test =
+      /\.test\.tsx?$/.test(path) || /^native\/.*\/Tests\/.*\.swift$/s.test(path)
+    return { kind: 'source', limit: test ? 1800 : 800 }
   }
   return excludedSuffixes.has(suffix)
     ? { kind: 'excluded' }
@@ -148,6 +154,8 @@ function workingPaths(): WorkingDiscovery {
       '--',
       'src',
       'src-tauri',
+      'crates',
+      'native',
       'scripts',
     ],
     { encoding: 'latin1', maxBuffer: 10 * 1024 * 1024 },
@@ -201,7 +209,17 @@ type IndexDiscovery = {
 function indexedFiles(): IndexDiscovery {
   const output = execFileSync(
     'git',
-    ['ls-files', '--stage', '-z', '--', 'src', 'src-tauri', 'scripts'],
+    [
+      'ls-files',
+      '--stage',
+      '-z',
+      '--',
+      'src',
+      'src-tauri',
+      'crates',
+      'native',
+      'scripts',
+    ],
     { encoding: 'latin1', maxBuffer: 10 * 1024 * 1024 },
   )
   const discovery: IndexDiscovery = {

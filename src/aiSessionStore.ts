@@ -6,14 +6,13 @@
 import { diskSessionOf, normalizeAiSession, type AiSession } from './ai/session'
 import { IPC_COMMANDS } from './ipc/commands'
 import { ipcInvoke } from './ipc/invoke'
-import { isTauriRuntime } from './ipc/runtime'
+import { isBrowserPreviewHost } from './platform/hostEnvironment'
 import {
   enqueueProjectWrite,
   onProjectWriteReplayFailure,
 } from './projectStore/saveChain'
 
 const memorySessions = new Map<string, AiSession>()
-const isTauri = isTauriRuntime()
 
 /** 加载结果：可用历史及文件/条目损坏的可见诊断；读取本身不写回文件。 */
 export interface AiSessionLoadResult {
@@ -64,7 +63,7 @@ onProjectWriteReplayFailure((id, err) => {
 
 /** 读取唯一主文件；缺失为空历史，损坏条目隔离，I/O 错误交给界面提示。 */
 export async function loadAiSession(id: string): Promise<AiSessionLoadResult> {
-  if (!isTauri) {
+  if (isBrowserPreviewHost()) {
     return {
       session: memorySessions.get(id) ?? { schemaVersion: 1, entries: [] },
       repairError: null,
@@ -91,7 +90,7 @@ export async function saveAiSession(
   id: string,
   session: AiSession,
 ): Promise<void> {
-  if (!isTauri) {
+  if (isBrowserPreviewHost()) {
     // 浏览器内存回退是主文件的等价物：与 Tauri 路径同容量语义。
     memorySessions.set(id, diskSessionOf(session))
     return

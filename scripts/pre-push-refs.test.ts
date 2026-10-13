@@ -306,7 +306,11 @@ fi`,
   writeExecutable(
     resolve(bin, 'cargo-llvm-cov'),
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"`,
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--output-path' ]; then output=$2; break; fi
+  shift
+done
+printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$output"`,
   )
   writeScenarioCargoStub(bin)
   writeExecutable(

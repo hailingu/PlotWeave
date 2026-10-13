@@ -40,6 +40,14 @@ const productionSentinels = [
   'src/model/document.ts',
   'src/model/legacy.ts',
   'src/model/titleWhitespace.ts',
+  'crates/plotweave-core/src/store/persist.rs',
+  'crates/plotweave-ffi/src/lib.rs',
+] as const
+
+/** 迁出的故障注入与存储夹具只在 cfg(test)/test-support 下编译。 */
+const rustTestFacilities = [
+  'crates/plotweave-core/src/store/testutil.rs',
+  'crates/plotweave-core/src/store/persist/faults.rs',
 ] as const
 
 /** 产品入口哨兵：入口模块被 index.html 直接加载、在 src 内零导入者，
@@ -136,6 +144,13 @@ describe('Sonar 测试设施分类契约（issue #311）', () => {
         matchesAny(testInclusions, file),
         `既有测试被移出测试纳入：${file}`,
       ).toBe(true)
+    }
+  })
+
+  it('迁入 core 的测试夹具仍被分析，但不计入产品源码统计', () => {
+    for (const file of rustTestFacilities) {
+      expect(matchesAny(testInclusions, file), file).toBe(true)
+      expect(matchesAny(exclusions, file), file).toBe(true)
     }
   })
 

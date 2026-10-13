@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 分支连线渲染测试：渐变描边贝塞尔路径（getBezierPath 真实数学）、
+ * 分支连线渲染测试：中性／蓝色描边贝塞尔路径（getBezierPath 真实数学）、
  * 线中点选项胶囊按源节点 options 实时派生（issue #18：改名/撤销/重做的
  * 会话内新鲜度，不落 data 镜像）、悬空句柄回退。
  * EdgeLabelRenderer 依赖画布内的 portal 容器，隔离渲染时内联子内容；
@@ -51,6 +51,7 @@ function setup(
   options: Option[] = [],
   sourceType = 'branch',
   handle = 'option-o1',
+  selected = false,
 ) {
   useInternalNodeMock.mockReset()
   useInternalNodeMock.mockReturnValue(branchSource(options, sourceType))
@@ -66,6 +67,7 @@ function setup(
     targetY: 80,
     sourcePosition: Position.Right,
     targetPosition: Position.Left,
+    selected,
   } as unknown as EdgeProps<BranchFlowEdge>
   const { container, rerender } = render(
     <svg>
@@ -84,41 +86,22 @@ function setup(
 }
 
 describe('BranchEdge（分支连线）', () => {
-  it('渲染贝塞尔路径并以独立渐变描边（url 引用本边渐变 id）', () => {
+  it('常态使用中性细线，选中使用同一卡片高亮蓝色', () => {
     const { container } = setup([{ id: 'o1', label: '坦白' }])
     const path = container.querySelector('path')
     expect(path?.getAttribute('d')).toContain('C') // 三次贝塞尔
-    const stroke = path?.getAttribute('style') ?? ''
-    const gradientId = container.querySelector('linearGradient')?.id
-    expect(gradientId).toMatch(/^pw-branch-g-/)
-    expect(stroke).toContain(`url(#${gradientId})`)
-  })
-
-  it('两条边实例的渐变 id 互不相同（defs 不串色）', () => {
-    const { container } = render(
-      <svg>
-        {(['e1', 'e2'] as const).map((id) => (
-          <BranchEdge
-            key={id}
-            {...({
-              id,
-              source: 'a',
-              target: 'b',
-              sourceX: 0,
-              sourceY: 0,
-              targetX: 10,
-              targetY: 10,
-              sourcePosition: Position.Right,
-              targetPosition: Position.Left,
-            } as unknown as EdgeProps<BranchFlowEdge>)}
-          />
-        ))}
-      </svg>,
+    expect(path?.style.stroke).toBe('var(--edge-sequence)')
+    expect(path?.style.strokeWidth).toBe('1.5')
+    cleanup()
+    const active = setup(
+      [{ id: 'o1', label: '坦白' }],
+      'branch',
+      'option-o1',
+      true,
     )
-    const ids = [...container.querySelectorAll('linearGradient')].map(
-      (g) => g.id,
-    )
-    expect(new Set(ids).size).toBe(2)
+    const activePath = active.container.querySelector('path')
+    expect(activePath?.style.stroke).toBe('var(--node-accent)')
+    expect(activePath?.style.strokeWidth).toBe('2')
   })
 
   it('胶囊文案按 sourceHandle 绑定的选项 id 从源节点 options 派生', () => {

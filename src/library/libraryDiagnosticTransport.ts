@@ -1,5 +1,6 @@
 /** 图库响应与恢复事件共用的 IPC 诊断边界；数据模型 §7.2 定义信封与序号。 */
-import { isTauriRuntime } from '../ipc/runtime'
+import { isNativeHost } from '../platform/hostEnvironment'
+import { listenHostEvent } from '../platform/hostEvents'
 import {
   publishCleanupPending,
   publishLibraryWarnings,
@@ -31,10 +32,9 @@ export function reportLibraryDiagnostics(input: unknown): void {
 export async function initializeLibraryDiagnostics(): Promise<
   (() => void) | undefined
 > {
-  if (!isTauriRuntime()) return
+  if (!isNativeHost()) return
   try {
-    const { listen } = await import('@tauri-apps/api/event')
-    return await listen<unknown>('library-diagnostics', ({ payload }) => {
+    return await listenHostEvent<unknown>('library-diagnostics', (payload) => {
       if (
         payload === null ||
         typeof payload !== 'object' ||

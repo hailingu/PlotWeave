@@ -206,6 +206,13 @@ function writeRustCoverageStub(paths: GateStubPaths): void {
     paths.llvmCovPath,
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 [ -z "$SONAR_TOKEN$PLOTWEAVE_SONAR_TOKEN$sonar_token" ] || printf 'rust-token-present\n' >> "$PLOTWEAVE_TEST_LOG"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--output-path' ]; then
+    PLOTWEAVE_RUST_COVERAGE_REPORT_PATH=$2
+    break
+  fi
+  shift
+done
 case "$PLOTWEAVE_TEST_RUST_COVERAGE_MODE" in
   valid)
     printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
@@ -407,6 +414,9 @@ function prepareGatePaths(options: GateOptions = {}): GateStubPaths {
 
   mkdirSync(dirname(paths.coveragePath))
   mkdirSync(dirname(paths.reportPath))
+  // 合并后的树包含两个 workspace；旧树的单 workspace 回归见 rust-coverage.test.ts。
+  mkdirSync(resolve(sandbox, 'crates'))
+  writeFileSync(resolve(sandbox, 'crates/Cargo.toml'), '')
   mkdirSync(resolve(sandbox, 'scripts'))
   copyFileSync(
     resolve(repositoryRoot, 'scripts/rust-module-graph-guard-baseline.json'),
@@ -559,6 +569,7 @@ describe('SonarQube 完整提交流水线', { timeout: 30_000 }, () => {
       'npm',
       'npm',
       'npm',
+      'cargo-llvm-cov',
       'cargo-llvm-cov',
       'cargo',
       'cargo',
@@ -1064,6 +1075,7 @@ describe('强杀门禁后的人工恢复（issue #430）', { timeout: 30_000 }, 
         'npm',
         'npm',
         'npm',
+        'cargo-llvm-cov',
         'cargo-llvm-cov',
         'cargo',
         'cargo',

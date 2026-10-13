@@ -400,11 +400,13 @@ fn real_repository_use_collection_is_complete() {
         found.resolved,
         found.external
     );
+    // store 已迁入外部内核 crate；宿主采样保留在实际的日志 facade，
+    // 内核采集与无环性由 crate_roots_tests 使用同一守卫验证。
     let graph = build_graph(&files);
     assert!(
         graph
-            .get("store/mod.rs")
-            .is_some_and(|t| t.contains("store/validate.rs")),
-        "store/mod.rs → validate 的裸路径 facade 边缺失（扫描器漏采？）"
+            .get("library_journal.rs")
+            .is_some_and(|t| t.contains("library_journal/recover.rs")),
+        "library_journal → recover 的裸路径 facade 边缺失（扫描器漏采？）"
     );
 }

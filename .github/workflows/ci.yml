@@ -62,7 +62,20 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            crates
+      # Tauri 使用的 Rust 内核与历史 P2 C ABI 保留 workspace 路由检查；
+      # Swift 原生应用使用独立 Swift 服务，不链接 Rust 或该 C ABI。
+      - name: crates cargo fmt --check
+        working-directory: crates
+        run: cargo fmt --check
+      - name: crates cargo clippy --all-targets -- -D warnings
+        working-directory: crates
+        run: cargo clippy --all-targets -- -D warnings
+      - name: crates cargo test
+        working-directory: crates
+        run: cargo test
       - name: cargo fmt --check
         working-directory: src-tauri
         run: cargo fmt --check
@@ -78,3 +91,28 @@ jobs:
       # 会饿死兄弟子进程测试）。
       - name: 模块图守卫元检查（issue #471）
         run: sh scripts/check-rust-module-graph-guard.sh
+
+  # SwiftUI 固定 Xcode 27.0 / macOS SDK 27.0；最低部署版本仍为 macOS 26.0。
+  native:
+    name: native（native/**）
+    runs-on: xcode-27
+    env:
+      # 使用镜像公开的版本别名，避免默认 Xcode 更新后静默切换工具链。
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: 验证钉版 Xcode 与 macOS SDK
+        run: |
+          xcodebuild -version
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 27.0"
+          test "$(xcrun --sdk macosx --show-sdk-version)" = "27.0"
+      - name: build:native-canvas
+        run: npm run build:native-canvas
+      - name: Swift 与 WKWebView 回归
+        # App-hosted 的窗口、焦点及退出委托共享一个 NSApplication；各套件不能并发改写它。
+        run: xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test

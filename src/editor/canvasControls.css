@@ -1,0 +1,89 @@
+/* Swift 宿主的画布操作层与原生缩放胶囊统一形态；
+ * 行为仍归 React Flow，颜色、材质与辅助显示偏好复用现有语义令牌。 */
+.canvas-root.is-swift .react-flow__controls {
+  --xy-controls-button-background-color: transparent;
+  --xy-controls-button-background-color-hover: var(--fill-quaternary);
+  --xy-controls-button-border-color: transparent;
+  --xy-controls-button-color: var(--text-primary);
+  --xy-controls-button-color-hover: var(--text-primary);
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 999px;
+  background:
+    linear-gradient(var(--fill-quaternary), var(--fill-quaternary)),
+    var(--material-sidebar);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.canvas-root.is-swift .react-flow__controls .react-flow__controls-button {
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border: none;
+  border-radius: 8px;
+}
+
+.canvas-root.is-swift
+  .react-flow__controls.horizontal
+  .react-flow__controls-button {
+  border-right: none;
+}
+
+.canvas-root.is-swift .react-flow__controls-button[aria-pressed='true'] {
+  --xy-controls-button-background-color: var(--fill-tertiary);
+  --xy-controls-button-color: var(--text-primary);
+  --xy-controls-button-color-hover: var(--text-primary);
+}
+
+.canvas-root.is-swift .react-flow__controls-button:active:not(:disabled) {
+  background: var(--fill-tertiary);
+}
+
+.canvas-root.is-swift .react-flow__controls-button svg {
+  width: 16px;
+  height: 16px;
+  max-width: 16px;
+  max-height: 16px;
+}
+
+/* 自定义线条图标不采用框架给实心图标设置的填充。 */
+.canvas-root.is-swift .react-flow__controls-button svg[fill='none'] {
+  fill: none;
+}
+
+.canvas-root.is-swift .react-flow__controls-button:disabled {
+  opacity: 0.4;
+}
+
+.canvas-root.is-swift .react-flow__controls-button:disabled svg {
+  fill-opacity: 1;
+}
+
+/* WK 的媒体查询可能晚于宿主快照；显式属性也必须退化材质。 */
+:root[data-host-reduce-transparency='true']
+  .canvas-root.is-swift
+  .react-flow__controls,
+:root[data-host-increase-contrast='true']
+  .canvas-root.is-swift
+  .react-flow__controls {
+  background: var(--surface-window);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-host-increase-contrast='true']
+  .canvas-root.is-swift
+  .react-flow__controls {
+  border-width: 2px;
+  border-color: var(--text-primary);
+}
+
+@media (prefers-contrast: more) {
+  .canvas-root.is-swift .react-flow__controls {
+    border-width: 2px;
+    border-color: var(--text-primary);
+  }
+}

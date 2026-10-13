@@ -12,7 +12,7 @@ export function useHomeActionFeedback() {
   const [failure, setFailure] = useState<{
     readonly error: HomeActionFailure
     // 可显式 undefined = 该失败无同参重试（issue #231）
-    readonly retry?: (() => void) | undefined
+    readonly retry?: (() => void | Promise<void>) | undefined
   } | null>(null)
   const seqRef = useRef(0)
   const pendingSaveRef = useRef<{
@@ -32,7 +32,7 @@ export function useHomeActionFeedback() {
     (
       seq: number,
       error: HomeActionFailure,
-      retry?: (() => void) | undefined,
+      retry?: (() => void | Promise<void>) | undefined,
     ) => {
       if (seq === seqRef.current && !pendingSaveRef.current?.recovered)
         setFailure({ error, retry })
@@ -60,7 +60,7 @@ export function useHomeActionFeedback() {
     [succeed],
   )
   const retry = useCallback(() => {
-    failure?.retry?.()
+    return failure?.retry?.()
   }, [failure])
   return { failure, begin, fail, succeed, watchSave, retry }
 }

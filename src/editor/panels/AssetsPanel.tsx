@@ -25,6 +25,13 @@ import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import { ConfirmDeleteDialog } from '../../home/Dialogs'
 import { LibraryWarnings } from './LibraryWarnings'
+import { useWebExitAction } from '../../useWebExitAction'
+import {
+  isWebExitPending,
+  reportWebExitPending,
+  runWebOperation,
+  WEB_EXIT_PENDING,
+} from '../../webExitFence'
 
 /** 失焦身份：本轮真实编辑、已提交但仍保留的草稿、无草稿的已保存显示。
  * draft 仅在有未解决失败时用于重试；值相等不代表未编辑。 */
@@ -105,6 +112,10 @@ function removeLibraryAsset(
   setUrls: (fn: (u: Record<string, string>) => Record<string, string>) => void,
   setError: (err: string | null) => void,
 ): void {
+  if (isWebExitPending()) {
+    setError(WEB_EXIT_PENDING)
+    return
+  }
   setAssets((list) => list.filter((a) => a.id !== asset.id))
   const url = urls[asset.id]
   if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
@@ -113,7 +124,9 @@ function removeLibraryAsset(
     delete next[asset.id]
     return next
   })
-  libraryStore.remove(asset.id).catch((err) => setError(String(err)))
+  runWebOperation(() => libraryStore.remove(asset.id)).catch((err) =>
+    setError(String(err)),
+  )
 }
 
 /** 删除确认框（AssetsPanel 拆分，issue #99）：✕ 只发起请求，确认后
@@ -169,7 +182,7 @@ function useAssetImport(
     importKind.current = kind
     fileRef.current?.click()
   }
-  return { busy, fileRef, importFiles, onPick }
+  return { busy, fileRef, importFiles: useWebExitAction(importFiles), onPick }
 }
 
 /** 隐藏文件输入（AssetsPanel 拆分，issue #241）：useAssetImport 的视图
@@ -381,24 +394,27 @@ function useAssetTagsCommit(
   /** 排队一次标签写入：立即进入门面队列 + 代际守卫取用响应；成功只合并
    * tags 字段并解除自身错误，失败逐资产记录。 */
   const enqueueTagsCommit = (assetId: string, tags: string[]) => {
+    if (isWebExitPending()) {
+      recordTagsError(assetId, WEB_EXIT_PENDING)
+      return
+    }
     const seq = (tagsCommitSeq.current.get(assetId) ?? 0) + 1
     tagsCommitSeq.current.set(assetId, seq)
     pendingTags.current.set(assetId, tags)
-    libraryStore
-      .updateMeta(assetId, { tags })
-      .then((updated) => {
+    runWebOperation(() =>
+      libraryStore.updateMeta(assetId, { tags }).then((updated) => {
         // 持久化基线由门面快照推进（跨挂载共享）：被取代的成功也落盘
         if (tagsCommitSeq.current.get(assetId) !== seq) return
         pendingTags.current.delete(assetId)
         resolveTagsError(assetId)
         setAssets((list) => mergeAssetTags(list, assetId, updated.tags))
-      })
-      .catch((err) => {
-        // 失败保留输入并逐资产记录；被取代的旧失败不再上报（代际守卫）
-        if (tagsCommitSeq.current.get(assetId) !== seq) return
-        pendingTags.current.delete(assetId)
-        recordTagsError(assetId, err)
-      })
+      }),
+    ).catch((err) => {
+      // 失败保留输入并逐资产记录；被取代的旧失败不再上报（代际守卫）
+      if (tagsCommitSeq.current.get(assetId) !== seq) return
+      pendingTags.current.delete(assetId)
+      recordTagsError(assetId, err)
+    })
   }
 
   const commitTags = (
@@ -452,6 +468,10 @@ function useAssetRename(
   )
 
   const rename = (asset: LibraryAsset, name: string) => {
+    if (isWebExitPending()) {
+      reportWebExitPending()
+      return
+    }
     // 代际/基线/错误统一由跨挂载所有者持有（PR #180 评审修复）：无挂载
     // 或新旧实例交替期间落定的响应，仍能被当前挂载实例看见并正确处置
     const seq = beginRename(
@@ -461,23 +481,24 @@ function useAssetRename(
     setAssets((list) =>
       list.map((a) => (a.id === asset.id ? { ...a, name } : a)),
     )
-    libraryStore
-      .updateMeta(asset.id, { name })
-      .then(() => completeRename(asset.id, name))
-      .catch((err) => {
-        // 回滚基线快照优先（门面随成功跨挂载推进），锚点兜底；被取代
-        // 的迟到失败（新意图或删除终结）静默
-        const baseline = failRename(
-          asset.id,
-          seq,
-          err,
-          libraryStore.persistedSnapshot(asset.id)?.name,
-        )
-        if (baseline === undefined) return
-        setAssets((list) =>
-          list.map((a) => (a.id === asset.id ? { ...a, name: baseline } : a)),
-        )
-      })
+    runWebOperation(() =>
+      libraryStore
+        .updateMeta(asset.id, { name })
+        .then(() => completeRename(asset.id, name)),
+    ).catch((err) => {
+      // 回滚基线快照优先（门面随成功跨挂载推进），锚点兜底；被取代
+      // 的迟到失败（新意图或删除终结）静默
+      const baseline = failRename(
+        asset.id,
+        seq,
+        err,
+        libraryStore.persistedSnapshot(asset.id)?.name,
+      )
+      if (baseline === undefined) return
+      setAssets((list) =>
+        list.map((a) => (a.id === asset.id ? { ...a, name: baseline } : a)),
+      )
+    })
   }
   return { rename, renameError, forgetRename }
 }

@@ -18,6 +18,7 @@ import { graphSignature } from './graphSignature'
 import { registerCanvasFlushGate } from '../canvasSaveRegistry'
 import { onRetryPersisted } from '../projectStore/saveChain'
 import type { ProjectContent } from '../model/content'
+import { assertWebWriteAllowed } from '../webExitFence'
 
 /** 持久化签名（§9.4）：剥离 React Flow 会话态（selected/dragging/measured/
  * className）后序列化参与置脏判定的字段——与序列化层（convert.ts 只存
@@ -384,6 +385,7 @@ function useSaveFlush(
 
   const markDirty = useCallback(
     (next: ProjectContent) => {
+      assertWebWriteAllowed()
       latestRef.current = next
       editSeqRef.current++ // 纯视口等 transient 编辑也前进水位（PR #174 评审）
       dirtyRef.current = true

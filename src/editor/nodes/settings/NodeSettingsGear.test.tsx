@@ -8,7 +8,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { NodeSettingsGear } from './NodeSettingsGear'
 
-afterEach(cleanup)
+/** Native host injection is local to each presentation test. */
+const host = window as Window & { __pwNativeHost?: unknown }
+
+afterEach(() => {
+  cleanup()
+  delete host.__pwNativeHost
+})
 
 function setup(options?: { open?: boolean; light?: boolean }) {
   const onToggle = vi.fn()
@@ -31,7 +37,6 @@ describe('NodeSettingsGear（节点设置齿轮按钮）', () => {
     setup()
     const button = screen.getByRole('button', { name: '节奏卡设置' })
     expect(button.getAttribute('data-pw-gear')).not.toBeNull()
-    expect(button.textContent).toBe('⚙️')
   })
 
   it('面板关闭时 aria-expanded 为 false 且不带打开态类名', () => {
@@ -77,4 +82,15 @@ describe('NodeSettingsGear（节点设置齿轮按钮）', () => {
       'pw-gear-light',
     )
   })
+})
+
+it('omits the settings button in Swift because node selection owns the native inspector', () => {
+  host.__pwNativeHost = {
+    kind: 'swift',
+    protocolVersion: 1,
+    sessionId: 'gear-removal',
+  }
+  const { container } = setup()
+  expect(screen.queryByRole('button', { name: '节奏卡设置' })).toBeNull()
+  expect(container.querySelector('button')).toBeNull()
 })

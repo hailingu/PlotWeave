@@ -791,3 +791,7 @@ mod dependency_fixture;
 /// #494 独立目标见证与实际采集缺口回归。
 #[cfg(test)]
 mod issue_494_tests;
+
+#[cfg(test)]
+#[path = "module_graph/crate_roots_tests.rs"]
+mod crate_roots_tests;

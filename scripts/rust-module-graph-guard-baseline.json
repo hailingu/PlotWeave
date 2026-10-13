@@ -1,6 +1,7 @@
 {
   "version": 1,
   "tests": [
+    "module_graph::crate_roots_tests::extracted_kernel_and_ffi_module_graphs_are_acyclic",
     "module_graph::fixture_ownership_tests::library_fixture_capabilities_have_one_owner",
     "module_graph::issue_424_alias_tests::inner_type_aliases_do_not_restore_outer_module_candidates",
     "module_graph::issue_424_alias_tests::namespace_disjoint_aliases_exclude_false_child_edges",

@@ -8,6 +8,11 @@
  * 过程内核（runStart/applyGenerationResult）为模块级纯函数。
  */
 import {
+  isWebExitPending,
+  runWebOperation,
+  WEB_EXIT_PENDING,
+} from '../../webExitFence'
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -18,7 +23,7 @@ import {
 } from 'react'
 import type { AssetRef } from '../../model/document'
 import { IPC_COMMANDS } from '../../ipc/commands'
-import { isTauriRuntime } from '../../ipc/runtime'
+import { isBrowserPreviewHost } from '../../platform/hostEnvironment'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import { uid } from '../../uid'
@@ -199,7 +204,7 @@ async function runStart(
   nodeId: string,
   jobId: string,
 ): Promise<void> {
-  if (!isTauriRuntime()) {
+  if (isBrowserPreviewHost()) {
     deps.setJobError(nodeId, PREVIEW_UNSUPPORTED)
     return
   }
@@ -431,6 +436,10 @@ function useImageStart(
     table
   return useCallback(
     (nodeId: string) => {
+      if (isWebExitPending()) {
+        setJobError(nodeId, WEB_EXIT_PENDING)
+        return
+      }
       const node = nodesRef.current.find((n) => n.id === nodeId)
       if (node?.type !== 'image') return
       if (jobsRef.current[nodeId]?.status === 'running') return
@@ -442,11 +451,13 @@ function useImageStart(
         [nodeId]: { status: 'running', jobId },
       }
       setJobs(jobsRef.current)
-      void runStart(
-        { projectId, nodesRef, jobAlive, setJobError, clearJob, applyResult },
-        nodeId,
-        jobId,
-      )
+      void runWebOperation(() =>
+        runStart(
+          { projectId, nodesRef, jobAlive, setJobError, clearJob, applyResult },
+          nodeId,
+          jobId,
+        ),
+      ).catch((error: unknown) => setJobError(nodeId, errorText(error)))
     },
     [
       applyResult,
