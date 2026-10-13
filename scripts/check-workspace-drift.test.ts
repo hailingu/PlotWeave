@@ -21,7 +21,7 @@ type StubSetup = {
   bin: string
   fixtures: string
   argsFile: string
-  mode: 'aligned' | 'drift' | 'cargo-fails'
+  mode: 'aligned' | 'drift' | 'cargo-fails' | 'garbage-trees'
 }
 
 function stubCargoEnvironment(mode: StubSetup['mode']): StubSetup {
@@ -91,13 +91,23 @@ function installFakeCargo(setup: StubSetup) {
     `printf '%s\\n' "$@" > ${JSON.stringify(argsFile)}`,
     mode === 'cargo-fails'
       ? 'echo "error: the lock file needs to be updated but --locked was passed" >&2\nexit 7'
-      : [
-          'case "$PWD" in',
-          `  */crates) cat ${JSON.stringify(resolve(fixtures, 'crates.txt'))} ;;`,
-          `  */src-tauri) cat ${JSON.stringify(resolve(fixtures, 'src-tauri.txt'))} ;;`,
-          '  *) echo "unexpected cwd: $PWD" >&2; exit 9 ;;',
-          'esac',
-        ].join('\n'),
+      : mode === 'garbage-trees'
+        ? [
+            // cargo tree 退出 0 但输出无任何 `name vX.Y.Z` 行（评审 5506545630：
+            // 未来输出格式变更或包装器场景），闭包解析结果为空。
+            'case "$PWD" in',
+            '  */crates) echo "some future cargo tree output format" ;;',
+            `  */src-tauri) cat ${JSON.stringify(resolve(fixtures, 'src-tauri.txt'))} ;;`,
+            '  *) echo "unexpected cwd: $PWD" >&2; exit 9 ;;',
+            'esac',
+          ].join('\n')
+        : [
+            'case "$PWD" in',
+            `  */crates) cat ${JSON.stringify(resolve(fixtures, 'crates.txt'))} ;;`,
+            `  */src-tauri) cat ${JSON.stringify(resolve(fixtures, 'src-tauri.txt'))} ;;`,
+            '  *) echo "unexpected cwd: $PWD" >&2; exit 9 ;;',
+            'esac',
+          ].join('\n'),
     '',
   ].join('\n')
   writeFileSync(cargo, lines)
@@ -187,5 +197,18 @@ describe('check-workspace-drift（issue #549）', () => {
     expect(failure?.workspace).toBe('crates')
     expect(String(failure?.stderr ?? '')).toContain('--locked')
     expect(diagnosticsOf(result.stdout).length).toBe(0)
+  })
+
+  it('cargo tree 退出 0 但解析不出根包时失败：空闭包不得静默通过（评审 5506545630）', () => {
+    const { result } = runCheck(stubCargoEnvironment('garbage-trees'))
+    expect(result.status).not.toBe(0)
+    const stderr = diagnosticsOf(result.stderr)
+    const invalid = byCode(stderr, 'DRIFT_CLOSURE_INVALID')[0]
+    expect(invalid?.workspace).toBe('crates')
+    expect(invalid?.root).toBe('plotweave-core')
+    // 不留半截结论：不产出比较汇总，也不把另一侧的包降级成警告放行。
+    const stdout = diagnosticsOf(result.stdout)
+    expect(byCode(stdout, 'DRIFT_CHECK_COMPLETE')).toEqual([])
+    expect(byCode(stdout, 'DRIFT_SIDE_ONLY')).toEqual([])
   })
 })

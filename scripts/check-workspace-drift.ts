@@ -60,8 +60,9 @@ function sameVersions(left: Set<string>, right: Set<string>): boolean {
 function main(): void {
   const closures = new Map<string, PackageVersions>()
   for (const workspace of workspaces) {
+    let closure: PackageVersions
     try {
-      closures.set(workspace, parseTreePackages(treeOutput(workspace)))
+      closure = parseTreePackages(treeOutput(workspace))
     } catch (error) {
       // 采集失败（cargo 不可用、锁失同步等）不得产出半截比较结论。
       const captured = error as { stderr?: unknown }
@@ -78,6 +79,22 @@ function main(): void {
       process.exitCode = 1
       return
     }
+    // 闭包解析不出根包（如 cargo tree 输出格式变更、经包装器调用）说明
+    // 本次没有可比对的真实解析——两个空闭包会得到 compared: 0 的假通过，
+    // 必须显式失败而非静默放行（评审 5506545630）。
+    if (!closure.has(sharedRootPackage)) {
+      console.error(
+        JSON.stringify({
+          code: 'DRIFT_CLOSURE_INVALID',
+          workspace,
+          root: sharedRootPackage,
+          parsedCount: closure.size,
+        }),
+      )
+      process.exitCode = 1
+      return
+    }
+    closures.set(workspace, closure)
   }
 
   const [first, second] = workspaces

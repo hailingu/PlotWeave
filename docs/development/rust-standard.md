@@ -25,10 +25,11 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   that file: record the complete routed-command verification below in the upgrade
   PR, and do not add platform targets without a project decision.
 - Verification: from `src-tauri/`, run
-  `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
+  `npm --prefix .. run check:size && npm --prefix .. run check:workspace-drift && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
   From `crates/`, run the same command for the independent kernel/FFI workspace.
-  The npm prefix selects the repository-root size guard before Cargo checks,
-  including for Rust-only changes (issue #432). Use the Node version pinned by
+  The npm prefix selects the repository-root size guard and the dual-workspace
+  dependency drift guard (`check:workspace-drift`, issue #549) before Cargo
+  checks, including for Rust-only changes (issue #432). Use the Node version pinned by
   `.nvmrc`; CI runs the repository-wide guard, including Rust, in its frontend job.
 - Format with `cargo fmt`; do not hand-format around it.
 - Lint with `cargo clippy`; treat new warnings as defects to fix or explicitly
