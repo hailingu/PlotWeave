@@ -122,12 +122,10 @@ fn handle_job(root: &CapDir, pending: &Mutex<HashMap<u32, bool>>, job: Job) {
 }
 
 /// FFI 内存登记与提交口仅执行 infallible 容器操作；持锁期间不调用内核或宿主。
-/// 中毒时保留状态并诊断恢复；core 的同类内核为 crate-private，不能跨 crate 复用。
+/// 中毒时保留状态并诊断恢复；恢复内核委托 plotweave-core 的全仓库单一来源
+/// （issue #145 策略；issue #549 消除同策略拷贝），诊断格式随之统一。
 fn state_guard<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
-    state.lock().unwrap_or_else(|poisoned| {
-        eprintln!("[lock] PW_FFI_STATE_RECOVERED: poisoned in-memory state retained");
-        poisoned.into_inner()
-    })
+    plotweave_core::lock::recover_guard(state.lock(), "PW_FFI_STATE")
 }
 
 /// 执行一层：内核 panic 不得跨 FFI（§4.3），转为 ERROR 回执。

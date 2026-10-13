@@ -53,7 +53,12 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   The current native application uses Swift services and does not link this
   crate; Tauri/core and ABI regressions remain in the Rust gate's scope.
 - `crates/` forms its own Cargo workspace; run its routed checks from the
-  `crates` directory.
+  `crates` directory. The two workspaces resolve `plotweave-core`
+  independently, so shared dependency versions can drift silently; the
+  guard `npm run check:workspace-drift` (issue #549) compares the kernel's
+  resolved closure between both locks (`cargo tree --locked`, never
+  rewriting them) and runs in the Rust CI job — align drift with
+  `cargo update` instead of bypassing it.
 - Core fault-injection helpers are available through `cfg(test)` or the
   `test-support` feature. The Tauri host enables that feature only in its
   dev-dependency for cross-domain integration regressions; the production
@@ -152,7 +157,11 @@ mandatory. Metric and scope:
   contention, cancellation, and poison or failure behavior.
 - Lock poisoning follows one domain policy (issue #145): default to
   **verifiable recovery** through the shared `crate::lock::recover_guard`
-  kernel — never propagate the panic and never silently ignore it. Recovery
+  kernel — never propagate the panic and never silently ignore it. The
+  kernel has one repository-wide source (issue #549): `plotweave-core`'s
+  `pub mod lock`; `src-tauri` re-exports it as `crate::lock` and
+  `plotweave-ffi` delegates to it, so duplicate copies of the same policy
+  are prohibited. Recovery
   is permitted only with a documented per-lock justification recorded at the
   lock site: on-disk consistency is owned by an independent protocol (the
   §7.2 journal recoverable-commit protocol, the §10.2 atomic-write

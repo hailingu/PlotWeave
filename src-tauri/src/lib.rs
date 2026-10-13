@@ -17,7 +17,8 @@
 //! - `imagegen`：画布内 AI 图像生成代理（文生图，docs/data-model.md §13 首片）。
 //! - `media_format`：导入/生成媒体扩展名的无 IO 叶子策略。
 //! - `http_util`：出站 HTTP 代理共享助手（响应体流式限读内核）。
-//! - `lock`：共享 Mutex 的中毒后领域策略（统一可验证恢复内核，issue #145）。
+//! - `lock`：共享 Mutex 的中毒后领域策略（统一可验证恢复内核，issue
+//!   #145；单一来源在 `plotweave_core::lock`，本 crate 复用，issue #549）。
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use tauri::Manager;
@@ -31,7 +32,9 @@ mod library;
 mod library_fs;
 mod library_index;
 mod library_journal;
-mod lock;
+// 中毒恢复内核复用 plotweave-core 单一来源（issue #549）：原 src/lock.rs
+// 逐字节拷贝已删除，各模块继续经 `crate::lock::recover_guard` 调用。
+use plotweave_core::lock;
 mod media_format;
 mod media_protocol;
 #[cfg(target_os = "macos")]

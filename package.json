@@ -22,7 +22,8 @@
     "hooks:install": "git config core.hooksPath .githooks",
     "sonar:gate": "sh scripts/sonar-quality-gate.sh",
     "check:static": "sh scripts/check-static.sh",
-    "check:size": "node scripts/check-file-size.ts"
+    "check:size": "node scripts/check-file-size.ts",
+    "check:workspace-drift": "node scripts/check-workspace-drift.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
