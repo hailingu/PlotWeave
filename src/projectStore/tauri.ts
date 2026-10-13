@@ -3,7 +3,7 @@
  * typed IPC 宿主命令传输调用）：列表/新建/
  * 加载走 Rust 命令（JSON 文件落盘于应用数据目录）。加载为「单循环三段」
  * ——链静止 → 失败登记复验 → 磁盘读取（链身份守卫），保证「读到即最新」；
- * 空库播种与已知示例的旧格式升级回写也在此域。
+ * 空库播种与已知示例的 v1 修复型升级回写也在此域。
  */
 import { parseProject } from '../model/convert'
 import type { ProjectContent } from '../model/content'

@@ -3,7 +3,7 @@
  * 纯 TS 类型，无框架依赖：React Flow 运行态与本格式之间的互转见 convert.ts。
  */
 
-/** 当前文档版本；旧扁平存储格式视为 0，由 §11 迁移链升级。 */
+/** 当前文档版本；旧扁平 v0 格式已随 #519 处置退役，判型即拒绝。 */
 export const CURRENT_SCHEMA_VERSION = 1
 
 /** 当前文档格式的版本字面量类型（issue #312）：随 CURRENT_SCHEMA_VERSION
