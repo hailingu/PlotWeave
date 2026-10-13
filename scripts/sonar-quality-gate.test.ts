@@ -64,12 +64,6 @@ type GateOptions = {
   lintExit?: number
   lockName?: string
   lockOccupied?: boolean
-  /** 模块图守卫元检查（issue #471）：cargo 替身退出码，非零模拟列举失败。 */
-  metaGuardExit?: number
-  /** 保留完整枚举，但在实际执行时跳过一个守卫（issue #495）。 */
-  metaGuardIgnored?: boolean
-  /** 从版本化基线取前 N 个用例，模拟枚举缺失（issue #495）。 */
-  metaGuardTests?: number
   npmExit?: number
   pendingBlocked?: boolean
   pendingSeed?: string
@@ -139,7 +133,6 @@ interface GateStubPaths {
   readonly scannerPath: string
   readonly curlPath: string
   readonly llvmCovPath: string
-  readonly cargoPath: string
 }
 
 /** npm 替身（writeCommandStubs 拆分，PR #415 评审 5339054039）：记录
@@ -287,39 +280,6 @@ esac`,
   )
 }
 
-/** cargo 替身：以版本化基线模拟完整枚举、逐例执行和 ignored 注入。 */
-function writeCargoStub(paths: GateStubPaths): void {
-  writeExecutable(
-    paths.cargoPath,
-    String.raw`printf 'cargo %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-if [ "$PLOTWEAVE_TEST_META_GUARD_EXIT" -ne 0 ]; then
-  printf '%s\n' 'error: injected cargo failure (boom-diagnostic)' >&2
-  exit "$PLOTWEAVE_TEST_META_GUARD_EXIT"
-fi
-case "$*" in
-  'test --lib --manifest-path src-tauri/Cargo.toml -- --list') mode=list ;;
-  'test --lib --manifest-path src-tauri/Cargo.toml -- module_graph:: --format pretty --color never --test-threads=1') mode=run ;;
-  *) printf '%s\n' 'unexpected cargo arguments' >&2; exit 64 ;;
-esac
-"$PLOTWEAVE_NODE_BIN" --input-type=module -e '
-import { readFileSync } from "node:fs";
-const baseline = JSON.parse(readFileSync("scripts/rust-module-graph-guard-baseline.json", "utf8"));
-const limit = process.env.PLOTWEAVE_TEST_META_GUARD_TESTS;
-const tests = limit ? baseline.tests.slice(0, Number(limit)) : baseline.tests;
-if (process.argv[1] === "list") {
-  for (const name of tests) console.log(name + ": test");
-  console.log(tests.length + " tests, 0 benchmarks");
-} else {
-  const ignored = process.env.PLOTWEAVE_TEST_META_GUARD_IGNORED === "1" ? 1 : 0;
-  for (const [index, name] of tests.entries()) {
-    console.log("test " + name + " ... " + (index < ignored ? "ignored" : "ok"));
-  }
-  console.log("test result: ok. " + (tests.length - ignored) + " passed; 0 failed; " + ignored + " ignored; 0 measured; 0 filtered out; finished in 0.00s");
-}
-' "$mode"`,
-  )
-}
-
 /** 外部命令替身总装（runGate 拆分，issue #99）：npm / cargo-llvm-cov /
  * sonar-scanner / curl 的记录-并-受控返回替身，按选项预置锁形态。 */
 function writeCommandStubs(paths: GateStubPaths, options: GateOptions): void {
@@ -327,7 +287,6 @@ function writeCommandStubs(paths: GateStubPaths, options: GateOptions): void {
   writeRustCoverageStub(paths)
   writeScannerStub(paths)
   writeCurlStub(paths)
-  writeCargoStub(paths)
 
   if (options.lockOccupied) {
     mkdirSync(paths.lockPath)
@@ -344,7 +303,6 @@ function gateEnvironment(
     ...gitFixtureEnvironment(),
     PLOTWEAVE_GATE_REPOSITORY_ROOT: paths.root,
     PLOTWEAVE_CARGO_LLVM_COV_BIN: paths.llvmCovPath,
-    PLOTWEAVE_CARGO_BIN: paths.cargoPath,
     PLOTWEAVE_CURL_BIN: paths.curlPath,
     PLOTWEAVE_COVERAGE_REPORT_PATH: paths.coveragePath,
     PLOTWEAVE_GATE_HISTORY_PATH: paths.historyPath,
@@ -362,9 +320,6 @@ function gateEnvironment(
     PLOTWEAVE_TEST_COVERAGE_MODE: options.coverageMode ?? 'valid',
     PLOTWEAVE_TEST_FORMAT_EXIT: String(options.formatExit ?? 0),
     PLOTWEAVE_TEST_LINT_EXIT: String(options.lintExit ?? 0),
-    PLOTWEAVE_TEST_META_GUARD_EXIT: String(options.metaGuardExit ?? 0),
-    PLOTWEAVE_TEST_META_GUARD_IGNORED: options.metaGuardIgnored ? '1' : '0',
-    PLOTWEAVE_TEST_META_GUARD_TESTS: String(options.metaGuardTests ?? ''),
     PLOTWEAVE_TEST_RUST_COVERAGE_MODE: options.rustCoverageMode ?? 'valid',
     PLOTWEAVE_TEST_NPM_EXIT: String(options.npmExit ?? 0),
     PLOTWEAVE_TEST_QUALITY_GATE_STATUS: options.qualityGateStatus ?? 'OK',
@@ -409,7 +364,6 @@ function prepareGatePaths(options: GateOptions = {}): GateStubPaths {
     scannerPath: resolve(sandbox, 'bin', 'sonar-scanner'),
     curlPath: resolve(sandbox, 'bin', 'curl'),
     llvmCovPath: resolve(sandbox, 'bin', 'cargo-llvm-cov'),
-    cargoPath: resolve(sandbox, 'bin', 'cargo'),
   }
 
   mkdirSync(dirname(paths.coveragePath))
@@ -417,11 +371,6 @@ function prepareGatePaths(options: GateOptions = {}): GateStubPaths {
   // 合并后的树包含两个 workspace；旧树的单 workspace 回归见 rust-coverage.test.ts。
   mkdirSync(resolve(sandbox, 'crates'))
   writeFileSync(resolve(sandbox, 'crates/Cargo.toml'), '')
-  mkdirSync(resolve(sandbox, 'scripts'))
-  copyFileSync(
-    resolve(repositoryRoot, 'scripts/rust-module-graph-guard-baseline.json'),
-    resolve(sandbox, 'scripts/rust-module-graph-guard-baseline.json'),
-  )
   writeCommandStubs(paths, options)
 
   // 版本化与待物化文件预置：待物化默认为空（失败路径不追加时读到空
@@ -484,10 +433,8 @@ function copyFixtureGateScripts(root: string): string {
   mkdirSync(scripts, { recursive: true })
   for (const file of [
     'check-file-size.ts',
-    'check-rust-module-graph-guard.sh',
     'check-static.sh',
     'file-size-baseline.json',
-    'rust-module-graph-guard-baseline.json',
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
   ]) {
@@ -571,8 +518,6 @@ describe('SonarQube 完整提交流水线', { timeout: 30_000 }, () => {
       'npm',
       'cargo-llvm-cov',
       'cargo-llvm-cov',
-      'cargo',
-      'cargo',
       'sonar-scanner',
       'curl',
       'curl',
@@ -584,13 +529,6 @@ describe('SonarQube 完整提交流水线', { timeout: 30_000 }, () => {
     expect(result.log).toContain(
       'cargo-llvm-cov llvm-cov --lib --test media_format_leaf --lcov',
     )
-    // 版本化守卫必须在扫描前枚举完整，并逐例执行（issue #495）。
-    expect(result.log).toContain(
-      'cargo test --lib --manifest-path src-tauri/Cargo.toml -- --list',
-    )
-    expect(result.log).toContain(
-      'cargo test --lib --manifest-path src-tauri/Cargo.toml -- module_graph:: --format pretty --color never --test-threads=1',
-    )
     expect(result.log).toContain('-Dsonar.qualitygate.wait=true')
     expect(result.log).toContain('-Dsonar.host.url=http://sonar.test')
     expect(result.log).toContain('-Dsonar.javascript.lcov.reportPaths=')
@@ -600,46 +538,6 @@ describe('SonarQube 完整提交流水线', { timeout: 30_000 }, () => {
     expect(result.log).toContain('/lcov-rust.info')
     // 增量清零：issues 查询按 sinceLeakPeriod（New Code 周期）过滤
     expect(result.log).toContain('sinceLeakPeriod=true')
-  })
-})
-
-describe('Rust 模块图守卫执行门禁', { timeout: 30_000 }, () => {
-  it('守卫枚举缺少基线用例时，门禁在扫描前失败（issue #495）', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', {
-      metaGuardTests: 3,
-    })
-
-    expect(result.status).toBe(1)
-    // 稳定诊断代码契约：rust-standard.md「Module Boundary Guards」。
-    expect(result.stderr).toContain('[RUST_MODULE_GRAPH_LIST_MISMATCH]')
-    expect(result.log).not.toContain('sonar-scanner')
-  })
-
-  it('cargo 列举失败：门禁 fail-closed 且不启动扫描（issue #471）', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', {
-      metaGuardExit: 101,
-    })
-
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain('cargo test --lib -- --list 失败')
-    expect(result.stderr).toContain('boom-diagnostic')
-    expect(result.log).not.toContain('sonar-scanner')
-  })
-
-  it('枚举完整但守卫被 ignored 时，门禁在扫描前失败（issue #495）', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', {
-      metaGuardIgnored: true,
-    })
-
-    expect(result.log, result.stderr).toContain(
-      'cargo test --lib --manifest-path src-tauri/Cargo.toml -- --list',
-    )
-    expect(result.log, result.stderr).toContain(
-      'cargo test --lib --manifest-path src-tauri/Cargo.toml -- module_graph:: --format pretty --color never --test-threads=1',
-    )
-    expect(result.status, result.stderr).toBe(1)
-    expect(result.log).not.toContain('sonar-scanner')
-    expect(result.pending).toBe('')
   })
 })
 
@@ -1077,8 +975,6 @@ describe('强杀门禁后的人工恢复（issue #430）', { timeout: 30_000 }, 
         'npm',
         'cargo-llvm-cov',
         'cargo-llvm-cov',
-        'cargo',
-        'cargo',
         'sonar-scanner',
         'curl',
         'curl',

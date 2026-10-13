@@ -85,12 +85,6 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test
-      # 模块图守卫元检查（issues #471/#495）：cargo test 后 lib 目标已热；
-      # 核对版本化注册名称与实际通过结果，拒绝挂载丢失及 ignored 用例。
-      # 串行挂在本任务，不进 frontend 任务的并行 vitest 套件（冷 cargo 构建
-      # 会饿死兄弟子进程测试）。
-      - name: 模块图守卫元检查（issue #471）
-        run: sh scripts/check-rust-module-graph-guard.sh
 
   # SwiftUI 固定 Xcode 27.0 / macOS SDK 27.0；最低部署版本仍为 macOS 26.0。
   native:

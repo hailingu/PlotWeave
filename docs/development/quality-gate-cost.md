@@ -94,26 +94,9 @@ Every gated command runs the same complete sequence:
    `media_format_leaf` test target, after which the same 80% floor is
    re-checked on both LCOV reports (frontend and Rust) before any analysis is
    published (issue #393).
-4. `scripts/check-rust-module-graph-guard.sh` — a semantic liveness check on
-   the Rust module-graph guard itself (issues #471 and
-   [#495](https://github.com/hailingu/PlotWeave/issues/495)): it compares
-   `cargo test --lib -- --list` names against the versioned baseline, then
-   executes the guard cases and requires every baseline name to report `ok`,
-   with no failed or ignored cases and a valid successful summary. Deleting
-   the mount point in `lib.rs`, emptying the module or marking its cases
-   `#[ignore]` fails the gate. Added cases require a reviewed baseline update,
-   raising the tracked count; its initial #495 baseline contains 149 cases.
-   The schema, execution contract, retained semantic boundary and regression
-   matrix are maintained in the
-   [Rust standard](rust-standard.md#issue-495-state-and-invariant-matrix).
-   Runs serially after the Rust coverage phase —
-   deliberately outside the parallel vitest suite, where a cold cargo build
-   starved sibling subprocess tests (8 timeouts observed at commit
-   `0e80937`); CI enforces the same check in its rust job after
-   `cargo test`.
-5. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
+4. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
    then a separate check that new-code unresolved issues are zero.
-6. Since issue #355, a fully passing run appends one summary record to a
+5. Since issue #355, a fully passing run appends one summary record to a
    pending file inside `.git`, and the `pre-push` hook materializes pending
    lines into the versioned `docs/development/gate-history.jsonl` after its
    gate passes (see

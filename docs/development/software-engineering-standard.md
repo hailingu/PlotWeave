@@ -127,9 +127,14 @@ Apply the guardrails as follows:
   relative import graph of non-test `src` modules from the TypeScript AST and
   asserts that both the compile-time graph (type-only imports included) and
   the runtime graph (after type erasure) stay acyclic. Routing a cycle through
-  an `import type` edge is a violation, not a loophole. The Rust backend
-  carries the counterpart acyclicity guard (`src-tauri/src/module_graph.rs`,
-  issue #399), so the invariant is cross-language; see
+  an `import type` edge is a violation, not a loophole. This test is the
+  single retained instance of the module-graph guard logic: the Rust-side
+  counterpart guard (`src-tauri/src/module_graph.rs`, issue #399; 31 files /
+  7,299 lines at retirement) and its meta-guard were retired by owner decision
+  ([issue #524](https://github.com/hailingu/PlotWeave/issues/524)), so the
+  Rust tree's file-granularity acyclicity invariant is no longer
+  machine-checked — module-level cycles remain legal Rust and are governed by
+  the cyclic-dependency prohibition above plus review; see
   [rust-standard.md](rust-standard.md) "Module Boundary Guards".
 - The shell must not depend on runtime values of `editor/**` internals
   (issue #399): `shellEditorRuntimeViolations` in `src/moduleGraph.test.ts`

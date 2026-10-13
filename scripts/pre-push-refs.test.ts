@@ -229,7 +229,6 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
   mkdirSync(resolve(sandbox, '.githooks'), { recursive: true })
   for (const script of [
     'check-file-size.ts',
-    'check-rust-module-graph-guard.sh',
     'check-static.sh',
     'file-size-baseline.json',
     'gate-history.sh',
@@ -238,7 +237,6 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
     'pre-push-install-launcher.mjs',
     'pre-push-install-watchdog.mjs',
     'rust-coverage.sh',
-    'rust-module-graph-guard-baseline.json',
     'sonar-quality-gate.sh',
   ]) {
     copyFileSync(
@@ -312,7 +310,6 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$output"`,
   )
-  writeScenarioCargoStub(bin)
   writeExecutable(
     resolve(bin, 'sonar-scanner'),
     String.raw`printf 'sonar-scanner\n' >> "$PLOTWEAVE_TEST_LOG"
@@ -337,30 +334,6 @@ esac`,
   )
 }
 
-/** 在当前被推树读取基线，模拟 cargo 枚举与逐例成功执行（issue #495）。 */
-function writeScenarioCargoStub(bin: string): void {
-  writeExecutable(
-    resolve(bin, 'cargo'),
-    String.raw`printf 'cargo %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-case "$*" in
-  'test --lib --manifest-path src-tauri/Cargo.toml -- --list') mode=list ;;
-  'test --lib --manifest-path src-tauri/Cargo.toml -- module_graph:: --format pretty --color never --test-threads=1') mode=run ;;
-  *) printf '%s\n' 'unexpected cargo arguments' >&2; exit 64 ;;
-esac
-"$PLOTWEAVE_NODE_BIN" --input-type=module -e '
-import { readFileSync } from "node:fs";
-const tests = JSON.parse(readFileSync("scripts/rust-module-graph-guard-baseline.json", "utf8")).tests;
-if (process.argv[1] === "list") {
-  for (const name of tests) console.log(name + ": test");
-  console.log(tests.length + " tests, 0 benchmarks");
-} else {
-  for (const name of tests) console.log("test " + name + " ... ok");
-  console.log("test result: ok. " + tests.length + " passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s");
-}
-' "$mode"`,
-  )
-}
-
 /** 场景环境：替身路径 + 记录与日志覆盖；令牌不继承宿主环境。 */
 function scenarioEnvironment(
   sandbox: string,
@@ -372,7 +345,6 @@ function scenarioEnvironment(
     ...gitFixtureEnvironment(),
     // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
     PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
-    PLOTWEAVE_CARGO_BIN: resolve(bin, 'cargo'),
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),
