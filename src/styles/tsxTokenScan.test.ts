@@ -512,67 +512,11 @@ describe('TSX/SVG 扫描入口与键归一（issue #362，评审补强）', () =
       ),
     ).toEqual([{ context: 'fill', value: '#fff' }])
   })
-
-  it('背景图像长形键 camelCase 归一进入扫描：style 对象 backgroundImage 字面被点名（评审 4113805575）', () => {
-    const occurrences = colorOccurrencesOfSource(
-      'fixture.tsx',
-      "export const a = <div style={{ backgroundImage: 'linear-gradient(#fff, #000)' }} />",
-    )
-    expect(occurrences).toEqual([
-      {
-        file: 'fixture.tsx',
-        context: 'background-image',
-        value: 'linear-gradient(#fff, #000)',
-      },
-    ])
-  })
-
-  it('React 厂商前缀键保留前导连字符：WebkitTextStroke 字面被点名（评审 4113846195）', () => {
-    const occurrences = colorOccurrencesOfSource(
-      'fixture.tsx',
-      "export const a = <div style={{ WebkitTextStroke: '1px #fff' }} />",
-    )
-    expect(occurrences).toEqual([
-      {
-        file: 'fixture.tsx',
-        context: '-webkit-text-stroke',
-        value: '1px #fff',
-      },
-    ])
-  })
+  // 键归一夹具（backgroundImage 长形、WebkitTextStroke 厂商前缀）已并入
+  // 下方静态抽取边界用例表（issue #537）。
 })
 
 describe('TSX/SVG 静态抽取与解析检查（issue #362，评审补强）', () => {
-  it('等价静态键/值语法（字符串属性名与无替换模板字面量）同样进入扫描（评审 4113846198）', () => {
-    const occurrences = colorOccurrencesOfSource(
-      'fixture.ts',
-      "export const a = { 'backgroundColor': '#fff' };\n" +
-        'export const b = { color: `#f00` };',
-    )
-    expect(occurrences).toEqual([
-      { file: 'fixture.ts', context: 'background-color', value: '#fff' },
-      { file: 'fixture.ts', context: 'color', value: '#f00' },
-    ])
-  })
-
-  it('静态抽取递归解包：计算属性名、as const 包装与 ?? 兜底字面量（评审 4113886895）', () => {
-    const occurrences = colorOccurrencesOfSource(
-      'fixture.ts',
-      "export const a = { ['color']: '#fff' };\n" +
-        "export const b = { fill: '#f00' as const };\n" +
-        "export const c = { gradient: g ?? 'linear-gradient(135deg,#8e8e93,#636366)' };",
-    )
-    expect(occurrences).toEqual([
-      { file: 'fixture.ts', context: 'color', value: '#fff' },
-      { file: 'fixture.ts', context: 'fill', value: '#f00' },
-      {
-        file: 'fixture.ts',
-        context: 'gradient',
-        value: 'linear-gradient(135deg,#8e8e93,#636366)',
-      },
-    ])
-  })
-
   it('SVG 经解析器检查属性：单引号命中、注释不误报（评审 4113886903）', () => {
     // 注释与属性用不同颜色判别：正则匹配会命中注释里的 #000（假来源）
     expect(
@@ -581,18 +525,8 @@ describe('TSX/SVG 静态抽取与解析检查（issue #362，评审补强）', (
       ),
     ).toEqual([{ context: 'fill', value: '#fff' }])
   })
-
-  it('JSX 表达式容器解包：fill={…} 与 as const 经容器均被点名（评审 4113927266）', () => {
-    const occurrences = colorOccurrencesOfSource(
-      'fixture.tsx',
-      "export const a = <circle fill={'#fff'} />;\n" +
-        "export const b = <stop stopColor={'#f00' as const} />;",
-    )
-    expect(occurrences).toEqual([
-      { file: 'fixture.tsx', context: 'fill', value: '#fff' },
-      { file: 'fixture.tsx', context: 'stop-color', value: '#f00' },
-    ])
-  })
+  // 静态抽取夹具（等价键/值语法、递归解包、JSX 表达式容器）已并入下方
+  // 静态抽取边界用例表（issue #537）。
 })
 
 describe('TSX/SVG 内联别名与多跳追踪（issue #362，评审补强）', () => {
@@ -649,79 +583,232 @@ describe('模块常量显示色消费入口（issue #438）', () => {
       ),
     ).toEqual([{ file: 'fixture.tsx', context, value: '#ff0000' }])
   })
-
-  it('对象简写使用模块常量也构成一个显示色消费点', () => {
-    expect(
-      colorOccurrencesOfSource(
-        'fixture.ts',
-        "const color = '#ff0000'; export const style = { color };",
-      ),
-    ).toEqual([{ file: 'fixture.ts', context: 'color', value: '#ff0000' }])
-  })
+  // 对象简写消费模块常量的夹具已并入下方静态抽取边界用例表（issue #537）。
 })
 
-describe('模块常量静态候选与别名（issue #438）', () => {
-  it('包装、分支和多跳常量在每个消费点独立计数', () => {
-    expect(
-      colorOccurrencesOfSource(
-        'fixture.tsx',
-        "const BASE = '#fff' as const;\n" +
-          "const TONE = flag ? (BASE satisfies string) : '#000';\n" +
-          'const ALIAS = TONE;\n' +
-          'export const a = <circle fill={ALIAS} />;\n' +
-          'export const b = { color: missing ?? ALIAS };',
-      ),
-    ).toEqual([
+/**
+ * 静态颜色抽取边界用例表（issue #537）：原散布在键归一、静态抽取、
+ * 模块常量与增量赋值各组的 16 个同构夹具块——均为
+ * `colorOccurrencesOfSource(fixture)` 对期望出现点数组的 `toEqual`，
+ * 仅输入源码与期望数组不同——收敛为单一数据表驱动；表项名保留各自
+ * 边界语义与评审出处，`&&` 短路分支的 .ts/.tsx 两形态拆为两行。
+ * 文件列同时决定 .ts/.tsx 解析口径（尖括号断言仅 .ts 合法）；内联
+ * 别名（两次调用对照）与词法绑定边界（期望空）非单调用同构形态，
+ * 留在各自套件。注册表对账与真实生产源扫描是 #291 明示保留的守护
+ * 机制，不入此表。
+ */
+const STATIC_COLOR_EXTRACTION_CASES: readonly (readonly [
+  name: string,
+  file: string,
+  source: string,
+  expected: readonly JsxColorOccurrence[],
+])[] = [
+  // —— 扫描入口键归一（issue #362 评审补强）——
+  [
+    '背景图像长形键 camelCase 归一：style 对象 backgroundImage 字面被点名（评审 4113805575）',
+    'fixture.tsx',
+    "export const a = <div style={{ backgroundImage: 'linear-gradient(#fff, #000)' }} />",
+    [
+      {
+        file: 'fixture.tsx',
+        context: 'background-image',
+        value: 'linear-gradient(#fff, #000)',
+      },
+    ],
+  ],
+  [
+    'React 厂商前缀键保留前导连字符：WebkitTextStroke 字面被点名（评审 4113846195）',
+    'fixture.tsx',
+    "export const a = <div style={{ WebkitTextStroke: '1px #fff' }} />",
+    [
+      {
+        file: 'fixture.tsx',
+        context: '-webkit-text-stroke',
+        value: '1px #fff',
+      },
+    ],
+  ],
+  // —— 静态抽取与解析（issue #362 评审补强）——
+  [
+    '等价静态键/值语法（字符串属性名与无替换模板字面量）同样进入扫描（评审 4113846198）',
+    'fixture.ts',
+    "export const a = { 'backgroundColor': '#fff' };\n" +
+      'export const b = { color: `#f00` };',
+    [
+      { file: 'fixture.ts', context: 'background-color', value: '#fff' },
+      { file: 'fixture.ts', context: 'color', value: '#f00' },
+    ],
+  ],
+  [
+    '静态抽取递归解包：计算属性名、as const 包装与 ?? 兜底字面量（评审 4113886895）',
+    'fixture.ts',
+    "export const a = { ['color']: '#fff' };\n" +
+      "export const b = { fill: '#f00' as const };\n" +
+      "export const c = { gradient: g ?? 'linear-gradient(135deg,#8e8e93,#636366)' };",
+    [
+      { file: 'fixture.ts', context: 'color', value: '#fff' },
+      { file: 'fixture.ts', context: 'fill', value: '#f00' },
+      {
+        file: 'fixture.ts',
+        context: 'gradient',
+        value: 'linear-gradient(135deg,#8e8e93,#636366)',
+      },
+    ],
+  ],
+  [
+    'JSX 表达式容器解包：fill={…} 与 as const 经容器均被点名（评审 4113927266）',
+    'fixture.tsx',
+    "export const a = <circle fill={'#fff'} />;\n" +
+      "export const b = <stop stopColor={'#f00' as const} />;",
+    [
+      { file: 'fixture.tsx', context: 'fill', value: '#fff' },
+      { file: 'fixture.tsx', context: 'stop-color', value: '#f00' },
+    ],
+  ],
+  // —— 模块常量静态候选与别名（issue #438）——
+  [
+    '对象简写使用模块常量也构成一个显示色消费点',
+    'fixture.ts',
+    "const color = '#ff0000'; export const style = { color };",
+    [{ file: 'fixture.ts', context: 'color', value: '#ff0000' }],
+  ],
+  [
+    '包装、分支和多跳常量在每个消费点独立计数',
+    'fixture.tsx',
+    "const BASE = '#fff' as const;\n" +
+      "const TONE = flag ? (BASE satisfies string) : '#000';\n" +
+      'const ALIAS = TONE;\n' +
+      'export const a = <circle fill={ALIAS} />;\n' +
+      'export const b = { color: missing ?? ALIAS };',
+    [
       { file: 'fixture.tsx', context: 'fill', value: '#fff' },
       { file: 'fixture.tsx', context: 'fill', value: '#000' },
       { file: 'fixture.tsx', context: 'color', value: '#fff' },
       { file: 'fixture.tsx', context: 'color', value: '#000' },
-    ])
-  })
-
-  it('合法令牌常量不误报，但可达内联自定义属性常量仍被捕获', () => {
-    expect(
-      colorOccurrencesOfSource(
-        'fixture.tsx',
-        "const TOKEN = 'var(--label-primary)';\n" +
-          "const TONE = '#fff'; const REF = 'var(--tone)';\n" +
-          'export const a = <circle fill={TOKEN} />;\n' +
-          "export const b = { '--tone': TONE, '--alias': REF, color: 'var(--alias)' };\n" +
-          "export const c = { '--tone': TONE };\n" +
-          "const UNUSED = '#f00';",
-      ),
-    ).toEqual([{ file: 'fixture.tsx', context: '--tone', value: '#fff' }])
-  })
-
-  it('循环常量链停止展开且保留可解析的回退分支', () => {
-    expect(
-      colorOccurrencesOfSource(
-        'fixture.ts',
-        "const A = B; const B = A || '#fff';\n" +
-          'export const a = { color: A };\n' +
-          "const C = D; const D = C; export const b = { fill: C ?? '#000' };",
-      ),
-    ).toEqual([
+    ],
+  ],
+  [
+    '合法令牌常量不误报，但可达内联自定义属性常量仍被捕获',
+    'fixture.tsx',
+    "const TOKEN = 'var(--label-primary)';\n" +
+      "const TONE = '#fff'; const REF = 'var(--tone)';\n" +
+      'export const a = <circle fill={TOKEN} />;\n' +
+      "export const b = { '--tone': TONE, '--alias': REF, color: 'var(--alias)' };\n" +
+      "export const c = { '--tone': TONE };\n" +
+      "const UNUSED = '#f00';",
+    [{ file: 'fixture.tsx', context: '--tone', value: '#fff' }],
+  ],
+  [
+    '循环常量链停止展开且保留可解析的回退分支',
+    'fixture.ts',
+    "const A = B; const B = A || '#fff';\n" +
+      'export const a = { color: A };\n' +
+      "const C = D; const D = C; export const b = { fill: C ?? '#000' };",
+    [
       { file: 'fixture.ts', context: 'color', value: '#fff' },
       { file: 'fixture.ts', context: 'fill', value: '#000' },
-    ])
-  })
-
-  it('导出、多声明、无替换模板与常量计算键复用同一静态口径', () => {
-    expect(
-      colorOccurrencesOfSource(
-        'fixture.ts',
-        'export const TONE = `#fff`, KEY = "color";\n' +
-          'export const a = { [KEY]: TONE };\n' +
-          'style[KEY] = TONE;\n' +
-          "export const b = { fill: LATER }; const LATER = '#000';",
-      ),
-    ).toEqual([
+    ],
+  ],
+  [
+    '导出、多声明、无替换模板与常量计算键复用同一静态口径',
+    'fixture.ts',
+    'export const TONE = `#fff`, KEY = "color";\n' +
+      'export const a = { [KEY]: TONE };\n' +
+      'style[KEY] = TONE;\n' +
+      "export const b = { fill: LATER }; const LATER = '#000';",
+    [
       { file: 'fixture.ts', context: 'color', value: '#fff' },
       { file: 'fixture.ts', context: 'color', value: '#fff' },
       { file: 'fixture.ts', context: 'fill', value: '#000' },
-    ])
-  })
+    ],
+  ],
+  // —— 增量赋值与断言语法（issue #362 评审补强，含 issue #396 包装形态）——
+  [
+    '尖括号类型断言解包：<const> 值与计算键被点名（评审 4114274468）',
+    'fixture.ts',
+    "export const a = { color: <const>'#fff' };\n" +
+      "export const b = { [<const>'backgroundColor']: '#000' };",
+    [
+      { file: 'fixture.ts', context: 'color', value: '#fff' },
+      { file: 'fixture.ts', context: 'background-color', value: '#000' },
+    ],
+  ],
+  [
+    '&& 短路分支对象键的字面被点名（评审 4114295210）',
+    'fixture.ts',
+    "export const a = { color: override && '#fff' };",
+    [{ file: 'fixture.ts', context: 'color', value: '#fff' }],
+  ],
+  [
+    '&& 短路分支 JSX 属性的字面被点名（评审 4114295210）',
+    'fixture.tsx',
+    "export const b = <circle fill={override && '#f00'} />;",
+    [{ file: 'fixture.tsx', context: 'fill', value: '#f00' }],
+  ],
+  [
+    '增量样式属性赋值：属性访问与字符串下标赋值被点名（评审 4114047062）',
+    'fixture.tsx',
+    'export function f(style: { color?: string }) {\n' +
+      "  style.color = '#fff';\n" +
+      "  style['backgroundColor'] = '#000';\n" +
+      '}',
+    [
+      { file: 'fixture.tsx', context: 'color', value: '#fff' },
+      { file: 'fixture.tsx', context: 'background-color', value: '#000' },
+    ],
+  ],
+  [
+    '逻辑赋值运算符：??= 与 ||= 写入的静态回退色被点名（评审 4114116865）',
+    'fixture.tsx',
+    'export function f(style: {\n' +
+      '  color?: string;\n' +
+      '  backgroundColor?: string;\n' +
+      '}) {\n' +
+      "  style.color ??= '#fff';\n" +
+      "  style.backgroundColor ||= '#000';\n" +
+      '}',
+    [
+      { file: 'fixture.tsx', context: 'color', value: '#fff' },
+      { file: 'fixture.tsx', context: 'background-color', value: '#000' },
+    ],
+  ],
+  [
+    '增量赋值的多候选计算键：全部分别分类，非显示键不遮蔽（评审 4114362293）',
+    'fixture.tsx',
+    'export function f(\n' +
+      '  style: { width?: string; color?: string },\n' +
+      '  flag: boolean,\n' +
+      ') {\n' +
+      "  style[flag ? 'width' : 'color'] = '#fff';\n" +
+      '}',
+    [{ file: 'fixture.tsx', context: 'color', value: '#fff' }],
+  ],
+  [
+    '括号包装的赋值目标：递归解包后与直赋值同口径受检（issue #396）',
+    'fixture.tsx',
+    'export function f(style: {\n' +
+      '  color?: string;\n' +
+      '  backgroundColor?: string;\n' +
+      '}) {\n' +
+      "  (style.color) = '#fff';\n" +
+      "  (style['backgroundColor']) = '#000';\n" +
+      "  ((style.color)) = '#f00';\n" +
+      '}',
+    [
+      { file: 'fixture.tsx', context: 'color', value: '#fff' },
+      { file: 'fixture.tsx', context: 'background-color', value: '#000' },
+      { file: 'fixture.tsx', context: 'color', value: '#f00' },
+    ],
+  ],
+]
+
+describe('TSX/SVG 静态颜色抽取边界用例表（issue #537：16 个同构夹具块收敛为单一数据表）', () => {
+  it.each(STATIC_COLOR_EXTRACTION_CASES)(
+    '%s',
+    (_name, file, source, expected) => {
+      expect(colorOccurrencesOfSource(file, source)).toEqual(expected)
+    },
+  )
 })
 
 describe('模块常量的词法绑定边界（issue #438）', () => {
@@ -754,104 +841,5 @@ describe('模块常量的词法绑定边界（issue #438）', () => {
           "function f() { const LOCAL = '#f00'; return { color: LOCAL }; }",
       ),
     ).toEqual([])
-  })
-})
-
-describe('TSX/SVG 增量赋值与断言语法（issue #362，评审补强）', () => {
-  it('尖括号类型断言解包：<const> 值与计算键被点名（评审 4114274468）', () => {
-    const occurrences = colorOccurrencesOfSource(
-      'fixture.ts',
-      "export const a = { color: <const>'#fff' };\n" +
-        "export const b = { [<const>'backgroundColor']: '#000' };",
-    )
-    expect(occurrences).toEqual([
-      { file: 'fixture.ts', context: 'color', value: '#fff' },
-      { file: 'fixture.ts', context: 'background-color', value: '#000' },
-    ])
-  })
-
-  it('&& 短路分支：对象键与 JSX 属性的字面被点名（评审 4114295210）', () => {
-    const objectForm = colorOccurrencesOfSource(
-      'fixture.ts',
-      "export const a = { color: override && '#fff' };",
-    )
-    expect(objectForm).toEqual([
-      { file: 'fixture.ts', context: 'color', value: '#fff' },
-    ])
-    const jsxForm = colorOccurrencesOfSource(
-      'fixture.tsx',
-      "export const b = <circle fill={override && '#f00'} />;",
-    )
-    expect(jsxForm).toEqual([
-      { file: 'fixture.tsx', context: 'fill', value: '#f00' },
-    ])
-  })
-
-  it('增量样式属性赋值：属性访问与字符串下标赋值被点名（评审 4114047062）', () => {
-    const occurrences = colorOccurrencesOfSource(
-      'fixture.tsx',
-      'export function f(style: { color?: string }) {\n' +
-        "  style.color = '#fff';\n" +
-        "  style['backgroundColor'] = '#000';\n" +
-        '}',
-    )
-    expect(occurrences).toEqual([
-      { file: 'fixture.tsx', context: 'color', value: '#fff' },
-      { file: 'fixture.tsx', context: 'background-color', value: '#000' },
-    ])
-  })
-
-  it('逻辑赋值运算符：??= 与 ||= 写入的静态回退色被点名（评审 4114116865）', () => {
-    const occurrences = colorOccurrencesOfSource(
-      'fixture.tsx',
-      'export function f(style: {\n' +
-        '  color?: string;\n' +
-        '  backgroundColor?: string;\n' +
-        '}) {\n' +
-        "  style.color ??= '#fff';\n" +
-        "  style.backgroundColor ||= '#000';\n" +
-        '}',
-    )
-    expect(occurrences).toEqual([
-      { file: 'fixture.tsx', context: 'color', value: '#fff' },
-      { file: 'fixture.tsx', context: 'background-color', value: '#000' },
-    ])
-  })
-
-  it('增量赋值的多候选计算键：全部分别分类，非显示键不遮蔽（评审 4114362293）', () => {
-    const occurrences = colorOccurrencesOfSource(
-      'fixture.tsx',
-      'export function f(\n' +
-        '  style: { width?: string; color?: string },\n' +
-        '  flag: boolean,\n' +
-        ') {\n' +
-        "  style[flag ? 'width' : 'color'] = '#fff';\n" +
-        '}',
-    )
-    // 首候选 width 非显示键不得遮蔽次候选 color：全部候选分别分类
-    expect(occurrences).toEqual([
-      { file: 'fixture.tsx', context: 'color', value: '#fff' },
-    ])
-  })
-
-  it('括号包装的赋值目标：递归解包后与直赋值同口径受检（issue #396）', () => {
-    const occurrences = colorOccurrencesOfSource(
-      'fixture.tsx',
-      'export function f(style: {\n' +
-        '  color?: string;\n' +
-        '  backgroundColor?: string;\n' +
-        '}) {\n' +
-        "  (style.color) = '#fff';\n" +
-        "  (style['backgroundColor']) = '#000';\n" +
-        "  ((style.color)) = '#f00';\n" +
-        '}',
-    )
-    // 包装只改变节点形态不改变语义：括号（含嵌套）包裹的属性访问与
-    // 下标目标解包后按既有键分类登记
-    expect(occurrences).toEqual([
-      { file: 'fixture.tsx', context: 'color', value: '#fff' },
-      { file: 'fixture.tsx', context: 'background-color', value: '#000' },
-      { file: 'fixture.tsx', context: 'color', value: '#f00' },
-    ])
   })
 })
