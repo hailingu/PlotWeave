@@ -232,6 +232,19 @@ struct NativeFormsTests {
         #expect(malformed.confirmedEdit("label") == 0)
         #expect(malformed.confirmedEdit("baseUrl") == 0)
         #expect(malformed.confirmedEdit("models") == 0)
+        // Double(Int.max) rounds up to 2^63, so this whole number passes a naive range guard yet must not convert fatally.
+        let upperBound = try #require(NativeProviderProjection(.object([
+            "id": .string("fixture"), "label": .string("更新"), "baseUrl": .string("https://next.test/v1"),
+            "enabled": .bool(true), "models": .array([.string("first")]), "keyConfigured": .bool(false),
+            "edits": .object(["label": .number(9.223372036854776e18)])
+        ])))
+        #expect(upperBound.confirmedEdit("label") == 0)
+        let aboveSafeInteger = try #require(NativeProviderProjection(.object([
+            "id": .string("fixture"), "label": .string("更新"), "baseUrl": .string("https://next.test/v1"),
+            "enabled": .bool(true), "models": .array([.string("first")]), "keyConfigured": .bool(false),
+            "edits": .object(["label": .number(1e16)])
+        ])))
+        #expect(aboveSafeInteger.confirmedEdit("label") == 0)
         let invalidContainer = try #require(NativeProviderProjection(.object([
             "id": .string("fixture"), "label": .string("更新"), "baseUrl": .string("https://next.test/v1"),
             "enabled": .bool(true), "models": .array([.string("first")]), "keyConfigured": .bool(false),

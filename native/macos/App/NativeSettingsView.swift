@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// Positive whole numbers are the only valid edit-identity form; other JSON types never confirm a pending edit.
+/// Positive JS safe-integer identities are the only valid edit form; other JSON numbers never confirm a pending edit.
 extension HostJSON {
+    /// The Web producer validates Number.isSafeInteger, so the consumer rejects anything above 2^53 - 1.
+    private static let maximumSafeInteger = 9_007_199_254_740_991
+
     fileprivate var positiveWholeNumber: Int? {
-        guard case .number(let value) = self, value >= 1, value.rounded() == value,
-              value <= Double(Int.max) else { return nil }
-        return Int(value)
+        guard case .number(let value) = self, value >= 1, value <= Double(Self.maximumSafeInteger) else { return nil }
+        return Int(exactly: value)
     }
 }
 

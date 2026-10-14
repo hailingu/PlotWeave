@@ -325,3 +325,11 @@ CI #604 的完整原生目标执行 224 tests／53 suites，新增设置回归�
 - **修复**：`NativeProviderDraft` 拆分单调 `editCounters`（跨确认持续递增，永不清理）与 `pendingEdits`（仍按确认清除）；`beginEdit` 从计数器派发身份。重挂后计数器从 1 重启仍安全：Web 侧身份映射被新补丁覆写为相同值，投影 `edits` 变化即可再次触发 `receive`。
 - **先红后绿**：`whitespaceEditAfterConfirmationKeepsIdentitiesMonotonic` 在旧实现 2 处预期失败（`revision > 1`、`republished != confirmed`——后者正是 onChange 被抑制的等价断言）；修复后通过，并验证重发帧清待定、外部更新随之应用。
 - **验证**：三套件集中 **17 tests／3 suites 通过**；完整原生路由 **249 tests／55 suites，TEST SUCCEEDED**（92.891 秒）。原生设置源 462 行；前端 TS 本轮未改动，Git 门禁按提交记录。SwiftUI 同值投影是否触发 onChange 由 `republished != confirmed` 断言与既有 Equatable 语义覆盖，未注入真实 TextEditor 空白键入路径（P5 人工缺口沿置）。
+
+#### R39 修复的次轮评审后续（2026-10-14，[Codex 评审](https://github.com/hailingu/PlotWeave/pull/566#pullrequestreview-5518839153)）
+
+`f6df683` 的首轮后续评审一条 P2：`positiveWholeNumber` 用 `value <= Double(Int.max)` 做范围守卫，而 64 位下 `Double(Int.max)` 向上舍入为 2^63，`9.223372036854776e18` 作为整数通过守卫后 `Int(value)` 触发 Fatal error 终止原生应用——与"非法元数据降级为无确认"的文档意图相悖。核查属实（复现即崩溃），属本修复引入的 fail-closed 缺口，按 `f6df683` 首轮预算内修复。
+
+- **修复**：身份解码改为 JS 安全整数上限（2^53−1＝`9_007_199_254_740_991`，与 Web 生产侧 `Number.isSafeInteger` 校验对齐）加 `Int(exactly:)` 可失败精确转换；越界、非整数、NaN／无穷均返回 nil（无确认），不再有 trap 路径。
+- **先红后绿**：`malformedEditIdentitiesNeverConfirmPendingEdits` 扩展 2^63 边界与 1e16（安全整数之上的可精确整数）两例——旧实现红灯为 `Fatal error: Double value cannot be converted to Int`（进程崩溃，非普通断言失败）；修复后均返回 `confirmedEdit == 0`。
+- **验证**：三套件集中 **17 tests／3 suites 通过**；完整原生路由 **249 tests／55 suites，TEST SUCCEEDED**（92.482 秒）。原生设置源 464 行；前端 TS 本轮未改动，Git 门禁按提交记录。
