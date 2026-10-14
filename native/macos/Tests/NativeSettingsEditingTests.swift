@@ -64,6 +64,39 @@ struct NativeSettingsEditingTests {
         await fixture.services.close()
     }
 
+    /// A reverted value equals the prior authority again, so only edit identities keep the stale echo from consuming the newer draft.
+    @Test func revertedProviderEditKeepsNewerDraftAheadOfStaleEcho() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try await fixture.start()
+        let name = try await fixture.field(value: "初始服务")
+        let address = try await fixture.field(value: "https://fixture.example/v1")
+        fixture.pauseProjections = true
+        fixture.enter("名称甲", in: name)
+        fixture.enter("https://revert.example/v1", in: address)
+        try await fixture.wait { fixture.bufferedProjection != nil }
+        try await fixture.drain()
+        let earlier = try #require(fixture.bufferedProjection)
+        fixture.enter("初始服务", in: name)
+        fixture.enter("https://fixture.example/v1", in: address)
+        try await fixture.wait { fixture.bufferedProjection?["sequence"] as? NSNumber != earlier["sequence"] as? NSNumber }
+        try await fixture.drain()
+        try fixture.state.receiveProjection(earlier)
+        try await fixture.wait { fixture.state.settings["providers"]?.array.last?["label"]?.string == "名称甲" }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(name.stringValue == "初始服务")
+        #expect(address.stringValue == "https://fixture.example/v1")
+        fixture.enter(name.stringValue + "丙", in: name)
+        fixture.enter(address.stringValue + "/next", in: address)
+        try await fixture.drain()
+        try fixture.resumeProjections()
+        _ = try await fixture.state.request("settings.close")
+        let provider = try #require(fixture.readSettings()["providers"]?.array.last)
+        #expect(provider["label"]?.string == "初始服务丙")
+        #expect(provider["baseUrl"]?.string == "https://fixture.example/v1/next")
+        await fixture.services.close()
+    }
+
     /// Only this fixture's roots, windows, production Web page and settings saver can receive the synthetic edits.
     @MainActor private final class Fixture {
         /// Settings never reach an application-support or Tauri root.

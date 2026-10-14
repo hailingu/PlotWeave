@@ -118,11 +118,153 @@ struct NativeFormsTests {
         #expect(replacement.models == "old")
     }
 
+    /// A reverted label equals the prior authority again; its pending identities keep the stale echo from consuming it.
+    @Test func revertedLabelKeepsNewerDraftAndFollowsAuthorityAfterConfirmation() throws {
+        let initial = try provider(label: "初始", url: "https://initial.test/v1", models: ["old"])
+        var draft = NativeProviderDraft(initial)
+        draft.label = "更新"
+        _ = draft.beginEdit("label")
+        draft.label = "初始"
+        _ = draft.beginEdit("label")
+        let staleEcho = try provider(label: "更新", url: "https://initial.test/v1", models: ["old"], edits: ["label": 1])
+        draft.receive(previous: initial, next: staleEcho)
+        #expect(draft.label == "初始")
+        let confirming = try provider(label: "初始", url: "https://initial.test/v1", models: ["old"], edits: ["label": 2])
+        draft.receive(previous: staleEcho, next: confirming)
+        #expect(draft.label == "初始")
+        let external = try provider(label: "外部", url: "https://initial.test/v1", models: ["old"])
+        draft.receive(previous: confirming, next: external)
+        #expect(draft.label == "外部")
+    }
+
+    /// A reverted address keeps the same protection while an independent model edit stays pending.
+    @Test func revertedAddressStaysAheadOfStaleEchoAcrossIndependentFields() throws {
+        let initial = try provider(label: "初始", url: "https://initial.test/v1", models: ["old"])
+        var draft = NativeProviderDraft(initial)
+        draft.baseUrl = "https://revert.test/v1"
+        _ = draft.beginEdit("baseUrl")
+        draft.baseUrl = "https://initial.test/v1"
+        _ = draft.beginEdit("baseUrl")
+        draft.models = "unrelated\n"
+        _ = draft.beginEdit("models")
+        let staleEcho = try provider(label: "初始", url: "https://revert.test/v1", models: ["old"], edits: ["baseUrl": 1])
+        draft.receive(previous: initial, next: staleEcho)
+        #expect(draft.baseUrl == "https://initial.test/v1")
+        #expect(draft.models == "unrelated\n")
+        let confirming = try provider(label: "初始", url: "https://initial.test/v1", models: ["old"], edits: ["baseUrl": 2])
+        draft.receive(previous: staleEcho, next: confirming)
+        let external = try provider(label: "初始", url: "https://external.test/v1", models: ["old"], edits: ["baseUrl": 2])
+        draft.receive(previous: confirming, next: external)
+        #expect(draft.baseUrl == "https://external.test/v1")
+        #expect(draft.models == "unrelated\n")
+    }
+
+    /// A raw multiline draft that normalizes back to the old list keeps its caret text through stale echo and confirmation.
+    @Test func revertedModelListKeepsRawMultilineDraftThroughStaleEcho() throws {
+        let initial = try provider(label: "初始", url: "https://initial.test/v1", models: ["old", "chat"])
+        var draft = NativeProviderDraft(initial)
+        draft.models = "new\nchat\n"
+        _ = draft.beginEdit("models")
+        draft.models = " old \nchat"
+        _ = draft.beginEdit("models")
+        let staleEcho = try provider(label: "初始", url: "https://initial.test/v1", models: ["new", "chat"], edits: ["models": 1])
+        draft.receive(previous: initial, next: staleEcho)
+        #expect(draft.models == " old \nchat")
+        let confirming = try provider(label: "初始", url: "https://initial.test/v1", models: ["old", "chat"], edits: ["models": 2])
+        draft.receive(previous: staleEcho, next: confirming)
+        #expect(draft.models == " old \nchat")
+        let external = try provider(label: "初始", url: "https://initial.test/v1", models: ["external"], edits: ["models": 2])
+        draft.receive(previous: confirming, next: external)
+        #expect(draft.models == "external")
+    }
+
+    /// A whitespace-only edit after confirmation must carry a fresh identity, or its value-identical echo cannot retrigger receive.
+    @Test func whitespaceEditAfterConfirmationKeepsIdentitiesMonotonic() throws {
+        let initial = try provider(label: "初始", url: "https://initial.test/v1", models: ["chat"])
+        var draft = NativeProviderDraft(initial)
+        draft.models = "chat "
+        _ = draft.beginEdit("models")
+        let confirmed = try provider(label: "初始", url: "https://initial.test/v1", models: ["chat"], edits: ["models": 1])
+        draft.receive(previous: initial, next: confirmed)
+        #expect(draft.models == "chat ")
+        draft.models = "chat  "
+        let revision = draft.beginEdit("models")
+        #expect(revision > 1)
+        let republished = try provider(label: "初始", url: "https://initial.test/v1", models: ["chat"], edits: ["models": revision])
+        #expect(republished != confirmed)
+        draft.receive(previous: confirmed, next: republished)
+        #expect(draft.models == "chat  ")
+        let external = try provider(label: "初始", url: "https://initial.test/v1", models: ["external"], edits: ["models": revision])
+        draft.receive(previous: republished, next: external)
+        #expect(draft.models == "external")
+    }
+
+    /// A merged confirmation whose value equals the prior authority still clears pending identities and stays observable.
+    @Test func sameValueMergedConfirmationClearsPendingWithoutRewritingTheDraft() throws {
+        let initial = try provider(label: "初始", url: "https://initial.test/v1", models: ["old"])
+        var draft = NativeProviderDraft(initial)
+        draft.label = "更新"
+        _ = draft.beginEdit("label")
+        draft.label = "初始"
+        _ = draft.beginEdit("label")
+        let merged = try provider(label: "初始", url: "https://initial.test/v1", models: ["old"], edits: ["label": 2])
+        #expect(merged != initial)
+        draft.receive(previous: initial, next: merged)
+        #expect(draft.label == "初始")
+        let external = try provider(label: "外部", url: "https://initial.test/v1", models: ["old"])
+        draft.receive(previous: merged, next: external)
+        #expect(draft.label == "外部")
+    }
+
+    /// Malformed or partial edit identities degrade to no confirmation instead of hiding the provider row.
+    @Test func malformedEditIdentitiesNeverConfirmPendingEdits() throws {
+        let base: HostJSON = .object([
+            "id": .string("fixture"), "label": .string("初始"), "baseUrl": .string("https://initial.test/v1"),
+            "enabled": .bool(true), "models": .array([.string("old")]), "keyConfigured": .bool(false)
+        ])
+        let malformed = try #require(NativeProviderProjection(.object([
+            "id": .string("fixture"), "label": .string("更新"), "baseUrl": .string("https://next.test/v1"),
+            "enabled": .bool(true), "models": .array([.string("first")]), "keyConfigured": .bool(false),
+            "edits": .object([
+                "label": .number(1.5), "baseUrl": .string("2"), "models": .number(-1), "unknown": .number(3)
+            ])
+        ])))
+        #expect(malformed.confirmedEdit("label") == 0)
+        #expect(malformed.confirmedEdit("baseUrl") == 0)
+        #expect(malformed.confirmedEdit("models") == 0)
+        // Double(Int.max) rounds up to 2^63, so this whole number passes a naive range guard yet must not convert fatally.
+        let upperBound = try #require(NativeProviderProjection(.object([
+            "id": .string("fixture"), "label": .string("更新"), "baseUrl": .string("https://next.test/v1"),
+            "enabled": .bool(true), "models": .array([.string("first")]), "keyConfigured": .bool(false),
+            "edits": .object(["label": .number(9.223372036854776e18)])
+        ])))
+        #expect(upperBound.confirmedEdit("label") == 0)
+        let aboveSafeInteger = try #require(NativeProviderProjection(.object([
+            "id": .string("fixture"), "label": .string("更新"), "baseUrl": .string("https://next.test/v1"),
+            "enabled": .bool(true), "models": .array([.string("first")]), "keyConfigured": .bool(false),
+            "edits": .object(["label": .number(1e16)])
+        ])))
+        #expect(aboveSafeInteger.confirmedEdit("label") == 0)
+        let invalidContainer = try #require(NativeProviderProjection(.object([
+            "id": .string("fixture"), "label": .string("更新"), "baseUrl": .string("https://next.test/v1"),
+            "enabled": .bool(true), "models": .array([.string("first")]), "keyConfigured": .bool(false),
+            "edits": .number(2)
+        ])))
+        #expect(invalidContainer.confirmedEdit("label") == 0)
+        var draft = NativeProviderDraft(try #require(NativeProviderProjection(base)))
+        draft.label = "回改"
+        _ = draft.beginEdit("label")
+        draft.receive(previous: try #require(NativeProviderProjection(base)), next: malformed)
+        #expect(draft.label == "回改")
+    }
+
     /// Complete credential-free snapshots isolate provider acknowledgment semantics from services and UI layout.
-    private func provider(label: String, url: String, models: [String]) throws -> NativeProviderProjection {
-        try #require(NativeProviderProjection(.object([
+    private func provider(label: String, url: String, models: [String], edits: [String: Int] = [:]) throws -> NativeProviderProjection {
+        var entry: [String: HostJSON] = [
             "id": .string("fixture"), "label": .string(label), "baseUrl": .string(url),
             "enabled": .bool(true), "models": .array(models.map(HostJSON.string)), "keyConfigured": .bool(false)
-        ])))
+        ]
+        if !edits.isEmpty { entry["edits"] = .object(edits.mapValues { .number(Double($0)) }) }
+        return try #require(NativeProviderProjection(.object(entry)))
     }
 }

@@ -195,7 +195,7 @@ R32 邻接恢复补查（在本分支生产修改前补记）：列表重读连�
 
 `e0de9ee` 的一轮后续评审新增两条独立 P2：默认模型选择携带另一字段的旧快照；服务文字的旧投影覆盖更新的本地输入。以下矩阵在生产修改前记录，复用现有 settings owner、原生表单及保存固定点，不新增配置副本或自动重放。
 
-本节保留 R33–R34 当时的实现与验证记录。后续第25条新增 A→B→A，使新稿再次等于前一权威值，原值比较保护未覆盖该时序；所有者转 [issue #527](https://github.com/hailingu/PlotWeave/issues/527) 后续修复，当前状态及缺口见 [R39](#服务文字回改缺陷的后续修复r39)。
+本节保留 R33–R34 当时的实现与验证记录。后续第25条新增 A→B→A，使新稿再次等于前一权威值，原值比较保护未覆盖该时序；所有者转 [issue #527](https://github.com/hailingu/PlotWeave/issues/527) 后续修复，当前状态及缺口见 [R39](#服务文字回改缺陷的后续修复r39)，其授权修复见文末 [R39 修复记录](#r39-修复记录2026-10-14issue-527-授权修复)。
 
 | ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 实现前选定验证／缺口 |
 | --- | --- | --- | --- | --- |
@@ -300,3 +300,36 @@ CI #604 的完整原生目标执行 224 tests／53 suites，新增设置回归�
 - 既有合法分配、全球可达例外、IPv4 转换形式、候选回退、原 hostname TLS 身份、共享 deadline／取消／大小上限回归全部保持；完整 native 路由（`npm run check:size && npm run build:native-canvas && xcodebuild … test`）、Git 静态／覆盖率／Sonar 门禁与绑定修复提交的 CI 证据见修复 PR。
 
 静态表更新机制：IANA 新增分配需人工同步 `globalV6Rows` 并同批更新边界回归（资产 §7.3 已披露），无运行时同步；真实特殊网络路由、真实公网 TLS 与计费模型仍未测试。
+
+### R39 修复记录（2026-10-14，issue #527 授权修复）
+
+用户要求按 [issue #527](https://github.com/hailingu/PlotWeave/issues/527) 创建分支修复并推送 PR。以下矩阵在生产修改前记录并映射验证结果；确认规则为：投影可替换某字段当且仅当该字段值意义上干净（草稿＝前一权威值；模型按规范化列表）**且**该快照确认严格新于其全部待定编辑身份；快照确认达到或超越最新待定身份即清除之。
+
+| case（映射 R39） | 前置状态／动作与顺序 | 结果与不变量 | 验证 |
+| --- | --- | --- | --- |
+| M1＝R39a | ready 草稿 A→输入 B（身份1）→回改 A（身份2）→旧 B 投影（确认1）→继续 C→关闭 | 旧 B 投影不消费新 A；继续键入与最终磁盘为 A+C | `revertedProviderEditKeepsNewerDraftAheadOfStaleEcho`：真实 NSTextField＋生产 WK owner＋隔离 Swift settings.json，先红 4 处（两字段被覆盖、两字段磁盘错误）后绿 |
+| M2＝R39b | 模型原始多行稿规范化后回到旧列表→旧 B 回执→最新确认→外部更新 | 原始光标文字与空白保留；确认后干净字段仍跟随 | `revertedModelListKeepsRawMultilineDraftThroughStaleEcho`（draft 边界）＋既有 R34 模型语义测试 |
+| M3＝R39c | 命令先完成投影被挡（M1 夹具）；同值无关投影；React 合并只发终态；确认与快照同批 | completion 不冒充确认；同值投影零动作；合并终态携带最终身份并清待定，`edits` 参与 Equatable 保证确认可观察 | M1 夹具 pauseProjections／drain 独立通道；`sameValueMergedConfirmationClearsPendingWithoutRewritingTheDraft`；TS `edit identities pair each applied field edit…`（同 tick 两个 intent 合并后配对正确）；全局 sequence 乱序仍由既有 `receiveProjection` 单调校验拒绝，未改动 |
+| M4＝R39d | 非法元数据（未知／缺席字段、0／负／小数／字符串身份、非对象）；未 ready／closing／不存在 provider；旧式无 `edit` 补丁 | owner 变更前完整校验拒绝，save 不触发；旧式补丁应用但不记录确认 | TS `malformed edit metadata is rejected before the owner changes`＋既有 readyProvider／校验回归；`providerEditMetadata` 在 `patchCurrentProvider` 之前执行 |
+| M5＝R39e | 确认后外部更新；另字段待定交叉；provider 删除／重挂／owner 卸载 | 逐字段独立；身份有界（每 provider 每字段仅最新），删除／卸载清理，磁盘 schema 与密钥生命周期不变 | `revertedAddressStaysAheadOfStaleEchoAcrossIndependentFields`、`revertedLabelKeepsNewerDraftAndFollowsAuthorityAfterConfirmation`；TS `edit identities stay bounded to current providers and do not survive owner remounts`；既有生命周期回归保持 |
+
+- **实现**：Swift `NativeProviderDraft` 增加逐字段待定身份（`beginEdit`／`pendingEdits`），`receive` 在 R34 值比较之上叠加"确认严格新于待定"与"确认达待定即清除"；`NativeProviderProjection` 解码 `edits`（仅 label／baseUrl／models 的正整数，非法项视为无确认）并参与 Equatable。TS `useNativeSettingsShell` 为 `settings.patchProvider` 增加可选 `edit` 元数据（边界校验先于变更），`patchCurrentProvider` 在替换快照的同一同步步骤记录身份，投影为当前 provider 回显 `edits` 并对已删除 provider 修剪；卸载清空。身份不写 `settings.json`、不含密钥、无第二份可写配置、无自动重放。
+- **先红**：WK ABA 回归在旧实现 4 处预期失败（`初始服务`/`https://fixture.example/v1` 字段被旧 B 投影改为 `名称甲`/回改地址，磁盘保存 `名称甲丙` 等）；TS 3 项新语义测试在旧实现失败（投影无 `edits`、非法元数据未拒绝）。Swift draft 级新用例依赖新 API（`beginEdit`），编译期即需新实现，不计入行为先红证据。
+- **验证**：`npx vitest run src/settings/SettingsView.native.test.tsx` **24 tests／1 file 通过**；集中原生三套件 `NativeSettingsEditingTests`／`NativeFormsTests`／`NativeSettingsDraftLifecycleTests` **16 tests／3 suites 通过**。仓库根完整前端路由（format:check／lint 零警告／check:size 715 文件／typecheck:strict／build／`npm test` **228 files／3132 tests**）与完整原生路由（`npm run check:size && npm run build:native-canvas && xcodebuild … -parallel-testing-enabled NO test`，**248 tests／55 suites，TEST SUCCEEDED** 93.062 秒，Node 24.18.0／Xcode 27.0）通过。原生设置源 459、Web adapter 307 行，全部低于文件上限；新增／修改执行单元人工复核低于 80 代码行。
+- **缺口**：真实中文 IME／VoiceOver、物理进程 kill 仍属 P5 人工缺口（沿 R34/R39 记录）；被动 effect 读取身份映射存在"提交后、effect 前到达的更新补丁"窗口，可能以较新身份配对较旧值发布一次，但值比较后备使该中间投影至多提前清待定而不改写脏草稿，随后投影自纠——未单独注入该时序的自动化回归。Git 门禁（新生成覆盖率＋Sonar）与绑定修复提交的 CI 证据在 PR 记录。
+
+#### R39 修复的首轮评审后续（2026-10-14，[Codex 评审](https://github.com/hailingu/PlotWeave/pull/566#pullrequestreview-5518575023)）
+
+首轮后续评审一条 P2：`beginEdit` 从 `pendingEdits` 派生身份，而 `clearConfirmedEdits` 在确认后删除条目——下一次编辑身份重置回 1。若该编辑是仅空白变化（规范化后与权威值相同），Web 重发的投影与上一帧内容完全相等，SwiftUI `onChange(of: provider)`（Equatable）不触发，新待定身份永不清除；随后的首个权威更新被 `确认 > 待定` 闸门抑制一次，用户下一次键入可能覆盖权威值。核查属实，属本修复引入的相邻缺陷，按首轮预算内修复。
+
+- **修复**：`NativeProviderDraft` 拆分单调 `editCounters`（跨确认持续递增，永不清理）与 `pendingEdits`（仍按确认清除）；`beginEdit` 从计数器派发身份。重挂后计数器从 1 重启仍安全：Web 侧身份映射被新补丁覆写为相同值，投影 `edits` 变化即可再次触发 `receive`。
+- **先红后绿**：`whitespaceEditAfterConfirmationKeepsIdentitiesMonotonic` 在旧实现 2 处预期失败（`revision > 1`、`republished != confirmed`——后者正是 onChange 被抑制的等价断言）；修复后通过，并验证重发帧清待定、外部更新随之应用。
+- **验证**：三套件集中 **17 tests／3 suites 通过**；完整原生路由 **249 tests／55 suites，TEST SUCCEEDED**（92.891 秒）。原生设置源 462 行；前端 TS 本轮未改动，Git 门禁按提交记录。SwiftUI 同值投影是否触发 onChange 由 `republished != confirmed` 断言与既有 Equatable 语义覆盖，未注入真实 TextEditor 空白键入路径（P5 人工缺口沿置）。
+
+#### R39 修复的次轮评审后续（2026-10-14，[Codex 评审](https://github.com/hailingu/PlotWeave/pull/566#pullrequestreview-5518839153)）
+
+`f6df683` 的首轮后续评审一条 P2：`positiveWholeNumber` 用 `value <= Double(Int.max)` 做范围守卫，而 64 位下 `Double(Int.max)` 向上舍入为 2^63，`9.223372036854776e18` 作为整数通过守卫后 `Int(value)` 触发 Fatal error 终止原生应用——与"非法元数据降级为无确认"的文档意图相悖。核查属实（复现即崩溃），属本修复引入的 fail-closed 缺口，按 `f6df683` 首轮预算内修复。
+
+- **修复**：身份解码改为 JS 安全整数上限（2^53−1＝`9_007_199_254_740_991`，与 Web 生产侧 `Number.isSafeInteger` 校验对齐）加 `Int(exactly:)` 可失败精确转换；越界、非整数、NaN／无穷均返回 nil（无确认），不再有 trap 路径。
+- **先红后绿**：`malformedEditIdentitiesNeverConfirmPendingEdits` 扩展 2^63 边界与 1e16（安全整数之上的可精确整数）两例——旧实现红灯为 `Fatal error: Double value cannot be converted to Int`（进程崩溃，非普通断言失败）；修复后均返回 `confirmedEdit == 0`。
+- **验证**：三套件集中 **17 tests／3 suites 通过**；完整原生路由 **249 tests／55 suites，TEST SUCCEEDED**（92.482 秒）。原生设置源 464 行；前端 TS 本轮未改动，Git 门禁按提交记录。
