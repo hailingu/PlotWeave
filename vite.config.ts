@@ -39,6 +39,7 @@ export default defineConfig({
       // 计 0% 空条目）。
       exclude: [
         'src/**/*.test-d.ts',
+        'src/appShellTestScaffolding.tsx',
         'src/moduleGraph.ts',
         'src/model/convertFixtures.ts',
         'src/editor/ai/testGraphs.ts',
