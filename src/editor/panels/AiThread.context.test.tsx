@@ -24,13 +24,14 @@ import { EMPTY_SETTINGS } from '../settings'
 import { mergeNodeData } from '../nodes/patch'
 import type { CanvasNode, DialogueFlowNode } from '../nodes/types'
 import { settingsStore } from '../../settings/settingsStore'
+import { stubElementScrollTo } from './testDomStubs'
 import { RightPanel } from './RightPanel'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 const invokeMock = vi.mocked(invoke)
 
 beforeEach(() => {
-  Element.prototype.scrollTo = vi.fn()
+  stubElementScrollTo() // happy-dom 未实现 scrollTo
   invokeMock
     .mockReset()
     .mockResolvedValue({ role: 'assistant', content: '继续讨论。' })
@@ -737,11 +738,50 @@ describe('AiThread 常驻设置入口（issue #87）', () => {
 
   it('会话读取失败态：聊天操作区不挂载，常驻设置入口仍可用', async () => {
     const onOpenSettings = vi.fn()
-    await setup({ onOpenSettings, loadFailed: true })
-    expect(screen.getByRole('alert')).toBeTruthy()
+    // 恢复会话中的待执行卡也不复活执行入口：失败态整段聊天操作区不挂载
+    // （RightPanel 层同名重复断言已收敛至此，issue #539 分层）
+    const h = await setup({
+      onOpenSettings,
+      loadFailed: true,
+      session: {
+        schemaVersion: 1,
+        entries: [
+          {
+            id: 1,
+            kind: 'msg',
+            role: 'assistant',
+            text: '待执行。',
+            card: {
+              v: {
+                ok: true,
+                items: [
+                  {
+                    kind: 'delete',
+                    danger: true,
+                    label: '删除 开场',
+                    key: 'd0',
+                  },
+                ],
+                commands: [{ op: 'delete_node', nodeId: 'd1' }],
+                issues: [],
+                hasDeletes: true,
+              },
+              status: 'pending',
+            },
+          },
+        ],
+      },
+    })
+    expect(screen.getByRole('alert').textContent).toContain('重新打开项目')
     expect(screen.queryByLabelText('AI 对话输入')).toBeNull()
+    expect(screen.queryByRole('button', { name: /执行/ })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '打开设置' }))
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    // 失败态不触模型、不落盘
+    expect(
+      invokeMock.mock.calls.filter(([cmd]) => cmd === 'llm_chat'),
+    ).toHaveLength(0)
+    expect(h.saved).toHaveLength(0)
   })
 })
 

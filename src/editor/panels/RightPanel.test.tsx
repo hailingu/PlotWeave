@@ -31,6 +31,7 @@ import type { BatchValidation, ValidatedCommand } from '../ai/commands'
 import { nodeFieldTableText } from '../ai/nodeFields'
 import { normalizeAiSession, type AiSession } from '../../ai/session'
 import { settingsStore } from '../../settings/settingsStore'
+import { stubElementScrollTo } from './testDomStubs'
 import type { AppSettings } from '../../settings/types'
 import type { ProjectSettings } from '../settings'
 import type { CanvasNode } from '../nodes/types'
@@ -49,7 +50,7 @@ afterEach(() => {
 })
 
 beforeAll(() => {
-  Element.prototype.scrollTo = vi.fn() // happy-dom 未实现
+  stubElementScrollTo() // happy-dom 未实现 scrollTo
 })
 
 beforeEach(() => {
@@ -248,9 +249,10 @@ const reply = (over: Partial<AssistantMessage>): AssistantMessage => ({
 })
 
 describe('RightPanel ✦AI 引导与模型', () => {
-  it('未配置 key：引导页 + 输入禁用 + 选项标（未配置 key）', async () => {
+  it('未配置 key：keyless 引导段落 + 输入禁用 + 选项标（未配置 key）', async () => {
     const spies = await toAiTab(APP_NO_KEY)
-    expect(screen.getByText('尚未接入 AI 服务')).toBeTruthy()
+    // 引导标题「尚未接入 AI 服务」的状态语义由 AiThread.context 层守护
+    // （issue #539 分层）；此处保留本层独有的 keyless 观测与接线断言。
     expect(screen.getByText(/尚未配置 API key/)).toBeTruthy()
     expect(
       (screen.getByLabelText('AI 对话输入') as HTMLInputElement).disabled,
@@ -469,34 +471,6 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
   })
 
-  it('含删除批次：执行按钮两步武装确认', async () => {
-    const spies = await toAiTab(APP_WITH_KEY)
-    spies.onValidateCommands.mockReturnValue(
-      validationOf({
-        items: [
-          {
-            kind: 'delete',
-            danger: true,
-            label: '删除 场景 · 场一',
-            key: 'd0',
-          },
-        ],
-        hasDeletes: true,
-      }),
-    )
-    llmChatMock.mockResolvedValue(batchReply())
-    send('删掉第一场')
-    const armBtn = await screen.findByRole('button', {
-      name: /执行（含 1 项删除）/,
-    })
-    fireEvent.click(armBtn)
-    expect(spies.onApplyAiBatch).not.toHaveBeenCalled()
-    fireEvent.click(
-      await screen.findByRole('button', { name: '再点一次确认执行删除' }),
-    )
-    expect(spies.onApplyAiBatch).toHaveBeenCalled()
-  })
-
   it('忽略：预览卡消失且不执行；执行失败出错误回执', async () => {
     const spies = await toAiTab(APP_WITH_KEY)
     spies.onValidateCommands.mockReturnValue(validationOf())
@@ -578,6 +552,70 @@ describe('RightPanel ✦AI 改动预览卡', () => {
     expect(screen.queryByText(/```json/)).toBeNull()
     expect(spies.onValidateAi).toHaveBeenCalled()
   })
+})
+
+/** 构造一张含删除的待执行预览卡并等待武装按钮就绪，返回执行桥 spy：
+ * 新卡经模型批次 + 校验产出；恢复卡经会话恢复 + 当前画布重校验产出
+ * （删除风险不信任落盘快照，重校验入参即原始命令，恢复分支就地断言）。 */
+async function pendingDeleteCard(restored: boolean) {
+  const deleteCommand: ValidatedCommand = { op: 'delete_node', nodeId: 's1' }
+  const currentPreview = () =>
+    validationOf({
+      commands: [deleteCommand],
+      items: [
+        { kind: 'delete', danger: true, label: '删除 场景 · 场一', key: 'd0' },
+      ],
+      hasDeletes: true,
+    })
+  if (!restored) {
+    const spies = await toAiTab(APP_WITH_KEY)
+    spies.onValidateCommands.mockReturnValue(currentPreview())
+    llmChatMock.mockResolvedValue(batchReply())
+    send('删掉第一场')
+    await screen.findByRole('button', { name: /执行（含 1 项删除）/ })
+    return spies
+  }
+  const stalePreview = validationOf({ commands: [deleteCommand] })
+  const validate = vi.fn(currentPreview)
+  const spies = await toAiTab(APP_WITH_KEY, {
+    ai: {
+      session: {
+        schemaVersion: 1,
+        entries: [
+          {
+            id: 1,
+            kind: 'msg',
+            role: 'assistant',
+            text: '已恢复的改动。',
+            card: { v: stalePreview, status: 'pending' },
+          },
+        ],
+      },
+      onValidateCommands: validate,
+    },
+  })
+  expect(validate).toHaveBeenCalledWith([deleteCommand])
+  return spies
+}
+
+/** 文件内原两例重复（新卡 / 恢复卡，issue #539）：不变量同为「含删除
+ * 批次第一次点击只武装，第二次才执行」，参数化为一组；卡片来源差异
+ * 收敛进 pendingDeleteCard。 */
+describe('RightPanel ✦AI 删除批次两步武装确认', () => {
+  it.each([false, true])(
+    '待执行删除卡（恢复=%s）：第一次点击只武装，第二次才执行',
+    async (restored) => {
+      const spies = await pendingDeleteCard(restored)
+      fireEvent.click(
+        screen.getByRole('button', { name: /执行（含 1 项删除）/ }),
+      )
+      expect(spies.onApplyAiBatch).not.toHaveBeenCalled()
+      fireEvent.click(
+        await screen.findByRole('button', { name: '再点一次确认执行删除' }),
+      )
+      expect(spies.onApplyAiBatch).toHaveBeenCalled()
+    },
+  )
 })
 
 describe('RightPanel ✦AI 执行回执落盘时序', () => {
@@ -781,41 +819,6 @@ describe('RightPanel ✦AI 恢复卡重校验', () => {
     })
     expect(screen.getByText(/已执行/)).toBeTruthy()
     expect(screen.queryByText(/⌘Z 可整批撤销/)).toBeNull()
-  })
-
-  it('恢复待执行卡时按当前画布重建删除风险，仍要求两步确认', async () => {
-    const deleteCommand: ValidatedCommand = { op: 'delete_node', nodeId: 's1' }
-    const stalePreview = validationOf({ commands: [deleteCommand] })
-    const currentPreview = validationOf({
-      commands: [deleteCommand],
-      items: [
-        { kind: 'delete', danger: true, label: '删除 场景 · 场一', key: 'd0' },
-      ],
-      hasDeletes: true,
-    })
-    const validate = vi.fn(() => currentPreview)
-    await toAiTab(APP_WITH_KEY, {
-      ai: {
-        session: {
-          schemaVersion: 1,
-          entries: [
-            {
-              id: 1,
-              kind: 'msg',
-              role: 'assistant',
-              text: '已恢复的改动。',
-              card: { v: stalePreview, status: 'pending' },
-            },
-          ],
-        },
-        onValidateCommands: validate,
-      },
-    })
-
-    expect(validate).toHaveBeenCalledWith([deleteCommand])
-    expect(
-      screen.getByRole('button', { name: /执行（含 1 项删除）/ }),
-    ).toBeTruthy()
   })
 })
 
@@ -1045,36 +1048,22 @@ describe('RightPanel ✦AI 重试耗尽（issue 41）', () => {
 })
 
 describe('RightPanel 会话读取失败', () => {
-  it('读取失败时没有发送和执行入口，不调用模型或保存，检查器仍可用', async () => {
-    vi.spyOn(settingsStore, 'load').mockResolvedValue(APP_WITH_KEY)
-    const onSaveSession = vi.fn().mockResolvedValue(undefined)
+  it('接线：失败横幅替换聊天操作区，面板分段切换不受影响', () => {
     const spies = setup({
       tab: 'ai',
       ai: {
         sessionLoadFailed: true,
-        session: {
-          schemaVersion: 1,
-          entries: [
-            {
-              id: 1,
-              kind: 'msg',
-              role: 'assistant',
-              text: '待执行',
-              card: { v: validationOf(), status: 'pending' },
-            },
-          ],
-        },
+        session: { schemaVersion: 1, entries: [] },
         sessionError: '读取文件失败',
-        onSaveSession,
       },
     })
+    // 失败态语义（横幅文案、恢复的待执行卡不复活执行入口、不触模型、
+    // 不落盘）由 AiThread.context 层守护（issue #539 分层）；此处只证
+    // RightPanel 把 sessionLoadFailed 接进失败分支且面板其余部分不受影响。
+    expect(screen.getByRole('alert')).toBeTruthy()
     expect(screen.queryByLabelText('AI 对话输入')).toBeNull()
-    expect(screen.queryByRole('button', { name: /执行/ })).toBeNull()
-    expect(screen.getByRole('alert').textContent).toContain('重新打开项目')
     fireEvent.click(screen.getByRole('button', { name: '检查器' }))
     expect(spies.onTabChange).toHaveBeenCalledWith('inspector')
-    expect(llmChatMock).not.toHaveBeenCalled()
-    expect(onSaveSession).not.toHaveBeenCalled()
   })
 })
 

@@ -18,6 +18,7 @@ import {
 } from '@testing-library/react'
 import { AssetsPanel } from './AssetsPanel'
 import { resetRenameStateForTests } from './assetsRenameState'
+import { stubIntersectionObserver } from './testDomStubs'
 import { libraryStore, type LibraryAsset } from '../../library/libraryStore'
 
 afterEach(() => {
@@ -27,21 +28,8 @@ afterEach(() => {
 })
 
 beforeAll(() => {
-  // happy-dom 无 IntersectionObserver：桩为 observe 即触发回调
-  vi.stubGlobal(
-    'IntersectionObserver',
-    class {
-      constructor(private cb: IntersectionObserverCallback) {}
-      observe(el: Element) {
-        this.cb(
-          [{ isIntersecting: true, target: el } as IntersectionObserverEntry],
-          this as never,
-        )
-      }
-      unobserve() {}
-      disconnect() {}
-    },
-  )
+  // happy-dom 无 IntersectionObserver：observe 即触发相交（懒加载用例）
+  stubIntersectionObserver(true)
   if (typeof URL.revokeObjectURL !== 'function') {
     URL.revokeObjectURL = vi.fn()
   }
