@@ -19,19 +19,18 @@ import {
  * （PR #199），失败横幅经 useHomeActionFeedback 上浮，成功路径刷新
  * 首页摘要。仅服务首页，不触碰打开态与编辑器域。
  */
-export function useHomeProjectActions(
+/** 重命名动作（useHomeProjectActions 拆分，守 80 行上限）：读档改名后
+ * 拒绝式保存（PR #199 评审：落盘失败上浮横幅并可重试，失败同经保存链
+ * 登记后台重试，绝不静默吞掉），成功后刷新首页摘要。 */
+function useRenameProject(
   refreshProjects: RefreshProjects,
-  unsavedAiSessions: UnsavedAiSessionsRef,
   feedback: ReturnType<typeof useHomeActionFeedback>,
-  attempts: ReturnType<typeof useCreateFamilyAttempts>,
 ) {
   const handleRenameProject = useCallback(
     async (id: string, name: string) => {
       const seq = feedback.begin()
       try {
         const doc = await projectStore.load(id)
-        // 拒绝式保存（PR #199 评审）：落盘失败必须上浮失败横幅，立即可见
-        // 可重试；失败同经保存链登记后台重试，绝不静默吞掉
         const renamed = { ...doc, name }
         feedback.watchSave(seq, renamed)
         await projectStore.save(id, renamed)
@@ -53,6 +52,16 @@ export function useHomeProjectActions(
     },
     [refreshProjects, feedback],
   )
+  return handleRenameProject
+}
+
+export function useHomeProjectActions(
+  refreshProjects: RefreshProjects,
+  unsavedAiSessions: UnsavedAiSessionsRef,
+  feedback: ReturnType<typeof useHomeActionFeedback>,
+  attempts: ReturnType<typeof useCreateFamilyAttempts>,
+) {
+  const handleRenameProject = useRenameProject(refreshProjects, feedback)
 
   const handleDuplicateProject = useCallback(
     async (id: string) => {

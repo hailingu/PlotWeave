@@ -135,7 +135,7 @@ describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
   })
 })
 
-describe('App ✦打开尝试并发收敛（PR #110 评审）', () => {
+describe('App ✦打开尝试并发收敛：迟到的拒绝（PR #110 评审）', () => {
   it('并发：在途打开被新尝试取代后，迟到的拒绝不发布旧错误也不拦截导航', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let rejectSlow!: (err: Error) => void
@@ -201,7 +201,9 @@ describe('App ✦打开尝试并发收敛（PR #110 评审）', () => {
       '乙的失败',
     )
   })
+})
 
+describe('App ✦打开尝试并发收敛：迟到的成功（PR #110 评审）', () => {
   it('并发：被取代的旧尝试成功晚到，不进入编辑器且新失败的横幅保留', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let releaseSlow!: (doc: ProjectContent) => void

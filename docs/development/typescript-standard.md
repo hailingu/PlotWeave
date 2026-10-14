@@ -162,10 +162,17 @@ single-source the sheetToken contract fixture matrices previously duplicated
 across four test files, added by issue
 [#538](https://github.com/hailingu/PlotWeave/issues/538)),
 `src/model/convertFixtures.ts`
-and `src/editor/ai/testGraphs.ts` (shared test fixtures), and
+and `src/editor/ai/testGraphs.ts` (shared test fixtures),
 `src/editor/nodes/testScaffolding.tsx` (shared scaffolding for the node
 component tests: Handle stub factory and `NodeEditApi` builder, added by
-issue [#534](https://github.com/hailingu/PlotWeave/issues/534)). The same
+issue [#534](https://github.com/hailingu/PlotWeave/issues/534)),
+`src/editor/panels/testDomStubs.ts` (shared happy-dom DOM stubs for panel
+tests, added by issue
+[#539](https://github.com/hailingu/PlotWeave/issues/539)), and
+`src/appShellTestScaffolding.tsx` (shared stub modules, fixtures, and
+open/settings-roundtrip helpers for the App shell test files split out of
+the former `App.test.tsx`, added by issue
+[#525](https://github.com/hailingu/PlotWeave/issues/525)). The same
 list is
 mirrored into `sonar.exclusions` — moving these files out of
 product-source statistics while they remain analyzed as test code, not a

@@ -210,23 +210,23 @@ function useAiSessionSave(
   return handleSaveAiSession
 }
 
-/** 打开/新建尝试的代序号与两条尝试路径（useOpenProjectActions 拆分，
- * issue #99 格式化后回到 80 行内）。加载期间首页控件仍可操作，慢的旧尝
- * 试可能在新尝试开始后才落定——只有最新发起的尝试可以发布结果（进入编
- * 辑器或失败横幅），被取代的旧尝试只留诊断；与 useProjectSummaries 的刷
- * 新序号收敛同款语义（标准「状态、并发与失败边界」：并发执行须先定义取
- * 代行为）。 */
-function useProjectOpenAttempt(
+/** 打开/新建尝试的代序号容器：共享可变盒子，便于尝试路径拆分后的
+ * 各 hook 引用同一次发起序（序号语义见 useProjectOpenAttempt）。 */
+type OpenAttemptSeqRef = { current: number }
+
+/** 新建尝试路径（useProjectOpenAttempt 拆分，守 80 行上限）：代序号 +
+ * 带外引用失效 + 作废排队导航，创建族对账（issue #132/PR #199：只有
+ * 确认未创建才开放重试），创建成功后按序进入编辑器——创建成功但打开
+ * 失败不虚报变更失败，由 #98 打开横幅承接。 */
+function useCreateProjectAttempt(
+  openAttemptSeqRef: OpenAttemptSeqRef,
   setOpenProject: OpenProjectSetter,
   setOpenFailure: OpenErrorSetter,
   refreshProjects: RefreshProjects,
-  unsavedAiSessions: UnsavedAiSessionsRef,
   latestDoc: LatestDocRef,
   feedback: ReturnType<typeof useHomeActionFeedback>,
   attempts: ReturnType<typeof useCreateFamilyAttempts>,
 ) {
-  const openAttemptSeqRef = useRef(0)
-
   const handleCreateProject = useCallback(async () => {
     const seq = ++openAttemptSeqRef.current
     const fbSeq = feedback.begin()
@@ -240,9 +240,6 @@ function useProjectOpenAttempt(
     // 取代的导航会在 chunk 就绪后提交并吞掉新尝试的失败横幅。无排队发布
     // 时为同值更新，React 跳过。
     startTransition(() => setOpenProject(null))
-    // 存储创建与随后打开分段反馈（issue #132）：创建被拒 = 变更失败横幅
-    // （可重试）；创建成功但打开失败 = 项目已存在，不虚报变更失败，由
-    // #98 打开横幅承接。
     // 创建族从基线读取到失败对账完整串行；只有确认未创建才开放重试。
     const outcome = await createWithReconcile(attempts, '未命名短剧')
     if (outcome.kind === 'rejected') {
@@ -279,6 +276,7 @@ function useProjectOpenAttempt(
     }
     void refreshProjects()
   }, [
+    openAttemptSeqRef,
     latestDoc,
     refreshProjects,
     setOpenFailure,
@@ -286,6 +284,35 @@ function useProjectOpenAttempt(
     feedback,
     attempts,
   ])
+  return handleCreateProject
+}
+
+/** 打开/新建尝试的代序号与两条尝试路径（useOpenProjectActions 拆分，
+ * issue #99 格式化后回到 80 行内；创建路径再拆至 useCreateProjectAttempt）。
+ * 加载期间首页控件仍可操作，慢的旧尝试可能在新尝试开始后才落定——只有
+ * 最新发起的尝试可以发布结果（进入编辑器或失败横幅），被取代的旧尝试只
+ * 留诊断；与 useProjectSummaries 的刷新序号收敛同款语义（标准「状态、
+ * 并发与失败边界」：并发执行须先定义取代行为）。 */
+function useProjectOpenAttempt(
+  setOpenProject: OpenProjectSetter,
+  setOpenFailure: OpenErrorSetter,
+  refreshProjects: RefreshProjects,
+  unsavedAiSessions: UnsavedAiSessionsRef,
+  latestDoc: LatestDocRef,
+  feedback: ReturnType<typeof useHomeActionFeedback>,
+  attempts: ReturnType<typeof useCreateFamilyAttempts>,
+) {
+  const openAttemptSeqRef = useRef(0)
+
+  const handleCreateProject = useCreateProjectAttempt(
+    openAttemptSeqRef,
+    setOpenProject,
+    setOpenFailure,
+    refreshProjects,
+    latestDoc,
+    feedback,
+    attempts,
+  )
 
   const handleOpenProject = useCallback(
     async (id: string) => {

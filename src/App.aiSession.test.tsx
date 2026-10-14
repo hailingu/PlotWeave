@@ -127,7 +127,9 @@ describe('App ✦AI 会话保存', () => {
     await settingsRoundtrip()
     expect(editorProps.current.aiSession).toEqual(session)
   })
+})
 
+describe('App ✦AI 会话保存失败', () => {
   it('正常加载后用户变更会话：保存失败仍保留内容并允许重试', async () => {
     store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
     await openEditor(App)
@@ -149,9 +151,7 @@ describe('App ✦AI 会话保存', () => {
     // 成功加载后的会话变更保留在内存，可重试保存。
     expect(editorProps.current.aiSessionRetryable).toBe(true)
   })
-})
 
-describe('App ✦AI 会话保存失败', () => {
   it('会话保存失败时拒绝上浮，错误写入项目级：重挂载不丢警告', async () => {
     store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
     await openEditor(App)
