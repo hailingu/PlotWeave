@@ -1,46 +1,28 @@
 // @vitest-environment happy-dom
 /**
- * 分支节点（岔路路标）渲染测试：问句即名称、选项条逐条渲染、
- * 每选项独立出口端口（option-n）、⚙️ 面板开关与问句改名。
- * Handle 依赖 React Flow 仓库上下文，隔离渲染时以锚点桩替代。
+ * 分支节点（岔路路标）渲染测试：问句即名称、选项条逐条渲染。
+ * ⚙️ 面板开关、问句改名与每选项独立出口端口等外壳共享行为收敛至
+ * nodeChrome.test.tsx 参数化维护（issue #534）；Handle 桩与
+ * NodeEditApi 夹具见 testScaffolding.tsx。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
-import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
-import { BRANCH_OPTION_HANDLE_PREFIX } from '../graphRules'
+import { NodeEditContext } from '../nodeEdit'
+import { makeNodeEditApi } from './testScaffolding'
 import { BranchNode } from './BranchNode'
 import type { BranchFlowNode } from './types'
 
-vi.mock('@xyflow/react', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@xyflow/react')>()
-  return {
-    ...orig,
-    /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
-    Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div
-        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
-      />
-    ),
-  }
-})
+vi.mock('@xyflow/react', async (importOriginal) =>
+  (await import('./testScaffolding')).stubReactFlowHandleModule(
+    await importOriginal<typeof import('@xyflow/react')>(),
+  ),
+)
 
 afterEach(cleanup)
 
 function setup(openSettingsId: string | null = null) {
-  const api: NodeEditApi = {
-    projectId: 'p-1',
-    openSettingsId,
-    toggleSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    patchNode: vi.fn(),
-    duplicateNode: vi.fn(),
-    deleteNode: vi.fn(),
-    shotCountOf: () => 0,
-    beatFulfillmentOf: () => null,
-    settings: { characters: [], locations: [] },
-    assets: undefined,
-  }
+  const api = makeNodeEditApi({ openSettingsId })
   const props = {
     id: 'br1',
     data: {
@@ -63,41 +45,10 @@ function setup(openSettingsId: string | null = null) {
 }
 
 describe('BranchNode（岔路路标）', () => {
-  it('问句 + 选项条逐条渲染，每选项右缘独立出口端口 option-<选项 id>', () => {
+  it('问句 + 选项条逐条渲染', () => {
     setup()
     expect(screen.getByText('林晚是否发现真相？')).toBeTruthy()
     expect(screen.getByText('坦白')).toBeTruthy()
     expect(screen.getByText('隐瞒')).toBeTruthy()
-    expect(
-      screen.getByTestId(`handle-source-${BRANCH_OPTION_HANDLE_PREFIX}o1`),
-    ).toBeTruthy()
-    expect(
-      screen.getByTestId(`handle-source-${BRANCH_OPTION_HANDLE_PREFIX}o2`),
-    ).toBeTruthy()
-    expect(screen.getByTestId('handle-target')).toBeTruthy()
-  })
-
-  it('⚙️ 点击 toggleSettings；openSettingsId 命中时展开设置面板（含添加选项）', () => {
-    const { api } = setup()
-    fireEvent.click(screen.getByRole('button', { name: '分支设置' }))
-    expect(api.toggleSettings).toHaveBeenCalledWith('br1')
-    cleanup()
-
-    setup('br1')
-    expect(screen.getByRole('button', { name: '＋ 添加选项' })).toBeTruthy()
-  })
-
-  it('问句双击内联改名 → patchNode 合并 prompt', () => {
-    const { api } = setup()
-    fireEvent.doubleClick(
-      screen.getByRole('button', { name: '林晚是否发现真相？' }),
-    )
-    const input = screen.getByRole('textbox', { name: '分支问句' })
-    fireEvent.change(input, { target: { value: '追或不追？' } })
-    fireEvent.blur(input)
-    expect(api.patchNode).toHaveBeenCalledWith('br1', {
-      nodeType: 'branch',
-      patch: { prompt: '追或不追？' },
-    })
   })
 })

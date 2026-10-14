@@ -22,9 +22,10 @@ const repositoryRoot = resolve(import.meta.dirname, '..')
 const propertiesPath = resolve(repositoryRoot, 'sonar-project.properties')
 
 /** 仅服务测试的模块与编译期探针（issue #311 核实清单，issue #343 补录
- * sheetRuleQuery，仓库相对路径）。 */
+ * sheetRuleQuery，issue #534 补录 nodes 测试共享脚手架，仓库相对路径）。 */
 const testFacilityFiles = [
   'src/editor/ai/testGraphs.ts',
+  'src/editor/nodes/testScaffolding.tsx',
   'src/model/convertFixtures.ts',
   'src/model/typeContracts.test-d.ts',
   'src/moduleGraph.ts',
