@@ -3,14 +3,18 @@
  * App 编辑器重挂载种子域测试（issue #525 自 App.test.tsx 拆分）：设置页
  * 往返后编辑器以带外最新文档/会话为种子（issue #61/#118），画布保存路径
  * 写引用不触发渲染，以及返回首页后带外引用的权威失效边界。
+ * issue #542 收敛：两条保存通道（画布文档/AI 会话）的「编辑器子树零次
+ * 多余提交」同形断言在此参数化合并（原 AI 通道用例来自
+ * App.aiSession.test.tsx，其保存委托断言由 App.test.tsx 回调编排用例持有）。
  * 子视图与 projectStore 桩经 appShellTestScaffolding 委托。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, screen } from '@testing-library/react'
+import { act, screen } from '@testing-library/react'
 import { App } from './App'
 import type { ProjectContent } from './projectStore'
 import {
   DOC,
+  afterAppShellTest,
   editorProps,
   editorRenders,
   homeProps,
@@ -34,7 +38,7 @@ vi.mock('./settings/SettingsView', async () =>
   (await import('./appShellTestScaffolding')).settingsViewMockModule(),
 )
 
-afterEach(cleanup)
+afterEach(afterAppShellTest)
 
 beforeEach(() => resetAppShellFixture())
 
@@ -83,16 +87,33 @@ describe('App ✦设置往返的重挂载种子（issue #118）', () => {
     expect(editorProps.current.project).toEqual({ id: 'p1', ...revised })
   })
 
-  it('画布保存路径写带外引用不触发渲染：编辑器子树零次多余提交', async () => {
-    await openEditor(App)
-    const rendersBefore = editorRenders.count
-    await act(async () => {
-      await (
-        editorProps.current.onSave as (doc: ProjectContent) => Promise<void>
-      )(structuredClone(DOC))
-    })
-    expect(editorRenders.count).toBe(rendersBefore)
-  })
+  // issue #542 参数化：仅触发动作（保存通道）不同，断言同形——保存写
+  // 带外引用不得令编辑器子树发生任何多余提交。
+  it.each(['画布保存路径写带外引用', 'AI 会话消息保存'] as const)(
+    '%s：编辑器子树零次多余提交（issue #61）',
+    async (channel) => {
+      await openEditor(App)
+      const rendersBefore = editorRenders.count
+      await act(async () => {
+        if (channel === '画布保存路径写带外引用') {
+          await (
+            editorProps.current.onSave as (doc: ProjectContent) => Promise<void>
+          )(structuredClone(DOC))
+        } else {
+          const session = {
+            schemaVersion: 1 as const,
+            entries: [{ id: 1, kind: 'note' as const, text: '新消息' }],
+          }
+          await (
+            editorProps.current.onSaveAiSession as (
+              value: typeof session,
+            ) => Promise<void>
+          )(session)
+        }
+      })
+      expect(editorRenders.count).toBe(rendersBefore)
+    },
+  )
 })
 
 describe('App ✦设置往返的引用边界（issue #118）', () => {

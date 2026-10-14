@@ -6,12 +6,13 @@
  * 排队导航作废。子视图与 projectStore 桩经 appShellTestScaffolding 委托。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { App } from './App'
 import type { ProjectContent } from './projectStore'
 import {
   attemptOpen,
   DOC,
+  afterAppShellTest,
   editorProps,
   editorSuspendGate,
   homeProps,
@@ -32,20 +33,18 @@ vi.mock('./settings/SettingsView', async () =>
   (await import('./appShellTestScaffolding')).settingsViewMockModule(),
 )
 
-afterEach(cleanup)
+afterEach(afterAppShellTest)
 
 beforeEach(() => resetAppShellFixture())
 
 describe('App ✦首页打开失败反馈（issue #98）', () => {
   it('打开失败：错误上浮为 openError 传给首页显示警示，停留首页', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     store.load.mockRejectedValue(
       new Error('文档版本过新（schemaVersion 2），请升级应用'),
     )
     render(<App />)
     await screen.findByTestId('home')
     await attemptOpen('p1')
-    warn.mockRestore()
     expect(screen.queryByTestId('editor')).toBeNull()
     expect(screen.getByRole('alert').textContent).toContain('请升级应用')
     const openError = homeProps.current.openError as {
@@ -57,12 +56,10 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
   })
 
   it('打开失败（IPC 字符串拒绝）：字符串原样作为原因', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     store.load.mockRejectedValue('项目文件不可读')
     render(<App />)
     await screen.findByTestId('home')
     await attemptOpen('p1')
-    warn.mockRestore()
     expect((homeProps.current.openError as { detail: string }).detail).toBe(
       '项目文件不可读',
     )
@@ -71,12 +68,10 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
 
 describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
   it('失败后重试同一项目成功：横幅清除，回首页不复活旧错误', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     store.load.mockRejectedValueOnce(new Error('项目文件不可读'))
     render(<App />)
     await screen.findByTestId('home')
     await attemptOpen('p1')
-    warn.mockRestore()
     expect(homeProps.current.openError).not.toBeNull()
     await attemptOpen('p1')
     await screen.findByTestId('editor')
@@ -88,7 +83,6 @@ describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
   })
 
   it('失败后打开另一正常项目：旧错误不带过去', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     store.list.mockResolvedValue([
       { id: 'p1', name: '雨夜' },
       { id: 'p2', name: '午夜出租车' },
@@ -101,7 +95,6 @@ describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
     render(<App />)
     await screen.findByTestId('home')
     await attemptOpen('p1')
-    warn.mockRestore()
     expect((homeProps.current.openError as { id: string }).id).toBe('p1')
     await attemptOpen('p2')
     await screen.findByTestId('editor')
@@ -116,12 +109,10 @@ describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
   })
 
   it('打开失败后新建项目成功：错误随导航过时，回首页不复活', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     store.load.mockRejectedValueOnce(new Error('项目文件不可读'))
     render(<App />)
     await screen.findByTestId('home')
     await attemptOpen('p1')
-    warn.mockRestore()
     expect(homeProps.current.openError).not.toBeNull()
     await act(async () => {
       ;(homeProps.current.onCreateProject as () => void)()
@@ -137,7 +128,6 @@ describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
 
 describe('App ✦打开尝试并发收敛：迟到的拒绝（PR #110 评审）', () => {
   it('并发：在途打开被新尝试取代后，迟到的拒绝不发布旧错误也不拦截导航', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let rejectSlow!: (err: Error) => void
     store.list.mockResolvedValue([
       { id: 'slow', name: '慢项目' },
@@ -162,7 +152,6 @@ describe('App ✦打开尝试并发收敛：迟到的拒绝（PR #110 评审）'
     await act(async () => {
       rejectSlow(new Error('文档版本过新（schemaVersion 2），请升级应用'))
     })
-    warn.mockRestore()
     await act(async () => {
       ;(editorProps.current.onBackHome as () => void)()
     })
@@ -172,7 +161,6 @@ describe('App ✦打开尝试并发收敛：迟到的拒绝（PR #110 评审）'
   })
 
   it('并发：两个在途打开都失败，显示后发起尝试的错误而非后完成者', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let rejectFirst!: (err: Error) => void
     store.list.mockResolvedValue([
       { id: 'a', name: '甲' },
@@ -191,7 +179,6 @@ describe('App ✦打开尝试并发收敛：迟到的拒绝（PR #110 评审）'
       ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)('a')
     })
     await attemptOpen('b')
-    warn.mockRestore()
     expect((homeProps.current.openError as { id: string }).id).toBe('b')
     await act(async () => {
       rejectFirst(new Error('甲的失败'))
@@ -205,7 +192,6 @@ describe('App ✦打开尝试并发收敛：迟到的拒绝（PR #110 评审）'
 
 describe('App ✦打开尝试并发收敛：迟到的成功（PR #110 评审）', () => {
   it('并发：被取代的旧尝试成功晚到，不进入编辑器且新失败的横幅保留', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let releaseSlow!: (doc: ProjectContent) => void
     store.list.mockResolvedValue([
       { id: 'a', name: '甲' },
@@ -224,7 +210,6 @@ describe('App ✦打开尝试并发收敛：迟到的成功（PR #110 评审）'
       ;(homeProps.current.onOpenProject as (id: string) => Promise<void>)('a')
     })
     await attemptOpen('b')
-    warn.mockRestore()
     expect((homeProps.current.openError as { id: string }).id).toBe('b')
     await act(async () => {
       releaseSlow(structuredClone(DOC))
@@ -236,7 +221,6 @@ describe('App ✦打开尝试并发收敛：迟到的成功（PR #110 评审）'
 
 describe('App ✦并发收敛：新建协调（PR #110 评审）', () => {
   it('并发：在途打开的拒绝晚于新建成功，回首页不复活旧横幅', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let rejectSlow!: (err: Error) => void
     store.list.mockResolvedValue([{ id: 'slow', name: '慢项目' }])
     store.load.mockImplementation((id: string) =>
@@ -260,7 +244,6 @@ describe('App ✦并发收敛：新建协调（PR #110 评审）', () => {
     await act(async () => {
       rejectSlow(new Error('项目文件不可读'))
     })
-    warn.mockRestore()
     await act(async () => {
       ;(editorProps.current.onBackHome as () => void)()
     })
@@ -271,7 +254,6 @@ describe('App ✦并发收敛：新建协调（PR #110 评审）', () => {
 
 describe('App ✦并发：chunk 挂起窗口内作废排队导航（PR #110 评审）', () => {
   it('新尝试失败时，已排队未提交的旧导航被作废，不得吞掉失败横幅', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     store.list.mockResolvedValue([
       { id: 'a', name: '甲' },
       { id: 'b', name: '乙' },
@@ -298,7 +280,6 @@ describe('App ✦并发：chunk 挂起窗口内作废排队导航（PR #110 评�
     await act(async () => {
       release()
     })
-    warn.mockRestore()
     expect(screen.queryByTestId('editor')).toBeNull()
     expect((homeProps.current.openError as { id: string }).id).toBe('b')
     expect(screen.getByRole('alert').textContent).toContain('乙的失败')

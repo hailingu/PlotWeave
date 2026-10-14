@@ -1,5 +1,5 @@
-import { expect, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { expect, vi, type MockInstance } from 'vitest'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentType, ReactNode } from 'react'
 import type { ProjectContent } from './projectStore'
 
@@ -179,8 +179,32 @@ export const DOC: ProjectContent = {
   settings: { characters: [], locations: [] },
 }
 
+/** console.warn 静默 spy 的共享句柄（issue #542 收敛）：安装与恢复由
+ * resetAppShellFixture / afterAppShellTest 的每用例生命周期负责，替代
+ * 此前散落各域用例的局部 spyOn/mockRestore 对；需断言告警是否发生的
+ * 用例经此读取。 */
+export const consoleWarn: { spy: MockInstance<typeof console.warn> | null } = {
+  spy: null,
+}
+
+/** 恢复在位的静默 spy 后重新安装；正常生命周期下复位时无在位 spy，
+ * 防御性恢复仅为复位被重复调用时不叠加包装。 */
+function silenceConsoleWarn(): void {
+  consoleWarn.spy?.mockRestore()
+  consoleWarn.spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+}
+
+/** 每用例收尾：卸载 React 树并恢复被静默的 console.warn（issue #542）。
+ * 各域测试文件以此替代裸 afterEach(cleanup)。 */
+export function afterAppShellTest(): void {
+  cleanup()
+  consoleWarn.spy?.mockRestore()
+  consoleWarn.spy = null
+}
+
 /** 每用例复位：清桩调用记录、挂起门与监听器，重建 store 默认应答
- * （load 每次返回全新克隆，防用例间经共享对象串改）。 */
+ * （load 每次返回全新克隆，防用例间经共享对象串改），并安装
+ * console.warn 静默 spy（issue #542）。 */
 export function resetAppShellFixture(): void {
   vi.clearAllMocks()
   editorRenders.count = 0
@@ -196,6 +220,7 @@ export function resetAppShellFixture(): void {
     session: { schemaVersion: 1, entries: [] },
     repairError: null,
   })
+  silenceConsoleWarn()
 }
 
 /** 打开 p1 并等编辑器就绪（App 经参数传入：本模块不导入 './App'）。 */

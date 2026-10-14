@@ -18,6 +18,8 @@ import { App } from './App'
 import type { ProjectContent } from './projectStore'
 import {
   DOC,
+  afterAppShellTest,
+  consoleWarn,
   homeProps,
   editorProps,
   openEditor,
@@ -38,7 +40,7 @@ vi.mock('./settings/SettingsView', async () =>
   (await import('./appShellTestScaffolding')).settingsViewMockModule(),
 )
 
-afterEach(cleanup)
+afterEach(afterAppShellTest)
 
 beforeEach(() => resetAppShellFixture())
 
@@ -49,7 +51,6 @@ describe('App（双界面路由壳）', () => {
     expect(store.list).toHaveBeenCalledTimes(1)
     cleanup()
     store.list.mockRejectedValue(new Error('io'))
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     render(<App />)
     expect(await screen.findByText('共0项')).toBeTruthy()
     // 读取失败 ≠ 空列表：错误态就位（HomePage 侧不渲染首次使用引导）
@@ -58,8 +59,7 @@ describe('App（双界面路由壳）', () => {
     )
     expect(homeProps.current.loadError).toMatch(/io/)
     expect(typeof homeProps.current.onRetryLoad).toBe('function')
-    expect(warn).toHaveBeenCalled()
-    warn.mockRestore()
+    expect(consoleWarn.spy).toHaveBeenCalled()
   })
 
   it('打开项目：load 成功进编辑器；失败停留首页', async () => {
@@ -75,7 +75,6 @@ describe('App（双界面路由壳）', () => {
     expect(await screen.findByTestId('editor')).toBeTruthy()
     cleanup()
     store.load.mockRejectedValue(new Error('gone'))
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {
@@ -84,7 +83,6 @@ describe('App（双界面路由壳）', () => {
       )
     })
     expect(screen.queryByTestId('editor')).toBeNull()
-    warn.mockRestore()
   })
 
   it('新建项目：create 后按落盘文档载入会话（保留 createdAt 溯源），并刷新列表', async () => {

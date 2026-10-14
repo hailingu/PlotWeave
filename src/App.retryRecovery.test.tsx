@@ -7,12 +7,13 @@
  * 委托；notifyRetryPersisted 走真实 saveChain 模块。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { App } from './App'
 import type { ProjectContent } from './projectStore'
 import { notifyRetryPersisted } from './projectStore/saveChain'
 import {
   DOC,
+  afterAppShellTest,
   failHomeRename,
   homeProps,
   resetAppShellFixture,
@@ -33,12 +34,11 @@ vi.mock('./settings/SettingsView', async () =>
   (await import('./appShellTestScaffolding')).settingsViewMockModule(),
 )
 
-afterEach(cleanup)
+afterEach(afterAppShellTest)
 
 beforeEach(() => resetAppShellFixture())
 
 it('App ✦重命名后台恢复：当前文档重存成功后横幅消失、卡片刷新', async () => {
-  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   const doc = await failHomeRename(App)
   store.list.mockResolvedValue([{ id: 'p1', name: '新名' }])
   await act(async () => {
@@ -48,23 +48,19 @@ it('App ✦重命名后台恢复：当前文档重存成功后横幅消失、卡
   expect(homeProps.current.projects).toEqual([{ id: 'p1', name: '新名' }])
   expect(screen.queryByRole('alert')).toBeNull()
   expect(screen.queryByTestId('retry-mutation')).toBeNull()
-  warn.mockRestore()
 })
 
 it('App ✦重命名后台恢复：同名但不同文档的成功通知不能清错', async () => {
-  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   const doc = await failHomeRename(App)
   act(() => notifyRetryPersisted(structuredClone(doc)))
   expect(screen.getByRole('alert').textContent).toMatch(/暂时只读/)
   act(() => notifyRetryPersisted(doc))
   expect(screen.queryByRole('alert')).toBeNull()
-  warn.mockRestore()
 })
 
 it.each(['rename', 'delete'] as const)(
   'App ✦重命名后台恢复：旧恢复不能清除后续 %s 失败',
   async (action) => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const oldDoc = await failHomeRename(App)
     if (action === 'rename')
       store.save.mockRejectedValueOnce(new Error('新失败'))
@@ -92,12 +88,10 @@ it.each(['rename', 'delete'] as const)(
       )
       expect(screen.queryByRole('alert')).toBeNull()
     }
-    warn.mockRestore()
   },
 )
 
 it('App ✦重命名后台恢复：旧读取迟到不覆盖新尝试的恢复身份', async () => {
-  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   let release!: (doc: ProjectContent) => void
   store.load.mockImplementationOnce(
     () =>
@@ -126,11 +120,9 @@ it('App ✦重命名后台恢复：旧读取迟到不覆盖新尝试的恢复身
     notifyRetryPersisted(currentDoc)
   })
   expect(screen.queryByRole('alert')).toBeNull()
-  warn.mockRestore()
 })
 
 it('App ✦重命名后台恢复：先收到恢复成功、后处理保存拒绝，错误不复活', async () => {
-  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   store.save.mockImplementationOnce(
     async (_id: string, doc: ProjectContent) => {
       notifyRetryPersisted(doc)
@@ -148,5 +140,4 @@ it('App ✦重命名后台恢复：先收到恢复成功、后处理保存拒绝
     )('p1', '新名')
   })
   expect(screen.queryByRole('alert')).toBeNull()
-  warn.mockRestore()
 })

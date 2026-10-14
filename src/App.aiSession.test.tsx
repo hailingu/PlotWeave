@@ -3,16 +3,19 @@
  * App AI 会话域测试（issue #525 自 App.test.tsx 拆分）：会话恢复的损坏
  * 隔离与读取失败边界、保存通道的成功/失败/在途路径（issue #61）、退出
  * 重试成功通知与回吐重排失败的事件登记恢复（issue #47 历轮评审）。
+ * issue #542 收敛：保存成功的「编辑器子树零次多余提交」与画布保存通道
+ * 参数化合并至 App.editorSeeds.test.tsx；失败矩阵的「失败保留 + 可重试」
+ * 子集用例并入回首页重开路径。
  * 子视图与 projectStore 桩经 appShellTestScaffolding 委托。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, screen } from '@testing-library/react'
+import { act, screen } from '@testing-library/react'
 import { App } from './App'
 import type { ProjectContent } from './projectStore'
 import {
   DOC,
+  afterAppShellTest,
   editorProps,
-  editorRenders,
   homeProps,
   openEditor,
   replayFailedListeners,
@@ -35,7 +38,7 @@ vi.mock('./settings/SettingsView', async () =>
   (await import('./appShellTestScaffolding')).settingsViewMockModule(),
 )
 
-afterEach(cleanup)
+afterEach(afterAppShellTest)
 
 beforeEach(() => resetAppShellFixture())
 
@@ -66,24 +69,6 @@ describe('App ✦AI 会话恢复', () => {
 })
 
 describe('App ✦AI 会话保存', () => {
-  it('追加 AI 消息保存成功：编辑器子树零次多余提交（issue #61）', async () => {
-    await openEditor(App)
-    const rendersBefore = editorRenders.count
-    const session = {
-      schemaVersion: 1 as const,
-      entries: [{ id: 1, kind: 'note' as const, text: '新消息' }],
-    }
-    await act(async () => {
-      await (
-        editorProps.current.onSaveAiSession as (
-          value: typeof session,
-        ) => Promise<void>
-      )(session)
-    })
-    expect(store.saveAiSession).toHaveBeenCalledWith('p1', session)
-    expect(editorRenders.count).toBe(rendersBefore)
-  })
-
   it('有加载诊断后实际编辑并保存成功：项目级错误清除，重挂载不再报保存失败', async () => {
     const recovered = {
       schemaVersion: 1 as const,
@@ -130,28 +115,6 @@ describe('App ✦AI 会话保存', () => {
 })
 
 describe('App ✦AI 会话保存失败', () => {
-  it('正常加载后用户变更会话：保存失败仍保留内容并允许重试', async () => {
-    store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
-    await openEditor(App)
-    expect(editorProps.current.aiSessionRetryable).toBe(false)
-    const changed = {
-      schemaVersion: 1 as const,
-      entries: [{ id: 1, kind: 'note' as const, text: '用户的新消息' }],
-    }
-    await act(async () => {
-      await expect(
-        (
-          editorProps.current.onSaveAiSession as (
-            value: typeof changed,
-          ) => Promise<void>
-        )(changed),
-      ).rejects.toThrow('磁盘已满')
-    })
-    expect(editorProps.current.aiSession).toEqual(changed)
-    // 成功加载后的会话变更保留在内存，可重试保存。
-    expect(editorProps.current.aiSessionRetryable).toBe(true)
-  })
-
   it('会话保存失败时拒绝上浮，错误写入项目级：重挂载不丢警告', async () => {
     store.saveAiSession.mockRejectedValueOnce(new Error('磁盘已满'))
     await openEditor(App)
@@ -176,6 +139,9 @@ describe('App ✦AI 会话保存失败', () => {
 
   it('保存失败后回首页再重开：未落盘会话保留并标记可重试', async () => {
     await openEditor(App)
+    // 正常加载后无失败存量：不可重试（原「失败保留 + 可重试」子集用例
+    // 的独有前置断言并入，issue #542）
+    expect(editorProps.current.aiSessionRetryable).toBe(false)
     const changed = {
       schemaVersion: 1 as const,
       entries: [{ id: 1, kind: 'note' as const, text: '未落盘' }],
