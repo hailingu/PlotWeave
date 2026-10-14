@@ -32,8 +32,8 @@ export default defineConfig({
       include: ['src/**'],
       // 测试设施不计入产品覆盖率（issue #311，issue #343 补录
       // sheetRuleQuery、issue #534 补录 nodes 测试脚手架、issue #538 补录
-      // sheetToken 共享用例数据表，均由
-      // scripts/sonar-test-scope.test.ts 同源核验）：
+      // sheetToken 共享用例数据表、issue #539 补录 panels 共享 DOM 桩，
+      // 均由 scripts/sonar-test-scope.test.ts 同源核验）：
       // 与 sonar-project.properties 的测试纳入清单同源——仅服务测试的
       // 模块无产品运行时形态，编译期类型探针是纯类型文件（v8 all 模式下
       // 计 0% 空条目）。
@@ -43,6 +43,7 @@ export default defineConfig({
         'src/model/convertFixtures.ts',
         'src/editor/ai/testGraphs.ts',
         'src/editor/nodes/testScaffolding.tsx',
+        'src/editor/panels/testDomStubs.ts',
         'src/styles/cssColorContract.ts',
         'src/styles/cssValueSyntax.ts',
         'src/styles/sheetRuleQuery.ts',

@@ -14,6 +14,7 @@ import {
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { invoke } from '@tauri-apps/api/core'
 import { AssetsPanel } from './AssetsPanel'
+import { stubIntersectionObserver } from './testDomStubs'
 import { libraryStore, type LibraryAsset } from '../../library/libraryStore'
 
 vi.hoisted(() => {
@@ -25,13 +26,7 @@ vi.hoisted(() => {
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 
 beforeAll(() => {
-  vi.stubGlobal(
-    'IntersectionObserver',
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  )
+  stubIntersectionObserver()
 })
 afterEach(() => {
   cleanup()

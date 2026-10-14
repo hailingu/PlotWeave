@@ -23,10 +23,12 @@ const propertiesPath = resolve(repositoryRoot, 'sonar-project.properties')
 
 /** 仅服务测试的模块与编译期探针（issue #311 核实清单，issue #343 补录
  * sheetRuleQuery，issue #534 补录 nodes 测试共享脚手架，issue #538 补录
- * sheetToken 共享用例数据表，仓库相对路径）。 */
+ * sheetToken 共享用例数据表，issue #539 补录 panels 共享 DOM 桩，
+ * 仓库相对路径）。 */
 const testFacilityFiles = [
   'src/editor/ai/testGraphs.ts',
   'src/editor/nodes/testScaffolding.tsx',
+  'src/editor/panels/testDomStubs.ts',
   'src/model/convertFixtures.ts',
   'src/model/typeContracts.test-d.ts',
   'src/moduleGraph.ts',
