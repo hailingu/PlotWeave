@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 /**
  * 图片节点（生成侧媒体节点，§13）渲染测试：标题行徽标/尺寸、Prompt 预览、
- * 产物区三态（空态 / 生成图像 / 悬空引用占位）、作业状态角标、产物换绑
- * 生命周期（issue #131）。
+ * 产物区三态（空态 / 生成图像 / 悬空引用占位）、作业状态角标、媒体加载
+ * 失败占位接线（issue #131）。
  * ⚙️ 面板展开等外壳共享行为收敛至 nodeChrome.test.tsx 参数化维护
  * （issue #534）；NodeEditApi 夹具见 testScaffolding.tsx。
  * 组件经 NodeEditContext + ImageGenProvider 双上下文隔离渲染。
+ * 换绑在途清空/乱序隔离/重挂载恢复自 issue #541 起仅在
+ * useAssetMedia.test.tsx 断言，此处留一条失败占位接线集成用例。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -97,18 +99,13 @@ describe('图片节点渲染（§13）', () => {
     expect(img.getAttribute('src')).toBe('asset://pa-1')
   })
 
+  // 组件层唯一的媒体生命周期接线用例（issue #541）：解析失败态经 hook
+  // 传导到占位渲染；换绑在途清空、乱序隔离、重挂载恢复与 onError 解码
+  // 转失败等规则的断言收敛至 useAssetMedia.test.tsx（缺陷溯源 issue #131）。
   it('产物资产在而媒体 URL 解析失败：显示可读失败占位，不静默空白', async () => {
     vi.mocked(projectAssets.mediaUrl).mockRejectedValueOnce(new Error('boom'))
     setup({ ...baseData(), outputs: { primary: { assetId: 'pa-1' } } })
     expect(await screen.findByText(/产物媒体无法读取/)).toBeTruthy()
-  })
-
-  it('URL 解析成功但图像解码失败（截断 PNG 等）：onError 转入失败占位', async () => {
-    setup({ ...baseData(), outputs: { primary: { assetId: 'pa-1' } } })
-    const img = await screen.findByRole('img')
-    img.dispatchEvent(new window.Event('error'))
-    expect(await screen.findByText(/产物媒体无法读取/)).toBeTruthy()
-    expect(screen.queryByRole('img')).toBeNull()
   })
 
   it('primary 悬空（资产已删）显示缺失占位，不清除引用', () => {
@@ -119,82 +116,5 @@ describe('图片节点渲染（§13）', () => {
       },
     )
     expect(screen.getByText(/产物资产缺失/)).toBeTruthy()
-  })
-})
-
-/** 可重渲染的隔离渲染（issue #131：产物换绑 = 同一 OutputImage 实例换
- * assetId）；byId 可注入多个资产。 */
-function renderImageNode(
-  assetId: string,
-  byId: Record<string, AssetRef> = { 'pa-1': asset },
-) {
-  const api = makeNodeEditApi({ assets: { byId } })
-  const nodesRef = { current: [] as CanvasNode[] }
-  const props = (id: string) =>
-    ({
-      id: 'img1',
-      data: { ...baseData(), outputs: { primary: { assetId: id } } },
-      selected: false,
-    }) as unknown as NodeProps<ImageFlowNode>
-  const view = render(
-    <ImageGenProvider
-      projectId="p-1"
-      nodes={nodesRef.current}
-      nodesRef={nodesRef}
-      assetsRef={{ current: undefined }}
-      settings={{ characters: [] }}
-      applyDataPatch={vi.fn()}
-      addAsset={vi.fn()}
-      removeAsset={vi.fn()}
-      pushHistory={vi.fn()}
-    >
-      <NodeEditContext.Provider value={api}>
-        <ImageNode {...props(assetId)} />
-      </NodeEditContext.Provider>
-    </ImageGenProvider>,
-  )
-  return {
-    rerender: (id: string) =>
-      view.rerender(
-        <ImageGenProvider
-          projectId="p-1"
-          nodes={nodesRef.current}
-          nodesRef={nodesRef}
-          assetsRef={{ current: undefined }}
-          settings={{ characters: [] }}
-          applyDataPatch={vi.fn()}
-          addAsset={vi.fn()}
-          removeAsset={vi.fn()}
-          pushHistory={vi.fn()}
-        >
-          <NodeEditContext.Provider value={api}>
-            <ImageNode {...props(id)} />
-          </NodeEditContext.Provider>
-        </ImageGenProvider>,
-      ),
-  }
-}
-
-describe('产物区换绑生命周期（issue #131）', () => {
-  it('产物换绑：在途窗口清空旧图不以 A 冒充 B；读取失败显示占位', async () => {
-    vi.mocked(projectAssets.mediaUrl)
-      .mockResolvedValueOnce('asset://a')
-      .mockImplementationOnce(() => new Promise(() => {}))
-      .mockRejectedValueOnce(new Error('媒体不可读'))
-    const byId = {
-      'pa-1': asset,
-      'pa-2': { ...asset, id: 'pa-2', relPath: 'assets/pa-2.png' },
-      'pa-3': { ...asset, id: 'pa-3', relPath: 'assets/pa-3.png' },
-    }
-    const { rerender } = renderImageNode('pa-1', byId)
-    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
-      'asset://a',
-    )
-    rerender('pa-2')
-    // 过渡窗口：B 在途，不得残留 A 的图
-    expect(screen.queryByRole('img')).toBeNull()
-    rerender('pa-3')
-    expect(await screen.findByText(/产物媒体无法读取/)).toBeTruthy()
-    expect(screen.queryByRole('img')).toBeNull()
   })
 })

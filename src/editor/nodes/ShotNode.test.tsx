@@ -2,10 +2,11 @@
 /**
  * 分镜卡（监视器卡）渲染测试：SHOT 编号/景别标题行、画面描述、
  * 镜头 Prompt、引用位 chip（角色垫图/场景底图/音频图标）、资产引用
- * 读取边界与换绑生命周期（issue #130/#131）。
+ * 读取边界（issue #130）与缩略图失败占位接线（issue #131）。
  * ⚙️ 面板开关与端口布局等外壳共享行为收敛至 nodeChrome.test.tsx
  * 参数化维护（issue #534）；Handle 桩与 NodeEditApi 夹具见
- * testScaffolding.tsx。
+ * testScaffolding.tsx。换绑在途清空/乱序隔离/重挂载恢复自 issue #541
+ * 起仅在 useAssetMedia.test.tsx 断言，此处留一条接线集成用例。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -259,11 +260,15 @@ describe('分镜坏引用的隔离与恢复（issue #130）', () => {
   })
 })
 
-describe('RefThumb 引用位缩略图生命周期（issue #131）', () => {
+describe('RefThumb 引用位缩略图接线（issue #131）', () => {
   beforeEach(() => {
     vi.mocked(projectAssets.mediaUrl).mockReset()
   })
 
+  // 组件层唯一的缩略图生命周期接线用例（issue #541）：换绑后失败 ⚠ 占位
+  // 可观察且旧图不冒充新引用；在途清空、乱序隔离、onError 解码转失败、
+  // 重挂载恢复、同 id 身份不重取等规则的断言收敛至 useAssetMedia.test.tsx
+  // （缺陷溯源 issue #131：旧实现残留 A 的 url 冒充 B）。
   it('改绑不可读资产：旧缩略图清除，失败 ⚠ 可定位，不以旧图冒充新引用', async () => {
     vi.mocked(projectAssets.mediaUrl)
       .mockResolvedValueOnce('asset://a')
@@ -279,82 +284,5 @@ describe('RefThumb 引用位缩略图生命周期（issue #131）', () => {
     ).toBeTruthy()
     // A 的 url 不得残留冒充 B（issue #131 核心缺陷）
     expect(screen.queryByRole('img')).toBeNull()
-  })
-
-  it('换绑过渡窗口：新解析在途时清空旧图，不得以 A 占位等待 B', async () => {
-    let resolveB: (u: string) => void = () => {}
-    vi.mocked(projectAssets.mediaUrl)
-      .mockResolvedValueOnce('asset://a')
-      .mockImplementationOnce(
-        () =>
-          new Promise((r) => {
-            resolveB = r
-          }),
-      )
-    const byId = { 'pa-1': refAsset('pa-1'), 'pa-2': refAsset('pa-2') }
-    const { rerender } = renderShotWithRef('pa-1', byId)
-    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
-      'asset://a',
-    )
-    rerender('pa-2')
-    // 过渡窗口无图（旧实现残留 asset://a 冒充 B）
-    expect(screen.queryByRole('img')).toBeNull()
-    resolveB('asset://b')
-    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
-      'asset://b',
-    )
-  })
-
-  it('换绑乱序：迟到的旧解析不得覆盖新引用', async () => {
-    let resolveA: (u: string) => void = () => {}
-    vi.mocked(projectAssets.mediaUrl)
-      .mockImplementationOnce(
-        () =>
-          new Promise((r) => {
-            resolveA = r
-          }),
-      )
-      .mockResolvedValueOnce('asset://b')
-    const byId = { 'pa-1': refAsset('pa-1'), 'pa-2': refAsset('pa-2') }
-    const { rerender } = renderShotWithRef('pa-1', byId)
-    rerender('pa-2')
-    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
-      'asset://b',
-    )
-    resolveA('asset://a-late')
-    await Promise.resolve()
-    expect(screen.getByRole('img').getAttribute('src')).toBe('asset://b')
-  })
-
-  it('URL 解析成功但图像加载失败：onError 转 ⚠ 失败标记，无半图残留', async () => {
-    vi.mocked(projectAssets.mediaUrl).mockResolvedValueOnce('asset://broken')
-    renderShotWithRef('pa-1')
-    const img = await screen.findByRole('img')
-    img.dispatchEvent(new window.Event('error'))
-    expect(
-      await screen.findByTitle('媒体不可读（assets/pa-1.png）'),
-    ).toBeTruthy()
-    expect(screen.queryByRole('img')).toBeNull()
-  })
-
-  it('读取失败后重挂载（应用重载）且媒体恢复：正常显示', async () => {
-    vi.mocked(projectAssets.mediaUrl)
-      .mockRejectedValueOnce(new Error('媒体不可读'))
-      .mockResolvedValue('asset://fresh')
-    renderShotWithRef('pa-1')
-    expect(await screen.findByTitle(/媒体不可读/)).toBeTruthy()
-    cleanup()
-    renderShotWithRef('pa-1')
-    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
-      'asset://fresh',
-    )
-  })
-
-  it('同 id 的资产对象身份变化（无关编辑致索引重建）不重取缩略图', async () => {
-    vi.mocked(projectAssets.mediaUrl).mockResolvedValue('asset://a')
-    const { rerender } = renderShotWithRef('pa-1')
-    await screen.findByRole('img')
-    rerender('pa-1', { 'pa-1': refAsset('pa-1') })
-    expect(vi.mocked(projectAssets.mediaUrl)).toHaveBeenCalledTimes(1)
   })
 })
