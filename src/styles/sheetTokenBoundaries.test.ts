@@ -1,15 +1,18 @@
 /**
  * F1 全局所有权、注册与根选择器，F2 CSS-wide 边界，F6 属性分类的既有回归。
  * 当前契约和问题族矩阵统一见 docs/css-token-contract.md；审查记录仅作历史证据。
+ * F1 全局拒绝矩阵与 F6 分类枚举已收敛到 sheetTokenCaseMatrix 共享表，
+ * 分别由 sheetTokenContractFamilies 与 sheetTokensSemantics 从同表驱动
+ * （issue #538）；本文件保留正向对照与注册/文法行为用例。
  */
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
 import { hasColorLiteral } from './cssColorContract'
+import { ROOT_SELECTOR_UNMODELED_SELECTORS } from './sheetTokenCaseMatrix'
 import {
   danglingRefs,
   displayTypeErrors,
   displayValueIn,
-  isDisplayColorProp,
   LIGHT_ENV,
   localDefinitions,
   sheetDecls,
@@ -18,35 +21,9 @@ import {
 } from './sheetTokensEngine'
 
 describe('组件表不得另定义全局令牌', () => {
-  it.each([
-    ':root',
-    'html',
-    'body',
-    '*',
-    '.card, :root',
-    ':root.dark',
-    'body[data-theme="dark"]',
-  ])('无消费者定义表也拒绝全局 %s', (selector) => {
-    const root = postcss.parse(`${selector} { --text-primary: 4px; }`, {
-      from: 'src/styles/fixture-component.css',
-    })
-    for (const scan of [
-      () => [...sheetDecls(root)],
-      () => localDefinitions(root),
-      () => danglingRefs(root, LIGHT_ENV),
-      () => displayTypeErrors(root, LIGHT_ENV),
-    ])
-      expect(scan).toThrow(/TOKEN_GLOBAL_OUTSIDE_SOURCE/)
-  })
-
-  it('媒体中的未消费全局定义仍拒绝', () => {
-    const root = postcss.parse(
-      '@media (prefers-color-scheme: dark) { :root { --new-token: 4px; } }',
-      { from: 'src/styles/fixture-component.css' },
-    )
-    expect(() => [...sheetDecls(root)]).toThrow(/TOKEN_GLOBAL_OUTSIDE_SOURCE/)
-  })
-
+  // 7 个简单选择器 × 4 入口与「媒体中的未消费全局定义仍拒绝」两条拒绝矩阵
+  // 已并入 GLOBAL_OWNERSHIP_REJECTION_CASES，由 sheetTokenContractFamilies
+  // 的 F1-a 从同表驱动（issue #538）。
   it('唯一令牌源、局部定义及全局普通属性保留', () => {
     const source = postcss.parse(':root { --text-primary: 4px; }', {
       from: TOKEN_SHEET,
@@ -122,18 +99,12 @@ describe('令牌源选择器列表中的根分支（review 5285788301）', () =>
     ).toThrow(/TOKEN_ROOT_AT_RULE_UNMODELED/)
   })
 
-  it.each([
-    'html',
-    'body',
-    '*',
-    ':root.dark',
-    ':root, html',
-    ':is(:root)',
-    ':root .child',
-  ])('%s 上的自定义属性可能命中文档根但未建模，明确拒绝', (selector) =>
-    expect(() => rootTokens(`${selector} { --fg: 4px; }`)).toThrow(
-      /TOKEN_ROOT_SELECTOR_UNMODELED/,
-    ),
+  it.each(ROOT_SELECTOR_UNMODELED_SELECTORS)(
+    '%s 上的自定义属性可能命中文档根但未建模，明确拒绝',
+    (selector) =>
+      expect(() => rootTokens(`${selector} { --fg: 4px; }`)).toThrow(
+        /TOKEN_ROOT_SELECTOR_UNMODELED/,
+      ),
   )
 
   it('非根选择器与全局普通属性保持原行为', () => {
@@ -145,22 +116,9 @@ describe('令牌源选择器列表中的根分支（review 5285788301）', () =>
 })
 
 describe('颜色属性按结构分类进入展示色契约', () => {
-  it.each([
-    'text-emphasis-color',
-    'text-emphasis',
-    'scrollbar-color',
-    '-webkit-text-fill-color',
-    'stop-color',
-    '-webkit-text-stroke',
-  ])('%s 承载展示色', (prop) => expect(isDisplayColorProp(prop)).toBe(true))
-
-  it.each([
-    '--xy-controls-button-color',
-    'color-scheme',
-    'text-emphasis-style',
-    '-webkit-text-stroke-width',
-  ])('%s 不承载展示色', (prop) => expect(isDisplayColorProp(prop)).toBe(false))
-
+  // 分类枚举（6 true + 4 false）已并入 DISPLAY_COLOR_PROP_CASES 共享表，
+  // 由 sheetTokensSemantics 的属性分类用例从同表驱动（issue #538）；本组
+  // 保留分类之下的文法与消费行为用例。
   it('-webkit-text-stroke 按「宽度 || 颜色」文法校验（review 5285927947）', () => {
     const root = postcss.parse(
       '.a { -webkit-text-stroke: 1px var(--radius-sm) }\n' +

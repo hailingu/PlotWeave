@@ -2,6 +2,8 @@
  * 全表 CSS 令牌契约的语义夹具（issue #278），与真实扫描共享 sheetTokensEngine。
  * F2 层叠、F3 类型、F5 引用的统一矩阵及支持/拒绝/保留边界见
  * docs/css-token-contract.md；保留已有根/局部/媒体/分支/恢复回归用例。
+ * 属性分类枚举与 NBSP 关键字边界值由 sheetTokenCaseMatrix 共享表驱动
+ * （原 sheetTokenBoundaries 的分类枚举并入本文件，issue #538）。
  */
 import postcss from 'postcss'
 import { readFileSync } from 'node:fs'
@@ -9,6 +11,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { colorTypeOk, hasColorLiteral } from './cssColorContract'
+import {
+  CSS_WIDE_KEYWORD_BOUNDARY_CASES,
+  DISPLAY_COLOR_PROP_CASES,
+} from './sheetTokenCaseMatrix'
 import {
   conditionActive,
   danglingRefs,
@@ -30,55 +36,36 @@ import {
 } from './sheetTokensEngine'
 
 describe('展示色结构：属性与字面探测分类（issue #278）', () => {
-  it('展示色属性分类覆盖 border 全部简写/长形（四向与逻辑方向）、border-image、SVG fill/stroke、background-image 与 text-shadow；box-shadow 与尺寸类不算', () => {
-    for (const prop of [
-      'border',
-      'border-top',
-      'border-left',
-      'border-inline-start',
-      'border-block-end-color',
-      'border-color',
-      'border-image',
-      'border-image-source',
-      'outline',
-      'fill',
-      'stroke',
-      'background',
-      'background-color',
-      'background-image',
-      'text-shadow',
-    ]) {
-      expect(isDisplayColorProp(prop), prop).toBe(true)
-    }
-    for (const prop of [
-      'box-shadow',
-      'border-width',
-      'border-radius',
-      'border-top-width',
-      'border-image-width',
-      'border-image-slice',
-      'mask-image',
-      'padding',
-    ]) {
-      expect(isDisplayColorProp(prop), prop).toBe(false)
+  it('展示色属性分类覆盖 border 全部简写/长形（四向与逻辑方向）、border-image、SVG fill/stroke、background 系、text-shadow、text-emphasis 系、scrollbar-color、stop-color 与 -webkit 前缀颜色长形；box-shadow、尺寸类、非颜色长形与自定义属性不算', () => {
+    // 枚举收敛自 sheetTokenBoundaries 的 F6 分类矩阵（issue #538），
+    // 集合交叉的两份枚举现为 DISPLAY_COLOR_PROP_CASES 单一事实源。
+    for (const [prop, carriesDisplayColor] of DISPLAY_COLOR_PROP_CASES) {
+      expect(isDisplayColorProp(prop), prop).toBe(carriesDisplayColor)
     }
   })
-  it('字面色探测覆盖 hex/大小写不敏感函数色/具名色；transparent、currentcolor、none、var() 名内的色词不算', () => {
-    expect(hasColorLiteral('#fff')).toBe(true)
-    expect(hasColorLiteral('rgba(0, 0, 0, 0.68)')).toBe(true)
-    expect(hasColorLiteral('RGB(255, 0, 0)'), 'CSS 函数名大小写不敏感').toBe(
-      true,
-    )
-    expect(hasColorLiteral('white')).toBe(true)
-    expect(hasColorLiteral('1px solid Red')).toBe(true)
-    expect(hasColorLiteral('linear-gradient(transparent, black)')).toBe(true)
-    expect(hasColorLiteral('2px solid transparent')).toBe(false)
-    expect(hasColorLiteral('currentcolor')).toBe(false)
-    expect(hasColorLiteral('none')).toBe(false)
-    expect(hasColorLiteral('inherit')).toBe(false)
-    expect(hasColorLiteral('var(--danger-red)')).toBe(false)
-    expect(hasColorLiteral('1px solid var(--border-hairline)')).toBe(false)
-  })
+
+  it.each([
+    '#fff',
+    'rgba(0, 0, 0, 0.68)',
+    'RGB(255, 0, 0)',
+    'white',
+    '1px solid Red',
+    'linear-gradient(transparent, black)',
+  ])('字面色 %s 命中探测（hex/大小写不敏感函数色/具名色）', (value) =>
+    expect(hasColorLiteral(value)).toBe(true),
+  )
+
+  it.each([
+    '2px solid transparent',
+    'currentcolor',
+    'none',
+    'inherit',
+    'var(--danger-red)',
+    '1px solid var(--border-hairline)',
+  ])(
+    '字面色 %s 不算颜色字面（transparent/currentcolor/none/var() 名内色词）',
+    (value) => expect(hasColorLiteral(value)).toBe(false),
+  )
 
   it('标准属性名 ASCII 大小写不敏感地归一分类；自定义属性名大小写保持原样不被归一', () => {
     expect(normalizeProp('Color')).toBe('color')
@@ -696,16 +683,9 @@ describe('接线语义：局部定义的级联取胜（issue #278）', () => {
     expect(danglingRefs(valid, LIGHT_ENV)).toEqual([])
   })
 
-  it('无空白子代组合器与带空白形式同样继承祖先遮蔽（review 5286056434）', () => {
-    for (const child of ['.parent>.child', '.parent > .child']) {
-      const root = postcss.parse(
-        `.parent { --text-primary: 4px } ${child} { color: var(--text-primary) }`,
-      )
-      expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([
-        `${child} color: 4px`,
-      ])
-    }
-  })
+  // 「无空白子代组合器与带空白形式同样继承祖先遮蔽」（review 5286056434）
+  // 已收敛到 sheetTokenContractFamilies F2-b 的空白写法矩阵（issue #538）；
+  // 根令牌同名遮蔽维度仍由上方「局部同名定义遮蔽根令牌」持有。
 })
 
 describe('接线语义：条件环境（issue #278）', () => {
@@ -990,13 +970,15 @@ describe('CSS 空白与 NBSP 的关键字判定边界（issue #339）', () => {
   )
 
   it('切分保留 NBSP：成分不折算成关键字或完整颜色，普通空白对照不变', () => {
-    // 简写层：'\u00a0unset' 是未知标识符成分，不得命中关键字集合
-    expect(colorTypeOk('background', '\u00a0unset')).toBe(false)
-    expect(colorTypeOk('outline', 'unset\u00a0')).toBe(false)
+    // 简写层的整值关键字判定与 resolveChain 入口共用
+    // CSS_WIDE_KEYWORD_BOUNDARY_CASES 一张事实源表（issue #538）：
+    // NBSP 粘连的是未知标识符成分，不得命中关键字集合；普通 CSS 空白
+    // 包围的关键字仍是合法属性值。
+    for (const { value, cssWide } of CSS_WIDE_KEYWORD_BOUNDARY_CASES) {
+      expect(colorTypeOk('background', value), value).toBe(cssWide)
+    }
     // 颜色列表：'#fff\u00a0' 是 hash + 标识符两个 token，非完整颜色成分
     expect(colorTypeOk('border-color', '#fff\u00a0')).toBe(false)
-    // 对照：普通 CSS 空白包围的关键字仍是合法属性值
-    expect(colorTypeOk('background', ' unset ')).toBe(true)
   })
 
   it.each([

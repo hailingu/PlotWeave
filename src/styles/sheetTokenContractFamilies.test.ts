@@ -5,6 +5,7 @@
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
 import { colorTypeOk } from './cssColorContract'
+import { GLOBAL_OWNERSHIP_REJECTION_CASES } from './sheetTokenCaseMatrix'
 import {
   danglingRefs,
   declOf,
@@ -18,29 +19,24 @@ import {
   TOKEN_SHEET,
 } from './sheetTokensEngine'
 
-describe('F1 全局所有权：文档组合器与全部扫描入口', () => {
-  it.each([
-    'html > body',
-    'html>body',
-    ':root body',
-    'HTML > BODY[data-theme="dark"]',
-    '.unused, html > body',
-    ':root > *',
-    'html > body > *',
-    'html[data-note="a > b"] > body',
-  ])('F1-a 无消费者的 %s 在所有入口被拒绝', (selector) => {
-    const root = postcss.parse(
-      `@media (prefers-color-scheme: dark) { ${selector} { --text-primary: 4px; } }`,
-      { from: 'src/styles/family-fixture.css' },
-    )
-    for (const scan of [
-      () => [...sheetDecls(root)],
-      () => localDefinitions(root),
-      () => danglingRefs(root, LIGHT_ENV),
-      () => displayTypeErrors(root, LIGHT_ENV),
-    ])
-      expect(scan).toThrow(/TOKEN_GLOBAL_OUTSIDE_SOURCE/)
-  })
+describe('F1 全局所有权：全局选择器形态与全部扫描入口', () => {
+  it.each(GLOBAL_OWNERSHIP_REJECTION_CASES)(
+    'F1-a 无消费者的 %s（失活媒体=%s）在所有入口被拒绝',
+    (selector, inInactiveMedia) => {
+      const definition = `${selector} { --text-primary: 4px; }`
+      const css = inInactiveMedia
+        ? `@media (prefers-color-scheme: dark) { ${definition} }`
+        : definition
+      const root = postcss.parse(css, { from: 'src/styles/family-fixture.css' })
+      for (const scan of [
+        () => [...sheetDecls(root)],
+        () => localDefinitions(root),
+        () => danglingRefs(root, LIGHT_ENV),
+        () => displayTypeErrors(root, LIGHT_ENV),
+      ])
+        expect(scan).toThrow(/TOKEN_GLOBAL_OUTSIDE_SOURCE/)
+    },
+  )
 
   it('F1-b 文档普通样式与局部后代定义保持可用', () => {
     const root = postcss.parse(
@@ -51,18 +47,9 @@ describe('F1 全局所有权：文档组合器与全部扫描入口', () => {
     expect(displayTypeErrors(root, LIGHT_ENV)).toEqual([])
   })
 
-  it.each(['html > body', 'html > body > *'])(
-    'F1-b 令牌源也拒绝未建模的文档组合器 %s',
-    (selector) => {
-      const root = postcss.parse(
-        `:root { --fg: #fff; } ${selector} { --fg: 4px; }`,
-        { from: TOKEN_SHEET },
-      )
-      expect(() => tokenValuesOf(root, LIGHT_ENV)).toThrow(
-        /TOKEN_ROOT_SELECTOR_UNMODELED/,
-      )
-    },
-  )
+  // 「令牌源也拒绝未建模的文档组合器」两条已并入
+  // ROOT_SELECTOR_UNMODELED_SELECTORS 共享表，由 sheetTokenBoundaries
+  // 的根分支套件从同表驱动（issue #538）。
 })
 
 describe('F2 层叠取胜：重要性规则覆盖全部拥有者', () => {
@@ -190,10 +177,14 @@ describe('F2-a 失活条件与无效值恢复', () => {
 
 describe('F2-b 简单子代链的空白写法不改变局部可达性', () => {
   // 子代组合器的空白书写（含多空格与 :hover 后缀）不影响两侧归一后的
-  // 可达判定；两个方向各留一代表（issue #291 精简镜像排列）。
+  // 可达判定；两个方向各留一代表（issue #291 精简镜像排列）。定义侧为
+  // 普通祖先的两行收敛自 sheetTokensSemantics「无空白子代组合器与带空白
+  // 形式同样继承祖先遮蔽」（review 5286056434，issue #538）。
   it.each([
     ['.parent > .child', '.parent>.child .grand'],
     ['.parent  >  .child', '.parent > .child:hover .grand'],
+    ['.parent', '.parent>.child'],
+    ['.parent', '.parent > .child'],
   ])('%s 定义可达 %s 的类型与引用入口', (definer, consumer) => {
     const root = postcss.parse(
       `${definer} { --fg: 4px; } ${consumer} { color: var(--fg, var(--text-primary)); }`,
