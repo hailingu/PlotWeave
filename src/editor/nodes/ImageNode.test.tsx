@@ -7,8 +7,8 @@
  * （issue #534）；NodeEditApi 夹具见 testScaffolding.tsx。
  * 组件经 NodeEditContext + ImageGenProvider 双上下文隔离渲染。
  * 换绑在途清空/乱序隔离/重挂载恢复自 issue #541 起仅在
- * useAssetMedia.test.tsx 断言；此处保留失败占位接线集成用例与
- * onError 解码接线的 DOM 级断言（PR #561 评审 5512852009）。
+ * useAssetMedia.test.tsx 断言；此处保留失败占位与换绑接线的集成用例
+ * 及 onError 解码接线的 DOM 级断言（PR #561 评审）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -126,5 +126,62 @@ describe('图片节点渲染（§13）', () => {
       },
     )
     expect(screen.getByText(/产物资产缺失/)).toBeTruthy()
+  })
+})
+
+/** 可重渲染的隔离渲染（换绑接线用例：同一产物位换 assetId）；换绑
+ * 清旧图的组合契约（key 重挂载 + hook 清空兜底）见 OutputImage 文档。 */
+function renderImageNode(
+  assetId: string,
+  byId: Record<string, AssetRef> = { 'pa-1': asset },
+) {
+  const api = makeNodeEditApi({ assets: { byId } })
+  const nodesRef = { current: [] as CanvasNode[] }
+  const props = (id: string) =>
+    ({
+      id: 'img1',
+      data: { ...baseData(), outputs: { primary: { assetId: id } } },
+      selected: false,
+    }) as unknown as NodeProps<ImageFlowNode>
+  const tree = (id: string) => (
+    <ImageGenProvider
+      projectId="p-1"
+      nodes={nodesRef.current}
+      nodesRef={nodesRef}
+      assetsRef={{ current: undefined }}
+      settings={{ characters: [] }}
+      applyDataPatch={vi.fn()}
+      addAsset={vi.fn()}
+      removeAsset={vi.fn()}
+      pushHistory={vi.fn()}
+    >
+      <NodeEditContext.Provider value={api}>
+        <ImageNode {...props(id)} />
+      </NodeEditContext.Provider>
+    </ImageGenProvider>
+  )
+  const view = render(tree(assetId))
+  return { rerender: (id: string) => view.rerender(tree(id)) }
+}
+
+describe('产物区换绑接线（issue #131）', () => {
+  // DOM 边界的换绑断言（PR #561 评审）：key 重挂载与清空在途旧图的
+  // 组合接线归组件所有，不随生命周期规则收敛到 hook 层；hook 层仅能
+  // 断言 effect 清空的状态语义。
+  it('产物换绑：在途窗口清空旧图，不以 A 冒充 B', async () => {
+    vi.mocked(projectAssets.mediaUrl)
+      .mockResolvedValueOnce('asset://a')
+      .mockImplementationOnce(() => new Promise(() => {}))
+    const byId = {
+      'pa-1': asset,
+      'pa-2': { ...asset, id: 'pa-2', relPath: 'assets/pa-2.png' },
+    }
+    const { rerender } = renderImageNode('pa-1', byId)
+    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
+      'asset://a',
+    )
+    rerender('pa-2')
+    // 过渡窗口：B 在途，不得残留 A 的图
+    expect(screen.queryByRole('img')).toBeNull()
   })
 })

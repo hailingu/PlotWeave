@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 /** #504 共享媒体生命周期：URL/失败可见状态、身份切换和迟到结果隔离。
  * #541 起本文件是三条生命周期规则（解析失败、换绑在途清空、乱序隔离）
- * 的唯一断言层，reportFailure 的状态语义亦在此覆盖；ImageNode/ShotNode
- * 保留各自的接线集成用例与 onError DOM 事件接线的组件级断言
- * （PR #561 评审 5512852009）。原 #131 组件级用例的缺陷溯源（旧实现
- * 以 A 的 url 冒充换绑后的 B）在此承接。 */
+ * 的唯一断言层，reportFailure 的状态语义亦在此覆盖；组件层各自保留
+ * 接线集成用例（换绑清旧图、失败占位、onError DOM 事件接线，PR #561
+ * 评审）。原 #131 组件级用例的缺陷溯源（旧实现以 A 的 url 冒充换绑后
+ * 的 B）在此承接。 */
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { projectAssets } from '../projectAssets'
