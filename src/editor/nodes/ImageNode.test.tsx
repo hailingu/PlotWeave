@@ -7,7 +7,8 @@
  * （issue #534）；NodeEditApi 夹具见 testScaffolding.tsx。
  * 组件经 NodeEditContext + ImageGenProvider 双上下文隔离渲染。
  * 换绑在途清空/乱序隔离/重挂载恢复自 issue #541 起仅在
- * useAssetMedia.test.tsx 断言，此处留一条失败占位接线集成用例。
+ * useAssetMedia.test.tsx 断言；此处保留失败占位接线集成用例与
+ * onError 解码接线的 DOM 级断言（PR #561 评审 5512852009）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -99,13 +100,22 @@ describe('图片节点渲染（§13）', () => {
     expect(img.getAttribute('src')).toBe('asset://pa-1')
   })
 
-  // 组件层唯一的媒体生命周期接线用例（issue #541）：解析失败态经 hook
-  // 传导到占位渲染；换绑在途清空、乱序隔离、重挂载恢复与 onError 解码
-  // 转失败等规则的断言收敛至 useAssetMedia.test.tsx（缺陷溯源 issue #131）。
+  // 媒体生命周期接线（issue #541）：三条生命周期规则在
+  // useAssetMedia.test.tsx 断言，此处以失败占位集成用例证明 hook 状态
+  // 到渲染的接线；onError 是组件自有的 DOM 事件接线，不随生命周期
+  // 收敛，保留组件级断言（PR #561 评审 5512852009）。
   it('产物资产在而媒体 URL 解析失败：显示可读失败占位，不静默空白', async () => {
     vi.mocked(projectAssets.mediaUrl).mockRejectedValueOnce(new Error('boom'))
     setup({ ...baseData(), outputs: { primary: { assetId: 'pa-1' } } })
     expect(await screen.findByText(/产物媒体无法读取/)).toBeTruthy()
+  })
+
+  it('URL 解析成功但图像解码失败（截断 PNG 等）：onError 转入失败占位', async () => {
+    setup({ ...baseData(), outputs: { primary: { assetId: 'pa-1' } } })
+    const img = await screen.findByRole('img')
+    img.dispatchEvent(new window.Event('error'))
+    expect(await screen.findByText(/产物媒体无法读取/)).toBeTruthy()
+    expect(screen.queryByRole('img')).toBeNull()
   })
 
   it('primary 悬空（资产已删）显示缺失占位，不清除引用', () => {
