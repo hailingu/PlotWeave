@@ -1,11 +1,14 @@
 // @vitest-environment happy-dom
 /**
  * 图片节点（生成侧媒体节点，§13）渲染测试：标题行徽标/尺寸、Prompt 预览、
- * 产物区三态（空态 / 生成图像 / 悬空引用占位）、作业状态角标、产物换绑
- * 生命周期（issue #131）。
+ * 产物区三态（空态 / 生成图像 / 悬空引用占位）、作业状态角标、媒体加载
+ * 失败占位接线（issue #131）。
  * ⚙️ 面板展开等外壳共享行为收敛至 nodeChrome.test.tsx 参数化维护
  * （issue #534）；NodeEditApi 夹具见 testScaffolding.tsx。
  * 组件经 NodeEditContext + ImageGenProvider 双上下文隔离渲染。
+ * 换绑在途清空/乱序隔离/重挂载恢复自 issue #541 起仅在
+ * useAssetMedia.test.tsx 断言；此处保留失败占位与换绑接线的集成用例
+ * 及 onError 解码接线的 DOM 级断言（PR #561 评审）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -97,6 +100,10 @@ describe('图片节点渲染（§13）', () => {
     expect(img.getAttribute('src')).toBe('asset://pa-1')
   })
 
+  // 媒体生命周期接线（issue #541）：三条生命周期规则在
+  // useAssetMedia.test.tsx 断言，此处以失败占位集成用例证明 hook 状态
+  // 到渲染的接线；onError 是组件自有的 DOM 事件接线，不随生命周期
+  // 收敛，保留组件级断言（PR #561 评审 5512852009）。
   it('产物资产在而媒体 URL 解析失败：显示可读失败占位，不静默空白', async () => {
     vi.mocked(projectAssets.mediaUrl).mockRejectedValueOnce(new Error('boom'))
     setup({ ...baseData(), outputs: { primary: { assetId: 'pa-1' } } })
@@ -122,8 +129,8 @@ describe('图片节点渲染（§13）', () => {
   })
 })
 
-/** 可重渲染的隔离渲染（issue #131：产物换绑 = 同一 OutputImage 实例换
- * assetId）；byId 可注入多个资产。 */
+/** 可重渲染的隔离渲染（换绑接线用例：同一产物位换 assetId）；换绑
+ * 清旧图的组合契约（key 重挂载 + hook 清空兜底）见 OutputImage 文档。 */
 function renderImageNode(
   assetId: string,
   byId: Record<string, AssetRef> = { 'pa-1': asset },
@@ -136,7 +143,7 @@ function renderImageNode(
       data: { ...baseData(), outputs: { primary: { assetId: id } } },
       selected: false,
     }) as unknown as NodeProps<ImageFlowNode>
-  const view = render(
+  const tree = (id: string) => (
     <ImageGenProvider
       projectId="p-1"
       nodes={nodesRef.current}
@@ -149,42 +156,25 @@ function renderImageNode(
       pushHistory={vi.fn()}
     >
       <NodeEditContext.Provider value={api}>
-        <ImageNode {...props(assetId)} />
+        <ImageNode {...props(id)} />
       </NodeEditContext.Provider>
-    </ImageGenProvider>,
+    </ImageGenProvider>
   )
-  return {
-    rerender: (id: string) =>
-      view.rerender(
-        <ImageGenProvider
-          projectId="p-1"
-          nodes={nodesRef.current}
-          nodesRef={nodesRef}
-          assetsRef={{ current: undefined }}
-          settings={{ characters: [] }}
-          applyDataPatch={vi.fn()}
-          addAsset={vi.fn()}
-          removeAsset={vi.fn()}
-          pushHistory={vi.fn()}
-        >
-          <NodeEditContext.Provider value={api}>
-            <ImageNode {...props(id)} />
-          </NodeEditContext.Provider>
-        </ImageGenProvider>,
-      ),
-  }
+  const view = render(tree(assetId))
+  return { rerender: (id: string) => view.rerender(tree(id)) }
 }
 
-describe('产物区换绑生命周期（issue #131）', () => {
-  it('产物换绑：在途窗口清空旧图不以 A 冒充 B；读取失败显示占位', async () => {
+describe('产物区换绑接线（issue #131）', () => {
+  // DOM 边界的换绑断言（PR #561 评审）：key 重挂载与清空在途旧图的
+  // 组合接线归组件所有，不随生命周期规则收敛到 hook 层；hook 层仅能
+  // 断言 effect 清空的状态语义。
+  it('产物换绑：在途窗口清空旧图，不以 A 冒充 B', async () => {
     vi.mocked(projectAssets.mediaUrl)
       .mockResolvedValueOnce('asset://a')
       .mockImplementationOnce(() => new Promise(() => {}))
-      .mockRejectedValueOnce(new Error('媒体不可读'))
     const byId = {
       'pa-1': asset,
       'pa-2': { ...asset, id: 'pa-2', relPath: 'assets/pa-2.png' },
-      'pa-3': { ...asset, id: 'pa-3', relPath: 'assets/pa-3.png' },
     }
     const { rerender } = renderImageNode('pa-1', byId)
     expect((await screen.findByRole('img')).getAttribute('src')).toBe(
@@ -192,9 +182,6 @@ describe('产物区换绑生命周期（issue #131）', () => {
     )
     rerender('pa-2')
     // 过渡窗口：B 在途，不得残留 A 的图
-    expect(screen.queryByRole('img')).toBeNull()
-    rerender('pa-3')
-    expect(await screen.findByText(/产物媒体无法读取/)).toBeTruthy()
     expect(screen.queryByRole('img')).toBeNull()
   })
 })

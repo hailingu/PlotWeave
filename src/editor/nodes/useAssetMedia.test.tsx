@@ -1,5 +1,10 @@
 // @vitest-environment happy-dom
-/** #504 共享媒体生命周期：URL/失败可见状态、身份切换和迟到结果隔离。 */
+/** #504 共享媒体生命周期：URL/失败可见状态、身份切换和迟到结果隔离。
+ * #541 起本文件是三条生命周期规则（解析失败、换绑在途清空、乱序隔离）
+ * 的唯一断言层，reportFailure 的状态语义亦在此覆盖；组件层各自保留
+ * 接线集成用例（换绑清旧图、失败占位、onError DOM 事件接线，PR #561
+ * 评审）。原 #131 组件级用例的缺陷溯源（旧实现以 A 的 url 冒充换绑后
+ * 的 B）在此承接。 */
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { projectAssets } from '../projectAssets'
@@ -52,6 +57,24 @@ describe('媒体加载与失败恢复', () => {
 })
 
 describe('媒体资源身份与乱序完成', () => {
+  it('资产换绑在途窗口清空旧 URL，不以 A 冒充 B', async () => {
+    const next = pendingMedia()
+    vi.mocked(projectAssets.mediaUrl)
+      .mockResolvedValueOnce('asset://a')
+      .mockReturnValueOnce(next.promise)
+    const { result, rerender } = renderHook(
+      ({ assetId }) => useAssetMedia('project', assetId),
+      { initialProps: { assetId: 'a' } },
+    )
+    await act(async () => {})
+    expect(result.current.url).toBe('asset://a')
+    rerender({ assetId: 'b' })
+    expect(result.current.url).toBeNull()
+    expect(result.current.failed).toBe(false)
+    await act(async () => next.resolve('asset://b'))
+    expect(result.current.url).toBe('asset://b')
+  })
+
   it.each(['resolve', 'reject'] as const)(
     '换绑后旧请求迟到 %s 不覆盖当前资源',
     async (completion) => {
