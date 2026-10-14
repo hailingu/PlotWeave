@@ -14,6 +14,7 @@ import {
   DOC,
   afterAppShellTest,
   editorProps,
+  expectConsoleWarn,
   homeProps,
   openEditor,
   resetAppShellFixture,
@@ -86,6 +87,7 @@ describe('App ✦返回首页摘要与保存落定（issue #101）', () => {
 
 describe('App ✦首页列表读取失败处置（issue #133）', () => {
   it('已有列表刷新失败：保留已知列表并置错误态；重试成功清除', async () => {
+    expectConsoleWarn()
     render(<App />)
     await screen.findByText('共1项')
     store.list.mockRejectedValueOnce(new Error('目录不可读'))
@@ -135,6 +137,7 @@ describe('App ✦列表响应的代际收敛（issue #101/#133）', () => {
           (homeProps.current.projects as Array<{ name: string }>)[0]?.name,
         ).toBe('新名称')
       } else {
+        expectConsoleWarn()
         let rejectSlow!: (err: Error) => void
         store.list.mockImplementationOnce(
           () =>

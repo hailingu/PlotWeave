@@ -172,8 +172,9 @@ tests, added by issue
 `src/appShellTestScaffolding.tsx` (shared stub modules, fixtures, and
 open/settings-roundtrip helpers for the App shell test files split out of
 the former `App.test.tsx`, added by issue
-[#525](https://github.com/hailingu/PlotWeave/issues/525), plus the
-per-case `console.warn` silencing lifecycle those files share, added by
+[#525](https://github.com/hailingu/PlotWeave/issues/525), plus the shared
+`console.warn` lifecycle those files use — expected warnings are declared
+per case and undeclared warnings fail the test with the captured output,
 issue [#542](https://github.com/hailingu/PlotWeave/issues/542)). The same
 list is
 mirrored into `sonar.exclusions` — moving these files out of

@@ -20,6 +20,7 @@ import {
   DOC,
   afterAppShellTest,
   consoleWarn,
+  expectConsoleWarn,
   homeProps,
   editorProps,
   openEditor,
@@ -51,6 +52,7 @@ describe('App（双界面路由壳）', () => {
     expect(store.list).toHaveBeenCalledTimes(1)
     cleanup()
     store.list.mockRejectedValue(new Error('io'))
+    expectConsoleWarn()
     render(<App />)
     expect(await screen.findByText('共0项')).toBeTruthy()
     // 读取失败 ≠ 空列表：错误态就位（HomePage 侧不渲染首次使用引导）
@@ -75,6 +77,7 @@ describe('App（双界面路由壳）', () => {
     expect(await screen.findByTestId('editor')).toBeTruthy()
     cleanup()
     store.load.mockRejectedValue(new Error('gone'))
+    expectConsoleWarn()
     render(<App />)
     await screen.findByTestId('home')
     await act(async () => {

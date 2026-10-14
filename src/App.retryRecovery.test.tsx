@@ -14,6 +14,7 @@ import { notifyRetryPersisted } from './projectStore/saveChain'
 import {
   DOC,
   afterAppShellTest,
+  expectConsoleWarn,
   failHomeRename,
   homeProps,
   resetAppShellFixture,
@@ -39,6 +40,7 @@ afterEach(afterAppShellTest)
 beforeEach(() => resetAppShellFixture())
 
 it('App ✦重命名后台恢复：当前文档重存成功后横幅消失、卡片刷新', async () => {
+  expectConsoleWarn()
   const doc = await failHomeRename(App)
   store.list.mockResolvedValue([{ id: 'p1', name: '新名' }])
   await act(async () => {
@@ -51,6 +53,7 @@ it('App ✦重命名后台恢复：当前文档重存成功后横幅消失、卡
 })
 
 it('App ✦重命名后台恢复：同名但不同文档的成功通知不能清错', async () => {
+  expectConsoleWarn()
   const doc = await failHomeRename(App)
   act(() => notifyRetryPersisted(structuredClone(doc)))
   expect(screen.getByRole('alert').textContent).toMatch(/暂时只读/)
@@ -61,6 +64,7 @@ it('App ✦重命名后台恢复：同名但不同文档的成功通知不能清
 it.each(['rename', 'delete'] as const)(
   'App ✦重命名后台恢复：旧恢复不能清除后续 %s 失败',
   async (action) => {
+    expectConsoleWarn()
     const oldDoc = await failHomeRename(App)
     if (action === 'rename')
       store.save.mockRejectedValueOnce(new Error('新失败'))
@@ -92,6 +96,7 @@ it.each(['rename', 'delete'] as const)(
 )
 
 it('App ✦重命名后台恢复：旧读取迟到不覆盖新尝试的恢复身份', async () => {
+  expectConsoleWarn()
   let release!: (doc: ProjectContent) => void
   store.load.mockImplementationOnce(
     () =>
@@ -123,6 +128,7 @@ it('App ✦重命名后台恢复：旧读取迟到不覆盖新尝试的恢复身
 })
 
 it('App ✦重命名后台恢复：先收到恢复成功、后处理保存拒绝，错误不复活', async () => {
+  expectConsoleWarn()
   store.save.mockImplementationOnce(
     async (_id: string, doc: ProjectContent) => {
       notifyRetryPersisted(doc)

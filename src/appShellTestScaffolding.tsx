@@ -187,18 +187,42 @@ export const consoleWarn: { spy: MockInstance<typeof console.warn> | null } = {
   spy: null,
 }
 
+/** 本用例是否已声明预期 console.warn（PR #567 评审：静默不得无条件
+ * 覆盖名义路径用例，否则意外告警的回归信号被吞）。 */
+let consoleWarnExpected = false
+
+/** 声明本用例预期触发 console.warn（失败路径用例）：告警仍被静默，
+ * 但收尾不再因告警判失败。预期失败路径的用例以此替代局部 spy。 */
+export function expectConsoleWarn(): void {
+  consoleWarnExpected = true
+}
+
 /** 恢复在位的静默 spy 后重新安装；正常生命周期下复位时无在位 spy，
  * 防御性恢复仅为复位被重复调用时不叠加包装。 */
 function silenceConsoleWarn(): void {
+  consoleWarnExpected = false
   consoleWarn.spy?.mockRestore()
   consoleWarn.spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 }
 
-/** 每用例收尾：卸载 React 树并恢复被静默的 console.warn（issue #542）。
- * 各域测试文件以此替代裸 afterEach(cleanup)。 */
+/** 每用例收尾：卸载 React 树；未声明预期而触发 console.warn 的用例
+ * 如实失败并回放告警内容（PR #567 评审：不得无条件丢弃诊断），随后
+ * 恢复被静默的 console.warn。各域测试文件以此替代裸 afterEach(cleanup)。 */
 export function afterAppShellTest(): void {
   cleanup()
-  consoleWarn.spy?.mockRestore()
+  const spy = consoleWarn.spy
+  if (!consoleWarnExpected && spy && spy.mock.calls.length > 0) {
+    const replay = spy.mock.calls
+      .map((args) => args.map((arg) => String(arg)).join(' '))
+      .join('\n')
+    spy.mockRestore()
+    consoleWarn.spy = null
+    throw new Error(
+      'Unexpected console.warn (declare expectConsoleWarn() if this is an expected failure path):\n' +
+        replay,
+    )
+  }
+  spy?.mockRestore()
   consoleWarn.spy = null
 }
 

@@ -16,6 +16,7 @@ import {
   DOC,
   afterAppShellTest,
   editorProps,
+  expectConsoleWarn,
   homeProps,
   openEditor,
   replayFailedListeners,
@@ -44,6 +45,7 @@ beforeEach(() => resetAppShellFixture())
 
 describe('App ✦AI 会话恢复', () => {
   it('AI 会话文件损坏时仍打开画布，并将恢复错误交给编辑器提示', async () => {
+    expectConsoleWarn()
     store.loadAiSession.mockRejectedValue(new Error('AI 会话文件损坏'))
     await openEditor(App)
     expect(editorProps.current.aiSessionError).toContain('AI 会话文件损坏')
@@ -285,6 +287,7 @@ describe('App ✦AI 会话保存失败（在途）', () => {
 
 describe('App 会话读取失败边界', () => {
   it('读取失败禁用 AI，画布继续打开；重开读取成功后解除', async () => {
+    expectConsoleWarn()
     const history = {
       schemaVersion: 1,
       entries: [{ id: 1, kind: 'note', text: '原有历史' }],

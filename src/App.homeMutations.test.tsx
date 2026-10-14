@@ -11,6 +11,7 @@ import { App } from './App'
 import {
   DOC,
   afterAppShellTest,
+  expectConsoleWarn,
   homeProps,
   resetAppShellFixture,
   store,
@@ -35,6 +36,7 @@ beforeEach(() => resetAppShellFixture())
 
 describe('App ✦首页项目变更失败反馈：重命名与删除/复制（issue #132）', () => {
   it('重命名失败：横幅点名动作、目标与诊断；重试成功后横幅消失', async () => {
+    expectConsoleWarn()
     store.load.mockResolvedValue(structuredClone(DOC))
     store.save.mockRejectedValueOnce(new Error('只读目录'))
     render(<App />)
@@ -54,6 +56,7 @@ describe('App ✦首页项目变更失败反馈：重命名与删除/复制（is
   })
 
   it('删除/复制失败：目标以项目 id 归属；重试生效后横幅消失', async () => {
+    expectConsoleWarn()
     store.delete.mockRejectedValueOnce(new Error('io'))
     render(<App />)
     await screen.findByTestId('home')
@@ -71,6 +74,7 @@ describe('App ✦首页项目变更失败反馈：重命名与删除/复制（is
 
 describe('App ✦创建失败反馈与结果对账（issue #132/PR #199 评审）', () => {
   it('创建失败：横幅点名尝试名称；重试成功后进入编辑器且无失败横幅', async () => {
+    expectConsoleWarn()
     store.create.mockRejectedValueOnce(new Error('磁盘满'))
     render(<App />)
     await screen.findByTestId('home')
@@ -85,6 +89,7 @@ describe('App ✦创建失败反馈与结果对账（issue #132/PR #199 评审�
   })
 
   it('创建成功但随后打开失败：变更不虚报失败，打开失败走 #98 横幅', async () => {
+    expectConsoleWarn()
     store.create.mockResolvedValue({ id: 'new-1', name: '未命名短剧' })
     store.duplicate.mockResolvedValue({ id: 'copy-1', name: '雨夜 副本' })
     store.load.mockRejectedValueOnce(new Error('打开失败'))
@@ -100,6 +105,7 @@ describe('App ✦创建失败反馈与结果对账（issue #132/PR #199 评审�
 
 describe('App ✦创建族失败对账（PR #199 评审）', () => {
   it('创建被拒但项目已实际存在（fsync 失败/应答丢失）：对账为已创建，不横幅不盲重试', async () => {
+    expectConsoleWarn()
     const projects = [{ id: 'p1', name: '雨夜' }]
     store.list.mockImplementation(async () => [...projects])
     store.create.mockImplementationOnce(async () => {
@@ -118,6 +124,7 @@ describe('App ✦创建族失败对账（PR #199 评审）', () => {
   })
 
   it('并发创建：他次尝试的产出不被本次失败认领（对账按尝试归属）', async () => {
+    expectConsoleWarn()
     let createCalls = 0
     let firstCommitted = false
     store.create.mockImplementation(() => {
@@ -160,6 +167,7 @@ describe('App ✦创建族失败对账（PR #199 评审）', () => {
 
 describe('App ✦复制失败对账：部分提交（PR #199 评审）', () => {
   it('复制在其创建段提交后才失败：对账识别部分提交，不给盲重试', async () => {
+    expectConsoleWarn()
     let dupCommitted = false
     store.duplicate.mockImplementation(() => {
       dupCommitted = true
@@ -191,6 +199,7 @@ describe('App ✦复制失败对账：部分提交（PR #199 评审）', () => {
 
 describe('App ✦并发动作与旧错误序号（issue #132）', () => {
   it('并发动作：后发起者拥有终态，旧尝试的迟到失败不覆盖新尝试状态', async () => {
+    expectConsoleWarn()
     let releaseRename: (() => void) | null = null
     store.delete.mockRejectedValue(new Error('del-fail'))
     store.load.mockResolvedValue(structuredClone(DOC))
@@ -228,6 +237,7 @@ describe('App ✦并发失败的创建族归属', () => {
   it.each(['create', 'duplicate'] as const)(
     '先行创建无写入，后发 %s 已提交但也拒绝：不给后者盲重试',
     async (action) => {
+      expectConsoleWarn()
       const projects = [{ id: 'p1', name: '雨夜' }]
       store.list.mockImplementation(async () => [...projects])
       const commitThenReject = async () => {
@@ -269,6 +279,7 @@ describe('App ✦失败对账结果未知', () => {
   it.each(['create', 'duplicate'] as const)(
     '%s 拒绝后列表也失败：保留已知卡片与诊断，不提供重试',
     async (action) => {
+      expectConsoleWarn()
       store[action].mockImplementationOnce(async () => {
         store.list.mockRejectedValue(new Error('目录暂不可读'))
         throw new Error('应答丢失')
@@ -297,6 +308,7 @@ describe('App ✦失败对账结果未知', () => {
 
 // 回归目标：确认没有副本残留的失败必须提供可完成复制的同参重试。
 it('App ✦复制完全回滚后可重试，成功新增卡片并清除错误', async () => {
+  expectConsoleWarn()
   const projects = [{ id: 'p1', name: '雨夜' }]
   store.list.mockImplementation(async () => [...projects])
   store.duplicate.mockRejectedValueOnce(new Error('拷贝失败且已清理'))

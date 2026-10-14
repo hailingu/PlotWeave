@@ -15,6 +15,7 @@ import {
   afterAppShellTest,
   editorProps,
   editorSuspendGate,
+  expectConsoleWarn,
   homeProps,
   resetAppShellFixture,
   store,
@@ -39,6 +40,7 @@ beforeEach(() => resetAppShellFixture())
 
 describe('App ✦首页打开失败反馈（issue #98）', () => {
   it('打开失败：错误上浮为 openError 传给首页显示警示，停留首页', async () => {
+    expectConsoleWarn()
     store.load.mockRejectedValue(
       new Error('文档版本过新（schemaVersion 2），请升级应用'),
     )
@@ -56,6 +58,7 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
   })
 
   it('打开失败（IPC 字符串拒绝）：字符串原样作为原因', async () => {
+    expectConsoleWarn()
     store.load.mockRejectedValue('项目文件不可读')
     render(<App />)
     await screen.findByTestId('home')
@@ -68,6 +71,7 @@ describe('App ✦首页打开失败反馈（issue #98）', () => {
 
 describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
   it('失败后重试同一项目成功：横幅清除，回首页不复活旧错误', async () => {
+    expectConsoleWarn()
     store.load.mockRejectedValueOnce(new Error('项目文件不可读'))
     render(<App />)
     await screen.findByTestId('home')
@@ -83,6 +87,7 @@ describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
   })
 
   it('失败后打开另一正常项目：旧错误不带过去', async () => {
+    expectConsoleWarn()
     store.list.mockResolvedValue([
       { id: 'p1', name: '雨夜' },
       { id: 'p2', name: '午夜出租车' },
@@ -109,6 +114,7 @@ describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
   })
 
   it('打开失败后新建项目成功：错误随导航过时，回首页不复活', async () => {
+    expectConsoleWarn()
     store.load.mockRejectedValueOnce(new Error('项目文件不可读'))
     render(<App />)
     await screen.findByTestId('home')
@@ -128,6 +134,7 @@ describe('App ✦打开失败后的错误清理时机（issue #98）', () => {
 
 describe('App ✦打开尝试并发收敛：迟到的拒绝（PR #110 评审）', () => {
   it('并发：在途打开被新尝试取代后，迟到的拒绝不发布旧错误也不拦截导航', async () => {
+    expectConsoleWarn()
     let rejectSlow!: (err: Error) => void
     store.list.mockResolvedValue([
       { id: 'slow', name: '慢项目' },
@@ -161,6 +168,7 @@ describe('App ✦打开尝试并发收敛：迟到的拒绝（PR #110 评审）'
   })
 
   it('并发：两个在途打开都失败，显示后发起尝试的错误而非后完成者', async () => {
+    expectConsoleWarn()
     let rejectFirst!: (err: Error) => void
     store.list.mockResolvedValue([
       { id: 'a', name: '甲' },
@@ -192,6 +200,7 @@ describe('App ✦打开尝试并发收敛：迟到的拒绝（PR #110 评审）'
 
 describe('App ✦打开尝试并发收敛：迟到的成功（PR #110 评审）', () => {
   it('并发：被取代的旧尝试成功晚到，不进入编辑器且新失败的横幅保留', async () => {
+    expectConsoleWarn()
     let releaseSlow!: (doc: ProjectContent) => void
     store.list.mockResolvedValue([
       { id: 'a', name: '甲' },
@@ -221,6 +230,7 @@ describe('App ✦打开尝试并发收敛：迟到的成功（PR #110 评审）'
 
 describe('App ✦并发收敛：新建协调（PR #110 评审）', () => {
   it('并发：在途打开的拒绝晚于新建成功，回首页不复活旧横幅', async () => {
+    expectConsoleWarn()
     let rejectSlow!: (err: Error) => void
     store.list.mockResolvedValue([{ id: 'slow', name: '慢项目' }])
     store.load.mockImplementation((id: string) =>
@@ -254,6 +264,7 @@ describe('App ✦并发收敛：新建协调（PR #110 评审）', () => {
 
 describe('App ✦并发：chunk 挂起窗口内作废排队导航（PR #110 评审）', () => {
   it('新尝试失败时，已排队未提交的旧导航被作废，不得吞掉失败横幅', async () => {
+    expectConsoleWarn()
     store.list.mockResolvedValue([
       { id: 'a', name: '甲' },
       { id: 'b', name: '乙' },
