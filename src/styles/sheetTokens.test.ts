@@ -891,54 +891,8 @@ describe('危险动作前景接线（#240 决策补齐，issue #278）', () => {
     }
   })
 
-  it('危险底色按颜色与图像成分各自层叠：简写展开到两条长形，长形只覆盖其自身成分', () => {
-    const paint = (css: string): { color: string; image: string } =>
-      backgroundPaint(postcss.parse(css).first as postcss.Rule)
-    expect(
-      paint('.d { background-color: #000; background: var(--danger) }'),
-      '简写重置先位长形',
-    ).toEqual(DANGER_PAINT)
-    expect(
-      paint(
-        '.d { background: var(--danger); BACKGROUND-COLOR: var(--surface-card) }',
-      ),
-    ).toEqual({ color: 'var(--surface-card)', image: 'none' })
-    expect(
-      paint(
-        '.d { background-image: linear-gradient(#000, #000) !important; background: var(--danger) }',
-      ),
-    ).toEqual({
-      color: 'var(--danger)',
-      image: 'linear-gradient(#000, #000)',
-    })
-    expect(
-      paint(
-        '.d { background: var(--danger) !important; background-color: var(--surface-card) }',
-      ),
-    ).toEqual(DANGER_PAINT)
-    expect(
-      paint('.d { background: var(--danger); background-image: none }'),
-      '后位图像长形不改变颜色成分',
-    ).toEqual(DANGER_PAINT)
-    expect(
-      paint('.d { background: var(--danger); background-image: url(a.png) }'),
-    ).toEqual({ color: 'var(--danger)', image: 'url(a.png)' })
-    expect(paint('.d { background-color: var(--danger) }')).toEqual(
-      DANGER_PAINT,
-    )
-    expect(
-      paint(
-        '.d { background: var(--surface-card); background-color: var(--danger) }',
-      ),
-      '纯色简写只贡献颜色层',
-    ).toEqual(DANGER_PAINT)
-    expect(
-      paint(
-        '.d { background: url(a.png) var(--danger); background-color: var(--danger) }',
-      ),
-      '含图像的简写不被当作纯色层',
-    ).toEqual({ color: 'var(--danger)', image: 'url(a.png)' })
-  })
+  // 「危险底色按颜色与图像成分各自层叠」的 9 条顺序断言已并入 F2-c
+  // describe 的既有参数化表（issue #538 收敛文件内同构断言簇）。
 
   it('--on-danger 全部配对环境（含 more × reduce 组合）消解恒 #ffffff（视觉零变化；深色底 ≈2.8:1 为 #240 已记录边界，不重开）', () => {
     for (const [envName, env] of PAIR_ENVS) {
@@ -977,6 +931,36 @@ describe('F2-c 含图像简写的成分提取与相邻长形覆盖', () => {
     [
       'background: url(a.png) var(--danger); background: var(--danger)',
       DANGER_PAINT,
+    ],
+    // 以下 9 行收敛自危险接线 describe 的顺序断言簇（issue #538）：
+    // 简写与两条长形互为前后位/重要性取胜，纯色简写只贡献颜色层，
+    // 含图像的简写不被当作纯色层。
+    ['background-color: #000; background: var(--danger)', DANGER_PAINT],
+    [
+      'background: var(--danger); BACKGROUND-COLOR: var(--surface-card)',
+      { color: 'var(--surface-card)', image: 'none' },
+    ],
+    [
+      'background-image: linear-gradient(#000, #000) !important; background: var(--danger)',
+      { color: 'var(--danger)', image: 'linear-gradient(#000, #000)' },
+    ],
+    [
+      'background: var(--danger) !important; background-color: var(--surface-card)',
+      DANGER_PAINT,
+    ],
+    ['background: var(--danger); background-image: none', DANGER_PAINT],
+    [
+      'background: var(--danger); background-image: url(a.png)',
+      { color: 'var(--danger)', image: 'url(a.png)' },
+    ],
+    ['background-color: var(--danger)', DANGER_PAINT],
+    [
+      'background: var(--surface-card); background-color: var(--danger)',
+      DANGER_PAINT,
+    ],
+    [
+      'background: url(a.png) var(--danger); background-color: var(--danger)',
+      { color: 'var(--danger)', image: 'url(a.png)' },
     ],
   ])('未重置或其他成分取胜时按各自长形结果判断：%s', (decls, expected) => {
     const rule = postcss.parse(`.d { ${decls} }`).first as postcss.Rule

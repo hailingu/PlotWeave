@@ -156,7 +156,12 @@ strict entry), and modules that exist only for tests — `src/moduleGraph.ts`
 (architecture guard), `src/styles/cssColorContract.ts`,
 `src/styles/cssValueSyntax.ts`, `src/styles/sheetRuleQuery.ts`, and
 `src/styles/sheetTokensEngine.ts` (CSS contract engine; `sheetRuleQuery.ts`
-added by issue #343 after the engine split), `src/model/convertFixtures.ts`
+added by issue #343 after the engine split), plus
+`src/styles/sheetTokenCaseMatrix.ts` (shared case-data tables that
+single-source the sheetToken contract fixture matrices previously duplicated
+across four test files, added by issue
+[#538](https://github.com/hailingu/PlotWeave/issues/538)),
+`src/model/convertFixtures.ts`
 and `src/editor/ai/testGraphs.ts` (shared test fixtures), and
 `src/editor/nodes/testScaffolding.tsx` (shared scaffolding for the node
 component tests: Handle stub factory and `NodeEditApi` builder, added by

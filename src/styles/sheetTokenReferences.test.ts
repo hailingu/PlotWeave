@@ -5,6 +5,7 @@
  */
 import postcss from 'postcss'
 import { describe, expect, it } from 'vitest'
+import { CSS_WIDE_KEYWORD_BOUNDARY_CASES } from './sheetTokenCaseMatrix'
 import {
   allVarRefs,
   danglingRefs,
@@ -189,43 +190,31 @@ describe('fallback 与保证无效主值的消解（issue #290）', () => {
 })
 
 describe('CSS 空白与 NBSP 的关键字判定边界（issue #339）', () => {
-  it('NBSP 前缀/尾随的 unset 是普通标识符：不判保证无效，不选 fallback', () => {
-    // U+00A0 不是 CSS 空白（空格/制表/换行/回车/换页），而是有效标识符
-    // 码点（≥ U+0080）：'\u00a0unset' 是单个标识符而非 unset 关键字，
-    // JS trim() 的空白集更大，会把它误判为关键字（issue #339）
-    expect(
-      resolveChain('var(--s, #fff)', new Map([['--s', '\u00a0unset']])),
-    ).toBe('\u00a0unset')
-    expect(
-      resolveChain('var(--s, #fff)', new Map([['--s', 'unset\u00a0']])),
-    ).toBe('unset\u00a0')
-  })
-
-  it.each(['initial', 'inherit', 'revert', 'revert-layer'])(
-    'NBSP 包围的 %s 不触发关键字分支：不换 fallback 也不按未建模拒绝',
-    (keyword) => {
-      // 无 NBSP 时 inherit/revert/revert-layer 走 TOKEN_CSS_WIDE_UNMODELED
-      // 显式拒绝、initial 判保证无效；NBSP 使其为普通标识符，两分支都不得触发
-      expect(
-        resolveChain(
-          'var(--s, #fff)',
-          new Map([['--s', `\u00a0${keyword}\u00a0`]]),
-        ),
-      ).toBe(`\u00a0${keyword}\u00a0`)
+  // U+00A0 不是 CSS 空白（空格/制表/换行/回车/换页），而是有效标识符
+  // 码点（≥ U+0080）：'\u00a0unset' 是单个标识符而非 unset 关键字，JS
+  // trim() 的空白集更大，会把它误判为关键字。值矩阵与类型入口
+  // （sheetTokensSemantics 的 colorTypeOk）共用
+  // CSS_WIDE_KEYWORD_BOUNDARY_CASES 一张事实源表（issue #538），本组从
+  // resolveChain 入口驱动：无 NBSP 时 inherit/revert/revert-layer 走
+  // TOKEN_CSS_WIDE_UNMODELED 显式拒绝、initial/unset 判保证无效选
+  // fallback；NBSP 粘连后为普通标识符，关键字分支都不得触发。
+  it.each(CSS_WIDE_KEYWORD_BOUNDARY_CASES.filter((entry) => !entry.cssWide))(
+    'NBSP 粘连的 %j 是普通标识符：原样交付，不选 fallback 也不按未建模拒绝',
+    ({ value }) => {
+      expect(resolveChain('var(--s, #fff)', new Map([['--s', value]]))).toBe(
+        value,
+      )
     },
   )
 
-  it('普通 CSS 空白与大小写规范继续成立（对照）', () => {
-    expect(
-      resolveChain('var(--s, #fff)', new Map([['--s', ' \tunset\n']])),
-    ).toBe('#fff')
-    expect(resolveChain('var(--s, #fff)', new Map([['--s', ' UNSET ']]))).toBe(
-      '#fff',
-    )
-    expect(
-      resolveChain('var(--s, #fff)', new Map([['--s', ' initial ']])),
-    ).toBe('#fff')
-  })
+  it.each(CSS_WIDE_KEYWORD_BOUNDARY_CASES.filter((entry) => entry.cssWide))(
+    '普通 CSS 空白包围的 %j 仍是关键字：主值判保证无效后选 fallback',
+    ({ value }) => {
+      expect(resolveChain('var(--s, #fff)', new Map([['--s', value]]))).toBe(
+        '#fff',
+      )
+    },
+  )
 })
 
 describe('求值与展示入口的字面边界（review 5280334884）', () => {
