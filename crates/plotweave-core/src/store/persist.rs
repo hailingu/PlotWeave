@@ -504,8 +504,16 @@ fn entry_sync_plan(dir: &std::path::Path) -> Result<Option<EntrySyncPlan>, Store
             created: Vec::new(),
         }));
     }
-    // 新建级 = 严格位于锚点之下、含 dir 的各段，浅→深
-    let missing = dir.strip_prefix(&anchor).unwrap();
+    // 新建级 = 严格位于锚点之下、含 dir 的各段，浅→深。不变量（issue #521）：
+    // anchor 取自 dir.ancestors()（existing_anchor 只返回其中之一）且已排除
+    // dir 自身，strip_prefix 必然成功——万一契约破坏，按 IO 错误显式上抛
+    // 而非 panic。
+    let missing = dir.strip_prefix(&anchor).map_err(|_| {
+        StoreError::io(
+            "目录条目宿主计划失败",
+            std::io::Error::other("锚点不是目标目录的祖先"),
+        )
+    })?;
     let mut created = Vec::new();
     let mut cursor = anchor.clone();
     for component in missing.components() {

@@ -591,30 +591,42 @@ fn recover_index_still_references(
 ) -> Result<(), LibraryError> {
     // 隔离项 Missing（目录缺失/条目缺失/rename 失败未生成）与无隔离目录
     // 同义：媒体仍绑定预期身份即未开始事务（评审修复：rename 失败残留的
-    // 日志不得永久标记冲突）
-    let verdict = match &trash {
-        Some(trash) => verify_trash_identity(trash, entry)?,
-        None => TrashVerdict::Missing,
-    };
-    match verdict {
-        TrashVerdict::IdentityOk(_) => {
-            let trash = trash.expect("IdentityOk 必有隔离目录");
-            recover_restore_if_vacant(assets, entry, &trash, recovery, current, changed)
-        }
-        TrashVerdict::Missing => {
-            if original_binds_expected(assets, entry)? {
-                retire_entry(current, entry);
-                *changed = true; // rename 失败的未开始事务：媒体原位且身份一致
-            } else {
-                mark_conflict(entry, recovery, "媒体缺失或身份不符");
+    // 日志不得永久标记冲突）。按 Option 流程分派（issue #521：IdentityOk
+    // 仅在隔离目录存在时产生，类型上不再需要跨臂 expect）
+    match &trash {
+        None => retire_unstarted_transaction(assets, entry, recovery, current, changed),
+        Some(trash) => match verify_trash_identity(trash, entry)? {
+            TrashVerdict::IdentityOk(_) => {
+                recover_restore_if_vacant(assets, entry, trash, recovery, current, changed)
             }
-            Ok(())
-        }
-        TrashVerdict::Mismatch => {
-            mark_conflict(entry, recovery, "隔离项身份不符");
-            Ok(())
-        }
+            TrashVerdict::Missing => {
+                retire_unstarted_transaction(assets, entry, recovery, current, changed)
+            }
+            TrashVerdict::Mismatch => {
+                mark_conflict(entry, recovery, "隔离项身份不符");
+                Ok(())
+            }
+        },
     }
+}
+
+/// 隔离项缺失（无隔离目录或该条目不存在）的收尾：媒体仍绑定预期身份即
+/// 未开始事务——清除日志回到一致态；否则标记冲突不可用（评审修复：
+/// rename 失败残留的日志不得永久标记冲突）。
+fn retire_unstarted_transaction(
+    assets: &CapDir,
+    entry: &JournalEntry,
+    recovery: &mut Recovery,
+    current: &mut Journal,
+    changed: &mut bool,
+) -> Result<(), LibraryError> {
+    if original_binds_expected(assets, entry)? {
+        retire_entry(current, entry);
+        *changed = true; // rename 失败的未开始事务：媒体原位且身份一致
+    } else {
+        mark_conflict(entry, recovery, "媒体缺失或身份不符");
+    }
+    Ok(())
 }
 
 /// 索引已无 assetId：隔离项存在则仅尝试身份绑定清理——成功清除日志，
@@ -631,52 +643,70 @@ fn recover_index_committed(
     current: &mut Journal,
     conv: &mut Convergence,
 ) -> Result<(), LibraryError> {
-    let verdict = match &trash {
-        Some(trash) => Some(verify_trash_identity(trash, entry)?),
-        None => None,
-    };
-    match verdict {
-        Some(TrashVerdict::IdentityOk(f)) => match identity_bound_unlink(&f) {
-            Ok(()) => {
-                fsync_dir(trash.as_ref().expect("trash"))?;
-                retire_entry(current, entry);
-                conv.changed = true;
+    // 按 Option 流程分派（issue #521）：无隔离目录与隔离项 Missing 同义，
+    // 类型上不再需要跨臂 expect 取回隔离目录。
+    match &trash {
+        None => recheck_original_after_missing(library, assets, entry, recovery, current, conv),
+        Some(trash) => match verify_trash_identity(trash, entry)? {
+            TrashVerdict::IdentityOk(f) => match identity_bound_unlink(&f) {
+                Ok(()) => {
+                    fsync_dir(trash)?;
+                    retire_entry(current, entry);
+                    conv.changed = true;
+                    Ok(())
+                }
+                Err(_) => {
+                    // 索引已提交且隔离项身份核验一致：唯一剩余步骤（④）无原语
+                    // 可执行——折叠退役（延迟到收尾单次写盘），证据（隔离项
+                    // 字节）原样保留，大小取自已核验句柄并入量级（issue #427）
+                    record_fold(conv, entry, verified_file_len(&f));
+                    Ok(())
+                }
+            },
+            // 身份不符/被占用：保留现场与日志（不得静默清除证据）
+            TrashVerdict::Mismatch => {
+                recovery
+                    .cleanup_pending
+                    .push(CleanupPendingItem::evidence(format!(
+                        "隔离项保留（身份不符或被占用）：{} / {}",
+                        entry.asset_id, entry.trash_name
+                    )));
+                Ok(())
             }
-            Err(_) => {
-                // 索引已提交且隔离项身份核验一致：唯一剩余步骤（④）无原语
-                // 可执行——折叠退役（延迟到收尾单次写盘），证据（隔离项
-                // 字节）原样保留，大小取自已核验句柄并入量级（issue #427）
-                record_fold(conv, entry, verified_file_len(&f));
+            // 隔离项缺失（无隔离目录或该条目不存在）：复查原路径——仍绑定预期
+            // 身份则重新隔离，否则清理完成（评审修复：此前 Missing 直接清日志，
+            // 漏掉"媒体回到原位"的脏数据状态）
+            TrashVerdict::Missing => {
+                recheck_original_after_missing(library, assets, entry, recovery, current, conv)
             }
         },
-        // 身份不符/被占用：保留现场与日志（不得静默清除证据）
-        Some(TrashVerdict::Mismatch) => {
-            recovery
-                .cleanup_pending
-                .push(CleanupPendingItem::evidence(format!(
-                    "隔离项保留（身份不符或被占用）：{} / {}",
-                    entry.asset_id, entry.trash_name
-                )));
-        }
-        // 隔离项缺失（无隔离目录或该条目不存在）：复查原路径——仍绑定预期
-        // 身份则重新隔离，否则清理完成（评审修复：此前 Missing 直接清日志，
-        // 漏掉"媒体回到原位"的脏数据状态）
-        Some(TrashVerdict::Missing) | None => {
-            let original_bound = match original_parent(assets, &entry.rel_path)? {
-                Some((parent, last)) => matches!(
-                    path_identity(&parent, &last)?,
-                    PathIdentity::Regular(d, i) if (d, i) == (entry.dev, entry.ino)
-                ),
-                None => false,
-            };
-            if original_bound {
-                re_quarantine(library, assets, entry, recovery, current, conv)?;
-            } else {
-                retire_entry(current, entry);
-            }
-            conv.changed = true;
-        }
     }
+}
+
+/// 索引已提交且隔离项缺失（无隔离目录或该条目不存在）的收尾：复查原
+/// 路径——仍绑定预期身份则重新隔离，否则清理完成（评审修复：此前
+/// Missing 直接清日志，漏掉"媒体回到原位"的脏数据状态）。
+fn recheck_original_after_missing(
+    library: &CapDir,
+    assets: &CapDir,
+    entry: &JournalEntry,
+    recovery: &mut Recovery,
+    current: &mut Journal,
+    conv: &mut Convergence,
+) -> Result<(), LibraryError> {
+    let original_bound = match original_parent(assets, &entry.rel_path)? {
+        Some((parent, last)) => matches!(
+            path_identity(&parent, &last)?,
+            PathIdentity::Regular(d, i) if (d, i) == (entry.dev, entry.ino)
+        ),
+        None => false,
+    };
+    if original_bound {
+        re_quarantine(library, assets, entry, recovery, current, conv)?;
+    } else {
+        retire_entry(current, entry);
+    }
+    conv.changed = true;
     Ok(())
 }
 
