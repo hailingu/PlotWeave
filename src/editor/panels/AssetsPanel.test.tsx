@@ -275,183 +275,179 @@ const noText = (pattern: string) =>
 const goneText = (pattern: string) =>
   waitFor(() => expect(screen.queryByText(new RegExp(pattern))).toBeNull())
 
-describe('AssetsPanel 行内改名守卫场景表（PR #180 评审）', () => {
-  // 每个表项对应一条 PR #180 评审发现（表项级独立可定位），断言逐项保留
-  const scenarios: GuardScenario[] = [
-    {
-      name: '被取代的迟到改名失败不回滚新意图（#125）',
-      calls: [{ hold: true }, { resolve: '女主微笑2' }],
-      run: async ({ rejectHold }) => {
-        // 第一次改名挂起未决，随后第二次改名（更新意图）成功
-        await renameInline('女主正面', '女主微笑')
-        await renameInline('女主微笑', '女主微笑2')
-        await seeText('女主微笑2')
-        // 第一次的迟到失败不回滚、不上报：新意图已落盘，陈旧失败静默
-        rejectHold(0, '磁盘只读')
-        await flush()
-        await seeName('女主微笑2')
-        noText('磁盘只读')
-      },
+/** 场景表：每个表项对应一条 PR #180 评审发现（表项级独立可定位），断言逐项保留。 */
+const guardScenarios: GuardScenario[] = [
+  {
+    name: '被取代的迟到改名失败不回滚新意图（#125）',
+    calls: [{ hold: true }, { resolve: '女主微笑2' }],
+    run: async ({ rejectHold }) => {
+      // 第一次改名挂起未决，随后第二次改名（更新意图）成功
+      await renameInline('女主正面', '女主微笑')
+      await renameInline('女主微笑', '女主微笑2')
+      await seeText('女主微笑2')
+      // 第一次的迟到失败不回滚、不上报：新意图已落盘，陈旧失败静默
+      rejectHold(0, '磁盘只读')
+      await flush()
+      await seeName('女主微笑2')
+      noText('磁盘只读')
     },
-    {
-      name: '同名往返的迟到失败不按名称误判为当前意图（PR #180 评审）',
-      // A→B（挂起）→C→B：首个 B 请求的迟到失败与当前意图同名，代际判定
-      // 不得按名称值误判——界面保持 B、不报错、不回滚到 A
-      calls: [
-        { hold: true },
-        { resolve: '女主微笑2' },
-        { resolve: '女主微笑' },
-      ],
-      run: async ({ rejectHold }) => {
-        await renameInline('女主正面', '女主微笑')
-        await renameInline('女主微笑', '女主微笑2')
-        await renameInline('女主微笑2', '女主微笑')
-        await seeName('女主微笑')
-        rejectHold(0, '磁盘只读')
-        await flush()
-        await seeName('女主微笑')
-        noName('女主正面')
-        noText('磁盘只读')
-      },
+  },
+  {
+    name: '同名往返的迟到失败不按名称误判为当前意图（PR #180 评审）',
+    // A→B（挂起）→C→B：首个 B 请求的迟到失败与当前意图同名，代际判定
+    // 不得按名称值误判——界面保持 B、不报错、不回滚到 A
+    calls: [{ hold: true }, { resolve: '女主微笑2' }, { resolve: '女主微笑' }],
+    run: async ({ rejectHold }) => {
+      await renameInline('女主正面', '女主微笑')
+      await renameInline('女主微笑', '女主微笑2')
+      await renameInline('女主微笑2', '女主微笑')
+      await seeName('女主微笑')
+      rejectHold(0, '磁盘只读')
+      await flush()
+      await seeName('女主微笑')
+      noName('女主正面')
+      noText('磁盘只读')
     },
-    {
-      name: '连续改名全失败时回滚到链条锚定的已落盘基线（PR #180 评审）',
-      // 本会话无快照：基线须锚定链条发起时的磁盘名，而非中途乐观值
-      persisted: () => undefined,
-      calls: [{ hold: true }, { reject: '磁盘只读' }],
-      run: async ({ rejectHold }) => {
-        await renameInline('女主正面', '女主微笑')
-        await renameInline('女主微笑', '女主微笑2')
-        // 第一次失败被取代（静默）；第二次失败按最新意图处理
-        rejectHold(0, '第一次失败（被取代）')
-        await flush()
-        // 回滚到锚定基线 女主正面（磁盘真值），而非乐观值 女主微笑
-        await seeName('女主正面')
-        noName('女主微笑')
-        noName('女主微笑2')
-        await seeText('Error: 磁盘只读')
-      },
+  },
+  {
+    name: '连续改名全失败时回滚到链条锚定的已落盘基线（PR #180 评审）',
+    // 本会话无快照：基线须锚定链条发起时的磁盘名，而非中途乐观值
+    persisted: () => undefined,
+    calls: [{ hold: true }, { reject: '磁盘只读' }],
+    run: async ({ rejectHold }) => {
+      await renameInline('女主正面', '女主微笑')
+      await renameInline('女主微笑', '女主微笑2')
+      // 第一次失败被取代（静默）；第二次失败按最新意图处理
+      rejectHold(0, '第一次失败（被取代）')
+      await flush()
+      // 回滚到锚定基线 女主正面（磁盘真值），而非乐观值 女主微笑
+      await seeName('女主正面')
+      noName('女主微笑')
+      noName('女主微笑2')
+      await seeText('Error: 磁盘只读')
     },
-    {
-      name: '面板重挂载后失败回滚到门面快照推进的基线（PR #180 评审）',
-      // 门面快照随旧实例排队写入的成功跨挂载推进（桩变量模拟）
-      calls: [{ hold: true }, { hold: true }],
-      run: async ({ rejectHold, resolveHold, advancePersisted }) => {
-        await renameInline('女主正面', '女主微笑')
-        // 切出资产 tab：面板卸载，新实例按列表读到 A（B 尚未落盘）并发起 C
-        cleanup()
-        await enterCharacter()
-        await renameInline('女主正面', '女主微笑2')
-        // 旧实例排队的 B 先成功：门面快照推进到 B（磁盘真值）
-        resolveHold(0, '女主微笑')
-        advancePersisted(asset({ name: '女主微笑' }))
-        // 新实例的 C 失败：回滚须取门面快照（B），不得用本地锚定的 A
-        rejectHold(1, '磁盘只读')
-        await flush()
-        await seeName('女主微笑')
-        noName('女主正面')
-        noName('女主微笑2')
-        await seeText('Error: 磁盘只读')
-      },
+  },
+  {
+    name: '面板重挂载后失败回滚到门面快照推进的基线（PR #180 评审）',
+    // 门面快照随旧实例排队写入的成功跨挂载推进（桩变量模拟）
+    calls: [{ hold: true }, { hold: true }],
+    run: async ({ rejectHold, resolveHold, advancePersisted }) => {
+      await renameInline('女主正面', '女主微笑')
+      // 切出资产 tab：面板卸载，新实例按列表读到 A（B 尚未落盘）并发起 C
+      cleanup()
+      await enterCharacter()
+      await renameInline('女主正面', '女主微笑2')
+      // 旧实例排队的 B 先成功：门面快照推进到 B（磁盘真值）
+      resolveHold(0, '女主微笑')
+      advancePersisted(asset({ name: '女主微笑' }))
+      // 新实例的 C 失败：回滚须取门面快照（B），不得用本地锚定的 A
+      rejectHold(1, '磁盘只读')
+      await flush()
+      await seeName('女主微笑')
+      noName('女主正面')
+      noName('女主微笑2')
+      await seeText('Error: 磁盘只读')
     },
-    {
-      name: '多资产改名失败互不覆盖，解除只影响自身（PR #180 评审）',
-      assets: [
-        asset(),
-        asset({ id: 'a2', name: '男主侧面', relPath: 'character/a2.png' }),
-      ],
-      calls: [
-        { reject: '磁盘只读一' },
-        { reject: '磁盘只读二' },
-        { resolve: '男主微笑' },
-      ],
-      run: async () => {
-        await renameInline('女主正面', '女主微笑')
-        await renameInline('男主侧面', '男主微笑')
-        // 两个资产的失败均可见（分号合并，互不覆盖）
-        await seeText('Error: 磁盘只读一；Error: 磁盘只读二')
-        // 第二个资产重试成功：只解除自身，第一个资产的失败仍然可见
-        await renameInline('男主侧面', '男主微笑')
-        await seeText('Error: 磁盘只读一')
-        noText('磁盘只读二')
-      },
+  },
+  {
+    name: '多资产改名失败互不覆盖，解除只影响自身（PR #180 评审）',
+    assets: [
+      asset(),
+      asset({ id: 'a2', name: '男主侧面', relPath: 'character/a2.png' }),
+    ],
+    calls: [
+      { reject: '磁盘只读一' },
+      { reject: '磁盘只读二' },
+      { resolve: '男主微笑' },
+    ],
+    run: async () => {
+      await renameInline('女主正面', '女主微笑')
+      await renameInline('男主侧面', '男主微笑')
+      // 两个资产的失败均可见（分号合并，互不覆盖）
+      await seeText('Error: 磁盘只读一；Error: 磁盘只读二')
+      // 第二个资产重试成功：只解除自身，第一个资产的失败仍然可见
+      await renameInline('男主侧面', '男主微笑')
+      await seeText('Error: 磁盘只读一')
+      noText('磁盘只读二')
     },
-    {
-      name: '无挂载期间落定的失败在重挂载后可见（PR #180 评审）',
-      calls: [{ hold: true }],
-      run: async ({ rejectHold }) => {
-        await renameInline('女主正面', '女主微笑')
-        // 切走资产分段：面板卸载，失败在无挂载期间落定
-        cleanup()
-        rejectHold(0, '磁盘只读')
-        await flush()
-        // 回到资产分段：新实例须能看到未解决的失败，名称与磁盘一致
-        await enterCharacter()
-        await seeText('Error: 磁盘只读')
-        await seeName('女主正面')
-      },
+  },
+  {
+    name: '无挂载期间落定的失败在重挂载后可见（PR #180 评审）',
+    calls: [{ hold: true }],
+    run: async ({ rejectHold }) => {
+      await renameInline('女主正面', '女主微笑')
+      // 切走资产分段：面板卸载，失败在无挂载期间落定
+      cleanup()
+      rejectHold(0, '磁盘只读')
+      await flush()
+      // 回到资产分段：新实例须能看到未解决的失败，名称与磁盘一致
+      await enterCharacter()
+      await seeText('Error: 磁盘只读')
+      await seeName('女主正面')
     },
-    {
-      name: '重挂载后旧实例落定的失败仍可见并随重试解除（PR #180 评审）',
-      calls: [{ hold: true }, { resolve: '女主微笑' }],
-      run: async ({ rejectHold }) => {
-        await renameInline('女主正面', '女主微笑')
-        // 切走后先重挂载新实例（旧请求仍未决），旧实例的迟到失败须对新实例可见
-        cleanup()
-        await enterCharacter()
-        rejectHold(0, '磁盘只读')
-        await seeText('Error: 磁盘只读')
-        // 同资产在新实例重试成功：错误解除
-        await renameInline('女主正面', '女主微笑')
-        await seeName('女主微笑')
-        await goneText('磁盘只读')
-      },
+  },
+  {
+    name: '重挂载后旧实例落定的失败仍可见并随重试解除（PR #180 评审）',
+    calls: [{ hold: true }, { resolve: '女主微笑' }],
+    run: async ({ rejectHold }) => {
+      await renameInline('女主正面', '女主微笑')
+      // 切走后先重挂载新实例（旧请求仍未决），旧实例的迟到失败须对新实例可见
+      cleanup()
+      await enterCharacter()
+      rejectHold(0, '磁盘只读')
+      await seeText('Error: 磁盘只读')
+      // 同资产在新实例重试成功：错误解除
+      await renameInline('女主正面', '女主微笑')
+      await seeName('女主微笑')
+      await goneText('磁盘只读')
     },
-    {
-      name: '重挂载后删除资产失效旧实例的在途失败（PR #180 评审）',
-      calls: [{ hold: true }],
-      run: async ({ rejectHold }) => {
-        await renameInline('女主正面', '女主微笑')
-        cleanup()
-        await enterCharacter()
-        // 新实例确认删除：跨实例失效旧实例在途请求的代际，迟到失败静默
-        await deleteAsset('女主正面')
-        rejectHold(0, '磁盘只读')
-        await flush()
-        noText('磁盘只读')
-        // 再次重挂载：已删资产的错误不得重新出现
-        cleanup()
-        await enterCharacter()
-        noText('磁盘只读')
-      },
+  },
+  {
+    name: '重挂载后删除资产失效旧实例的在途失败（PR #180 评审）',
+    calls: [{ hold: true }],
+    run: async ({ rejectHold }) => {
+      await renameInline('女主正面', '女主微笑')
+      cleanup()
+      await enterCharacter()
+      // 新实例确认删除：跨实例失效旧实例在途请求的代际，迟到失败静默
+      await deleteAsset('女主正面')
+      rejectHold(0, '磁盘只读')
+      await flush()
+      noText('磁盘只读')
+      // 再次重挂载：已删资产的错误不得重新出现
+      cleanup()
+      await enterCharacter()
+      noText('磁盘只读')
     },
-    {
-      name: '改名失败后删除资产：错误随之解除不残留（PR #180 评审）',
-      calls: [{ reject: '磁盘只读' }],
-      run: async () => {
-        await renameInline('女主正面', '女主微笑')
-        await seeText('Error: 磁盘只读')
-        // 确认删除该资产：已删资产的错误不得残留
-        await deleteAsset('女主正面')
-        expect(screen.queryByText('女主正面')).toBeNull()
-        await goneText('磁盘只读')
-      },
+  },
+  {
+    name: '改名失败后删除资产：错误随之解除不残留（PR #180 评审）',
+    calls: [{ reject: '磁盘只读' }],
+    run: async () => {
+      await renameInline('女主正面', '女主微笑')
+      await seeText('Error: 磁盘只读')
+      // 确认删除该资产：已删资产的错误不得残留
+      await deleteAsset('女主正面')
+      expect(screen.queryByText('女主正面')).toBeNull()
+      await goneText('磁盘只读')
     },
-    {
-      name: '在途改名失败在删除资产后不得复活错误（PR #180 评审）',
-      calls: [{ hold: true }],
-      run: async ({ rejectHold }) => {
-        await renameInline('女主正面', '女主微笑')
-        // 确认删除后迟到的失败失效：不写错误、不回滚（行已不存在）
-        await deleteAsset('女主微笑')
-        rejectHold(0, '磁盘只读')
-        await flush()
-        noText('磁盘只读')
-      },
+  },
+  {
+    name: '在途改名失败在删除资产后不得复活错误（PR #180 评审）',
+    calls: [{ hold: true }],
+    run: async ({ rejectHold }) => {
+      await renameInline('女主正面', '女主微笑')
+      // 确认删除后迟到的失败失效：不写错误、不回滚（行已不存在）
+      await deleteAsset('女主微笑')
+      rejectHold(0, '磁盘只读')
+      await flush()
+      noText('磁盘只读')
     },
-  ]
+  },
+]
 
-  it.each(scenarios)('$name', async (scenario) => {
+describe('AssetsPanel 行内改名守卫场景表（PR #180 评审）', () => {
+  it.each(guardScenarios)('$name', async (scenario) => {
     const env = guardEnv(scenario)
     await enterCharacter()
     await scenario.run(env)
