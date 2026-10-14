@@ -72,6 +72,10 @@ struct WebCanvasLoadingTests {
             "document.querySelectorAll('.react-flow__node').length"
         ) as? Int
         #expect(nodes == 9)
+        let edges = try await webView.evaluateJavaScript(
+            "document.querySelectorAll('.react-flow__edge').length"
+        ) as? Int
+        #expect(edges == 7, "the demo fixture must render all 7 edges incl. branch/attach")
         let styledNodes = try await webView.evaluateJavaScript("""
             Array.from(document.querySelectorAll('.react-flow__node')).filter(node => {
               const style = getComputedStyle(node);

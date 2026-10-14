@@ -28,7 +28,7 @@ import { beatFulfillmentMap } from '../outline'
 import type { NodeEditApi } from '../nodeEdit'
 import type { CanvasNode } from '../nodes/types'
 import { uid } from '../../uid'
-import { demoGraph } from './demoGraph'
+import { demoGraph, type DemoGraph } from './demoGraph'
 
 /**
  * P1 画布演示页的本地编辑会话（docs/swiftui-react-flow-migration-plan.md
@@ -50,8 +50,8 @@ export interface DemoEditor {
 }
 
 /** 演示图唯一状态与回调读取镜像，供各编辑职责共用。 */
-function useDemoGraphState() {
-  const initial = useMemo(demoGraph, [])
+function useDemoGraphState(initialGraph?: DemoGraph) {
+  const initial = useMemo(() => initialGraph ?? demoGraph(), [initialGraph])
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(
     initial.nodes,
   )
@@ -200,8 +200,8 @@ function useDemoCounts({ nodesRef, edgesRef }: DemoGraphState) {
 }
 
 /** 装配图、连线和节点能力；P1 会话仅存在于内存。 */
-export function useDemoEditor(): DemoEditor {
-  const graph = useDemoGraphState()
+export function useDemoEditor(initialGraph?: DemoGraph): DemoEditor {
+  const graph = useDemoGraphState(initialGraph)
   const { initial, nodes, edges, onNodesChange, onEdgesChange } = graph
   const [openSettingsId, setOpenSettingsId] = useState<string | null>(null)
   const { isValidConnection, onConnect } = useDemoConnections(graph)
