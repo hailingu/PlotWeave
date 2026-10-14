@@ -1,5 +1,14 @@
 import SwiftUI
 
+/// Positive whole numbers are the only valid edit-identity form; other JSON types never confirm a pending edit.
+extension HostJSON {
+    fileprivate var positiveWholeNumber: Int? {
+        guard case .number(let value) = self, value >= 1, value.rounded() == value,
+              value <= Double(Int.max) else { return nil }
+        return Int(value)
+    }
+}
+
 /// Credential-free provider fields accepted by the native settings form.
 struct NativeProviderProjection: Identifiable, Equatable {
     /// Provider identity cannot be edited by a form patch.
@@ -10,6 +19,8 @@ struct NativeProviderProjection: Identifiable, Equatable {
     let models: [String]
     /// This boolean deliberately carries neither plaintext nor the encrypted envelope.
     let keyConfigured: Bool
+    /// Per-field edit identities this snapshot has applied; participation in equality keeps confirmations observable.
+    let edits: [String: Int]
 
     /// Reads only the native projection contract; malformed provider entries remain unavailable.
     init?(_ value: HostJSON) {
@@ -21,10 +32,24 @@ struct NativeProviderProjection: Identifiable, Equatable {
         self.enabled = enabled
         models = value["models"]?.array.compactMap(\.string) ?? []
         keyConfigured = value["keyConfigured"]?.bool ?? false
+        edits = Self.editIdentities(value)
     }
 
     /// The existing built-in catalog fixes labels for OpenAI-compatible and Ark providers.
     var isBuiltin: Bool { id == "openai" || id == "volcengine-ark" }
+
+    /// The edit identity this snapshot applied for a draft field; zero means no confirmed native edit.
+    func confirmedEdit(_ field: String) -> Int { edits[field] ?? 0 }
+
+    /// Reads only the three draft-field identities the form tracks; malformed entries stay unconfirmed.
+    private static func editIdentities(_ value: HostJSON) -> [String: Int] {
+        guard let raw = value["edits"]?.object else { return [:] }
+        var identities: [String: Int] = [:]
+        for field in ["label", "baseUrl", "models"] {
+            if let revision = raw[field]?.positiveWholeNumber { identities[field] = revision }
+        }
+        return identities
+    }
 }
 
 /// Settings readiness and model options are projected by the authoritative application owner.
@@ -72,6 +97,8 @@ struct NativeProviderDraft {
     var baseUrl: String
     var models: String
     var key = ""
+    /// Per-field edit identities awaiting their confirming projection; value equality alone cannot detect a reverted edit.
+    private(set) var pendingEdits: [String: Int] = [:]
 
     /// Seeds editable fields from a read-only provider snapshot.
     init(_ provider: NativeProviderProjection) {
@@ -91,12 +118,35 @@ struct NativeProviderDraft {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 
-    /// A projected change may replace only fields still equal to the prior authority; newer local input wins.
+    /// Registers one bounded identity for a field edit so only a strictly newer snapshot can replace it.
+    mutating func beginEdit(_ field: String) -> Int {
+        let revision = (pendingEdits[field] ?? 0) + 1
+        pendingEdits[field] = revision
+        return revision
+    }
+
+    /// A projected change may replace only value-clean fields whose every local edit this snapshot confirms strictly beyond.
     mutating func receive(previous: NativeProviderProjection, next: NativeProviderProjection) {
-        if label == previous.label, next.label != previous.label { label = next.label }
-        if baseUrl == previous.baseUrl, next.baseUrl != previous.baseUrl { baseUrl = next.baseUrl }
-        if normalizedModels == previous.models, next.models != previous.models {
+        if label == previous.label, Self.replaces(previous: previous.label, next: next.label,
+            confirmed: next.confirmedEdit("label"), pending: pendingEdits["label"]) { label = next.label }
+        if baseUrl == previous.baseUrl, Self.replaces(previous: previous.baseUrl, next: next.baseUrl,
+            confirmed: next.confirmedEdit("baseUrl"), pending: pendingEdits["baseUrl"]) { baseUrl = next.baseUrl }
+        if normalizedModels == previous.models, Self.replaces(previous: previous.models, next: next.models,
+            confirmed: next.confirmedEdit("models"), pending: pendingEdits["models"]) {
             models = next.models.joined(separator: "\n")
+        }
+        clearConfirmedEdits(next)
+    }
+
+    /// Value equality cannot distinguish a reverted edit from a clean field, so a confirmed identity strictly newer than every pending one is also required.
+    private static func replaces<T: Equatable>(previous: T, next: T, confirmed: Int, pending: Int?) -> Bool {
+        previous != next && (pending == nil || confirmed > pending!)
+    }
+
+    /// Only a snapshot confirming at or beyond each pending identity clears it, so later external updates keep flowing.
+    private mutating func clearConfirmedEdits(_ next: NativeProviderProjection) {
+        for (field, revision) in Array(pendingEdits) where next.confirmedEdit(field) >= revision {
+            pendingEdits.removeValue(forKey: field)
         }
     }
 
@@ -377,7 +427,7 @@ private struct NativeProviderSettingsForm: View {
         Binding(get: { draft[keyPath: keyPath] }, set: { value in
             guard !disabled else { return }
             draft[keyPath: keyPath] = value
-            patch(.object([wire: .string(value)]))
+            patch(.object([wire: .string(value)]), edit: wire)
         })
     }
 
@@ -386,14 +436,16 @@ private struct NativeProviderSettingsForm: View {
         Binding(get: { draft.models }, set: { value in
             guard !disabled else { return }
             draft.models = value
-            patch(draft.modelsPatch)
+            patch(draft.modelsPatch, edit: "models")
         })
     }
 
     /// Guards a captured form against current request readiness before issuing one provider mutation.
-    private func patch(_ fields: HostJSON) {
+    private func patch(_ fields: HostJSON, edit: String? = nil) {
         guard !disabled else { return }
-        state.send("settings.patchProvider", args: ["id": .string(provider.id), "patch": fields])
+        var args: [String: HostJSON] = ["id": .string(provider.id), "patch": fields]
+        if let edit { args["edit"] = .object([edit: .number(Double(draft.beginEdit(edit)))]) }
+        state.send("settings.patchProvider", args: args)
     }
 
     /// Plaintext is removed before sending and is never copied into ordinary draft patches.

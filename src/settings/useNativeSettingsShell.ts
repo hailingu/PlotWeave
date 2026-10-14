@@ -31,6 +31,8 @@ interface IntentState {
   current: NativeSettingsOptions
   active: boolean
   keyRevisions: Map<string, number>
+  /** Latest per-field edit identity per provider; bounded to the three draft fields of current providers. */
+  editRevisions: Map<string, Map<string, number>>
 }
 
 /** Reject unknown fields instead of permitting credential or identity writes through a provider patch. */
@@ -51,6 +53,32 @@ function providerPatch(value: unknown): Partial<ProviderConfig> {
   )
     throw new Error('Provider 修改字段类型无效。')
   return patch as Partial<ProviderConfig>
+}
+
+/** Edit identities pair one native field edit with the snapshot that applied it; malformed metadata mutates nothing. */
+function providerEditMetadata(
+  value: unknown,
+  patch: Partial<ProviderConfig>,
+): Record<string, number> {
+  if (value === undefined) return {}
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new Error('Provider 编辑身份必须是对象。')
+  const allowed = new Set(['label', 'baseUrl', 'models'])
+  const identities: Record<string, number> = {}
+  for (const [field, revision] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    if (!allowed.has(field) || !(field in patch))
+      throw new Error('Provider 编辑身份字段无效。')
+    if (
+      typeof revision !== 'number' ||
+      !Number.isSafeInteger(revision) ||
+      revision <= 0
+    )
+      throw new Error('Provider 编辑身份必须是正整数。')
+    identities[field] = revision
+  }
+  return identities
 }
 
 /** Requires the loaded live provider before any mutation can enter the existing saver. */
@@ -82,7 +110,17 @@ function patchCurrentProvider(
   state: IntentState,
   id: string,
   patch: Partial<ProviderConfig>,
+  edit: Record<string, number> = {},
 ): void {
+  if (Object.keys(edit).length > 0) {
+    let fields = state.editRevisions.get(id)
+    if (!fields) {
+      fields = new Map()
+      state.editRevisions.set(id, fields)
+    }
+    for (const [field, revision] of Object.entries(edit))
+      fields.set(field, revision)
+  }
   const settings = state.current.settings
   commit(state, {
     ...settings,
@@ -149,13 +187,14 @@ async function runIntent(
     case 'settings.patchProvider': {
       const provider = readyProvider(state, args.id)
       const patch = providerPatch(args.patch)
+      const edit = providerEditMetadata(args.edit, patch)
       if (
         BUILTIN_PROVIDERS.some((item) => item.id === provider.id) &&
         patch.label !== undefined &&
         patch.label !== provider.label
       )
         throw new Error('内置 Provider 的名称不可修改。')
-      patchCurrentProvider(state, provider.id, patch)
+      patchCurrentProvider(state, provider.id, patch, edit)
       return
     }
     case 'settings.setKey':
@@ -191,12 +230,22 @@ async function runIntent(
   }
 }
 
+/** Published identities stay bounded to each current provider's latest per-field edit. */
+function providerEdits(
+  state: IntentState,
+  id: string,
+): { edits?: Record<string, number> } {
+  const fields = state.editRevisions.get(id)
+  return fields && fields.size > 0 ? { edits: Object.fromEntries(fields) } : {}
+}
+
 /** Publishes credential-free snapshots and registers intents while the production owner is mounted. */
 export function useNativeSettingsShell(options: NativeSettingsOptions): void {
   const stateRef = useRef<IntentState>({
     current: options,
     active: false,
     keyRevisions: new Map(),
+    editRevisions: new Map(),
   })
   stateRef.current.current = options
   const [intentError, setIntentError] = useState<string | null>(null)
@@ -222,11 +271,16 @@ export function useNativeSettingsShell(options: NativeSettingsOptions): void {
     return () => {
       state.active = false
       state.keyRevisions.clear()
+      state.editRevisions.clear()
       off()
     }
   }, [])
   useEffect(() => {
     const settings = options.settings
+    const state = stateRef.current
+    for (const id of state.editRevisions.keys())
+      if (!settings.providers.some((provider) => provider.id === id))
+        state.editRevisions.delete(id)
     publishNativeProjection('settings', {
       phase: options.phase,
       error: options.error ?? intentError,
@@ -239,6 +293,7 @@ export function useNativeSettingsShell(options: NativeSettingsOptions): void {
           enabled,
           models,
           keyConfigured: Boolean(keyEnc),
+          ...providerEdits(state, id),
         }),
       ),
       defaultChat: settings.defaultChat,

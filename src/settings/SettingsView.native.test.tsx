@@ -494,6 +494,147 @@ it('builtin provider labels retain the existing normalization constraint, while 
   ).toBe('我的服务')
 })
 
+/** Reads the first projected provider entry for edit-identity assertions. */
+function projectedProvider(index = 0): Record<string, unknown> | undefined {
+  const providers = projection()?.providers as
+    Array<Record<string, unknown>> | undefined
+  return providers?.[index]
+}
+
+it('edit identities pair each applied field edit with its confirming snapshot', async () => {
+  render(<SettingsView onClose={vi.fn()} />)
+  await waitFor(() => expect(projection()?.phase).toBe('ready'))
+  expect(projectedProvider()?.edits).toBeUndefined()
+  expect(
+    await intent('settings.patchProvider', {
+      id: 'openai',
+      patch: { baseUrl: 'https://aba.example/v1' },
+      edit: { baseUrl: 1 },
+    }),
+  ).toEqual({ ok: null })
+  expect(projectedProvider()?.baseUrl).toBe('https://aba.example/v1')
+  expect(projectedProvider()?.edits).toEqual({ baseUrl: 1 })
+  await act(async () => {
+    expect(
+      await startIntent('settings.patchProvider', {
+        id: 'openai',
+        patch: { baseUrl: 'https://api.openai.com/v1' },
+        edit: { baseUrl: 2 },
+      }),
+    ).toEqual({ ok: null })
+    expect(
+      await startIntent('settings.patchProvider', {
+        id: 'openai',
+        patch: { models: ['merged-model'] },
+        edit: { models: 1 },
+      }),
+    ).toEqual({ ok: null })
+  })
+  expect(projectedProvider()?.baseUrl).toBe('https://api.openai.com/v1')
+  expect(projectedProvider()?.models).toEqual(['merged-model'])
+  expect(projectedProvider()?.edits).toEqual({ baseUrl: 2, models: 1 })
+  expect(
+    await intent('settings.patchProvider', {
+      id: 'openai',
+      patch: { models: ['legacy-model'] },
+    }),
+  ).toEqual({ ok: null })
+  expect(projectedProvider()?.models).toEqual(['legacy-model'])
+  expect(projectedProvider()?.edits).toEqual({ baseUrl: 2, models: 1 })
+})
+
+it('malformed edit metadata is rejected before the owner changes', async () => {
+  render(<SettingsView onClose={vi.fn()} />)
+  await waitFor(() => expect(projection()?.phase).toBe('ready'))
+  for (const edit of [
+    { label: 1 },
+    { baseUrl: 0 },
+    { baseUrl: -1 },
+    { baseUrl: 1.5 },
+    { baseUrl: '1' },
+    { enabled: 1 },
+    { keyEnc: 1 },
+    'identity',
+    1,
+    null,
+  ]) {
+    expect(
+      await intent('settings.patchProvider', {
+        id: 'openai',
+        patch: { baseUrl: 'https://meta.example/v1' },
+        edit,
+      }),
+    ).toMatchObject({ error: { code: 'PW_INTENT_FAILED' } })
+  }
+  expect(projectedProvider()?.baseUrl).toBe('https://api.openai.com/v1')
+  expect(projectedProvider()?.edits).toBeUndefined()
+  expect(settingsStore.save).not.toHaveBeenCalled()
+})
+
+it('edit identities stay bounded to current providers and do not survive owner remounts', async () => {
+  const update = vi.fn()
+  const options: NativeSettingsOptions = {
+    settings: stored,
+    phase: 'ready',
+    error: null,
+    closing: false,
+    loadGeneration: { current: 1 },
+    update,
+    requestClose: async () => true,
+    trackPendingKey: (work) => work,
+    reload: vi.fn(),
+  }
+  const withBaseUrl = (value: string): AppSettings => ({
+    ...stored,
+    providers: stored.providers.map((provider) =>
+      provider.id === 'openai' ? { ...provider, baseUrl: value } : provider,
+    ),
+  })
+  const view = renderHook((props) => useNativeSettingsShell(props), {
+    initialProps: options,
+  })
+  await waitFor(() => expect(projection()?.phase).toBe('ready'))
+  expect(
+    await intent('settings.patchProvider', {
+      id: 'openai',
+      patch: { baseUrl: 'https://bounded.example/v1' },
+      edit: { baseUrl: 3 },
+    }),
+  ).toEqual({ ok: null })
+  view.rerender({
+    ...options,
+    settings: withBaseUrl('https://bounded.example/v1'),
+  })
+  expect(projectedProvider()?.edits).toEqual({ baseUrl: 3 })
+  const withoutOpenai = {
+    ...stored,
+    providers: stored.providers.filter((provider) => provider.id !== 'openai'),
+  }
+  view.rerender({ ...options, settings: withoutOpenai })
+  expect(projection()?.providers).toHaveLength(stored.providers.length - 1)
+  view.rerender(options)
+  expect(projectedProvider()?.edits).toBeUndefined()
+  view.unmount()
+  const remounted = renderHook((props) => useNativeSettingsShell(props), {
+    initialProps: options,
+  })
+  await waitFor(() => expect(projection()?.phase).toBe('ready'))
+  expect(projectedProvider()?.edits).toBeUndefined()
+  expect(
+    await intent('settings.patchProvider', {
+      id: 'openai',
+      patch: { baseUrl: 'https://fresh.example/v1' },
+      edit: { baseUrl: 1 },
+    }),
+  ).toEqual({ ok: null })
+  remounted.rerender({
+    ...options,
+    settings: withBaseUrl('https://fresh.example/v1'),
+  })
+  expect(projectedProvider()?.edits).toEqual({ baseUrl: 1 })
+  remounted.unmount()
+})
+
 it.each(['new load generation', 'removed provider'] as const)(
   'late key encryption cannot write after %s',
   async (transition) => {
