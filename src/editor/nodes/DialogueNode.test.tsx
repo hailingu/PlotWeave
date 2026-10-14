@@ -1,29 +1,25 @@
 // @vitest-environment happy-dom
 /**
  * 对白节点（气泡流卡）渲染测试：标题行派生统计、台词气泡/动作行、
- * 头像解析与失效兜底、VO 徽标、⚙️ 面板开关与内联改名、左右端口。
- * Handle 依赖 React Flow 仓库上下文，隔离渲染时以锚点桩替代。
+ * 头像解析与失效兜底、VO 徽标、设定集投影实时解析。
+ * ⚙️ 面板开关、内联改名与左右端口等外壳共享行为收敛至
+ * nodeChrome.test.tsx 参数化维护（issue #534）；Handle 桩与
+ * NodeEditApi 夹具见 testScaffolding.tsx。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
-import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
+import { NodeEditContext } from '../nodeEdit'
 import type { ProjectSettings } from '../settings'
+import { makeNodeEditApi } from './testScaffolding'
 import { DialogueNode } from './DialogueNode'
 import type { DialogueFlowNode, DialogueLine } from './types'
 
-vi.mock('@xyflow/react', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@xyflow/react')>()
-  return {
-    ...orig,
-    /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
-    Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div
-        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
-      />
-    ),
-  }
-})
+vi.mock('@xyflow/react', async (importOriginal) =>
+  (await import('./testScaffolding')).stubReactFlowHandleModule(
+    await importOriginal<typeof import('@xyflow/react')>(),
+  ),
+)
 
 afterEach(cleanup)
 
@@ -47,29 +43,14 @@ const LINES: DialogueLine[] = [
   },
 ]
 
-function setup(
-  data: { name?: string; lines?: DialogueLine[] } = {},
-  openSettingsId: string | null = null,
-) {
-  const api: NodeEditApi = {
-    projectId: 'p-1',
-    openSettingsId,
-    toggleSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    patchNode: vi.fn(),
-    duplicateNode: vi.fn(),
-    deleteNode: vi.fn(),
-    shotCountOf: () => 0,
-    beatFulfillmentOf: () => null,
-    settings: structuredClone(SETTINGS),
-    assets: undefined,
-  }
+function setup(data: { name?: string; lines?: DialogueLine[] } = {}) {
+  const api = makeNodeEditApi({ settings: structuredClone(SETTINGS) })
   const props = {
     id: 'd1',
     data: { name: data.name ?? '真相逼近', lines: data.lines ?? LINES },
     selected: false,
   } as unknown as NodeProps<DialogueFlowNode>
-  const { container, unmount, rerender } = render(
+  const { container, rerender } = render(
     <ReactFlowProvider>
       <NodeEditContext.Provider value={api}>
         <DialogueNode {...props} />
@@ -85,7 +66,7 @@ function setup(
         </NodeEditContext.Provider>
       </ReactFlowProvider>,
     )
-  return { api, container, unmount, rerenderSettings }
+  return { container, rerenderSettings }
 }
 
 describe('DialogueNode（气泡流卡）', () => {
@@ -136,33 +117,5 @@ describe('DialogueNode（气泡流卡）', () => {
     })
     expect(screen.getByText('雨停了。')).toBeTruthy()
     expect(container.querySelector('.pw-node-avatar')).toBeNull()
-  })
-
-  it('⚙️ 点击 toggleSettings 且阻止冒泡；openSettingsId 命中时展开设置面板', () => {
-    const { api, unmount } = setup()
-    fireEvent.click(screen.getByRole('button', { name: '对白设置' }))
-    expect(api.toggleSettings).toHaveBeenCalledWith('d1')
-    unmount()
-
-    setup({}, 'd1')
-    expect(screen.getByRole('button', { name: '＋ 添加台词' })).toBeTruthy()
-  })
-
-  it('名称双击内联改名 → patchNode 合并 name', () => {
-    const { api } = setup()
-    fireEvent.doubleClick(screen.getByRole('button', { name: '真相逼近' }))
-    const input = screen.getByRole('textbox', { name: '对白名称' })
-    fireEvent.change(input, { target: { value: '雨夜摊牌' } })
-    fireEvent.blur(input)
-    expect(api.patchNode).toHaveBeenCalledWith('d1', {
-      nodeType: 'dialogue',
-      patch: { name: '雨夜摊牌' },
-    })
-  })
-
-  it('端口：左入右出', () => {
-    setup()
-    expect(screen.getByTestId('handle-target')).toBeTruthy()
-    expect(screen.getByTestId('handle-source')).toBeTruthy()
   })
 })

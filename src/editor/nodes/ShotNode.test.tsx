@@ -1,15 +1,19 @@
 // @vitest-environment happy-dom
 /**
  * 分镜卡（监视器卡）渲染测试：SHOT 编号/景别标题行、画面描述、
- * 镜头 Prompt、引用位 chip（角色垫图/场景底图/音频图标）、⚙️ 面板开关。
- * Handle 依赖 React Flow 仓库上下文，隔离渲染时以锚点桩替代。
+ * 镜头 Prompt、引用位 chip（角色垫图/场景底图/音频图标）、资产引用
+ * 读取边界与换绑生命周期（issue #130/#131）。
+ * ⚙️ 面板开关与端口布局等外壳共享行为收敛至 nodeChrome.test.tsx
+ * 参数化维护（issue #534）；Handle 桩与 NodeEditApi 夹具见
+ * testScaffolding.tsx。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
-import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
+import { NodeEditContext } from '../nodeEdit'
 import { projectAssets } from '../projectAssets'
 import type { AssetRef } from '../../model/document'
+import { makeNodeEditApi } from './testScaffolding'
 import { ShotNode } from './ShotNode'
 import type { ShotFlowNode } from './types'
 
@@ -20,36 +24,16 @@ vi.mock('../projectAssets', () => ({
   },
 }))
 
-vi.mock('@xyflow/react', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@xyflow/react')>()
-  return {
-    ...orig,
-    /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
-    Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div
-        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
-      />
-    ),
-  }
-})
+vi.mock('@xyflow/react', async (importOriginal) =>
+  (await import('./testScaffolding')).stubReactFlowHandleModule(
+    await importOriginal<typeof import('@xyflow/react')>(),
+  ),
+)
 
 afterEach(cleanup)
 
-function setup(
-  openSettingsId: string | null = null,
-  refs?: ShotFlowNode['data']['refs'],
-) {
-  const api: NodeEditApi = {
-    projectId: 'p-1',
-    openSettingsId,
-    toggleSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    patchNode: vi.fn(),
-    duplicateNode: vi.fn(),
-    deleteNode: vi.fn(),
-    shotCountOf: () => 0,
-    beatFulfillmentOf: () => null,
-    settings: { characters: [], locations: [] },
+function setup(refs?: ShotFlowNode['data']['refs']) {
+  const api = makeNodeEditApi({
     assets: {
       byId: {
         'pa-1': {
@@ -61,7 +45,7 @@ function setup(
         },
       },
     },
-  }
+  })
   const props = {
     id: 'sh1',
     data: {
@@ -112,26 +96,10 @@ describe('ShotNode（监视器卡）', () => {
     expect(screen.getByText('＋ 引用')).toBeTruthy()
   })
 
-  it('⚙️ 点击 toggleSettings；openSettingsId 命中时展开设置面板（含添加引用）', () => {
-    const { api } = setup()
-    fireEvent.click(screen.getByRole('button', { name: '分镜设置' }))
-    expect(api.toggleSettings).toHaveBeenCalledWith('sh1')
-    cleanup()
-
-    setup('sh1')
-    expect(screen.getByRole('button', { name: '＋ 添加引用' })).toBeTruthy()
-  })
-
-  it('端口：顶部入口（宿主下挂）+ 右侧出口', () => {
-    setup()
-    expect(screen.getByTestId('handle-target')).toBeTruthy()
-    expect(screen.getByTestId('handle-source')).toBeTruthy()
-  })
-
   it('资产引用位：image/* 资产经 mediaUrl 解析渲染缩略图；解析失败回退纯文本', async () => {
     const { projectAssets } = await import('../projectAssets')
     vi.mocked(projectAssets.mediaUrl).mockResolvedValue('asset://media/pa-1')
-    const { container } = setup(null, [
+    const { container } = setup([
       { id: 'r4', kind: 'character', assetId: 'pa-1' },
     ])
     const img = (await screen.findAllByRole('img'))[0]
@@ -159,19 +127,7 @@ function renderShotWithRef(
   byId: Record<string, AssetRef> = { 'pa-1': refAsset('pa-1') },
   kind: ShotFlowNode['data']['refs'][number]['kind'] = 'character',
 ) {
-  const api: NodeEditApi = {
-    projectId: 'p-1',
-    openSettingsId: null,
-    toggleSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    patchNode: vi.fn(),
-    duplicateNode: vi.fn(),
-    deleteNode: vi.fn(),
-    shotCountOf: () => 0,
-    beatFulfillmentOf: () => null,
-    settings: { characters: [], locations: [] },
-    assets: { byId },
-  }
+  const api = makeNodeEditApi({ assets: { byId } })
   const props = (id: string) =>
     ({
       id: 'sh1',
@@ -270,7 +226,7 @@ describe('分镜坏引用的隔离与恢复（issue #130）', () => {
   })
 
   it('坏引用不会阻断同卡片的合法图片引用', async () => {
-    setup(null, [
+    setup([
       { id: 'bad', kind: 'character', assetId: 'constructor' },
       { id: 'good', kind: 'location', assetId: 'pa-1' },
     ])

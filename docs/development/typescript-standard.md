@@ -157,7 +157,11 @@ strict entry), and modules that exist only for tests — `src/moduleGraph.ts`
 `src/styles/cssValueSyntax.ts`, `src/styles/sheetRuleQuery.ts`, and
 `src/styles/sheetTokensEngine.ts` (CSS contract engine; `sheetRuleQuery.ts`
 added by issue #343 after the engine split), `src/model/convertFixtures.ts`
-and `src/editor/ai/testGraphs.ts` (shared test fixtures). The same list is
+and `src/editor/ai/testGraphs.ts` (shared test fixtures), and
+`src/editor/nodes/testScaffolding.tsx` (shared scaffolding for the node
+component tests: Handle stub factory and `NodeEditApi` builder, added by
+issue [#534](https://github.com/hailingu/PlotWeave/issues/534)). The same
+list is
 mirrored into `sonar.exclusions` — moving these files out of
 product-source statistics while they remain analyzed as test code, not a
 blanket exclusion that hides findings — and into the vitest coverage

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /** 原生内容卡的真实 React Flow 回归：方向、稳定行出口、选择和实时目标投影。 */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   cleanup,
   fireEvent,
@@ -9,7 +9,8 @@ import {
   within,
 } from '@testing-library/react'
 import { ReactFlow, Position, useEdgesState, type Edge } from '@xyflow/react'
-import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
+import { NodeEditContext } from '../nodeEdit'
+import { makeNodeEditApi } from './testScaffolding'
 import { BranchNode } from './BranchNode'
 import { BeatNode } from './BeatNode'
 import { BranchEdge } from '../edges/BranchEdge'
@@ -24,19 +25,7 @@ const OPTIONS: BranchOption[] = [
 ]
 const NODE_TYPES = { branch: BranchNode, beat: BeatNode }
 const EDGE_TYPES = { branch: BranchEdge }
-const API: NodeEditApi = {
-  projectId: 'ports',
-  openSettingsId: null,
-  toggleSettings: vi.fn(),
-  closeSettings: vi.fn(),
-  patchNode: vi.fn(),
-  duplicateNode: vi.fn(),
-  deleteNode: vi.fn(),
-  shotCountOf: () => 0,
-  beatFulfillmentOf: () => null,
-  settings: { characters: [], locations: [] },
-  assets: undefined,
-}
+const API = makeNodeEditApi({ projectId: 'ports' })
 
 /** 提供框架可计算的尺寸和句柄；真实浏览器另验证 CSS 几何。 */
 function nodes(options: BranchOption[], targetName: string): CanvasNode[] {

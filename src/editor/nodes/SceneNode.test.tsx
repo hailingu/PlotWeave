@@ -1,31 +1,26 @@
 // @vitest-environment happy-dom
 /**
  * 场景节点（索引卡）渲染测试：SCENE 编号/内外景/地点时间天气 chip、
- * 分镜计数、角色头像串与失效兜底、⚙️ 面板开关、三向端口（含分镜下挂口）。
- * Handle 依赖 React Flow 仓库上下文，隔离渲染时以锚点桩替代。
+ * 分镜计数、角色头像串与失效兜底、设定集投影实时解析。
+ * ⚙️ 面板开关与端口布局等外壳共享行为收敛至 nodeChrome.test.tsx
+ * 参数化维护（issue #534）；Handle 桩与 NodeEditApi 夹具见
+ * testScaffolding.tsx。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
-import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
+import { NodeEditContext } from '../nodeEdit'
 import type { ProjectSettings } from '../settings'
-import { SCENE_SHOT_HANDLE } from '../graphRules'
+import { makeNodeEditApi } from './testScaffolding'
 import { SceneNode } from './SceneNode'
 import type { SceneFlowNode, SceneNodeData } from './types'
 import type { PatchShape } from './patch'
 
-vi.mock('@xyflow/react', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@xyflow/react')>()
-  return {
-    ...orig,
-    /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
-    Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div
-        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
-      />
-    ),
-  }
-})
+vi.mock('@xyflow/react', async (importOriginal) =>
+  (await import('./testScaffolding')).stubReactFlowHandleModule(
+    await importOriginal<typeof import('@xyflow/react')>(),
+  ),
+)
 
 afterEach(cleanup)
 
@@ -52,21 +47,11 @@ function setup(
   // 覆盖补丁走 PatchShape 清除通道（issue #231）：{ locationId: undefined }
   // = 清除地点引用，与产品补丁语义一致
   data: PatchShape<SceneNodeData> = {},
-  openSettingsId: string | null = null,
 ) {
-  const api: NodeEditApi = {
-    projectId: 'p-1',
-    openSettingsId,
-    toggleSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    patchNode: vi.fn(),
-    duplicateNode: vi.fn(),
-    deleteNode: vi.fn(),
+  const api = makeNodeEditApi({
     shotCountOf: () => 2,
-    beatFulfillmentOf: () => null,
     settings: structuredClone(SETTINGS),
-    assets: undefined,
-  }
+  })
   const props = {
     id: 's1',
     data: { ...DATA, ...data },
@@ -88,7 +73,7 @@ function setup(
         </NodeEditContext.Provider>
       </ReactFlowProvider>,
     )
-  return { api, container, unmount, rerenderSettings }
+  return { container, unmount, rerenderSettings }
 }
 
 describe('SceneNode（索引卡）', () => {
@@ -151,24 +136,5 @@ describe('SceneNode（索引卡）', () => {
     rerenderSettings(SETTINGS)
     expect(container.querySelector('.pw-node-avatar')?.textContent).toBe('林')
     expect(container.querySelectorAll('.pw-av-invalid')).toHaveLength(1)
-  })
-
-  it('⚙️ 点击 toggleSettings；openSettingsId 命中时展开设置面板', () => {
-    const { api, unmount } = setup()
-    fireEvent.click(screen.getByRole('button', { name: '场景设置' }))
-    expect(api.toggleSettings).toHaveBeenCalledWith('s1')
-    unmount()
-
-    setup({}, 's1')
-    expect(screen.getByRole('combobox')).toBeTruthy() // 地点下拉
-  })
-
-  it('端口：左入、右出、底部 SCENE_SHOT_HANDLE 分镜下挂口', () => {
-    setup()
-    expect(screen.getByTestId('handle-target')).toBeTruthy()
-    expect(screen.getByTestId('handle-source')).toBeTruthy()
-    expect(
-      screen.getByTestId(`handle-source-${SCENE_SHOT_HANDLE}`),
-    ).toBeTruthy()
   })
 })

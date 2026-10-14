@@ -1,46 +1,30 @@
 // @vitest-environment happy-dom
 /**
  * 节奏卡（节拍胶囊）渲染测试：名称/基调、兑现状态徽标（待兑现虚线态 /
- * ✓ 兑现态，派生自 beatFulfillmentOf）、⚙️ 面板开关与内联改名。
- * Handle 依赖 React Flow 仓库上下文，隔离渲染时以锚点桩替代。
+ * ✓ 兑现态，派生自 beatFulfillmentOf）。
+ * ⚙️ 面板开关与内联改名等外壳共享行为收敛至 nodeChrome.test.tsx
+ * 参数化维护（issue #534）；Handle 桩与 NodeEditApi 夹具见
+ * testScaffolding.tsx。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
-import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
+import { NodeEditContext } from '../nodeEdit'
 import type { BeatFulfillment } from '../outline'
+import { makeNodeEditApi } from './testScaffolding'
 import { BeatNode } from './BeatNode'
 import type { BeatFlowNode } from './types'
 
-vi.mock('@xyflow/react', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@xyflow/react')>()
-  return {
-    ...orig,
-    /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
-    Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div
-        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
-      />
-    ),
-  }
-})
+vi.mock('@xyflow/react', async (importOriginal) =>
+  (await import('./testScaffolding')).stubReactFlowHandleModule(
+    await importOriginal<typeof import('@xyflow/react')>(),
+  ),
+)
 
 afterEach(cleanup)
 
 function setup(fulfillment: BeatFulfillment | null = null) {
-  const api: NodeEditApi = {
-    openSettingsId: null,
-    projectId: 'p-1',
-    toggleSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    patchNode: vi.fn(),
-    duplicateNode: vi.fn(),
-    deleteNode: vi.fn(),
-    shotCountOf: () => 0,
-    beatFulfillmentOf: () => fulfillment,
-    settings: { characters: [], locations: [] },
-    assets: undefined,
-  }
+  const api = makeNodeEditApi({ beatFulfillmentOf: () => fulfillment })
   const props = {
     id: 'b1',
     data: { name: '真相逼近', tone: '紧张' },
@@ -53,7 +37,7 @@ function setup(fulfillment: BeatFulfillment | null = null) {
       </NodeEditContext.Provider>
     </ReactFlowProvider>,
   )
-  return { api, container }
+  return { container }
 }
 
 describe('BeatNode（节拍胶囊）', () => {
@@ -79,20 +63,5 @@ describe('BeatNode（节拍胶囊）', () => {
     })
     const badge = container.querySelector('.pw-beat-state.ok')
     expect(badge?.getAttribute('title')).toContain('场 03 · 天台对峙')
-  })
-
-  it('⚙️ 点击 toggleSettings；名称双击改名 → patchNode', () => {
-    const { api } = setup()
-    fireEvent.click(screen.getByRole('button', { name: '节奏卡设置' }))
-    expect(api.toggleSettings).toHaveBeenCalledWith('b1')
-
-    fireEvent.doubleClick(screen.getByRole('button', { name: '真相逼近' }))
-    const input = screen.getByRole('textbox', { name: '节奏卡内容' })
-    fireEvent.change(input, { target: { value: '雨夜反转' } })
-    fireEvent.blur(input)
-    expect(api.patchNode).toHaveBeenCalledWith('b1', {
-      nodeType: 'beat',
-      patch: { name: '雨夜反转' },
-    })
   })
 })
