@@ -275,11 +275,11 @@ fn unique_library_id_with<G: FnMut() -> String>(
 /// 超 16 项一律拒绝整次命令，不得静默跳过校验、截断或留待读取归一化剥离
 /// （评审修复，PR #33 第十轮）。
 fn validate_meta_patch(patch: &Value) -> Result<(), String> {
-    if !patch.is_object() {
+    let Some(patch_obj) = patch.as_object() else {
         return Err("patch 必须是对象".into());
-    }
+    };
     const EDITABLE: [&str; 5] = ["name", "kind", "view", "tags", "groupId"];
-    for key in patch.as_object().unwrap().keys() {
+    for key in patch_obj.keys() {
         if !EDITABLE.contains(&key.as_str()) {
             return Err(format!("不可修改的字段：{key}"));
         }
@@ -344,16 +344,23 @@ fn validate_tags_patch(v: &Value) -> Result<(), String> {
 /// 应用 groupId 补丁（§7.2）：null/空白是唯一清除标记，落盘删除可选字段；
 /// 非空值必须 **verbatim** 过 id 值域——`" g "` 不得 trim 成 `"g"` 错接进组
 /// g（评审修复，PR #33 第十一轮：ID 不透明，trim 只适用于契约允许的字段）；
-/// 其他异型值拒绝。
+/// 其他异型值拒绝。条目非对象同样拒绝（issue #521）：「条目必为对象」的
+/// 不变量由读取归一化保证（异型条目进入写路径前已被隔离），此处为防御
+/// 路径——返回带上下文的错误而非 panic，且不得改动条目。
 fn apply_group_id(entry: &mut Value, g: &Value) -> Result<(), String> {
+    let obj = entry
+        .as_object_mut()
+        .ok_or("资产条目必须是对象，无法应用 groupId 补丁")?;
     match g {
         Value::Null => {
-            entry.as_object_mut().unwrap().remove("groupId");
+            obj.remove("groupId");
         }
         Value::String(s) if s.trim().is_empty() => {
-            entry.as_object_mut().unwrap().remove("groupId");
+            obj.remove("groupId");
         }
-        Value::String(s) if validate_asset_id(s).is_ok() => entry["groupId"] = json!(s),
+        Value::String(s) if validate_asset_id(s).is_ok() => {
+            obj.insert("groupId".into(), json!(s));
+        }
         _ => return Err("groupId 必须是合法 id 字符串或 null".into()),
     }
     Ok(())
@@ -423,9 +430,16 @@ fn update_meta_with(
         entry["kind"] = json!(k);
     }
     if let Some(v) = patch.get("view") {
-        // §7.2：view: null 是唯一清除标记，落盘删除可选字段
+        // §7.2：view: null 是唯一清除标记，落盘删除可选字段；条目非对象是
+        // 防御路径（归一化保证条目为对象，issue #521）——Corrupt 错误而非
+        // panic
         if v.is_null() {
-            entry.as_object_mut().unwrap().remove("view");
+            entry
+                .as_object_mut()
+                .ok_or_else(|| LibraryError::Corrupt {
+                    detail: "资产条目非对象，无法清除 view（索引结构损坏）".into(),
+                })?
+                .remove("view");
         } else {
             entry["view"] = v.clone();
         }

@@ -655,6 +655,26 @@ fn migration_suspended_blocks_mutations_preserving_disk() {
     cleanup(&root);
 }
 
+/// [issue #521](https://github.com/hailingu/PlotWeave/issues/521)：
+/// `apply_group_id` 对异型条目（非对象）返回结构化错误而非 panic——正常
+/// 路径的「条目必为对象」由读取归一化保证（异型条目进入写路径前已被
+/// 隔离），此处钉住内核防御路径，并复验清除/设置两条正常路径不变。
+#[test]
+fn group_id_patch_rejects_non_object_entry_instead_of_panicking() {
+    for patch in [Value::Null, json!("  ")] {
+        let mut entry = json!("not-an-object");
+        let err = apply_group_id(&mut entry, &patch).expect_err("异型条目应拒绝而非 panic");
+        assert!(err.contains("对象"), "错误应指明条目形状：{err}");
+        assert_eq!(entry, json!("not-an-object"), "被拒条目不得被改动");
+    }
+    let mut cleared = json!({ "groupId": "la-18f-1024", "name": "n" });
+    apply_group_id(&mut cleared, &Value::Null).expect("清除 groupId 正常路径");
+    assert!(cleared.get("groupId").is_none());
+    let mut assigned = json!({ "name": "n" });
+    apply_group_id(&mut assigned, &json!("la-18f-1024")).expect("设置 groupId 正常路径");
+    assert_eq!(assigned["groupId"], json!("la-18f-1024"));
+}
+
 /// 库 id 查重重试（评审修复，PR #33 第十七轮）：生成器产出与当前 byId 冲突
 /// 时重试——进程内计数器跨进程不唯一（Windows 的库锁为进程本地互斥），按
 /// 当前索引查重 + 随机段在跨进程锁正确平台闭合碰撞窗口。
