@@ -97,6 +97,8 @@ struct NativeProviderDraft {
     var baseUrl: String
     var models: String
     var key = ""
+    /// Monotonic per-field edit counters survive confirmations so a later value-identical edit still republishes a distinct identity.
+    private var editCounters: [String: Int] = [:]
     /// Per-field edit identities awaiting their confirming projection; value equality alone cannot detect a reverted edit.
     private(set) var pendingEdits: [String: Int] = [:]
 
@@ -120,7 +122,8 @@ struct NativeProviderDraft {
 
     /// Registers one bounded identity for a field edit so only a strictly newer snapshot can replace it.
     mutating func beginEdit(_ field: String) -> Int {
-        let revision = (pendingEdits[field] ?? 0) + 1
+        let revision = (editCounters[field] ?? 0) + 1
+        editCounters[field] = revision
         pendingEdits[field] = revision
         return revision
     }

@@ -317,3 +317,11 @@ CI #604 的完整原生目标执行 224 tests／53 suites，新增设置回归�
 - **先红**：WK ABA 回归在旧实现 4 处预期失败（`初始服务`/`https://fixture.example/v1` 字段被旧 B 投影改为 `名称甲`/回改地址，磁盘保存 `名称甲丙` 等）；TS 3 项新语义测试在旧实现失败（投影无 `edits`、非法元数据未拒绝）。Swift draft 级新用例依赖新 API（`beginEdit`），编译期即需新实现，不计入行为先红证据。
 - **验证**：`npx vitest run src/settings/SettingsView.native.test.tsx` **24 tests／1 file 通过**；集中原生三套件 `NativeSettingsEditingTests`／`NativeFormsTests`／`NativeSettingsDraftLifecycleTests` **16 tests／3 suites 通过**。仓库根完整前端路由（format:check／lint 零警告／check:size 715 文件／typecheck:strict／build／`npm test` **228 files／3132 tests**）与完整原生路由（`npm run check:size && npm run build:native-canvas && xcodebuild … -parallel-testing-enabled NO test`，**248 tests／55 suites，TEST SUCCEEDED** 93.062 秒，Node 24.18.0／Xcode 27.0）通过。原生设置源 459、Web adapter 307 行，全部低于文件上限；新增／修改执行单元人工复核低于 80 代码行。
 - **缺口**：真实中文 IME／VoiceOver、物理进程 kill 仍属 P5 人工缺口（沿 R34/R39 记录）；被动 effect 读取身份映射存在"提交后、effect 前到达的更新补丁"窗口，可能以较新身份配对较旧值发布一次，但值比较后备使该中间投影至多提前清待定而不改写脏草稿，随后投影自纠——未单独注入该时序的自动化回归。Git 门禁（新生成覆盖率＋Sonar）与绑定修复提交的 CI 证据在 PR 记录。
+
+#### R39 修复的首轮评审后续（2026-10-14，[Codex 评审](https://github.com/hailingu/PlotWeave/pull/566#pullrequestreview-5518575023)）
+
+首轮后续评审一条 P2：`beginEdit` 从 `pendingEdits` 派生身份，而 `clearConfirmedEdits` 在确认后删除条目——下一次编辑身份重置回 1。若该编辑是仅空白变化（规范化后与权威值相同），Web 重发的投影与上一帧内容完全相等，SwiftUI `onChange(of: provider)`（Equatable）不触发，新待定身份永不清除；随后的首个权威更新被 `确认 > 待定` 闸门抑制一次，用户下一次键入可能覆盖权威值。核查属实，属本修复引入的相邻缺陷，按首轮预算内修复。
+
+- **修复**：`NativeProviderDraft` 拆分单调 `editCounters`（跨确认持续递增，永不清理）与 `pendingEdits`（仍按确认清除）；`beginEdit` 从计数器派发身份。重挂后计数器从 1 重启仍安全：Web 侧身份映射被新补丁覆写为相同值，投影 `edits` 变化即可再次触发 `receive`。
+- **先红后绿**：`whitespaceEditAfterConfirmationKeepsIdentitiesMonotonic` 在旧实现 2 处预期失败（`revision > 1`、`republished != confirmed`——后者正是 onChange 被抑制的等价断言）；修复后通过，并验证重发帧清待定、外部更新随之应用。
+- **验证**：三套件集中 **17 tests／3 suites 通过**；完整原生路由 **249 tests／55 suites，TEST SUCCEEDED**（92.891 秒）。原生设置源 462 行；前端 TS 本轮未改动，Git 门禁按提交记录。SwiftUI 同值投影是否触发 onChange 由 `republished != confirmed` 断言与既有 Equatable 语义覆盖，未注入真实 TextEditor 空白键入路径（P5 人工缺口沿置）。

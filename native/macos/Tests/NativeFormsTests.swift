@@ -178,6 +178,27 @@ struct NativeFormsTests {
         #expect(draft.models == "external")
     }
 
+    /// A whitespace-only edit after confirmation must carry a fresh identity, or its value-identical echo cannot retrigger receive.
+    @Test func whitespaceEditAfterConfirmationKeepsIdentitiesMonotonic() throws {
+        let initial = try provider(label: "初始", url: "https://initial.test/v1", models: ["chat"])
+        var draft = NativeProviderDraft(initial)
+        draft.models = "chat "
+        _ = draft.beginEdit("models")
+        let confirmed = try provider(label: "初始", url: "https://initial.test/v1", models: ["chat"], edits: ["models": 1])
+        draft.receive(previous: initial, next: confirmed)
+        #expect(draft.models == "chat ")
+        draft.models = "chat  "
+        let revision = draft.beginEdit("models")
+        #expect(revision > 1)
+        let republished = try provider(label: "初始", url: "https://initial.test/v1", models: ["chat"], edits: ["models": revision])
+        #expect(republished != confirmed)
+        draft.receive(previous: confirmed, next: republished)
+        #expect(draft.models == "chat  ")
+        let external = try provider(label: "初始", url: "https://initial.test/v1", models: ["external"], edits: ["models": revision])
+        draft.receive(previous: republished, next: external)
+        #expect(draft.models == "external")
+    }
+
     /// A merged confirmation whose value equals the prior authority still clears pending identities and stays observable.
     @Test func sameValueMergedConfirmationClearsPendingWithoutRewritingTheDraft() throws {
         let initial = try provider(label: "初始", url: "https://initial.test/v1", models: ["old"])
