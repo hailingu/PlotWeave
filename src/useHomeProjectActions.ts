@@ -14,10 +14,9 @@ import {
 } from './openProjectActions'
 
 /**
- * 首页卡片变更动作族（自 App.tsx 拆出，issue #545）：重命名/复制/删除
- * 三条非幂等变更的 store 编排与失败对账——复制与创建共用创建族对账
- * （PR #199），失败横幅经 useHomeActionFeedback 上浮，成功路径刷新
- * 首页摘要。仅服务首页，不触碰打开态与编辑器域。
+ * 首页卡片变更动作族模块（自 App.tsx 拆出，issue #545）：仅服务首页的
+ * 重命名/复制/删除动作编排，不触碰打开态与编辑器域；对外入口是
+ * useHomeProjectActions，动作细则见各导出符号的意图文档。
  */
 /** 重命名动作（useHomeProjectActions 拆分，守 80 行上限）：读档改名后
  * 拒绝式保存（PR #199 评审：落盘失败上浮横幅并可重试，失败同经保存链
@@ -55,6 +54,10 @@ function useRenameProject(
   return handleRenameProject
 }
 
+/** 首页卡片变更动作集（App 根的 home 桨）：重命名/复制/删除三条非幂等
+ * 变更的 store 编排与失败对账——复制与创建共用创建族对账（PR #199：
+ * 部分提交不给盲重试），失败横幅经 useHomeActionFeedback 上浮，成功
+ * 路径刷新首页摘要。 */
 export function useHomeProjectActions(
   refreshProjects: RefreshProjects,
   unsavedAiSessions: UnsavedAiSessionsRef,
