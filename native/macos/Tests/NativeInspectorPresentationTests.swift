@@ -200,6 +200,37 @@ struct NativeInspectorPresentationTests {
             "收起再展开不得丢弃未完成的数字草稿（销毁路径会从投影值恢复为 3）")
     }
 
+    /// Reopening after a hidden selection must retain the newly mounted node's draft on later collapses.
+    @Test(arguments: [false, true])
+    func reopenedPaneKeepsNumericDraftAfterHiddenSelection(hadSelection: Bool) async throws {
+        let initial: [String: Any]? = hadSelection
+            ? ["id": "previous", "type": "scene", "data": ["name": "旧节点", "sceneNo": 1]] : nil
+        let mounted = try makeVisibilityWindow(sequence: 1, aiOpen: false, selected: initial)
+        defer { mounted.window.close(); mounted.window.contentView = nil }
+        try await settlePane()
+        mounted.pane.inspector = false
+        try await settlePane()
+        try publishEditorState(mounted.state, sequence: 2, aiOpen: false,
+            selected: ["id": "current", "type": "scene", "data": ["name": "新节点", "sceneNo": 3]])
+        try await settlePane()
+        #expect(Self.textInputs(in: mounted.window.contentView).isEmpty, "隐藏时切换选择不得创建新字段树")
+        mounted.pane.inspector = true
+        try await settlePane()
+        let field = try await awaitField(mounted.window, label: "场次")
+        #expect(NativeCreationControlFixture.string(field, kAXValueAttribute) == "3")
+        try #require(AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, "3." as CFTypeRef) == .success)
+        try await settlePane()
+        for _ in 0..<2 {
+            mounted.pane.inspector = false
+            try await settlePane()
+            mounted.pane.inspector = true
+            try await settlePane()
+            let restored = try await awaitField(mounted.window, label: "场次")
+            #expect(NativeCreationControlFixture.string(restored, kAXValueAttribute) == "3.",
+                "隐藏时换选后重新展开的字段也须跨后续收展保留未完成数字草稿")
+        }
+    }
+
     /// Finds a labeled text input once it has mounted.
     private func awaitField(_ window: NSWindow, label: String) async throws -> AXUIElement {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))

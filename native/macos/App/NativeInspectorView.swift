@@ -40,6 +40,9 @@ struct NativeInspectorView: View {
         .onChange(of: state.selectedNodeID) { _, current in
             mountedNodeID = visible ? current : nil
         }
+        .onChange(of: visible) { _, current in
+            if current { mountedNodeID = state.selectedNodeID }
+        }
     }
 }
 

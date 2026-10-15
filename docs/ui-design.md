@@ -383,6 +383,8 @@ J13–J16 补齐 [issue #502](https://github.com/hailingu/PlotWeave/issues/502) 
 | 失效地点／角色／资产、MIME 不匹配；图片生成中或失败 → 展示及恢复 | 原诊断、受限选项、取消／重试入口继续可见 | 不改变引用、生成任务及失败恢复 owner；不因展示修改字段 | 原生失效角色／资产诊断、生成中／失败入口回归通过；地点失效选项与 MIME 禁用绑定结构复核，Web 无效引用、生成及历史回归通过；未新增原生菜单逐项操作 |
 | 浅／深外观；空选择／错误／AI 页／busy → 面板更新 | 语义颜色适配外观；替代面板、诊断与原禁用条件保持 | 外层面板路由与应用 busy 仍由现有状态拥有，不增加持久化或异步入口 | 双外观真实字段与开关回归、截图核对及既有面板测试通过；busy 作用范围结构复核；VoiceOver、增强对比度实机未验 |
 
+检查器单纯收展保留当前节点的未完成数字草稿；隐藏时换选会拆除旧字段树且不创建新树，重新展开时记录当前挂载身份，使新节点草稿也能跨后续收展保留（[PR #578](https://github.com/hailingu/PlotWeave/pull/578)，真实字段回归及状态矩阵见[编辑器域切片发布](development/canvas-performance-diagnostics.md#编辑器域切片发布2026-10-15issue-544)）。选中／项目／路由或 AI 分支改变时，字段草稿仍按原生命周期丢弃。
+
 用户可编辑的时间／天气原字符串继续完整显示；不把输入内容中的 Emoji 当作装饰删除。没有新增业务状态、网络、保存、重试或并发入口，这些维度沿用现有所有者的回归。
 
 验证在仓库根目录使用 Node 24.18.0 与 Xcode 27.0／SDK 27.0。`npm run check:size && npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData test` 的大小检查与画布构建通过；默认并行原生运行 169 tests／45 suites 有 7 项断言失败，涉及之前已有的工具栏几何、节点请求展开、侧栏恢复宽度与退出委托夹具。相同 Xcode 命令追加 `-parallel-testing-enabled NO`，169 tests／45 suites 全通过；默认并行模式仍是已记录缺口，不用串行结果替代。新检查器套件 5 项测试／13 参数用例通过，操作区与开关几何均先红后绿。`npm test -- src/editor/nativeCanvas/nativeEditorShell.test.tsx src/editor/nativeCanvas/NativeCanvasApp.test.tsx` 的 2 文件／27 项生产命令回归通过。Vite 保留既有大 chunk 提示；原生系统服务与布局诊断未阻止串行测试。详情见[原生功能记录](swiftui-react-flow-feature-parity.md#原生节点检查器视觉统一2026-10-08)。
