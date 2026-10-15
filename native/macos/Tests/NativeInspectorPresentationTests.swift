@@ -163,6 +163,24 @@ struct NativeInspectorPresentationTests {
         #expect(restored.string == "未发送草稿", "收起再展开不得丢失 AI 草稿")
     }
 
+    /// Editor autosave failures stay visible while the AI pane is active (PR #578 review).
+    @Test func aiPaneKeepsEditorSaveErrorVisible() async throws {
+        let mounted = try makeVisibilityWindow(sequence: 1, aiOpen: true)
+        defer { mounted.window.close(); mounted.window.contentView = nil }
+        try publishEditorState(mounted.state, sequence: 2, aiOpen: true, selected: nil,
+            saveError: "保存失败：磁盘已满")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        var found = false
+        while ContinuousClock.now < deadline && !found {
+            let elements = try await NativeCreationControlFixture.elements(in: mounted.window)
+            found = elements.contains {
+                NativeCreationControlFixture.string($0, kAXValueAttribute) == "保存失败：磁盘已满"
+            }
+            if !found { try await Task.sleep(for: .milliseconds(50)) }
+        }
+        #expect(found, "AI 面板激活时文档保存错误横幅仍须可见")
+    }
+
     /// Verification attachments render the actual production view with synthetic content only.
     private func savePreview(_ window: NSWindow, name: String) throws {
         let view = try #require(window.contentView)
@@ -200,9 +218,10 @@ struct NativeInspectorPresentationTests {
     }
 
     /// Editor-domain state reaches the view through the production projection receiver.
-    private func publishEditorState(_ state: NativeApplicationState, sequence: Int, aiOpen: Bool, selected: [String: Any]?) throws {
+    private func publishEditorState(_ state: NativeApplicationState, sequence: Int, aiOpen: Bool, selected: [String: Any]?, saveError: String? = nil) throws {
         var editor: [String: Any] = ["projectId": "preview", "aiOpen": aiOpen]
         if let selected { editor["selected"] = selected }
+        if let saveError { editor["saveError"] = saveError }
         try state.receiveProjection([
             "protocolVersion": 1, "sessionId": "inspector-visibility", "sequence": sequence,
             "projection": ["app": ["route": "editor", "loading": false,

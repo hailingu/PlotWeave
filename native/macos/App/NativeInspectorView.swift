@@ -10,15 +10,18 @@ struct NativeInspectorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // The shared error banner stays outside the AI-versus-content branch: document
+            // autosave failures (`editor.saveError`) must remain visible in every pane.
+            if visible,
+                let error = state.error ?? state.editor["saveError"]?.string ?? state.app["error"]?.string {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red).padding()
+            }
             if state.editor["aiOpen"]?.bool == true {
                 // The AI pane stays mounted while hidden so its native draft state survives
                 // visibility toggles exactly as before (its tree never depends on selection).
                 NativeAiView(state: state, projectId: state.projectId ?? "").id(state.projectId)
             } else if visible {
-                if let error = state.error ?? state.editor["saveError"]?.string ?? state.app["error"]?.string {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red).padding()
-                }
                 if let id = state.editor["selected"]?["id"]?.string,
                    let type = state.editor["selected"]?["type"]?.string,
                    let data = state.editor["selected"]?["data"] {
