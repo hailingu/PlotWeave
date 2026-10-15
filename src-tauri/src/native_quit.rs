@@ -104,7 +104,7 @@ extern "C" fn should_terminate(delegate: *mut c_void, _: *mut c_void, _: *mut c_
         }
         // AssertUnwindSafe：回调可能持有共享应用状态（QuitGate 等），panic 后
         // 其不变量或已受损；本层只承诺不再调用并拒绝退出，不负责恢复其状态。
-        if catch_unwind(AssertUnwindSafe(|| (*pointer)())).is_err() {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| (*pointer)())) {
             // 与 blocking.rs 同口径（issue #400）：不落 panic 载荷，仅稳定诊断码。
             // 显式忽略写错误而非 eprintln!（PR #580 评审）：eprintln! 在写失败
             // （如断管 EPIPE）时自身 panic，且此处已在 catch_unwind 之外，
@@ -113,6 +113,12 @@ extern "C" fn should_terminate(delegate: *mut c_void, _: *mut c_void, _: *mut c_
                 std::io::stderr(),
                 "[native-quit] code=quit-callback-panicked"
             );
+            // 载荷自身的 Drop 也可能 panic（panic_any 自定义载荷，PR #580 第二轮
+            // 评审）：显式绑定并在边界内二次遏制其析构；若析构再次 panic，其
+            // 嵌套载荷直接遗忘、不再递归展开——该失败路径至多泄漏一枚载荷。
+            if let Err(nested) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+                std::mem::forget(nested);
+            }
         }
         0 // NSTerminateCancel
     }

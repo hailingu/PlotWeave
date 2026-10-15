@@ -17,6 +17,10 @@ fn main() {
         panic_broken_stderr_child();
         return;
     }
+    if std::env::args().any(|arg| arg == "--native-quit-payload-drop-child") {
+        panic_payload_drop_child();
+        return;
+    }
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("--native-quit-child")
         .output()
@@ -66,6 +70,19 @@ fn main() {
         String::from_utf8_lossy(&sealed.stdout).contains("native-quit-broken-stderr-contained"),
         "stderr 断管引发的二次 panic 跨边界中断了进程：{:?}",
         sealed
+    );
+
+    // PR #580 第二轮评审：panic 载荷自身的 Drop panic 不得越过边界——
+    // panic_any 注入 Drop 中 panic 的载荷，terminate: 后进程仍须存活。
+    let payload = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--native-quit-payload-drop-child")
+        .output()
+        .unwrap();
+    assert!(payload.status.success(), "{:?}", payload);
+    assert!(
+        String::from_utf8_lossy(&payload.stdout).contains("native-quit-payload-drop-contained"),
+        "载荷析构 panic 跨边界中断了进程：{:?}",
+        payload
     );
 }
 
@@ -164,6 +181,48 @@ fn panic_broken_stderr_child() {
         send_arg(app, sel_registerName(c"terminate:".as_ptr()), app);
         // 到达即证明：诊断写失败被静默吞掉，遏制在 stderr 断管时仍然成立。
         println!("native-quit-broken-stderr-contained");
+        drop(barrier);
+    }
+}
+
+/// PR #580 第二轮评审：catch_unwind 捕获的 panic 载荷若在 Drop 中 panic，
+/// 其析构发生在 catch 之外的 extern "C" 函数体内——必须同样被遏制。
+/// 经 panic_any 注入 Drop 中 panic 的自定义载荷验证。
+#[cfg(target_os = "macos")]
+fn panic_payload_drop_child() {
+    use std::ffi::{c_char, c_void};
+    #[link(name = "AppKit", kind = "framework")]
+    unsafe extern "C" {}
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    struct PayloadDropPanics;
+    impl Drop for PayloadDropPanics {
+        fn drop(&mut self) {
+            panic!("fixture: 载荷析构");
+        }
+    }
+    let _runtime = tauri_runtime();
+    // SAFETY: selector 与签名均来自 AppKit/NSObject；此子进程在主线程执行。
+    unsafe {
+        let send: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let send_arg: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+            std::mem::transmute(objc_msgSend as *const ());
+        let app = send(
+            objc_getClass(c"NSApplication".as_ptr()),
+            sel_registerName(c"sharedApplication".as_ptr()),
+        );
+        let barrier = native_quit::install(|| {
+            std::panic::panic_any(PayloadDropPanics);
+        })
+        .unwrap();
+        send_arg(app, sel_registerName(c"terminate:".as_ptr()), app);
+        // 到达即证明：载荷析构 panic 被遏制在边界内，终止被拒绝。
+        println!("native-quit-payload-drop-contained");
         drop(barrier);
     }
 }
