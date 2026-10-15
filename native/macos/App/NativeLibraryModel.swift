@@ -15,6 +15,8 @@ final class NativeLibraryModel {
     private(set) var busy = false
     private(set) var error: String?
     let library: NativeLibrary
+    /// App-level registry receives accepted write batches so quit approval cannot precede their settlement.
+    @ObservationIgnored private let quitWork: NativeLibraryQuitWork?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var work: Task<Void, Never>?
     @ObservationIgnored private let selectFiles: FileSelection
@@ -23,8 +25,9 @@ final class NativeLibraryModel {
     var writable: Bool { !loading && !busy && value.object != nil }
 
     /// One shared library actor serves native views and host requests.
-    init(library: NativeLibrary, selectFiles: FileSelection? = nil) {
+    init(library: NativeLibrary, quitWork: NativeLibraryQuitWork? = nil, selectFiles: FileSelection? = nil) {
         self.library = library
+        self.quitWork = quitWork
         self.selectFiles = selectFiles ?? Self.chooseFiles
     }
 
@@ -37,7 +40,7 @@ final class NativeLibraryModel {
     /// A confirmed mutation completes once, then reloads the authoritative list; failures keep form drafts open.
     func mutate(_ command: String, args: [String: HostJSON], completion: @escaping @MainActor (Bool) -> Void = { _ in }) {
         guard writable else { return }
-        run(refreshOnFailure: true, completion: completion) { [library] in
+        run(refreshOnFailure: true, settlesQuit: true, completion: completion) { [library] in
             _ = try await library.invoke(command, args: args)
             return try await library.invoke("list_library_assets", args: [:])
         }
@@ -46,7 +49,7 @@ final class NativeLibraryModel {
     /// The user's native file selection is the only source of ambient file URLs, never a Web payload.
     func pickFiles(kind: String) {
         guard writable else { return }
-        run(refreshOnFailure: true) { [library, selectFiles] in
+        run(refreshOnFailure: true, settlesQuit: true) { [library, selectFiles] in
             for url in try await selectFiles() {
                 try Task.checkCancellation()
                 let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
@@ -70,12 +73,15 @@ final class NativeLibraryModel {
     }
 
     /// A single task owner disables conflicting writes and settles only its own presentation generation.
-    private func run(refreshOnFailure: Bool = false, completion: @escaping @MainActor (Bool) -> Void = { _ in }, _ operation: @escaping @MainActor () async throws -> HostJSON) {
+    private func run(refreshOnFailure: Bool = false, settlesQuit: Bool = false, completion: @escaping @MainActor (Bool) -> Void = { _ in }, _ operation: @escaping @MainActor () async throws -> HostJSON) {
         work?.cancel()
         let current = generation
+        let registry = settlesQuit ? quitWork : nil
+        let id = UUID()
         busy = true
         error = nil
-        work = Task { @MainActor [weak self] in
+        let task = Task { @MainActor [weak self, registry] in
+            defer { registry?.retire(id) }
             do {
                 let result = try await operation()
                 try Task.checkCancellation()
@@ -89,6 +95,8 @@ final class NativeLibraryModel {
                 await self?.recover(error, refreshList: refreshOnFailure, generation: current, completion: completion)
             }
         }
+        work = task
+        registry?.accept(id, task: task)
     }
 
     /// A failed batch may already have committed files; reread the actor without clearing the last good snapshot on failure.

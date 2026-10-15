@@ -9,7 +9,7 @@ struct NativeLibrarySheet: View {
 
     var body: some View {
         Group {
-            if let library { NativeLibraryView(state: state, library: library) }
+            if let library { NativeLibraryView(state: state, library: library, quitWork: services.libraryQuitWork) }
             else if let error { ContentUnavailableView("素材库无法打开", systemImage: "exclamationmark.triangle", description: Text(error)) }
             else { ProgressView("正在打开素材库") }
         }
