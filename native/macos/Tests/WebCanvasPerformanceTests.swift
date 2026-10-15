@@ -56,8 +56,15 @@ struct WebCanvasPerformanceTests {
         try await Task.sleep(for: .milliseconds(300))
         // WebContent processes are launchd children here; attribute this
         // test's page by the pids that appeared since the pre-mount baseline.
+        // Exactly one pid must appear: an empty set means pool reuse, and a
+        // second pid means a foreign suite's WebContent entered the window —
+        // either makes the attribution ambiguous, so fail explicitly instead
+        // of recording evidence against the wrong process set (issue #575).
         let trackedPages = WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
-        #expect(!trackedPages.isEmpty, "a WebContent process must own the loaded page")
+        #expect(
+            trackedPages.count == 1,
+            "attribution must isolate exactly this page's WebContent process: \(trackedPages.sorted())"
+        )
         let baseline = WebProcessMemorySampler.sample(tracking: trackedPages)
 
         // The script task inherits main-actor isolation so the options dict
@@ -119,10 +126,15 @@ struct WebCanvasPerformanceTests {
             let webView = try await waitForWebView(in: window)
             try await waitForFixture(webView, nodes: 100, edges: 89, deadline: .seconds(90))
             try await Task.sleep(for: .seconds(1))
-            // Pool reuse would return an empty diff and fail here explicitly
-            // instead of silently measuring the wrong process set.
+            // Pool reuse (empty diff) or a foreign suite's WebContent entering
+            // the attribution window (second pid) both make the enforced RSS
+            // bound unreliable — masking via an inflated first sample or a
+            // false failure — so ambiguity fails explicitly (issue #575).
             let bornThisCycle = WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
-            #expect(!bornThisCycle.isEmpty, "cycle \(cycle): a WebContent process must own the loaded page")
+            #expect(
+                bornThisCycle.count == 1,
+                "cycle \(cycle): attribution must isolate exactly this page's WebContent process: \(bornThisCycle.sorted())"
+            )
             cycleOwnedPids.formUnion(bornThisCycle)
             aggregateSamples.append(WebProcessMemorySampler.sample(tracking: cycleOwnedPids))
 
