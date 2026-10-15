@@ -181,7 +181,16 @@ NODE
   the versioned file and `git add` the ledger into the commit being created
   **before** the gate runs; the staging also picks up the previous push's
   unstaged materialized tail, automating the previously manual
-  "stage with the next change" discipline. The lines are carried by that
+  "stage with the next change" discipline. Auto-staging is attribution-
+  guarded (PR #581 评审 5537676738): it fires only for content attributable
+  to gate materialization — either the lines folded in this run form a pure
+  parseable-JSON append on top of the index (the developer's staged
+  selection is preserved verbatim), or the worktree is a pure
+  parseable-JSON append over `HEAD` with no distinct partial staging in the
+  index. A modified/deleted existing line, a malformed appended line, a
+  manual partial staging, or an undecidable state (Node unavailable) warns
+  `[GATE_HISTORY_UNATTRIBUTED_CHANGE]` and keeps the developer's staging
+  untouched. The lines are carried by that
   commit, so no unstaged residue remains while the operation proceeds —
   the PR #415 breakage was an *unstaged* write; this path folds and stages
   into the same commit. The record for commit C's own gate run is

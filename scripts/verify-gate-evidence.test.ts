@@ -1,7 +1,8 @@
 /** verify-gate-evidence.ts 的行为测试（issue #548）：在真实临时 Git 仓库
  * 中按物化时序构造台账演进，断言核验的退出码与稳定诊断码——诊断码是
  * scripts/verify-gate-evidence.ts 文件头文档化的机器可读契约，本文件按
- * 契约断言，不校验普通措辞。 */
+ * 契约断言，不校验普通措辞。用例按「非 tip 证据判定 / tip 形态判定 /
+ * 解析、范围与参数」分组，各 describe 回调保持在可执行单元行数上限内。 */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -115,41 +116,9 @@ afterEach(() => {
 })
 
 describe(
-  '门禁证据核验（verify-gate-evidence.ts，issue #548）',
+  '非 tip 提交的证据判定（verify-gate-evidence.ts，issue #548）',
   { timeout: 60_000 },
   () => {
-    it('revert 台账补充提交会把此前的证据一并剥离：非 tip 提交判缺失、退出 1', () => {
-      const root = createSeeded((root) => {
-        writeFile(root, 'src/app.txt', 'c1\n')
-        const c1 = commitAll(root, 'c1')
-        appendLedger(root, [recordLine(root, c1)])
-        commitAll(root, '物化台账')
-        // revert 撤销台账补充提交，c1 的证据行随台账回到补充前状态
-        git(root, 'revert', '--no-edit', 'HEAD')
-      })
-
-      const result = runVerifier(root, ['--base', 'main~3', '--head', 'HEAD'])
-
-      expect(result.status).toBe(1)
-      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
-      expect(result.output).toContain('（c1）')
-    })
-
-    it('tip 自身记录滞后一次提交：通过但输出 GATE_EVIDENCE_TIP_LAG 告警', () => {
-      const root = createSeeded((root) => {
-        writeFile(root, 'src/app.txt', 'c1\n')
-        const c1 = commitAll(root, 'c1')
-        writeFile(root, 'src/app.txt', 'c2\n')
-        appendLedger(root, [recordLine(root, c1)])
-        commitAll(root, 'c2')
-      })
-
-      const result = runVerifier(root, ['--base', 'main~2', '--head', 'HEAD'])
-
-      expect(result.status).toBe(0)
-      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
-    })
-
     it('非 tip 提交缺失通过记录：退出 1 并逐条列出 GATE_EVIDENCE_MISSING', () => {
       const root = createSeeded((root) => {
         writeFile(root, 'src/app.txt', 'c1-绕过\n')
@@ -187,6 +156,56 @@ describe(
       expect(result.output).toContain('（c1）')
     })
 
+    it('revert 台账补充提交会把此前的证据一并剥离：非 tip 提交判缺失、退出 1', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        appendLedger(root, [recordLine(root, c1)])
+        commitAll(root, '物化台账')
+        // revert 撤销台账补充提交，c1 的证据行随台账回到补充前状态
+        git(root, 'revert', '--no-edit', 'HEAD')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~3', '--head', 'HEAD'])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('（c1）')
+    })
+  },
+)
+
+describe(
+  'tip 形态判定（verify-gate-evidence.ts，issue #548）',
+  { timeout: 60_000 },
+  () => {
+    it('tip 自身记录滞后一次提交：通过但输出 GATE_EVIDENCE_TIP_LAG 告警', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        writeFile(root, 'src/app.txt', 'c2\n')
+        appendLedger(root, [recordLine(root, c1)])
+        commitAll(root, 'c2')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~2', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+    })
+
+    it('单提交 PR 且 tip 未留证：通过但告警滞后', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        commitAll(root, 'c1')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~1', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+    })
+
     it('tip 仅改台账（物化补充提交）：豁免且无告警', () => {
       const root = createSeeded((root) => {
         writeFile(root, 'src/app.txt', 'c1\n')
@@ -202,6 +221,35 @@ describe(
       expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
     })
 
+    it('合并提交不适用台账-only 豁免：作为 tip 滞后仅告警，范围内其余提交留证即通过', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        git(root, 'checkout', '-b', 'side', 'main~1')
+        writeFile(root, 'src/side.txt', 'side\n')
+        const s1 = commitAll(root, 's1')
+        git(root, 'checkout', 'main')
+        appendLedger(root, [recordLine(root, c1), recordLine(root, s1)])
+        const c2 = commitAll(root, '物化台账')
+        git(root, 'merge', '--no-ff', '--no-commit', 'side')
+        appendLedger(root, [recordLine(root, c2)])
+        commitAll(root, 'merge side')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~3', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+      expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+      expect(result.output).not.toContain('[GATE_EVIDENCE_MISSING]')
+    })
+  },
+)
+
+describe(
+  '台账解析、范围与参数（verify-gate-evidence.ts，issue #548）',
+  { timeout: 60_000 },
+  () => {
     it('台账畸形行跳过并告警，有效记录仍参与判定', () => {
       const root = createSeeded((root) => {
         writeFile(root, 'src/app.txt', 'c1\n')
@@ -233,41 +281,6 @@ describe(
 
       expect(result.status).toBe(0)
       expect(result.output).toContain('没有待合并提交')
-    })
-
-    it('单提交 PR 且 tip 未留证：通过但告警滞后', () => {
-      const root = createSeeded((root) => {
-        writeFile(root, 'src/app.txt', 'c1\n')
-        commitAll(root, 'c1')
-      })
-
-      const result = runVerifier(root, ['--base', 'main~1', '--head', 'HEAD'])
-
-      expect(result.status).toBe(0)
-      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
-    })
-
-    it('合并提交不适用台账-only 豁免：作为 tip 滞后仅告警，范围内其余提交留证即通过', () => {
-      const root = createSeeded((root) => {
-        writeFile(root, 'src/app.txt', 'c1\n')
-        const c1 = commitAll(root, 'c1')
-        git(root, 'checkout', '-b', 'side', 'main~1')
-        writeFile(root, 'src/side.txt', 'side\n')
-        const s1 = commitAll(root, 's1')
-        git(root, 'checkout', 'main')
-        appendLedger(root, [recordLine(root, c1), recordLine(root, s1)])
-        const c2 = commitAll(root, '物化台账')
-        git(root, 'merge', '--no-ff', '--no-commit', 'side')
-        appendLedger(root, [recordLine(root, c2)])
-        commitAll(root, 'merge side')
-      })
-
-      const result = runVerifier(root, ['--base', 'main~3', '--head', 'HEAD'])
-
-      expect(result.status).toBe(0)
-      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
-      expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
-      expect(result.output).not.toContain('[GATE_EVIDENCE_MISSING]')
     })
 
     it('缺少 --base 或未知参数：退出 2 并给出用法', () => {

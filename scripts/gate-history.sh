@@ -3,8 +3,10 @@
 # 记录行追加到 .git 内的待物化文件——不在门禁运行中途留下未暂存改动，
 # 重放/检出/合并不会因未暂存改动而中止。物化分三条路径：
 # pre-commit / pre-merge-commit 在门禁前调用 materialize
-# --stage-for-commit（issue #548）：把待物化行并入版本化文件并无条件
-# git add 台账（含上次推送物化后遗留的未暂存行）进即将创建的提交——
+# --stage-for-commit（issue #548）：把待物化行并入版本化文件，并在台账
+# 改动可归因于门禁物化（对 HEAD 纯追加且新行均为合法 JSON 记录、无人工
+# 部分暂存）时 git add 台账（含上次推送物化后遗留的未暂存行）进即将
+# 创建的提交，不可归因时保留原暂存状态并警告——
 # 普通提交与合并提交可靠采纳钩子暂存，服务端证据核验由此读到「滞后
 # 一次提交」的账本；revert / cherry-pick / rebase 重放走的
 # prepare-commit-msg 回退门禁【不】物化——sequencer 重放不采纳钩子对
@@ -32,16 +34,83 @@ cd "$repository_root"
 # 取值；非仓库环境回退到仓库根下的 .git。
 pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-$(git rev-parse --git-path plotweave-gate-history.pending 2>/dev/null || printf '%s' "$repository_root/.git/plotweave-gate-history.pending")}
 
+node_bin=${PLOTWEAVE_NODE_BIN:-node}
+
+# 台账改动的归因判定（PR #581 评审 5537676738）：自动暂存只收编可归因
+# 于门禁物化的内容，判定用钉版 Node 对比四个输入：HEAD 版、有效索引版、
+# 工作树版与本次折并的待物化行。两种可归因形态：
+# ① 本次折并的行恰为索引之上的纯追加（每行可解析为 JSON）——用户已
+#   暂存的台账选择被逐字保留，暂存只追加工具写入的行；
+# ② 工作树是 HEAD 版的逐行纯追加、追加行逐一可解析为 JSON、且索引要么
+#   与 HEAD 一致（无人工暂存）要么与工作树一致（人工已全量暂存）——
+#   覆盖推送尾物化遗留行的收编；索引处于其他形态说明开发者做了部分
+#   暂存，不得覆盖。
+# 任何无法判定（Node 不可用/崩溃、非 Git 环境）都视为不可归因，宁可退回
+# 人工暂存；判定输出 attributed。
+ledger_change_attribution() {
+  ledger_directory=$(CDPATH= cd -- "$(dirname -- "$history_path")" && pwd) || return 1
+  ledger_name=$(basename -- "$history_path")
+  head_temp=$(mktemp) || return 1
+  index_temp=$(mktemp) || return 1
+  git -C "$ledger_directory" show "HEAD:./$ledger_name" >"$head_temp" 2>/dev/null || : >"$head_temp"
+  git -C "$ledger_directory" show ":./$ledger_name" >"$index_temp" 2>/dev/null || : >"$index_temp"
+  verdict=$("$node_bin" - "$head_temp" "$index_temp" "$history_path" "${folded_capture:-}" <<'ATTRIBUTION'
+const { readFileSync } = require('node:fs')
+const read = (path) => {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return ''
+  }
+}
+const toLines = (text) => {
+  const lines = text.split('\n')
+  if (lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
+const head = toLines(read(process.argv[2]))
+const index = toLines(read(process.argv[3]))
+const work = toLines(read(process.argv[4]))
+const folded = toLines(read(process.argv[5]))
+const same = (left, right) =>
+  left.length === right.length && left.every((line, position) => line === right[position])
+const parseable = (lines) =>
+  lines.every((line) => {
+    try {
+      JSON.parse(line)
+      return true
+    } catch {
+      return false
+    }
+  })
+const foldAppend =
+  folded.length > 0 && same(work, index.concat(folded)) && parseable(folded)
+const headAppend =
+  head.every((line, position) => work[position] === line) &&
+  parseable(work.slice(head.length)) &&
+  (same(index, head) || same(index, work))
+if (foldAppend || headAppend) {
+  process.stdout.write('attributed')
+}
+ATTRIBUTION
+  ) || verdict=
+  rm -f "$head_temp" "$index_temp" "${folded_capture:-}"
+  printf '%s' "$verdict"
+}
+
 # 提交创建路径的暂存（issue #548）：把版本化台账 git add 进即将创建的
 # 提交——含刚并入的待物化行与上次推送物化后遗留的未暂存行（AGENTS.md
 # 「随下一次变更一起提交」的规范由此自动执行）。只在普通提交与合并提交
 # 钩子（pre-commit / pre-merge-commit）调用：这些路径的暂存可靠进入提交
 # 且不留未暂存残留（PR #415 评审 5338815626 的中止形态是未暂存写）；
 # sequencer 重放不采纳追加暂存，prepare-commit-msg 回退路径不得调用。
-# 台账文件不存在时静默跳过；git add 失败只警告：行保持未暂存、随下一次
-# 变更提交，绝不因证据暂存失败阻塞已通过的门禁或本次提交。台账与 HEAD
-# 无差异且本次未并入新行时静默跳过，不给常规提交增加噪音输出。
+# 台账文件不存在时静默跳过；台账与 HEAD 无差异且本次未并入新行时静默
+# 跳过；改动不可归因于门禁物化（修改/删除既有行、畸形新行、人工部分
+# 暂存、无法判定）时保留原暂存状态并警告 [GATE_HISTORY_UNATTRIBUTED_
+# CHANGE]，交回开发者人工核验；git add 失败只警告
+# [GATE_HISTORY_STAGE_FAILED]。三者都绝不阻塞已通过的门禁或本次提交。
 folded_this_run=
+folded_capture=
 stage_materialized_lines() {
   if [ ! -f "$history_path" ]; then
     return 0
@@ -49,6 +118,11 @@ stage_materialized_lines() {
   if [ "$folded_this_run" != 1 ] &&
     git diff --quiet HEAD -- "$history_path" 2>/dev/null &&
     git diff --cached --quiet HEAD -- "$history_path" 2>/dev/null; then
+    return 0
+  fi
+  if [ "$(ledger_change_attribution)" != 'attributed' ]; then
+    printf 'gate-history 警告：[GATE_HISTORY_UNATTRIBUTED_CHANGE] 台账 %s 存在不可归因于门禁物化的改动（修改/删除既有行、畸形新行、人工部分暂存）或无法完成归因判定；保留原暂存状态，请人工核验后随下一次变更提交；不阻塞本次操作。\n' \
+      "$history_path" >&2
     return 0
   fi
   if git add -- "$history_path" 2>/dev/null; then
@@ -112,6 +186,10 @@ case ${1:-} in
     fi
     trap release_lock 0 1 2 15
     pending_lines=$(grep -c '' "$pending_path" 2>/dev/null) || pending_lines=0
+    folded_capture=$(mktemp) || folded_capture=
+    if [ -n "$folded_capture" ]; then
+      cp "$pending_path" "$folded_capture" 2>/dev/null || folded_capture=
+    fi
     if cat "$pending_path" >> "$history_path" 2>/dev/null &&
       : > "$pending_path" 2>/dev/null; then
       folded_this_run=1
