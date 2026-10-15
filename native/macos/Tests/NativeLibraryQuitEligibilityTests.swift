@@ -221,6 +221,44 @@ struct NativeLibraryQuitEligibilityTests {
         #expect(list["assets"]?["byId"]?.object?.count == 1)
     }
 
+    /// A cancelled or replaced quit delivery abandons its batch wait promptly instead of staying suspended.
+    @Test func cancelledDeliveryReleasesBatchWaitPromptly() async throws {
+        let fixture = try QuitFixture()
+        defer { fixture.close() }
+        try await fixture.waitUntilReady()
+        let gate = SelectionGate()
+        let model = fixture.model { await gate.select() }
+        defer { model.close() }
+        try await fixture.load(model)
+        model.pickFiles(kind: "other")
+        try await fixture.waitUntil { fixture.services.libraryQuitWork.hasPendingBatches && gate.isWaiting }
+        let installed = fixture.quit.sendEvent
+        let released = ReleaseFlag()
+        fixture.quit.sendEvent = { name, payload in
+            defer { released.set() }
+            try await installed?(name, payload)
+        }
+        fixture.quit.acknowledgeListener()
+        fixture.quit.request(.terminate)
+        // The current delivery is legitimately held by the accepted batch.
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!released.value)
+        fixture.quit.cancel()
+        // The obsolete delivery must unwind while the batch is still held, without touching the batch itself.
+        try await fixture.waitUntil { released.value }
+        #expect(fixture.services.libraryQuitWork.hasPendingBatches && model.busy)
+        #expect(try await fixture.quitEvents() == 0)
+        gate.release([])
+        try await fixture.waitUntil { !fixture.services.libraryQuitWork.hasPendingBatches && !model.busy }
+    }
+
+    /// One-shot flag observable across the wrapped production delivery closure.
+    @MainActor
+    private final class ReleaseFlag {
+        private(set) var value = false
+        func set() { value = true }
+    }
+
     /// Holds one deterministic selection; the accepted batch suspends until the test releases it.
     @MainActor
     private final class SelectionGate {

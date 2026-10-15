@@ -96,7 +96,7 @@ final class NativeLibraryModel {
             }
         }
         work = task
-        registry?.accept(id, task: task)
+        registry?.accept(id)
     }
 
     /// A failed batch may already have committed files; reread the actor without clearing the last good snapshot on failure.
