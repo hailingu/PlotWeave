@@ -141,20 +141,22 @@ final class NativeDirectory: Sendable {
             _ = temporary.withCString { unlinkat(descriptor, $0, 0) }
         }
         try Self.writeAll(data, descriptor: file)
-        guard fsync(file) == 0 else { throw Self.ioError("同步文件内容失败") }
+        guard NativeAtomicWriteFaults.syscall(.temporaryFileSync, { fsync(file) }) == 0 else { throw Self.ioError("同步文件内容失败") }
         if let existing = try metadata(name), !Self.isRegular(existing) {
             throw Self.refused("写入目标在提交前成为非普通文件")
         }
         try beforeCommit(file)
-        let renamed = temporary.withCString { from in
-            name.withCString { to in
-                replace ? renameat(descriptor, from, descriptor, to)
-                    : renameatx_np(descriptor, from, descriptor, to, UInt32(RENAME_EXCL))
+        let renamed = NativeAtomicWriteFaults.syscall(.rename) {
+            temporary.withCString { from in
+                name.withCString { to in
+                    replace ? renameat(descriptor, from, descriptor, to)
+                        : renameatx_np(descriptor, from, descriptor, to, UInt32(RENAME_EXCL))
+                }
             }
         }
         guard renamed == 0 else { throw Self.ioError("提交原子写失败") }
         try afterCommit()
-        try sync()
+        try syncBarrier()
     }
 
     /// Removes only the classified entry; directories are traversed through bound no-follow handles.
@@ -192,6 +194,11 @@ final class NativeDirectory: Sendable {
     /// Directory entry durability is part of the success contract, including newly created children.
     func sync() throws {
         guard fsync(descriptor) == 0 else { throw Self.ioError("同步目录条目失败") }
+    }
+
+    /// The post-rename durability barrier shares sync()'s syscall but is injectable as its own protocol stage.
+    private func syncBarrier() throws {
+        guard NativeAtomicWriteFaults.syscall(.directorySync, { fsync(descriptor) }) == 0 else { throw Self.ioError("同步目录条目失败") }
     }
 
     /// File classification stays separate from following or opening its target.

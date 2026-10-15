@@ -17,9 +17,11 @@
 | 会话与写入 owner | React 继续拥有图文档、撤销、防抖、保存／删除链和退出冲刷；Swift actor 串行执行项目保存、删除及项目媒体事务，`expectExisting` 在同一 actor 内拒绝删除后的迟到保存。原生界面不拥有可写文档副本。 |
 | 文件提交与失败 | 原子写先同步临时文件，rename 后同步父目录；保存前后均按绑定目录句柄复验媒体。提交前拒绝保留旧文档；提交后目录同步或资产复验失败如实报错，新文档可能已经落盘，不保证回滚。两类失败的既有边界见 §10.5 与[资产 §7.1](assets.md#71-两个作用域)。 |
 | 兼容性差异 | v1 文档、AI 会话与资产引用沿用既有格式；旧扁平 v0 格式支持已随 [#519 处置](https://github.com/hailingu/PlotWeave/issues/519)退役，两栈判型统一拒绝并保留原文件，此前记录的脏 legacy 小数 `updated_at` 排序差异不再存在。 |
-| 验证缺口 | 单应用实例范围保持；不承诺跨进程媒体替换与文档之间的事务。Swift 系统 fsync 故障注入、真实系统面板、IME、VoiceOver、视觉、性能与签名分发仍未验收，不能由隔离根测试推定通过。 |
+| 验证缺口 | 单应用实例范围保持；不承诺跨进程媒体替换与文档之间的事务。原子写的系统调用故障注入（临时文件同步、rename、rename 后父目录同步）已随 [issue #543](https://github.com/hailingu/PlotWeave/issues/543) 由 Swift 测试验收，见下方验证记录；真实系统面板、IME、VoiceOver、视觉、性能与签名分发仍未验收，不能由隔离根测试推定通过。 |
 
 详细落地与缺口见[总体分层](overview.md#二-总体分层)、[功能补齐记录](../swiftui-react-flow-feature-parity.md)及[修复矩阵 R20–R21](../swiftui-react-flow-pr526-fixes.md)。下文明确标注 Tauri／Rust 的实现说明继续描述其基线，不意味着 Swift 调用这些内核；公共文档格式与失败语义仍适用于两条服务路径。
+
+验证记录（2026-10-15，[issue #543](https://github.com/hailingu/PlotWeave/issues/543)）：Swift 原子写的系统 fsync／rename 故障注入已验收。测试专用 `NativeAtomicWriteFaults` 以进程级、互斥锁保护的阶段注入包装真实系统调用（临时文件 `fsync`、提交 `renameat`／`renameatx_np`、rename 后父目录 `fsync`），与 Rust `store::persist::faults` 基线同级；生产路径无活动注入时按原样执行，不改变成功保存的文件布局、时间戳或 v0 拒绝行为。`NativeAtomicWriteFaultTests` 在隔离临时根上经 `save_project` 命令观察三类失败：临时文件同步与 rename 失败（提交前）——`PW_STORAGE_ERROR` 上浮、磁盘保持旧文档、无临时文件残留、注入撤除后重试收敛为新文档；rename 后目录屏障失败（提交后）——如实报错、新文档已落盘不回滚、重试幂等收敛。三阶段以「已抵达阶段」记录自证守卫（rename 前置于屏障）。注入为 errno 级阶段模拟（EIO），不等同真实断电实验；Tauri／Rust 基线故障测试保留，不替代本路径，也不被本路径替代。
 
 历史 FFI `saveProject` 的可选布尔 `expectExisting` 沿用 Tauri 保存的存在性约束：缺省 `false` 保留初次创建，`true` 在共享操作锁内确认目标仍存在，删除后的迟到请求返回失败且不得重建项目；非法字段类型拒绝。保存 NotFound 不携带 `[project_not_found]` 码，该码仅由加载入口返回。调用方仍须维护项目保存/删除协调，FFI guard 不替代会话排序；兼容性回归见[P2 合并同步](../swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)。当前 Swift 在自己的 actor 内实现同一存在性约束，并未接入该历史调用路径。
 
