@@ -16,6 +16,13 @@
 //! recover → trash → journal_io → fsync，issue #399 解环后的无环形态由
 //! 评审与 docs/development/rust-standard.md 的退役记录维护），兄弟模块
 //! 直接互引、不经父级转口。
+//!
+//! 平台边界（issue #546）：本协议依赖 Unix 文件身份 `(dev, ino)`——官方
+//! 仅支持 macOS；非 Unix 目标保持**可编译**（Windows 等由使用者自行构建，
+//! 见 README 平台声明，不提供官方构建/测试/发行支持），运行时身份原语
+//! 与目录持久性屏障按能力缺失显式拒绝（trash/fsync 的 `cfg(not(unix))`
+//! 变体与 `identity_bound_unlink` 同款契约），删除入口在无身份平台拒绝，
+//! 绝不基于猜测身份移动或删除媒体。
 
 mod archive;
 mod fsync;
