@@ -35,13 +35,19 @@ anchor or new enforcement mechanism is introduced.
 checks, both coverage reports, the scanner, Quality Gate `OK`, and zero
 new-code unresolved issues — `scripts/sonar-quality-gate.sh` appends exactly
 one JSON line to a pending file inside `.git`
-(`plotweave-gate-history.pending`), never to the tracked file mid-operation
-(PR #415 评审 5338815626: a commit-side write to the tracked file leaves an
+(`plotweave-gate-history.pending`), never to the tracked file mid-gate
+(PR #415 评审 5338815626: a gate-side write to the tracked file leaves an
 unstaged change that aborts the next rebase replay, checkout, or merge
-updating that file). After the `pre-push` gate passes, the hook runs
-`scripts/gate-history.sh materialize`, which folds the pending lines into the
-versioned `docs/development/gate-history.jsonl` and clears the pending file.
-Each record line:
+updating that file). Since issue #548, `pre-commit` and `pre-merge-commit` run
+`gate-history.sh materialize --stage-for-commit` before their gate: they
+fold pending lines into the versioned ledger and `git add` it into the
+commit being created, so the versioned ledger lags one commit (the
+`prepare-commit-msg` fallback gate — revert, cherry-pick, rebase replays —
+deliberately does not touch the ledger; see the timing property below).
+After the `pre-push` gate passes, the hook runs
+`scripts/gate-history.sh materialize`, which folds the remaining push-tail
+lines into the versioned `docs/development/gate-history.jsonl` and clears
+the pending file. Each record line:
 
 | Field | Meaning |
 | --- | --- |
@@ -167,16 +173,42 @@ NODE
   after confirming that no gate or materialization process is running.
   Evidence must not become a
   new way to fail a clean gate or push.
-- *Materialize-at-push, one-commit lag.* Commit-creating paths write only to
-  the pending file inside `.git`, so they never dirty the tracked file and
-  never interfere with subsequent Git steps; the versioned file is touched
-  only after a passing `pre-push`, at which no further tree operation is
-  pending in that command. Because the evidence file must itself pass the
-  gate, materialized lines are unstaged until the next commit stages them —
-  stage them together with the next change; committing the file alone burns
-  a full gate run on a record-only commit. Records for commit-side runs of
-  commits that are never pushed stay in the local pending file: nothing
-  leaves the machine, so there is no external claim to verify.
+- *Materialize timing and the one-commit lag.* Gate runs write only to the
+  pending file inside `.git`, so they never dirty the tracked file mid-gate
+  and never interfere with subsequent Git steps. Since issue #548,
+  `pre-commit` and `pre-merge-commit` — the ordinary commit and merge
+  paths, which reliably adopt hook staging — fold the pending lines into
+  the versioned file and `git add` the ledger into the commit being created
+  **before** the gate runs; the staging also picks up the previous push's
+  unstaged materialized tail, automating the previously manual
+  "stage with the next change" discipline. The lines are carried by that
+  commit, so no unstaged residue remains while the operation proceeds —
+  the PR #415 breakage was an *unstaged* write; this path folds and stages
+  into the same commit. The record for commit C's own gate run is
+  therefore versioned in the **next** ordinary commit (C's tree contains
+  the staged lines, so it cannot contain its own record — self-reference).
+  The `prepare-commit-msg` fallback gate — automatic `git revert` /
+  `git cherry-pick` commits and every `git rebase` replay — deliberately
+  does **not** materialize: sequencer replays do not adopt hook-added
+  staging, and the folded-but-uncommitted lines would abort the next replay
+  (measured in this change's fixtures; the PR #415 protection is kept).
+  Those runs' records stay in the pending file and fold with the next
+  ordinary commit — after rebasing a branch, one follow-up ordinary commit
+  (`git commit --allow-empty` qualifies, and lands as the exempt
+  ledger-only tip) restores replay evidence before pushing.
+  The versioned file is additionally touched after a passing `pre-push`,
+  which folds the push-tail records (the tip's commit-side and push runs)
+  and leaves them unstaged; stage them together with the next change.
+  Committing the file alone burns a full gate run on a record-only commit —
+  not the norm, except as an optional evidence-tip commit, which the
+  server-side check exempts when it only touches the ledger. Records for
+  commit-side runs of commits that are never pushed stay in the local
+  pending file: nothing leaves the machine, so there is no external claim
+  to verify. If the commit-time `git add` fails (best-effort), the folded
+  lines stay unstaged and ride with the next change; a `rebase --abort`
+  after a staged fold can discard that batch — any commit that is actually
+  pushed later gets a fresh push-path record, so no durable evidence gap
+  remains.
 - *Working tree vs. index key.* The gate analyzes the working tree (see
   [Known Finding: Push Scans The Checked-Out Tree, Not The Pushed
   Ref](quality-gate-push.md#known-finding-push-scans-the-checked-out-tree-not-the-pushed-ref)),
@@ -194,3 +226,71 @@ NODE
   never reach the record path (the gate passes them via stdin/environment
   exclusively), and raw scan artifacts stay unversioned — the issue #355
   acceptance criteria require both.
+
+## Server-Side Evidence Verification (issue #548)
+
+The local gate's enforcement endpoint was the machine's own Git hooks; a
+`git push --no-verify` direct push, or a PR whose commits were created
+without the gate, previously had no server-side backstop. Issue #548 added
+two complementary backstops (方案 1 + 方案 2):
+
+1. **CI evidence check（方案 1）.** The `gate-evidence` job in
+   `.github/workflows/ci.yml` runs `scripts/verify-gate-evidence.ts` on
+   every pull request targeting `dev` or `main` (`ubuntu-latest`,
+   pull-request events only — push runs contain server-created merge
+   commits that have no local ledger record by design). For the range
+   `merge-base(base, head)..head`, against the ledger **as versioned at the
+   PR head**:
+   - Every commit **except the tip** must have an evidence record: a line
+     whose `tree` equals the commit tree with `qualityGate == "OK"` and
+     `newCodeUnresolvedIssues == 0`. A missing record fails the check
+     (`[GATE_EVIDENCE_MISSING]`, exit 1).
+   - The **tip** gets its own record only with the next commit (see the
+     one-commit-lag property above), so a missing tip record is a warning
+     (`[GATE_EVIDENCE_TIP_LAG]`, exit 0) — surfaced as a GitHub annotation.
+     A tip whose only change is the ledger itself is exempt
+     (`[GATE_EVIDENCE_LEDGER_ONLY_TIP]`): it carries no ungated source
+     change. Merge commits never qualify for the exemption (a merge can
+     carry content); as tips they get the lag warning like any other tip.
+   - Malformed ledger lines are skipped and warned
+     (`[GATE_EVIDENCE_MALFORMED_LINE]`), matching the ledger's log
+     semantics; they do not fail the check by themselves.
+   - The script always reads original Git objects
+     (`GIT_NO_REPLACE_OBJECTS=1`, matching the push gate, PR #442).
+
+   This check is why the ordinary commit paths now stage pending records
+   into each commit (issue #548): with materialize-at-push only, the
+   versioned ledger lags one full push cycle and every compliant PR would
+   fail the per-commit requirement. With commit-time staging, a compliant
+   multi-commit PR is fully evidenced except its tip. Replayed commits
+   (rebase / cherry-pick / revert) are evidenced once one follow-up
+   ordinary commit exists on the branch — the verifier's remediation
+   message names that step (`git commit --allow-empty` then re-push); a
+   rebased branch pushed without it fails the check on the replayed
+   non-tip commits.
+
+2. **Branch protection（方案 2）.** GitHub branch protection is enabled on
+   `dev` and `main` (owner decision, 2026-10-16): pull requests required
+   (no approving-review count), the four `ci` jobs required as status
+   checks, administrators included, force pushes and deletions blocked. A
+   `git push --no-verify` direct push is rejected server-side before any
+   code leaves the machine unverified.
+
+**Remaining boundaries.** The trust boundary of
+[issue #431](https://github.com/hailingu/PlotWeave/issues/431) is
+unchanged: the ledger is unsigned, so the check raises the cost of
+bypassing from "push with `--no-verify`" to "actively falsify the versioned
+ledger inside a pushed commit", and does not authenticate that the gate
+executed. A single-commit bypass PR surfaces only the tip warning — it is
+visible at merge time but not blocking. The uncovered creation paths
+(`git am`, plumbing, history rewriters) produce commits without records and
+therefore fail the check once they appear as non-tip commits in a PR —
+remediation is to recreate the change through the gated workflow (or let
+the owner adjudicate). Rebasing a branch without a follow-up ordinary
+commit fails the check on the replayed commits; the remediation is the
+named `git commit --allow-empty` step, not a bypass. Path-limited commits (`git commit <pathspec>`) keep
+the pre-existing working-tree-versus-index boundary recorded in
+[What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces):
+the record keys the effective index, which the hooks also stage the ledger
+into. Commits created before the issue #548 hooks staged evidence carry no
+records; they fail the check until recreated or superseded.

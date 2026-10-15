@@ -97,11 +97,17 @@ Every gated command runs the same complete sequence:
 4. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
    then a separate check that new-code unresolved issues are zero.
 5. Since issue #355, a fully passing run appends one summary record to a
-   pending file inside `.git`, and the `pre-push` hook materializes pending
-   lines into the versioned `docs/development/gate-history.jsonl` after its
-   gate passes (see
+   pending file inside `.git`. Since issue #548 the ordinary commit paths
+   (`pre-commit` / `pre-merge-commit`) fold and stage those pending lines
+   into the commit being created before the gate runs, and the `pre-push`
+   hook materializes the remaining push-tail lines into the versioned
+   `docs/development/gate-history.jsonl` after its gate passes (see
    [Gate Run Evidence Record](quality-gate-evidence.md#gate-run-evidence-record-issue-355)). This step
    observes and records; it checks nothing and adds no variant of the gate.
+   The server-side evidence check issue #548 added on top (the CI
+   `gate-evidence` job reading that ledger) is verification of the recorded
+   evidence, not a gate variant, and does not change this sequence or its
+   cost.
 
 提交创建路径及同次操作去重见[标记归属与复用](quality-gate-lifecycle.md#commit-marker-ownership-and-reuse)。
 未覆盖路径与逐命令差异以[门禁覆盖清单](quality-gate-enforcement.md#what-the-gate-actually-enforces)为唯一事实源。

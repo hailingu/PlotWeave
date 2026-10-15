@@ -1,4 +1,5 @@
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -10,6 +11,10 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
+import {
+  gitFixtureEnvironment,
+  gitScenarioFixture,
+} from './git-scenario-fixture'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
@@ -199,6 +204,135 @@ describe(
       expect(result.status).toBe(0)
       expect(result.pending).toBe(pending)
       expect(`${result.stdout}${result.stderr}`).toContain('非数字')
+    })
+  },
+)
+
+const scenarioFixtures: Array<ReturnType<typeof gitScenarioFixture>> = []
+
+/** 在指定根下运行一份独立脚本副本：脚本按自身位置定位仓库根（与真实
+ * 钩子一致），副本放进夹具仓库即物化该仓库的台账。 */
+function runIsolatedMaterialize(
+  root: string,
+  options: { pending?: string } = {},
+): { status: number | null; stdout: string; stderr: string; history: string } {
+  const historyPath = resolve(root, 'docs/development/gate-history.jsonl')
+  const pendingPath = resolve(root, 'gate-pending.jsonl')
+  mkdirSync(resolve(historyPath, '..'), { recursive: true })
+  writeFileSync(historyPath, '')
+  if (options.pending !== undefined) {
+    writeFileSync(pendingPath, options.pending)
+  }
+  // 脚本按自身位置（scripts/..）推算仓库根：副本放进 scripts/ 镜像真实布局
+  mkdirSync(resolve(root, 'scripts'), { recursive: true })
+  cpSync(
+    resolve(repositoryRoot, 'scripts/gate-history.sh'),
+    resolve(root, 'scripts/gate-history.sh'),
+  )
+  const environment: NodeJS.ProcessEnv = {
+    ...gitFixtureEnvironment(),
+    PLOTWEAVE_GATE_HISTORY_PATH: historyPath,
+    PLOTWEAVE_GATE_PENDING_PATH: pendingPath,
+    PLOTWEAVE_SONAR_LOCK_DIRECTORY: resolve(root, 'gate-lock'),
+  }
+  const result = spawnSync(
+    'sh',
+    [
+      resolve(root, 'scripts/gate-history.sh'),
+      'materialize',
+      '--stage-for-commit',
+    ],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: environment,
+      timeout: 60_000,
+    },
+  )
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    history: readFileSync(historyPath, 'utf8'),
+  }
+}
+
+describe(
+  '物化暂存（gate-history.sh materialize --stage-for-commit，issue #548）',
+  { timeout: 30_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
+    })
+
+    it('在真实 Git 仓库中把待物化行并入版本化文件并暂存进即将创建的提交', () => {
+      const fixture = gitScenarioFixture((root) => {
+        const environment = gitFixtureEnvironment()
+        const run = (args: string[]) =>
+          spawnSync('git', args, {
+            cwd: root,
+            encoding: 'utf8',
+            env: environment,
+          })
+        run(['init', '--initial-branch=main'])
+        run(['config', 'user.name', 'Stage'])
+        run(['config', 'user.email', 'stage@example.invalid'])
+        mkdirSync(resolve(root, 'docs/development'), { recursive: true })
+        writeFileSync(resolve(root, 'docs/development/gate-history.jsonl'), '')
+        run(['add', '-A'])
+        run(['commit', '-m', 'base'])
+      })
+      scenarioFixtures.push(fixture)
+      const root = fixture.create()
+
+      const result = runIsolatedMaterialize(root, {
+        pending: '{"qualityGate":"OK"}\n',
+      })
+      const staged = spawnSync('git', ['status', '--porcelain'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: gitFixtureEnvironment(),
+      }).stdout
+
+      expect(result.status).toBe(0)
+      expect(result.history.split('\n').filter(Boolean)).toHaveLength(1)
+      expect(result.stdout).toContain('已暂存物化记录')
+      expect(staged).toMatch(/^M {2}docs\/development\/gate-history\.jsonl$/m)
+    })
+
+    it('非 Git 仓库环境：暂存失败只警告 GATE_HISTORY_STAGE_FAILED，并入行保留未暂存、不阻塞', () => {
+      const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-stage-'))
+      temporaryDirectories.push(sandbox)
+
+      const result = runIsolatedMaterialize(sandbox, {
+        pending: '{"qualityGate":"OK"}\n',
+      })
+
+      expect(result.status).toBe(0)
+      expect(result.history.split('\n').filter(Boolean)).toHaveLength(1)
+      expect(result.stderr).toContain('GATE_HISTORY_STAGE_FAILED')
+    })
+
+    it('未知第二参数以非零退出并给出用法', () => {
+      const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-gate-stage-'))
+      temporaryDirectories.push(sandbox)
+      mkdirSync(resolve(sandbox, 'scripts'), { recursive: true })
+      cpSync(
+        resolve(repositoryRoot, 'scripts/gate-history.sh'),
+        resolve(sandbox, 'scripts/gate-history.sh'),
+      )
+      const result = spawnSync(
+        'sh',
+        [
+          resolve(sandbox, 'scripts/gate-history.sh'),
+          'materialize',
+          '--nonsense',
+        ],
+        { cwd: sandbox, encoding: 'utf8' },
+      )
+
+      expect(result.status).toBe(2)
+      expect(result.stderr).toContain('用法')
     })
   },
 )
