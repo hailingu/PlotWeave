@@ -7,6 +7,10 @@ struct NativeInspectorView: View {
     /// observe the per-selection node field tree (issue #544); the AI pane stays mounted
     /// regardless because its native draft state must survive visibility toggles.
     var visible: Bool = true
+    /// The node whose field tree may stay mounted while the pane is hidden: collapsing alone
+    /// must not discard incomplete numeric drafts, while a selection change while hidden still
+    /// tears the tree down without building a replacement (PR #578 review).
+    @State private var mountedNodeID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -21,17 +25,21 @@ struct NativeInspectorView: View {
                 // The AI pane stays mounted while hidden so its native draft state survives
                 // visibility toggles exactly as before (its tree never depends on selection).
                 NativeAiView(state: state, projectId: state.projectId ?? "").id(state.projectId)
-            } else if visible {
-                if let id = state.editor["selected"]?["id"]?.string,
-                   let type = state.editor["selected"]?["type"]?.string,
-                   let data = state.editor["selected"]?["data"] {
+            } else if let id = state.editor["selected"]?["id"]?.string,
+               let type = state.editor["selected"]?["type"]?.string,
+               let data = state.editor["selected"]?["data"] {
+                if visible || id == mountedNodeID {
                     NativeNodeInspector(state: state, projectId: state.projectId ?? "", id: id, type: type, data: data).id((state.projectId ?? "") + id)
-                } else {
-                    ContentUnavailableView("没有选择节点", systemImage: "cursorarrow", description: Text("在画布或大纲中选择节点，查看和编辑属性。"))
                 }
+            } else if visible {
+                ContentUnavailableView("没有选择节点", systemImage: "cursorarrow", description: Text("在画布或大纲中选择节点，查看和编辑属性。"))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { if visible { mountedNodeID = state.selectedNodeID } }
+        .onChange(of: state.selectedNodeID) { _, current in
+            mountedNodeID = visible ? current : nil
+        }
     }
 }
 
