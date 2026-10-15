@@ -284,6 +284,44 @@ open -n native/macos/build/DerivedData/Build/Products/Release/PlotWeaveNative.ap
 - 本页矩阵在生产修改前记录；UI §3.6／§12.1 和功能补齐入口同步更新，按所有权、会话与序号、前后请求、复位、嵌套指标语义和链接结构化复核。新增本节定向 Prettier 检查与 `git diff --check` 通过，文档没有配置的自动语义检查。仅改本轮两处 Swift 源、一个新 Swift 回归及上述文档，此前前端改动保留；未重跑前端全量或 Cargo，未进行提交／推送，因而未运行 Git 操作的覆盖率／SonarQube 门禁。
 - 所有验证位于独立临时源副本，未读写用户应用数据或启动用户产品；验证副本、生成资源、应用、DerivedData 和日志在结果核对后清理。P1–P5 的观察和功能回归通过，真实无录制首拖、两侧边栏展开／收起对照和显示呈现仍是验收缺口：本次消除已证明的原生失效扩散，不宣称完整启动停顿或 ProMotion 呈现已解决。用户重新构建 Release 产品后复测同一项目，保持诊断关闭及先激活窗口，并比较首次与后续拖动。
 
+#### 编辑器域切片发布（2026-10-15，issue #544）
+
+上一节域级修正后，选中变化仍会把整个 editor 域作为新值发布：读取 `state.editor` 任一字段的原生消费者都会失效并从全新 `HostJSON` 值重算，即使该消费者自己的切片（大纲组、分集标题字段、撤销／重做可用性、缩放百分比）没有变化。首拖阈值越过的选中提交是这些视图的第一次重算：首次 AttributeGraph 更新、大纲分集 `NativeTextField`（系统 SystemTextField）更新与文字测量、`NSToolbarView.applyLayout`、`NSHostingView.layout` 与带开始提示音的系统采样中原生主线程约 80ms 的 SwiftUI 工作串吻合；隔离夹具中真实外壳＋投影桥首拖 47ms／二拖 20ms，预选等待后消失，而纯 WKWebView 对照无此差异。
+
+修正共三层，全部沿用同一 owner 的等值发布或值传递模式，投影信封、域过滤、会话／序号校验、检查器展开规则与全部既有语义不变，不节流、不冻结、不新增桥接字段：
+
+1. `NativeApplicationState` 把 editor 域再拆为只读切片（`editorOutline`、`focusedEpisode`、`selectedNodeID`、`canUndo`、`canRedo`、`canvasZoom`），仅当该切片自身变化时通知；大纲、历史工具栏与缩放栏改为读取对应切片，检查器与图库等必须响应选中的消费者保持原域读取。
+2. 大纲行高亮改为组级读取 `selectedNodeID` 并以 `isSelected` 值传入行：一次选中变化只重算受影响的行，未变行由 SwiftUI 值相等跳过。
+3. `NativeInspectorView` 增加 `visible` 守卫：macOS 会急切求值 `.inspector(isPresented:)` 的内容闭包（临时插桩实测收起期间 body 求值 7 次），隐藏面板不再构建或观察按选中身份重建的节点字段树；AI 面板保持挂载使原生 `draft` 状态跨收起／展开保留（真实控件回归覆盖）。
+
+归因对照（新增 `WebCanvasFirstDragLatencyTests`，真实 SwiftUI 外壳＋生产编辑器页＋独立存储，15 节点级联，普通 Debug 构建，合成鼠标事件约 16ms 节奏，同一节点首拖→二拖；`firstPositionMs` 受吸附网格相位影响，解释权在 rAF 间隔）：修正前检查器收起的首拖有一个 ~47ms rAF 长间隔；「点击预选」对照 26ms 无长帧；「投影完全挂起」（页面序列化保留、不投递宿主）与「改名投递」（完整投递但宿主忽略）对照均 ~19ms 无长帧——证明长间隔由宿主侧投影处理引发、与 marshal/IPC 无关，且切片修正后仍残留 ~25ms 的载体就是隐藏检查器子树的急切实例化。守卫落地后收起态首拖 19ms 与对照持平。
+
+| 变体（首拖 maxFrameMs／over33） | 修正前 | 修正后 | 二拖（修正前后一致） |
+| -------------------------------- | ------ | ------ | -------------------- |
+| 检查器展开，选中发生在拖动起点    | 45／2  | 47／1  | 20–25／0             |
+| 检查器收起，选中发生在拖动起点    | 47／1  | 19／0  | 18–22／0             |
+| 点击预选后拖动                    | 26／0  | 19／0  | 20–24／0             |
+| 投影挂起（不投递宿主）            | —      | 18／0  | 20／0                |
+| 投影改名投递（宿主忽略）          | —      | 18／0  | 20–23／0             |
+
+| 编号 | 前置状态、动作与顺序                                                                                          | 预期可见结果                                                                                          | 不变量、所有者／入口                                                                                              | 验证与当前缺口                                                                                                     |
+| ---- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| S1   | 当前项目已投影（大纲／集聚焦／历史标志／缩放已发布）→ 仅选择变化（首拖阈值越过的选中提交，其余字段不变）        | `selectedNodeID` 消费者收到通知并更新；五个切片读取者不失效，大纲组、分集标题字段、工具栏与缩放栏不重算 | 切片值派生自同一个已验证完整快照的 editor 域，按等值跳过通知；NativeApplicationState 仍是唯一投影 owner           | 通过：`NativeEditorSliceObservationTests` 先以缺失 API 编译失败（红）后绿：仅选中变化时五切片静默、选中身份通知                          |
+| S2   | 大纲相关内容变化（改名／增删／重排）→ 集聚焦变化 → 缩放变化 → 历史可用性变化                                    | 对应切片通知其消费者并呈现新值；未变切片（如选中身份）不通知                                          | 切片与原域读取来自同一信封，无第二数据所有者；内容变化仍必须到达大纲等真实消费者                                   | 通过：四类切片变化各自通知且无关切片静默；新值到达（改名标签、集聚焦 2、缩放 1.75、undo/redo 翻转、清空选择）                             |
+| S3   | 项目切换但旧 editor 域仍在信封 → 新项目域到达；`beginSession`／`invalidate` 复位                                | 切片立即随域过滤回到默认（null／nil／false／1.0）并通知；新项目域到达后切片恢复新值                    | 项目 identity 与 session 校验仍由 NativeApplicationState 统一拥有；两个复位入口都清空切片                          | 通过：切换过滤与两个复位入口均清空并通知                                                                                               |
+| S4   | 真实渲染：大纲行高亮跟随选中；分集标题、工具栏禁用态、缩放百分比与修正前一致；检查器展开规则与 WKWebView identity 不变 | 呈现结果不变，仅失效范围收窄；既有检查器／面板生命周期语义保持                                          | 视图只迁移观察来源，不改变视图语义或 owner；shell→feature 运行时方向不变                                            | 通过：`NativeInspectorPresentationTests`（含新增隐藏面板不构建字段、AI 草稿跨收起保留）、`NativeShellNodeSettingsTests`、`NativeInspectorToolbarTests`、`NativeSidebarToggleTests`、`ShellWebCanvasLifecycleTests`、`NativeAiDraftTests`、`NativeProjectionObservationTests` 回归 |
+| S5   | 真实 SwiftUI 外壳＋生产编辑器页＋独立存储，15 节点，普通 Debug 构建 → 同一节点首拖→二拖（合成鼠标事件，约 16ms 节奏）；检查器展开与收起两个变体 | 结构断言：两次拖动均移动节点、均采到 rAF 样本；记录证据：各变体首／二拖的启动到首位置间隔与最大 rAF 间隔（数值为证据，不作 CI 阈值） | 测量只观察不改业务；首位置间隔近似 WebContent 侧启动成本，rAF 间隔含原生／显示链路停顿；不伪造阈值结论              | 通过（结构断言）＋证据如上表：收起态与预选态首拖长间隔消除；展开态保留一次 ~47ms 帧（见剩余缺口）                                       |
+
+验证记录（2026-10-15，仓库根目录，Node 24.18.0、Xcode 27.0／SDK 27.0）：
+
+- 红：`NativeEditorSliceObservationTests` 在生产修改前对缺失切片 API 编译失败（`editorOutline` 等成员不存在）；检查器可见性回归在暂存守卫实现后对旧代码因 `visible` 参数缺失编译失败，配合临时插桩（收起期间 `NativeInspectorView.body` 求值 7 次）与挂起／改名对照完成归因。
+- 绿（聚焦）：`NativeEditorSliceObservationTests`、`NativeProjectionObservationTests`、`NativeApplicationStateTests` 共 13 tests／3 suites；`NativeInspectorPresentationTests` 7 tests／1 suite（含两个新增可见性回归）。
+- 绿（相关回归）：`NativeShellNodeSettingsTests`、`NativeInspectorToolbarTests`、`NativeSidebarToggleTests`、`ShellWebCanvasLifecycleTests`、`NativeAiDraftTests` 全部通过。
+- 完整原生路由：`npm run check:size`（730 维护文件／64 排除项）与 `npm run build:native-canvas` 通过；`xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test` 275 tests／62 suites 全部通过（150.8s），含新增 `WebCanvasFirstDragLatencyTests` 的结构断言与证据输出。
+- 修改文件：`NativeApplicationState.swift`（切片发布）、`NativeOutlineView.swift`（切片读取与行高亮值传递）、`NativeEditorToolbar.swift`、`WebCanvasSection.swift`（切片读取）、`NativeInspectorView.swift`＋`NativeShellRoot.swift`（可见性守卫）、三个测试文件；全部在 800／1800 行上限内，实质修改执行单位在 80 代码行内（人工复核，未新增检测工具）。
+
+剩余缺口：检查器展开时首拖仍有一个 ~47ms 的 rAF 长间隔——这是首次选中必须在可见面板构建节点字段树（SystemTextField／文字测量）的必要 UI 工作，与二拖差约 22ms（Debug）。将其移出拖动起点需要投影携带拖动状态或延迟字段树物化，属于此前记录中明确等待证据的检查器生命周期／冻结决策，留待仓库 owner 裁决；本页证据（挂起／改名对照与预选对照）可作为该决策的输入。实机（用户硬件、120Hz、真实输入路径、Release）复测仍待用户执行，验收口径为同一节点首拖与二拖对照，与本页夹具证据同构。
+
 ### 单节点拖动的渲染范围（2026-10-08）
 
 用户指出只拖一个节点却出现大量整体提交，需要直接验证无关组件的更新范围。当前两层 Profiler 嵌套：同一画布子树提交也被外层记录，277／277 不能相加，也不能证明全部 15 个节点或整个装配层执行了 277 次。139 批位置变更在当前受控 React Flow 中经过外部 React state 与 StoreUpdater effect 同步内部 store，接近两次提交的数量本身不作为缺陷判据。[React Profiler 语义](https://react.dev/reference/react/Profiler)。rAF 样本数记录采样回调，不是组件重渲染次数。
