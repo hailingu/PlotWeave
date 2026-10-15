@@ -224,6 +224,19 @@ function intersectsViewport(rect: DOMRect): boolean {
   )
 }
 
+/** 节点中心点在窗口视口内；强于相交判定——被视口边缘裁剪的节点
+ * 中心可能在屏外，对屏外点按下仍会绕过命中测试（PR #574 评审）。 */
+function centerWithinViewport(rect: DOMRect): boolean {
+  const centerX = rect.left + rect.width / 2
+  const centerY = rect.top + rect.height / 2
+  return (
+    centerX >= 0 &&
+    centerX <= window.innerWidth &&
+    centerY >= 0 &&
+    centerY <= window.innerHeight
+  )
+}
+
 /** 与窗口视口相交的节点数（§7.2 记录口径：可见节点数与视口）。 */
 function countVisibleNodes(): number {
   let count = 0
@@ -236,17 +249,18 @@ function countVisibleNodes(): number {
 }
 
 /**
- * 拖拽目标：优先取与视口相交的节点——夹具远宽于视口且 fitView 受默认
- * minZoom 限制时，DOM 首个节点可能在屏外；直接对屏外元素派发事件绕过了
- * 命中测试，不能代表用户可执行的交互（issue #523 评审 5521422435）。
- * 无布局环境（happy-dom，全部矩形为零）回退到首个节点。
+ * 拖拽目标：优先取中心点在视口内的节点——夹具远宽于视口且 fitView 受
+ * 默认 minZoom 限制时，DOM 首个节点可能在屏外（issue #523 评审
+ * 5521422435），且被边缘裁剪的相交节点中心也可能在屏外（PR #574 评审
+ * 5527774215）；对屏外点派发事件绕过命中测试，不能代表用户可执行的
+ * 交互。无布局环境（happy-dom，全部矩形为零）回退到首个节点。
  */
 function selectDragTargetNode(): HTMLElement {
   const nodes = Array.from(
     document.querySelectorAll<HTMLElement>('.react-flow__node'),
   )
   const visible = nodes.find((node) =>
-    intersectsViewport(node.getBoundingClientRect()),
+    centerWithinViewport(node.getBoundingClientRect()),
   )
   const target = visible ?? nodes[0]
   if (!target) throw new Error('PW_PERF_TARGET_MISSING: .react-flow__node')
@@ -375,6 +389,9 @@ export async function runCanvasPerfScript(
   const nodes = document.querySelectorAll('.react-flow__node').length
   const edges = document.querySelectorAll('.react-flow__edge').length
   if (nodes === 0) throw new Error('PW_PERF_CANVAS_NOT_MOUNTED')
+  // 可见节点数在交互改动视口之前采样，对应 §7.2「初始 fitView 视口」
+  // 的记录口径（PR #574 评审：拖拽/平移/缩放之后的读数不可比）。
+  const visibleNodeCount = countVisibleNodes()
   const sampler = startFrameSampler()
   const longTasks = startLongTaskObserver()
   const phaseBounds: Array<{
@@ -419,7 +436,7 @@ export async function runCanvasPerfScript(
     version: 1,
     nodeCount: nodes,
     edgeCount: edges,
-    visibleNodeCount: countVisibleNodes(),
+    visibleNodeCount,
     viewport: {
       width: window.innerWidth,
       height: window.innerHeight,
