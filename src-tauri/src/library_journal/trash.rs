@@ -1,6 +1,12 @@
 //! `assets/.trash/` 隔离区与身份绑定原语（issue #39 自 library_journal.rs
 //! 拆出）：no-follow 打开/创建隔离目录、路径身份三态判别、隔离项身份复核
 //! 与 no-replace 回迁——恢复分支与事务步骤共用的底层能力。
+//!
+//! 平台边界（issue #546）：官方仅支持 macOS，非 Unix 目标保持可编译
+//! （Windows 等由使用者自行构建，见 README 平台声明）。依赖 `(dev, ino)`
+//! 身份的原语（`path_identity`/`verify_trash_identity`）在非 Unix 变体中
+//! 按能力缺失显式拒绝，不猜测身份；隔离目录打开/确保与回迁只用跨平台
+//! 目录操作，单一实现覆盖全部平台。
 
 use cap_std::fs::Dir as CapDir;
 
@@ -22,7 +28,7 @@ pub(super) fn identity_bound_unlink(_file: &cap_std::fs::File) -> Result<(), Lib
 }
 
 /// 相对锚定句柄读取路径身份：缺失/占用/异型分别处置（§7.2 恢复分支）。
-#[cfg(unix)]
+/// `Regular` 携带的 `(dev, ino)` 仅在 Unix 平台可取得。
 pub(super) enum PathIdentity {
     Missing,
     Regular(u64, u64),
@@ -41,10 +47,18 @@ pub(super) fn path_identity(parent: &CapDir, name: &str) -> Result<PathIdentity,
     }
 }
 
+/// 非 Unix 无 `(dev, ino)` 身份原语：显式拒绝，不把异型/缺失的猜测当作
+/// 身份判定（issue #546；对齐 `identity_bound_unlink` 的能力缺失报告）。
+#[cfg(not(unix))]
+pub(super) fn path_identity(_parent: &CapDir, _name: &str) -> Result<PathIdentity, LibraryError> {
+    Err(LibraryError::refused(
+        "平台缺少文件身份原语（dev/ino），无法判定路径身份",
+    ))
+}
+
 /// no-follow 打开 .trash 隔离项并复核身份的三态判别（评审修复：缺失与
 /// 身份不符必须区分——清理分支只允许在确认缺失时清除日志，身份不符/
 /// 被占用保留现场与日志，不得丢失证据）。
-#[cfg(unix)]
 pub(super) enum TrashVerdict {
     IdentityOk(cap_std::fs::File),
     Missing,
@@ -86,6 +100,20 @@ pub(super) fn verify_trash_identity(
     Ok(TrashVerdict::IdentityOk(f))
 }
 
+/// 非 Unix 无 `(dev, ino)` 身份原语：无法核验身份时显式拒绝，不区分
+/// 缺失/占用/异型三态（issue #546）——恢复流程保留现场与日志，不做
+/// 任何基于猜测身份的清理或回迁决策。
+#[cfg(not(unix))]
+pub(super) fn verify_trash_identity(
+    _trash: &CapDir,
+    entry: &JournalEntry,
+) -> Result<TrashVerdict, LibraryError> {
+    Err(LibraryError::refused(format!(
+        "平台缺少文件身份原语（dev/ino），无法核验隔离项身份（{}）",
+        entry.trash_name
+    )))
+}
+
 /// 打开 .trash 隔离区目录句柄（缺失返回 None；不在此创建——创建只发生在
 /// 事务步骤①与恢复重隔离，且都在已验证资产根句柄下）。
 pub(super) fn open_trash_dir(assets: &CapDir) -> Result<Option<CapDir>, LibraryError> {
@@ -104,8 +132,9 @@ pub(super) fn open_trash_dir(assets: &CapDir) -> Result<Option<CapDir>, LibraryE
     }
 }
 
-/// 在已验证资产根句柄下确保 .trash 为真实目录并 fsync 资产根。
-#[cfg(unix)]
+/// 在已验证资产根句柄下确保 .trash 为真实目录并 fsync 资产根（目录操作
+/// 跨平台；耐久屏障由 `fsync_dir` 的平台变体持有——非 Unix 编译可用，
+/// 运行时按 §7.2 契约拒绝进入下一阶段）。
 pub(super) fn ensure_trash_dir(assets: &CapDir) -> Result<CapDir, LibraryError> {
     if let Err(e) = assets.create_dir(".trash") {
         if e.kind() != std::io::ErrorKind::AlreadyExists {
@@ -127,8 +156,8 @@ pub(super) fn ensure_trash_dir(assets: &CapDir) -> Result<CapDir, LibraryError> 
 /// unlink 的 no-replace 语义——`link()` 在目标已存在时返回 EEXIST 不覆盖
 /// 后来文件，窗口内被占用即失败并保留现场；成功则隔离名释放、双侧目录
 /// fsync。cap-std 的 rename 在 Unix 为替换语义、不携带 no-replace 标志，
-/// 故用硬链接对偶表达同一原子语义。
-#[cfg(unix)]
+/// 故用硬链接对偶表达同一原子语义。调用方先经 `verify_trash_identity`
+/// 核验身份——非 Unix 该核验拒绝，本函数不承担身份判责。
 pub(super) fn restore_from_trash(
     trash: &CapDir,
     entry: &JournalEntry,

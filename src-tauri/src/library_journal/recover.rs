@@ -712,8 +712,9 @@ fn recheck_original_after_missing(
 
 /// 重新执行身份核验隔离（索引已去项但媒体仍在原位）：新映射先于 rename
 /// 耐久记录进日志（评审修复：先改后记的窗口会让中断后的恢复按旧名收敛、
-/// 永久孤儿化新隔离项），再 rename 并按能力清理。
-#[cfg(unix)]
+/// 永久孤儿化新隔离项），再 rename 并按能力清理。目录操作与日志写入跨
+/// 平台；身份判定经 `path_identity`/`try_bound_cleanup`——非 Unix 处按
+/// 能力缺失拒绝，不产生猜测性隔离（issue #546）。
 fn re_quarantine(
     library: &CapDir,
     assets: &CapDir,

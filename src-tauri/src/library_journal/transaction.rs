@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use super::fsync::fsync_dir;
 use super::journal_io::{read_journal, serialize_journal, write_journal, Journal, JournalEntry};
 use super::recover::{recover, CleanupPendingItem, Recovery};
+#[cfg(unix)]
 use super::trash::{
     ensure_trash_dir, identity_bound_unlink, verify_trash_identity, TrashVerdict, TRASH_DIR,
 };
