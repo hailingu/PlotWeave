@@ -48,10 +48,12 @@ struct WebCanvasPerformanceTests {
 
         let webView = try await waitForWebView(in: window)
         // Edges render only after node measurement settles; gate on both so
-        // the script starts against the fully mounted fixture.
+        // the script starts against the fully mounted fixture. The readiness
+        // timestamp is taken here, before the settlement sleep, so
+        // mountToNodes reports the metric it names (PR #574 review).
         try await waitForFixture(webView, nodes: scale, edges: scale / 10 * 9 - 1, deadline: .seconds(90))
-        try await Task.sleep(for: .milliseconds(300))
         let renderedAt = ContinuousClock.now
+        try await Task.sleep(for: .milliseconds(300))
         // WebContent processes are launchd children here; attribute this
         // test's page by the pids that appeared since the pre-mount baseline.
         let trackedPages = WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
