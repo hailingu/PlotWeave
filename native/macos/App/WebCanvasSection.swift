@@ -95,7 +95,7 @@ private struct NativeCanvasZoom: View {
     var body: some View {
         HStack(spacing: 8) {
             Button("缩小", systemImage: "minus.magnifyingglass") { state.sendEditor("editor.zoomOut") }
-            Text("\(Int((state.editor["zoom"]?.number ?? 1) * 100))%")
+            Text("\(Int(state.canvasZoom * 100))%")
                 .monospacedDigit().foregroundStyle(.secondary)
             Button("放大", systemImage: "plus.magnifyingglass") { state.sendEditor("editor.zoomIn") }
             Button("适应画布", systemImage: "arrow.up.left.and.arrow.down.right") { state.sendEditor("editor.fit") }

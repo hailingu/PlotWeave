@@ -3,24 +3,46 @@ import SwiftUI
 /// One flexible inspector fills the system-managed column for AI and node fields using the shared edit/history owner.
 struct NativeInspectorView: View {
     let state: NativeApplicationState
+    /// macOS evaluates `.inspector` content eagerly, so a hidden pane must not build or
+    /// observe the per-selection node field tree (issue #544); the AI pane stays mounted
+    /// regardless because its native draft state must survive visibility toggles.
+    var visible: Bool = true
+    /// The node whose field tree may stay mounted while the pane is hidden: collapsing alone
+    /// must not discard incomplete numeric drafts, while a selection change while hidden still
+    /// tears the tree down without building a replacement (PR #578 review).
+    @State private var mountedNodeID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let error = state.error ?? state.editor["saveError"]?.string ?? state.app["error"]?.string {
+            // The shared error banner stays outside the AI-versus-content branch: document
+            // autosave failures (`editor.saveError`) must remain visible in every pane.
+            if visible,
+                let error = state.error ?? state.editor["saveError"]?.string ?? state.app["error"]?.string {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red).padding()
             }
             if state.editor["aiOpen"]?.bool == true {
+                // The AI pane stays mounted while hidden so its native draft state survives
+                // visibility toggles exactly as before (its tree never depends on selection).
                 NativeAiView(state: state, projectId: state.projectId ?? "").id(state.projectId)
             } else if let id = state.editor["selected"]?["id"]?.string,
                let type = state.editor["selected"]?["type"]?.string,
                let data = state.editor["selected"]?["data"] {
-                NativeNodeInspector(state: state, projectId: state.projectId ?? "", id: id, type: type, data: data).id((state.projectId ?? "") + id)
-            } else {
+                if visible || id == mountedNodeID {
+                    NativeNodeInspector(state: state, projectId: state.projectId ?? "", id: id, type: type, data: data).id((state.projectId ?? "") + id)
+                }
+            } else if visible {
                 ContentUnavailableView("没有选择节点", systemImage: "cursorarrow", description: Text("在画布或大纲中选择节点，查看和编辑属性。"))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { if visible { mountedNodeID = state.selectedNodeID } }
+        .onChange(of: state.selectedNodeID) { _, current in
+            mountedNodeID = visible ? current : nil
+        }
+        .onChange(of: visible) { _, current in
+            if current { mountedNodeID = state.selectedNodeID }
+        }
     }
 }
 

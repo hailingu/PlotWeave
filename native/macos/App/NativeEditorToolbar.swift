@@ -10,9 +10,9 @@ struct NativeEditorToolbar: ToolbarContent {
         if state.route == "editor" {
             ToolbarItemGroup(placement: .navigation) {
                 Button("撤销", systemImage: "arrow.uturn.backward") { state.sendEditor("editor.undo") }
-                    .disabled(state.editor["canUndo"]?.bool != true || state.busy)
+                    .disabled(!state.canUndo || state.busy)
                 Button("重做", systemImage: "arrow.uturn.forward") { state.sendEditor("editor.redo") }
-                    .disabled(state.editor["canRedo"]?.bool != true || state.busy)
+                    .disabled(!state.canRedo || state.busy)
             }
         }
     }

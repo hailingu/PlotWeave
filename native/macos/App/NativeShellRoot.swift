@@ -54,7 +54,7 @@ struct NativeShellRoot: View {
         }
         .toolbar { NativeEditorToolbar(state: application, layout: layout) }
         .inspector(isPresented: editorPanelsAvailable ? $layout.inspectorVisible : .constant(false)) {
-            NativeInspectorView(state: application)
+            NativeInspectorView(state: application, visible: editorPanelsAvailable && layout.inspectorVisible)
                 .inspectorColumnWidth(min: 300, ideal: 360, max: 640)
                 .toolbar { NativeInspectorToolbar(state: application, layout: layout) }
         }

@@ -14,7 +14,7 @@ struct NativeOutlineView: View {
             HStack {
                 Text("故事大纲").font(.headline)
                 Spacer()
-                if state.editor["focusedEpisode"] != nil && state.editor["focusedEpisode"] != .null {
+                if state.focusedEpisode != .null {
                     Button("取消聚焦") { episode("editor.episodeFocus", number: .null) }.font(.caption)
                 }
             }.padding(.horizontal, 12)
@@ -37,7 +37,7 @@ struct NativeOutlineView: View {
     /// Changed project identity removes the old projection from drop validation immediately.
     private var groups: [NativeOutlineGroupProjection] {
         guard state.projectId == projectId else { return [] }
-        return (state.editor["outline"]?.array ?? []).map(NativeOutlineGroupProjection.init)
+        return state.editorOutline.array.map(NativeOutlineGroupProjection.init)
     }
 
     /// Current identities are reread at the actual drop event, including changes after the row was rendered.
@@ -77,7 +77,7 @@ private struct NativeOutlineGroup: View {
                 NativeTextField(label: "集名称", value: group["title"]?.string ?? "") { send("editor.episodeRename", title: $0) }
             }
             ForEach(rows.compactMap(NativeOutlineRowProjection.init), id: \.identity) { row in
-                NativeOutlineRow(state: state, projectId: projectId, row: row.value, drop: drop)
+                NativeOutlineRow(state: state, projectId: projectId, row: row.value, isSelected: state.selectedNodeID == row.identity, drop: drop)
             }
             Text("拖到此处放在组末尾").font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
@@ -103,6 +103,8 @@ private struct NativeOutlineRow: View {
     let state: NativeApplicationState
     let projectId: String?
     let row: HostJSON
+    /// The group owns the selected-identity read, so one selection change re-evaluates only the affected rows.
+    let isSelected: Bool
     let drop: (String, HostJSON) -> Bool
     @State private var targeted = false
     private var id: String { row["id"]?.string ?? "" }
@@ -125,7 +127,7 @@ private struct NativeOutlineRow: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 5)
-        .background(targeted ? Color.accentColor.opacity(0.2) : state.editor["selected"]?["id"]?.string == id ? Color.accentColor.opacity(0.1) : .clear,
+        .background(targeted ? Color.accentColor.opacity(0.2) : isSelected ? Color.accentColor.opacity(0.1) : .clear,
             in: .rect(cornerRadius: 5))
         .draggable(payload)
         .dropDestination(for: String.self) { items, point in

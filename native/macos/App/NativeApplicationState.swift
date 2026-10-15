@@ -51,6 +51,17 @@ final class NativeApplicationState {
     }
     /// Settings projection omits encrypted and plaintext credentials.
     var settings: HostJSON { settingsProjection }
+    /// Outline rows re-render only when the outline itself changes, not on selection-only updates (issue #544).
+    private(set) var editorOutline = HostJSON.null
+    /// Episode focus follows its own slice so selection commits leave the outline header quiet.
+    private(set) var focusedEpisode = HostJSON.null
+    /// Row highlight observes the selected identity without re-mapping outline groups.
+    private(set) var selectedNodeID: String?
+    /// History toolbar buttons observe flags instead of the whole editor domain.
+    private(set) var canUndo = false
+    private(set) var canRedo = false
+    /// The zoom readout changes only with the projected viewport scale.
+    private(set) var canvasZoom = 1.0
     /// Identity changes revalidate retained feature projections without subscribing to unrelated app fields.
     private(set) var projectId: String?
     /// Window titles update only when the actual projected project name changes.
@@ -108,10 +119,22 @@ final class NativeApplicationState {
         projectName = appProjection["project"]?["name"]?.string ?? "PlotWeave"
         route = appProjection["route"]?.string ?? "loading"
         editorProjection = value["editor"] ?? .null
+        publishEditorChrome()
         aiProjection = value["ai"] ?? .null
         imageProjection = value["image"] ?? .null
         settingsProjection = value["settings"] ?? .null
         projection = value
+    }
+
+    /// Editor chrome slices derive from the same validated domain; equal values stay silent (issue #544).
+    private func publishEditorChrome() {
+        let editor = editorProjection["projectId"]?.string == projectId ? editorProjection : .null
+        editorOutline = editor["outline"] ?? .null
+        focusedEpisode = editor["focusedEpisode"] ?? .null
+        selectedNodeID = editor["selected"]?["id"]?.string
+        canUndo = editor["canUndo"]?.bool == true
+        canRedo = editor["canRedo"]?.bool == true
+        canvasZoom = editor["zoom"]?.number ?? 1
     }
 
     /// A failed page cannot retain active edit controls or present an empty replacement document.
