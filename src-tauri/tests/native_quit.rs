@@ -13,6 +13,10 @@ fn main() {
         panic_child();
         return;
     }
+    if std::env::args().any(|arg| arg == "--native-quit-broken-stderr-child") {
+        panic_broken_stderr_child();
+        return;
+    }
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("--native-quit-child")
         .output()
@@ -48,6 +52,20 @@ fn main() {
             .contains("[native-quit] code=quit-callback-panicked"),
         "回调 panic 未产生结构化诊断：{:?}",
         panicked
+    );
+
+    // PR #580 评审：stderr 不可写时诊断写入失败不得使遏制失效——写失败自身
+    // 不允许产生新的越界 panic。断管（EPIPE）是 std 不吞错的确定性触发
+    // （EBADF 被 std::io 特判为成功）；stdout 仍为有效管道，marker 照常可达。
+    let sealed = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--native-quit-broken-stderr-child")
+        .output()
+        .unwrap();
+    assert!(sealed.status.success(), "{:?}", sealed);
+    assert!(
+        String::from_utf8_lossy(&sealed.stdout).contains("native-quit-broken-stderr-contained"),
+        "stderr 断管引发的二次 panic 跨边界中断了进程：{:?}",
+        sealed
     );
 }
 
@@ -108,6 +126,45 @@ fn panic_child() {
         println!("native-quit-panic-contained");
         drop(barrier);
         println!("native-quit-panic-guard-dropped");
+    }
+}
+
+/// PR #580 评审：回调 panic 且 stderr 不可写时，诊断写入失败不得产生新的
+/// 越界 panic。把 fd 2 换成读端已关闭的管道写端——写入稳定返回 EPIPE，
+/// 且完全在子进程内构造、无父子竞态；EBADF（fd 关闭/只读）被 std::io
+/// 特判为成功，构不成触发。terminate: 后进程仍须存活并拒绝终止。
+#[cfg(target_os = "macos")]
+fn panic_broken_stderr_child() {
+    use std::ffi::{c_char, c_void};
+    #[link(name = "AppKit", kind = "framework")]
+    unsafe extern "C" {}
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    let _runtime = tauri_runtime();
+    // SAFETY: selector 与签名均来自 AppKit/NSObject；此子进程在主线程执行。
+    unsafe {
+        let send: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let send_arg: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+            std::mem::transmute(objc_msgSend as *const ());
+        let app = send(
+            objc_getClass(c"NSApplication".as_ptr()),
+            sel_registerName(c"sharedApplication".as_ptr()),
+        );
+        let barrier = native_quit::install(|| panic!("fixture")).unwrap();
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0, "创建断管夹具失败");
+        assert_eq!(libc::dup2(fds[1], 2), 2);
+        libc::close(fds[0]);
+        libc::close(fds[1]);
+        send_arg(app, sel_registerName(c"terminate:".as_ptr()), app);
+        // 到达即证明：诊断写失败被静默吞掉，遏制在 stderr 断管时仍然成立。
+        println!("native-quit-broken-stderr-contained");
+        drop(barrier);
     }
 }
 
