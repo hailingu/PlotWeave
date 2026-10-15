@@ -100,10 +100,54 @@ struct WebCanvasPerformanceTests {
     }
 
     /// Repeated open/close cycles must not grow WebContent memory without
-    /// bound (matrix M15 invariant); five reloads sample the trend.
-    @Test func repeatedReloadKeepsWebMemoryBounded() async throws {
-        let webBaseline = WebProcessMemorySampler.webContentPids()
-        let layout = ShellLayoutState()
+    /// bound (matrix M15 invariant). Each cycle mounts a fresh hosted shell
+    /// and destroys it (`contentView = nil` runs SwiftUI dismantle →
+    /// coordinator invalidation and handler removal), so retention tied to
+    /// destruction — not merely page re-navigation — is exercised
+    /// (PR #574 review).
+    @Test func repeatedHostedCanvasCyclesKeepWebMemoryBounded() async throws {
+        var loadedSamples: [WebProcessMemorySample] = []
+        var residualSamples: [WebProcessMemorySample] = []
+        for cycle in 0..<5 {
+            let webBaseline = WebProcessMemorySampler.webContentPids()
+            let window = try await mountPerfShell(scale: 100)
+            let webView = try await waitForWebView(in: window)
+            try await waitForFixture(webView, nodes: 100, edges: 89, deadline: .seconds(90))
+            try await Task.sleep(for: .seconds(1))
+            // Pool reuse would return an empty diff and fail here explicitly
+            // instead of silently measuring the wrong process set.
+            let tracked = WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
+            #expect(!tracked.isEmpty, "cycle \(cycle): a WebContent process must own the loaded page")
+            loadedSamples.append(WebProcessMemorySampler.sample(tracking: tracked))
+
+            window.contentView = nil
+            window.close()
+            try await Task.sleep(for: .seconds(2))
+            residualSamples.append(WebProcessMemorySampler.sample(tracking: tracked))
+        }
+        let loadedTrend = loadedSamples.map(\.description).joined(separator: " -> ")
+        let residualTrend = residualSamples.map(\.description).joined(separator: " -> ")
+        print("PW-PERF cycle-loaded-trend: \(loadedTrend)")
+        print("PW-PERF cycle-residual-trend: \(residualTrend)")
+        let first = try #require(loadedSamples.first)
+        let last = try #require(loadedSamples.last)
+        // Generous bound (400MB) catches unbounded growth without making
+        // timing noise a CI failure; the recorded trend is the real evidence.
+        #expect(
+            last.webContentResidentBytes <= first.webContentResidentBytes + 400 * 1_048_576,
+            "repeated open/close must not grow WebContent memory without bound: \(loadedTrend)"
+        )
+        // The residual series is informational: WebKit's process cache keeps
+        // a torn-down page's WebContent process alive briefly at roughly the
+        // same RSS, so teardown release is a platform timing fact, not an
+        // app-owned invariant; the bound above plus per-cycle fresh-pid
+        // attribution carry the no-unbounded-growth guarantee.
+    }
+
+    // MARK: helpers
+
+    /// Mounts a fresh hosted shell window for the requested perf scale.
+    private func mountPerfShell(scale: Int) async throws -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
             styleMask: [.titled], backing: .buffered, defer: false
@@ -111,40 +155,12 @@ struct WebCanvasPerformanceTests {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(
             rootView: NativeShellRoot(
-                layout: layout, appearance: CanvasAppearanceState(),
-                demoMode: true, demoFragment: "perf:100"
+                layout: ShellLayoutState(), appearance: CanvasAppearanceState(),
+                demoMode: true, demoFragment: "perf:\(scale)"
             )
         )
         window.orderFront(nil)
-        defer { window.close() }
-
-        let webView = try await waitForWebView(in: window)
-        try await waitForFixture(webView, nodes: 100, edges: 89, deadline: .seconds(90))
-        try await Task.sleep(for: .seconds(1))
-        var trackedPages = WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
-        #expect(!trackedPages.isEmpty, "a WebContent process must own the loaded page")
-        var samples = [WebProcessMemorySampler.sample(tracking: trackedPages)]
-
-        for _ in 0..<5 {
-            webView.reload()
-            try await waitForFixture(webView, nodes: 100, edges: 89, deadline: .seconds(60))
-            try await Task.sleep(for: .seconds(1))
-            // A reload may swap the WebContent process; re-attribute rather
-            // than silently dropping the page's memory from the trend.
-            trackedPages.formUnion(WebProcessMemorySampler.pageWebContentPids(since: webBaseline))
-            samples.append(WebProcessMemorySampler.sample(tracking: trackedPages))
-        }
-        let trend = samples.map(\.description).joined(separator: " -> ")
-        print("PW-PERF reload-trend: \(trend)")
-        #expect(samples.allSatisfy { $0.webContentProcessCount >= 1 })
-        let first = try #require(samples.first)
-        let last = try #require(samples.last)
-        // Generous bound (400MB) catches unbounded growth without making
-        // timing noise a CI failure; the recorded trend is the real evidence.
-        #expect(
-            last.webContentResidentBytes <= first.webContentResidentBytes + 400 * 1_048_576,
-            "repeated open/close must not grow WebContent memory without bound: \(trend)"
-        )
+        return window
     }
 
     // MARK: helpers

@@ -2,7 +2,8 @@
  * M15 脚本化持续操作驱动（docs/swiftui-react-flow-migration-plan.md §7.2，
  * issue #523）：在已挂载的画布页面上按固定脚本派生真实鼠标/滚轮事件，
  * 驱动 React Flow 的拖拽、平移、缩放与画布控件，并采样 rAF 帧间隔、
- * 长任务与操作效果。报告只含数值统计（脱敏），不携带节点 id 或文案；
+ * 长任务与操作效果；拖拽目标优先选视口内可见节点，保证测量代表用户
+ * 可执行的交互。报告只含数值统计（脱敏），不携带节点 id 或文案；
  * 由验证页（#perf:N）装配并经 `window.__pwRunCanvasPerf` 供宿主调用。
  */
 
@@ -212,24 +213,44 @@ function fireMouse(
   )
 }
 
+/** 节点矩形与窗口视口相交（§7.2 记录口径：可见节点数与视口）。 */
+function intersectsViewport(rect: DOMRect): boolean {
+  return (
+    rect.width > 0 &&
+    rect.bottom > 0 &&
+    rect.right > 0 &&
+    rect.top < window.innerHeight &&
+    rect.left < window.innerWidth
+  )
+}
+
 /** 与窗口视口相交的节点数（§7.2 记录口径：可见节点数与视口）。 */
 function countVisibleNodes(): number {
   let count = 0
   for (const node of document.querySelectorAll<HTMLElement>(
     '.react-flow__node',
   )) {
-    const rect = node.getBoundingClientRect()
-    if (
-      rect.width > 0 &&
-      rect.bottom > 0 &&
-      rect.right > 0 &&
-      rect.top < window.innerHeight &&
-      rect.left < window.innerWidth
-    ) {
-      count += 1
-    }
+    if (intersectsViewport(node.getBoundingClientRect())) count += 1
   }
   return count
+}
+
+/**
+ * 拖拽目标：优先取与视口相交的节点——夹具远宽于视口且 fitView 受默认
+ * minZoom 限制时，DOM 首个节点可能在屏外；直接对屏外元素派发事件绕过了
+ * 命中测试，不能代表用户可执行的交互（issue #523 评审 5521422435）。
+ * 无布局环境（happy-dom，全部矩形为零）回退到首个节点。
+ */
+function selectDragTargetNode(): HTMLElement {
+  const nodes = Array.from(
+    document.querySelectorAll<HTMLElement>('.react-flow__node'),
+  )
+  const visible = nodes.find((node) =>
+    intersectsViewport(node.getBoundingClientRect()),
+  )
+  const target = visible ?? nodes[0]
+  if (!target) throw new Error('PW_PERF_TARGET_MISSING: .react-flow__node')
+  return target
 }
 
 /** 解析节点自身的 inline 位移（translate(Xpx, Ypx)）；状态驱动，不依赖布局。 */
@@ -244,7 +265,7 @@ function elementTranslate(element: HTMLElement): { x: number; y: number } {
 
 /** 拖拽阶段：按下节点→逐步移动→松手；返回节点位移（px，图坐标）。 */
 async function dragPhase(options: CanvasPerfScriptOptions): Promise<number> {
-  const node = requireElement('.react-flow__node')
+  const node = selectDragTargetNode()
   const rect = node.getBoundingClientRect()
   const startX = rect.left + rect.width / 2
   const startY = rect.top + rect.height / 2

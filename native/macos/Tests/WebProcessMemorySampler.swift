@@ -36,13 +36,18 @@ enum WebProcessMemorySampler {
 
     /// Every live `com.apple.WebKit.WebContent` pid on the machine.
     static func webContentPids() -> Set<Int32> {
-        let capacity = proc_listallpids(nil, 0)
-        guard capacity > 0 else { return [] }
-        var pids = [pid_t](repeating: 0, count: Int(capacity))
-        let written = proc_listallpids(&pids, capacity)
+        // The size probe returns a pid count, while the `buffersize` parameter
+        // is bytes: passing the count would expose only a quarter of the
+        // buffer (PR #574 review). Keep headroom for process churn and pass
+        // the byte size explicitly.
+        let needed = proc_listallpids(nil, 0)
+        guard needed > 0 else { return [] }
+        let slots = Int(needed) + 64
+        var pids = [pid_t](repeating: 0, count: slots)
+        let written = proc_listallpids(&pids, Int32(MemoryLayout<pid_t>.stride * slots))
         guard written > 0 else { return [] }
         var webPids: Set<Int32> = []
-        for index in 0..<Int(written) {
+        for index in 0..<min(Int(written), slots) {
             let pid = pids[index]
             guard pid > 0 else { continue }
             var info = proc_bsdinfo()
