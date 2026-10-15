@@ -6,6 +6,7 @@ import WebKit
 /// Exercises the shipped page in real WebKit: missing or unexecutable bundle
 /// scripts must fail this test even when HTML navigation itself succeeds.
 @MainActor
+@Suite(.serialized, WebKitTestIsolation())
 struct WebCanvasLoadingTests {
 
     /// M01 regression: a packaged canvas must both report ready and render nodes.

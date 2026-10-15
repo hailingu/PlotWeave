@@ -6,6 +6,7 @@ import WebKit
 
 /// The production file URL origin must provide cryptographic fingerprints without a weaker fallback.
 @MainActor
+@Suite(.serialized, WebKitTestIsolation())
 struct NativeWebCryptoTests {
     /// Real WebKit hashes a synthetic request body under the same loadFileURL trust boundary as the app.
     @Test func localFilePageHasWebCryptoSHA256() async throws {

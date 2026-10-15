@@ -7,7 +7,7 @@ import WebKit
 
 /// Real composer controls preserve an unsent prompt when the native bridge rejects admission.
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, WebKitTestIsolation())
 struct NativeAiDraftTests {
     /// A missing page has no Web user message, so its rejected send must leave the native draft intact.
     @Test func rejectedSendPreservesDraftAndAllowsRetry() async throws {

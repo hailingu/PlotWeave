@@ -13,7 +13,7 @@ import WebKit
 /// evidence for the migration plan, not CI thresholds — baselines are fixed
 /// only after this first measurement round (§7.2).
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, WebKitTestIsolation())
 struct WebCanvasPerformanceTests {
 
     private struct Timeout: Error {}
@@ -44,7 +44,7 @@ struct WebCanvasPerformanceTests {
             )
         )
         window.orderFront(nil)
-        defer { window.close() }
+        defer { window.contentView = nil; window.close() }
 
         let webView = try await waitForWebView(in: window)
         // Edges render only after node measurement settles; gate on both so
@@ -54,17 +54,9 @@ struct WebCanvasPerformanceTests {
         try await waitForFixture(webView, nodes: scale, edges: scale / 10 * 9 - 1, deadline: .seconds(90))
         let renderedAt = ContinuousClock.now
         try await Task.sleep(for: .milliseconds(300))
-        // WebContent processes are launchd children here; attribute this
-        // test's page by the pids that appeared since the pre-mount baseline.
-        // Exactly one pid must appear: an empty set means pool reuse, and a
-        // second pid means a foreign suite's WebContent entered the window —
-        // either makes the attribution ambiguous, so fail explicitly instead
-        // of recording evidence against the wrong process set (issue #575).
-        let trackedPages = WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
-        #expect(
-            trackedPages.count == 1,
-            "attribution must isolate exactly this page's WebContent process: \(trackedPages.sorted())"
-        )
+        // The shared suite permit excludes sibling page launches across all
+        // awaits in this window. Reuse or ambiguous diffs throw before sampling.
+        let trackedPages = try WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
         let baseline = WebProcessMemorySampler.sample(tracking: trackedPages)
 
         // The script task inherits main-actor isolation so the options dict
@@ -123,18 +115,19 @@ struct WebCanvasPerformanceTests {
         for cycle in 0..<5 {
             let webBaseline = WebProcessMemorySampler.webContentPids()
             let window = try await mountPerfShell(scale: 100)
+            // Attribution now throws: failure must dismantle the host before
+            // releasing the shared suite permit to another WebKit owner.
+            defer {
+                window.contentView = nil
+                if window.isVisible { window.close() }
+            }
             let webView = try await waitForWebView(in: window)
             try await waitForFixture(webView, nodes: 100, edges: 89, deadline: .seconds(90))
             try await Task.sleep(for: .seconds(1))
-            // Pool reuse (empty diff) or a foreign suite's WebContent entering
-            // the attribution window (second pid) both make the enforced RSS
-            // bound unreliable — masking via an inflated first sample or a
-            // false failure — so ambiguity fails explicitly (issue #575).
-            let bornThisCycle = WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
-            #expect(
-                bornThisCycle.count == 1,
-                "cycle \(cycle): attribution must isolate exactly this page's WebContent process: \(bornThisCycle.sorted())"
-            )
+            // Hold the same exclusive suite permit across every cycle; a
+            // reused page cannot collide with a sibling suite's new process.
+            // Fail closed on empty/multi-process diffs before changing the union.
+            let bornThisCycle = try WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
             cycleOwnedPids.formUnion(bornThisCycle)
             aggregateSamples.append(WebProcessMemorySampler.sample(tracking: cycleOwnedPids))
 

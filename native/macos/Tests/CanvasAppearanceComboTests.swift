@@ -14,7 +14,7 @@ import WebKit
 /// up in the test host without a running AX client) stay manual gaps tracked
 /// as separate issues.
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, WebKitTestIsolation())
 struct CanvasAppearanceComboTests {
 
     private struct Timeout: Error {}

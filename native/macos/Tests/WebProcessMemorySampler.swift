@@ -3,10 +3,10 @@ import AppKit
 /// Samples resident memory of the hosting app and its WebContent (page)
 /// processes (plan §7.2 / matrix M15, issue #523). On this macOS generation
 /// WebContent processes are re-parented to launchd, so ownership cannot come
-/// from `pbi_ppid`; attribution uses a before/after diff of every
-/// `com.apple.WebKit.WebContent` pid on the machine — the processes that
-/// appear after this test loads its page are the page's. Public process APIs
-/// only: `proc_listallpids` + `proc_pidinfo`.
+/// from `pbi_ppid`; a before/after diff requires an exclusive WebKit suite
+/// scope so sibling suites cannot launch a foreign page during attribution.
+/// This remains a quiet-machine measurement, not a public page-to-PID API.
+/// Public process APIs only: `proc_listallpids` + `proc_pidinfo`.
 struct WebProcessMemorySample: Equatable {
 
     /// Resident bytes of the hosting app process itself.
@@ -33,6 +33,12 @@ struct WebProcessMemorySample: Equatable {
 
 /// One-shot sampler; stateless, safe to call from the main actor between waits.
 enum WebProcessMemorySampler {
+
+    /// Invalid attribution stops the measurement before a PID enters an RSS bound.
+    enum AttributionFailure: Error, Equatable {
+        case exclusiveSuiteScopeRequired
+        case ambiguousProcessCount(Int)
+    }
 
     /// Every live `com.apple.WebKit.WebContent` pid on the machine.
     static func webContentPids() -> Set<Int32> {
@@ -63,9 +69,12 @@ enum WebProcessMemorySampler {
         return webPids
     }
 
-    /// WebContent pids that appeared since `baseline` — this test's page.
-    static func pageWebContentPids(since baseline: Set<Int32>) -> Set<Int32> {
-        webContentPids().subtracting(baseline)
+    /// Accepts a single new page process only while sibling WebKit suites are excluded.
+    static func pageWebContentPids(since baseline: Set<Int32>) throws -> Set<Int32> {
+        guard WebKitTestIsolation.isHeld else { throw AttributionFailure.exclusiveSuiteScopeRequired }
+        let candidates = webContentPids().subtracting(baseline)
+        guard candidates.count == 1 else { throw AttributionFailure.ambiguousProcessCount(candidates.count) }
+        return candidates
     }
 
     /// Reads the app's resident size plus the still-alive tracked processes.

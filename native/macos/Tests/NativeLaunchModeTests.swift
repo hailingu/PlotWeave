@@ -4,6 +4,7 @@ import WebKit
 @testable import PlotWeaveNative
 
 /// Test-host isolation is decided before XCTest loads its bundle, using the shared scheme's launch contract.
+@Suite(.serialized, WebKitTestIsolation())
 struct NativeLaunchModeTests {
     /// AGENTS.md's v0.2.0 release contract applies to the actual application bundle in both build configurations.
     @Test func applicationBundleUsesDesignatedVersion() {

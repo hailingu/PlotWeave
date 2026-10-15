@@ -5,7 +5,7 @@ import Testing
 
 /// Real AppKit window notifications keep exit ownership independent of project titles and native panels.
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, WebKitTestIsolation())
 struct NativeWindowLifecycleTests {
     /// Real shell mounting and AppKit ordering must attach exit ownership without a manually posted window event.
     @Test func hostedApplicationWindowHasExitDelegate() async throws {
