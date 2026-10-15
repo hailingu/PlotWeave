@@ -141,12 +141,12 @@ final class NativeDirectory: Sendable {
             _ = temporary.withCString { unlinkat(descriptor, $0, 0) }
         }
         try Self.writeAll(data, descriptor: file)
-        guard NativeAtomicWriteFaults.syscall(.temporaryFileSync, { fsync(file) }) == 0 else { throw Self.ioError("同步文件内容失败") }
+        guard NativeAtomicWriteFaults.syscall(.temporaryFileSync, of: descriptor, { fsync(file) }) == 0 else { throw Self.ioError("同步文件内容失败") }
         if let existing = try metadata(name), !Self.isRegular(existing) {
             throw Self.refused("写入目标在提交前成为非普通文件")
         }
         try beforeCommit(file)
-        let renamed = NativeAtomicWriteFaults.syscall(.rename) {
+        let renamed = NativeAtomicWriteFaults.syscall(.rename, of: descriptor) {
             temporary.withCString { from in
                 name.withCString { to in
                     replace ? renameat(descriptor, from, descriptor, to)
@@ -198,7 +198,7 @@ final class NativeDirectory: Sendable {
 
     /// The post-rename durability barrier shares sync()'s syscall but is injectable as its own protocol stage.
     private func syncBarrier() throws {
-        guard NativeAtomicWriteFaults.syscall(.directorySync, { fsync(descriptor) }) == 0 else { throw Self.ioError("同步目录条目失败") }
+        guard NativeAtomicWriteFaults.syscall(.directorySync, of: descriptor, { fsync(descriptor) }) == 0 else { throw Self.ioError("同步目录条目失败") }
     }
 
     /// File classification stays separate from following or opening its target.

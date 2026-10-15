@@ -4,7 +4,9 @@ import Testing
 
 /// System-call fault injection proves the §10.0 atomic-write failure classes for the Swift save path (#543):
 /// pre-commit failures keep the old document, while a post-rename directory barrier failure reports honestly
-/// with the new document already committed. Serialized because the scoped fault window is process-wide.
+/// with the new document already committed. Each fault window is bound to this fixture's own projects
+/// directory descriptor, so concurrently running sibling suites with other temporary roots are never
+/// intercepted regardless of the runner's concurrency mode; `.serialized` additionally orders these two tests.
 @Suite(.serialized)
 struct NativeAtomicWriteFaultTests {
     /// Pre-commit stages (temporary-file fsync, rename) surface the I/O diagnostic, keep the old document, leave no residue and converge on retry.
@@ -18,7 +20,7 @@ struct NativeAtomicWriteFaultTests {
             defer { fixture.remove() }
             let id = try await fixture.createProject()
             _ = try await fixture.save(id: id, name: "改前")
-            var injection: NativeAtomicWriteFaults.Injection? = NativeAtomicWriteFaults.Injection(failing: fault.stage)
+            var injection: NativeAtomicWriteFaults.Injection? = NativeAtomicWriteFaults.Injection(failing: fault.stage, owner: try await fixture.projectsOwner())
             do {
                 _ = try await fixture.save(id: id, name: "改后")
                 Issue.record("阶段 \(fault.stage) 注入后保存未失败")
@@ -42,7 +44,7 @@ struct NativeAtomicWriteFaultTests {
         defer { fixture.remove() }
         let id = try await fixture.createProject()
         _ = try await fixture.save(id: id, name: "改前")
-        var injection: NativeAtomicWriteFaults.Injection? = NativeAtomicWriteFaults.Injection(failing: .directorySync)
+        var injection: NativeAtomicWriteFaults.Injection? = NativeAtomicWriteFaults.Injection(failing: .directorySync, owner: try await fixture.projectsOwner())
         do {
             _ = try await fixture.save(id: id, name: "改后")
             Issue.record("目录屏障注入后保存未失败")
@@ -81,6 +83,11 @@ struct NativeAtomicWriteFaultTests {
         func createProject() async throws -> String {
             let created = try await store.invoke(command: "create_project", args: ["name": .string("故障注入剧")])
             return try #require(created["id"]?.string)
+        }
+
+        /// Anchors the fault window to this store's own projects directory so sibling-suite writers in other directories are never intercepted.
+        func projectsOwner() async throws -> Int32 {
+            try await store.projectsDirectory().descriptor
         }
 
         /// Saves a complete envelope with the given project name through the caller-visible command.
