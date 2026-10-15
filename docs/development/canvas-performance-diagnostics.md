@@ -313,6 +313,8 @@ open -n native/macos/build/DerivedData/Build/Products/Release/PlotWeaveNative.ap
 | S5   | 真实 SwiftUI 外壳＋生产编辑器页＋独立存储，15 节点，普通 Debug 构建 → 同一节点首拖→二拖（合成鼠标事件，约 16ms 节奏）；检查器展开与收起两个变体 | 结构断言：两次拖动均移动节点、均采到 rAF 样本；记录证据：各变体首／二拖的启动到首位置间隔与最大 rAF 间隔（数值为证据，不作 CI 阈值） | 测量只观察不改业务；首位置间隔近似 WebContent 侧启动成本，rAF 间隔含原生／显示链路停顿；不伪造阈值结论              | 通过（结构断言）＋证据如上表：收起态与预选态首拖长间隔消除；展开态保留一次 ~47ms 帧（见剩余缺口）                                       |
 | S6 | 初始无选择或已选择 A → 收起 → 隐藏时选择 B → 展开 → 输入未完成数字 `3.` → 连续两次收起／展开 | 隐藏时不创建 B 的字段；展开显示 B；后续收展始终保留 `3.` | `NativeInspectorView` 独占挂载身份；`onAppear`、选择变化及可见性变化共同保证已显示的当前字段树可保留；数字草稿不成为第二份文档 | 生产修改前记录；`reopenedPaneKeepsNumericDraftAfterHiddenSelection` 两种前置状态各重复两次收展，先红（4 处草稿丢失）后绿；完整原生路由结果见下方补充记录 |
 | S7 | 可见时未完成数字草稿 → 仅收展；隐藏时选择变更；AI 草稿 → 收展 | 同节点草稿保留；隐藏换选拆除旧树但不创建新树；AI 草稿保留 | 同一节点的单纯收展不结束编辑；选中／项目身份、路由及 AI 分支仍按既有规则结束字段生命周期 | 既有 `hiddenPaneKeepsIncompleteNumericDraft`、`hiddenPaneDoesNotBuildNodeFieldsForSelection`、`hiddenPaneKeepsAiDraftMounted` 聚焦回归通过；不新增保存、重试或异步入口，乱序投影仍由原 session／sequence owner 拒绝 |
+| S8 | 已创建一个节点 → 每次复制回执先到、投影延迟 → 达到目标后停止 | 目标数量精确，副本依次从最新投影节点向右下级联，不因旧投影重复复制同一来源 | 测试夹具 `seedProjectWithCascade` 拥有序列；每次请求前捕获数量，必须看到投影数量增加后才继续；Web 仍是图唯一写入者 | 修正等待条件前记录；真实 WK 生产页延迟投影的 3 节点回归先红（生成 33 个、坐标重复）后绿；断言原生数量及 Web 实际相对坐标 `[[0,0],[48,40],[96,80]]` |
+| S9 | 自然投影顺序 → 15 节点播种 → 首拖／二拖与归因对照；请求失败或投影不再增长 | 正常 15 节点结构测量保持；请求错误传播，未增长由既有有界等待报告失败，不自动重试复制 | 只修测试播种的等待条件，不改变产品、投影协议或延迟实际测量；注入仅限独立测试页，失败时随窗口销毁 | 既有首拖结构回归五个变体通过；请求异常与 12s 超时路径结构化复核，未新增产品错误／重试路径，不人为等待真实超时 |
 
 验证记录（2026-10-15，仓库根目录，Node 24.18.0、Xcode 27.0／SDK 27.0）：
 
@@ -327,6 +329,13 @@ PR #578 隐藏换选后再次收展的 P2 修复补充（2026-10-15）：
 - 仓库、源分支与 HEAD `658c9d2f040846e252198053110a9c5faceeca75` 已与 PR 核对；生产修复仅增加可见性变化时的挂载身份捕获。S6 在生产修改前记录；相同 `xcodebuild` 命令追加 `-only-testing:PlotWeaveNativeTests/NativeInspectorPresentationTests`，新增参数回归先出现 4 处预期草稿丢失，再以 10 tests／1 suite 全通过（13.152s）。最初方法名过滤匹配 0 tests，不作为红绿证据。
 - 完整 `native/**` 路由通过：`npm run check:size`（730 维护文件／64 排除项）、`npm run build:native-canvas` 及上方完整串行 `xcodebuild ... test`，**278 tests／62 suites 全通过，TEST SUCCEEDED**（154.587s）。S6 两种前置状态与重复收展、S7 数字／AI 草稿及隐藏换选均通过；外壳、投影、WKWebView 生命周期与首拖结构回归保持通过，不将采样数值作为性能验收结论。
 - Swift 源／测试分别为 97／324 行，新增回归与实质修改 body 均少于 80 代码行；文档无配置的自动语义检查，已结构化复核生命周期所有权、矩阵与 UI §4.8 交叉引用，`git diff --check` 通过。Vite 大 chunk 与聚焦编译的 AppIntents 元数据跳过提示保留。构建资源、DerivedData 与临时验证日志在结果核对后删除；原有 `gate-history.jsonl` 改动保留。后续提交／推送的覆盖率、SonarQube 与 CI 结果绑定修复提交记录在 PR #578 原评审回复中；本段记录原生路由证据。未改变前端／Rust 源，其覆盖率与共享静态检查仍按版本化 Git 门禁执行。实机 IME、VoiceOver 与 Release 性能仍沿用已有缺口。
+
+PR #578 复制回执先于投影的 P2 测试夹具修复补充（2026-10-15）：
+
+- 仓库、源分支与 HEAD `c26c25b2e7952227118c927a2e983288d64a5a9d` 已与 PR 核对；先记录 S8–S9，再新增 `delayedProjectionsKeepSeededCascadeCountAndShape`。真实 WK 生产页仅将投影向宿主的投递延迟 150ms，真实意图、复制与回执仍执行。旧等待条件 `count > 0` 在初始节点已存在时立即通过：目标 3 个却生成 33 个，且坐标重复，两处结果断言按预期失败；等待改为超过请求前数量后，原生节点数恰为 3，Web 实际相对坐标为 `[[0,0],[48,40],[96,80]]`。注入在播种后恢复，失败时独立窗口销毁，延迟不进入首拖测量。
+- 聚焦命令为上方串行 `xcodebuild ... test` 追加 `-only-testing:PlotWeaveNativeTests/WebCanvasFirstDragLatencyTests`：先红（2 tests，2 issues），修正后 **2 tests／1 suite 全通过**（12.047s）。自然顺序下原有 15 节点实验的五个变体均通过数量、拖动位移与采样结构断言；数值不作为性能阈值或实机验收。
+- 完整 `native/**` 路由 `npm run check:size`（730 维护文件／64 排除项）、`npm run build:native-canvas`、上方完整串行 `xcodebuild ... test` 全通过，**279 tests／62 suites，TEST SUCCEEDED**（154.937s）。S8 延迟顺序与 S9 自然顺序通过；请求异常传播及既有 12s 有界等待人工复核，不新增重试、协议或产品错误路径，未人为等待真实超时。
+- 测试文件 392 行；新增测试、注入 helper 和实质修改的播种函数均少于 80 代码行，`git diff --check` 通过。文档无配置的自动语义检查，已复核矩阵与验证记录。保留既有 Vite 大 chunk 提示；原生构建资源、DerivedData 与临时日志在核对结果后删除。提交／推送共享静态检查、前端与 Rust 覆盖率、SonarQube 及 CI 状态绑定修复提交记录在 PR 原评审回复中。产品源未改，既有实机输入、VoiceOver 与 Release 性能缺口保持。
 
 剩余缺口：检查器展开时首拖仍有一个 ~47ms 的 rAF 长间隔——这是首次选中必须在可见面板构建节点字段树（SystemTextField／文字测量）的必要 UI 工作，与二拖差约 22ms（Debug）。将其移出拖动起点需要投影携带拖动状态或延迟字段树物化，属于此前记录中明确等待证据的检查器生命周期／冻结决策，留待仓库 owner 裁决；本页证据（挂起／改名对照与预选对照）可作为该决策的输入。实机（用户硬件、120Hz、真实输入路径、Release）复测仍待用户执行，验收口径为同一节点首拖与二拖对照，与本页夹具证据同构。
 

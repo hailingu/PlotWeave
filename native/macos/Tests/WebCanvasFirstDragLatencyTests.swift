@@ -69,11 +69,29 @@ struct WebCanvasFirstDragLatencyTests {
         await fixture.services.close()
     }
 
+    /// Seeding must still build one diagonal chain when intent replies overtake delayed projections.
+    @Test func delayedProjectionsKeepSeededCascadeCountAndShape() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let mounted = try await seedProjectWithCascade(fixture, nodes: 3, delayProjections: true)
+        #expect(mounted.state.editor["nodes"]?.arrayValue?.count == 3)
+        let webView = try #require(Self.findWebView(mounted.window.contentView))
+        let offsets = try await webView.callAsyncJavaScript(#"""
+            const positions = Array.from(document.querySelectorAll('.react-flow__node')).map((node) => {
+              const match = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(node.style.transform);
+              return [Number(match[1]), Number(match[2])];
+            });
+            return positions.map(([x, y]) => [x - positions[0][0], y - positions[0][1]]);
+            """#, arguments: [:], in: nil, contentWorld: .page) as? [[Double]]
+        #expect(offsets == [[0, 0], [48, 40], [96, 80]], "每次复制都须基于最新节点，且只创建目标数量的级联节点")
+        await fixture.services.close()
+    }
+
     // MARK: helpers
 
     /// Creates the project, opens it and seeds a diagonal node cascade through
     /// production intents only (create once, duplicate the latest node).
-    private func seedProjectWithCascade(_ fixture: Fixture, nodes: Int) async throws -> (window: NSWindow, state: NativeApplicationState, layout: ShellLayoutState) {
+    private func seedProjectWithCascade(_ fixture: Fixture, nodes: Int, delayProjections: Bool = false) async throws -> (window: NSWindow, state: NativeApplicationState, layout: ShellLayoutState) {
         let projects = try #require(fixture.services.projectStore)
         let metadata = try await projects.invoke(command: "create_project", args: ["name": .string("首拖证据")])
         let id = try #require(metadata["id"]?.string)
@@ -85,12 +103,39 @@ struct WebCanvasFirstDragLatencyTests {
         try await wait { mounted.state.route == "editor" && mounted.state.editor["projectId"]?.string == id }
         _ = try await mounted.state.request("editor.create", args: ["projectId": .string(id), "nodeType": .string("scene")])
         try await wait { mounted.state.editor["nodes"]?.arrayValue?.count == 1 }
+        if delayProjections { try await delaySeedProjections(webView) }
         while mounted.state.editor["nodes"]?.arrayValue?.count ?? 0 < nodes {
+            let previousCount = mounted.state.editor["nodes"]?.arrayValue?.count ?? 0
             let latest = try #require(mounted.state.editor["nodes"]?.arrayValue?.last?["id"]?.string)
             _ = try await mounted.state.request("editor.duplicate", args: ["projectId": .string(id), "id": .string(latest)])
-            try await wait { mounted.state.editor["nodes"]?.arrayValue?.count ?? 0 > 0 }
+            try await wait { mounted.state.editor["nodes"]?.arrayValue?.count ?? 0 > previousCount }
+        }
+        if delayProjections {
+            _ = try await webView.callAsyncJavaScript("window.webkit = window.__pwSeedProjectionHost; delete window.__pwSeedProjectionHost;",
+                arguments: [:], in: nil, contentWorld: .page)
         }
         return mounted
+    }
+
+    /// Only the disposable page's projection transport is delayed; real intents, graph edits and replies stay live.
+    private func delaySeedProjections(_ webView: WKWebView) async throws {
+        _ = try await webView.callAsyncJavaScript(#"""
+            const original = window.webkit;
+            const host = original.messageHandlers.canvasHost;
+            window.__pwSeedProjectionHost = original;
+            window.webkit = {
+              messageHandlers: {
+                canvasHost: {postMessage: (body) => {
+                  if (body && body.event === 'projection') {
+                    setTimeout(() => host.postMessage(body), 150);
+                    return;
+                  }
+                  return host.postMessage(body);
+                }},
+                plotweaveHost: original.messageHandlers.plotweaveHost,
+              },
+            };
+            """#, arguments: [:], in: nil, contentWorld: .page)
     }
 
     /// Runs the in-page two-drag script and decodes its self-measured report.
