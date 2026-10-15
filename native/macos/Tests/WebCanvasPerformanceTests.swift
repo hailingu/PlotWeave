@@ -128,10 +128,16 @@ struct WebCanvasPerformanceTests {
             window.close()
             try await Task.sleep(for: .seconds(2))
         }
-        // Let WebKit's process cache retire torn-down pages before the final
-        // reading; the during-loop aggregate is recorded either way.
-        try await Task.sleep(for: .seconds(8))
-        let settled = WebProcessMemorySampler.sample(tracking: cycleOwnedPids)
+        // Torn-down pages' WebContent processes are reclaimed asynchronously
+        // by WebKit's process cache; wait (bounded) until every cycle-owned
+        // process exits so the settled reading is asserted, not assumed
+        // (PR #574 review).
+        let reclaimDeadline = ContinuousClock.now.advanced(by: .seconds(30))
+        var settled = WebProcessMemorySampler.sample(tracking: cycleOwnedPids)
+        while settled.webContentProcessCount > 0 && ContinuousClock.now < reclaimDeadline {
+            try await Task.sleep(for: .seconds(2))
+            settled = WebProcessMemorySampler.sample(tracking: cycleOwnedPids)
+        }
         aggregateSamples.append(settled)
         let trend = aggregateSamples.map(\.description).joined(separator: " -> ")
         print("PW-PERF cycle-aggregate-trend: \(trend)")
@@ -153,6 +159,10 @@ struct WebCanvasPerformanceTests {
                 "cycle \(index): host app memory must stay bounded across destroy/recreate cycles: \(trend)"
             )
         }
+        #expect(
+            settled.webContentProcessCount == 0,
+            "destroyed cycles' WebContent processes must be reclaimed within the wait window: \(trend)"
+        )
     }
 
     // MARK: helpers
