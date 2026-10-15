@@ -5,7 +5,7 @@ import Testing
 
 /// Native title controls share the split view's visibility owner and follow its geometry (matrix N72–N76).
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, WebKitTestIsolation())
 struct NativeSidebarToggleTests {
     /// The owner's target is inside the sidebar header, next to its right edge rather than over the canvas (N76).
     @Test func outlineToggleStaysOverSidebar() async throws {

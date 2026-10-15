@@ -3,6 +3,8 @@ import SwiftUI
 /// Native navigation, toolbar, inspector and business views surround one persistent Web canvas session.
 struct NativeShellRoot: View {
     let demoMode: Bool
+    /// Isolated-fixture fragment (`fixture` demo default or `perf:N` M15 scales).
+    let demoFragment: String
     let services: NativeHostServices?
     @State private var layout: ShellLayoutState
     @State private var appearance: CanvasAppearanceState
@@ -15,11 +17,13 @@ struct NativeShellRoot: View {
         layout: ShellLayoutState = ShellLayoutState(),
         appearance: CanvasAppearanceState = CanvasAppearanceState(),
         demoMode: Bool = false,
+        demoFragment: String = "fixture",
         services: NativeHostServices? = nil,
         application: NativeApplicationState = NativeApplicationState(),
         windowPresentation: NativeWelcomeWindowController = NativeWelcomeWindowController()
     ) {
         self.demoMode = demoMode
+        self.demoFragment = demoFragment
         self.services = services
         _layout = State(initialValue: layout)
         _appearance = State(initialValue: appearance)
@@ -44,7 +48,7 @@ struct NativeShellRoot: View {
                 .toolbar(removing: .sidebarToggle)
         } detail: {
             WebCanvasSection(
-                appearance: appearance, demoMode: demoMode,
+                appearance: appearance, demoMode: demoMode, demoFragment: demoFragment,
                 application: application, services: services
             )
         }

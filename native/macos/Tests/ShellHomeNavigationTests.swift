@@ -7,7 +7,7 @@ import WebKit
 /// Production home navigation retains the native canvas host and saved document.
 /// This replaces the earlier memory-only demo regression (integration matrix I2).
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, WebKitTestIsolation())
 struct ShellHomeNavigationTests {
     /// Native dimensions and Web viewport transform are separate observable initialization concerns.
     private struct CanvasFrame: Equatable {

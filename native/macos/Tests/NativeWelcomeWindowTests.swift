@@ -5,7 +5,7 @@ import Testing
 
 /// Verifies the welcome card's real window contract without opening a production data root.
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, WebKitTestIsolation())
 struct NativeWelcomeWindowTests {
     /// The actual close button must retain the window until the shared lifecycle controller can approve it.
     @Test func closeWaitsForListenerAndApproval() async throws {

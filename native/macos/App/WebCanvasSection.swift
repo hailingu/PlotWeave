@@ -8,6 +8,9 @@ struct WebCanvasSection: View {
     let appearance: CanvasAppearanceState
     /// Only hosted integration tests select the isolated memory canvas.
     var demoMode = false
+    /// Isolated-fixture fragment: the 9-node demo default, or a registered
+    /// `perf:N` scale for M15 measurement runs (issue #523).
+    var demoFragment: String = "fixture"
     /// Native navigation consumes the page's read-only application projection.
     var application: NativeApplicationState? = nil
     /// Test services are explicit; production lazily selects its independent data root.
@@ -17,7 +20,7 @@ struct WebCanvasSection: View {
     private var fixtureURL: URL? {
         guard demoMode, let url = Bundle.main.url(forResource: "native-canvas", withExtension: "html") else { return nil }
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        components?.fragment = "fixture"
+        components?.fragment = demoFragment
         return components?.url
     }
 

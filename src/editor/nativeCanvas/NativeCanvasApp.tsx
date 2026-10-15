@@ -13,7 +13,9 @@ import {
   canvasNodeTypes,
 } from '../canvasRegistry'
 import { useDemoEditor } from './useDemoEditor'
-import { DEMO_GRAPH_LABEL } from './demoGraph'
+import { DEMO_GRAPH_LABEL, type DemoGraph } from './demoGraph'
+import { CANVAS_PERF_LABEL } from './canvasPerfFixture'
+import { isSwiftHost } from '../../platform/hostEnvironment'
 import { useNativeCanvasLifecycle } from './useNativeCanvasLifecycle'
 import { useCanvasPerformance } from '../useCanvasPerformance'
 import {
@@ -65,9 +67,14 @@ const DEMO_IMAGE_GEN_API: ImageGenApi = {
   cancel: () => undefined,
 }
 
+/** 验证页装配入参：注入固定规模性能夹具时徽标改为测量口径。 */
+interface NativeCanvasAppProps {
+  readonly graph?: DemoGraph
+}
+
 /** 装配演示会话、宿主握手与外观同步，复用编辑器画布能力。 */
-export function NativeCanvasApp() {
-  const editor = useDemoEditor()
+export function NativeCanvasApp({ graph }: NativeCanvasAppProps) {
+  const editor = useDemoEditor(graph)
   const canvasRef = useRef<HTMLDivElement>(null)
   const perf = useCanvasPerformance({
     canvas: 'demo',
@@ -82,7 +89,7 @@ export function NativeCanvasApp() {
   return (
     <div style={VIEWPORT_STYLE}>
       <div
-        className="canvas-root"
+        className={isSwiftHost() ? 'canvas-root is-swift' : 'canvas-root'}
         ref={canvasRef}
         data-canvas-effects={perf.renderingMode}
         style={{ position: 'relative' }}
@@ -94,7 +101,11 @@ export function NativeCanvasApp() {
             </Profiler>
           </NodeEditContext.Provider>
         </ImageGenContext.Provider>
-        <div style={BADGE_STYLE}>{DEMO_GRAPH_LABEL} · P1 视觉首片 · 不落盘</div>
+        <div style={BADGE_STYLE}>
+          {graph
+            ? `${DEMO_GRAPH_LABEL} · ${CANVAS_PERF_LABEL} · 不落盘`
+            : `${DEMO_GRAPH_LABEL} · P1 视觉首片 · 不落盘`}
+        </div>
       </div>
     </div>
   )

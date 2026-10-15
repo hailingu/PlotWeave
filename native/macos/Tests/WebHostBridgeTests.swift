@@ -5,6 +5,7 @@ import WebKit
 
 /// Real WebKit exercises session trust and projection/intent invalidation at their host entry points.
 @MainActor
+@Suite(.serialized, WebKitTestIsolation())
 struct WebHostBridgeTests {
     /// Native identities belong to the retained page, survive application-state reconnects, and reset only on real reload.
     @Test func nativeIntentIdentityUsesCurrentPageOrdinal() async throws {

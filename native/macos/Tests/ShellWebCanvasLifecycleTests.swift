@@ -10,6 +10,7 @@ import WebKit
 /// instance and the loaded page alive. Also seeds M13 by asserting the
 /// host appearance sync lands on the real web page.
 @MainActor
+@Suite(.serialized, WebKitTestIsolation())
 struct ShellWebCanvasLifecycleTests {
 
     private struct Timeout: Error {}

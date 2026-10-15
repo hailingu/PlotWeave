@@ -6,6 +6,7 @@ import WebKit
 /// Exercises the shipped page in real WebKit: missing or unexecutable bundle
 /// scripts must fail this test even when HTML navigation itself succeeds.
 @MainActor
+@Suite(.serialized, WebKitTestIsolation())
 struct WebCanvasLoadingTests {
 
     /// M01 regression: a packaged canvas must both report ready and render nodes.
@@ -72,6 +73,10 @@ struct WebCanvasLoadingTests {
             "document.querySelectorAll('.react-flow__node').length"
         ) as? Int
         #expect(nodes == 9)
+        let edges = try await webView.evaluateJavaScript(
+            "document.querySelectorAll('.react-flow__edge').length"
+        ) as? Int
+        #expect(edges == 7, "the demo fixture must render all 7 edges incl. branch/attach")
         let styledNodes = try await webView.evaluateJavaScript("""
             Array.from(document.querySelectorAll('.react-flow__node')).filter(node => {
               const style = getComputedStyle(node);

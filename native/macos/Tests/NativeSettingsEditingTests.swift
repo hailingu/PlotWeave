@@ -7,7 +7,7 @@ import WebKit
 
 /// Actual native settings controls and a production Web owner preserve edits across delayed projections.
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, WebKitTestIsolation())
 struct NativeSettingsEditingTests {
     /// Two native choices compose while both controls still display the original read projection.
     @Test(arguments: [true, false])

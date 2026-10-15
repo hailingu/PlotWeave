@@ -6,7 +6,7 @@ import WebKit
 
 /// Real shell presentation consumes explicit node-property requests without reviving stale route or page state.
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, WebKitTestIsolation())
 struct NativeShellNodeSettingsTests {
     /// Different targets and repeated requests for one target each reopen a manually collapsed inspector.
     @Test func explicitNodeRequestsReopenTheSameNativeInspector() async throws {

@@ -7,7 +7,7 @@ import WebKit
 
 /// Production bundle, SwiftUI shell, Web canvas and native storage prove one document writer across real saves.
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, WebKitTestIsolation())
 struct NativeProductionLifecycleTests {
     /// Real canvas editing survives debounce, the quit fixed point and a second page opening the saved project.
     @Test func nativeProjectEditFlushAndReloadUsesActualIndependentStorage() async throws {

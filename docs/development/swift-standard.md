@@ -121,8 +121,12 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
 - Run the app-hosted target with `-parallel-testing-enabled NO`, as specified
   in Scope Routing and CI. Its real AppKit windows share `NSApplication`
   focus, toolbar layout and close delegates; per-suite `.serialized` does
-  not isolate concurrently executing sibling suites. Serial execution keeps
-  every assertion and test while preventing fixture interference.
+  not isolate concurrently executing sibling suites. All suites that create
+  WKWebView directly or mount it through the shell also use the test-only
+  `WebKitTestIsolation` suite trait, together with `.serialized`. Its shared
+  async permit spans the entire suite, including suspension and teardown;
+  PID-difference attribution rejects calls outside that scope. New WebKit
+  fixture owners must join this same scope (PR #574, issue #575).
 
 ## Before Writing Code
 

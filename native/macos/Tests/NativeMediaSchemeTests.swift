@@ -5,6 +5,7 @@ import WebKit
 
 /// Scheme tests use owned temporary descriptors and a real WebKit task contract without user data or network.
 @MainActor
+@Suite(.serialized, WebKitTestIsolation())
 struct NativeMediaSchemeTests {
     /// A bounded resource reaches response, byte chunks and exactly one successful completion.
     @Test func deliversOwnedMediaBytes() async throws {
