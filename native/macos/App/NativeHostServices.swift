@@ -21,6 +21,8 @@ final class NativeHostServices {
     private let models: NativeModels?
     /// Shared application quit controller or an isolated test lifecycle.
     let quit: HostQuitController
+    /// App-level quit eligibility also covers direct native library writes, not only cross-bridge intents (issue #529).
+    let libraryQuitWork = NativeLibraryQuitWork()
     /// Only the currently connected page may revoke the shared listener's pending quit decision.
     private weak var quitPage: WebCanvasCoordinator?
 
@@ -52,9 +54,12 @@ final class NativeHostServices {
     func connect(_ coordinator: WebCanvasCoordinator) {
         quit.resetListener()
         quitPage = coordinator
-        quit.sendEvent = { [weak coordinator] name, payload in
+        quit.sendEvent = { [weak coordinator, libraryQuitWork] name, payload in
             guard let coordinator else { throw HostFailure(code: "PW_PAGE_UNAVAILABLE", message: "画布页面不可用") }
-            if name == "app-quit-requested" { try await coordinator.drainNativeIntents?() }
+            if name == "app-quit-requested" {
+                try await coordinator.drainNativeIntents?()
+                try await libraryQuitWork.drain()
+            }
             try Task.checkCancellation()
             try await coordinator.dispatchEvent(name, payload: payload)
         }
@@ -114,6 +119,9 @@ final class NativeHostServices {
         case nil, .bool(false):
             guard quitPage?.hasPendingNativeIntents?() != true else {
                 throw HostFailure(code: "PW_NATIVE_INTENTS_PENDING", message: "原生编辑尚未完成，已阻止退出；请等待后重试。")
+            }
+            guard !libraryQuitWork.hasPendingBatches else {
+                throw HostFailure(code: "PW_NATIVE_LIBRARY_PENDING", message: "原生素材库写入尚未完成，已阻止退出；请等待后重试。")
             }
             try quit.approve()
         case .bool(true): quit.cancel()

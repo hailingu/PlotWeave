@@ -19,10 +19,10 @@ struct NativeLibraryView: View {
     @Environment(\.dismiss) private var dismiss
 
     /// Project identity is captured at sheet creation so delayed actions cannot target a subsequently opened document.
-    init(state: NativeApplicationState, library: NativeLibrary) {
+    init(state: NativeApplicationState, library: NativeLibrary, quitWork: NativeLibraryQuitWork) {
         self.state = state
         projectID = state.projectId
-        _model = State(initialValue: NativeLibraryModel(library: library))
+        _model = State(initialValue: NativeLibraryModel(library: library, quitWork: quitWork))
     }
 
     /// Loading, errors and cleanup evidence remain visible without inventing an empty successful state.
