@@ -138,16 +138,21 @@ struct WebCanvasPerformanceTests {
         print("PW-PERF pre-loop: \(preLoop.description)")
 
         let first = try #require(aggregateSamples.first)
-        let last = try #require(aggregateSamples.last)
         let bound: UInt64 = 400 * 1_048_576
-        #expect(
-            last.webContentResidentBytes <= first.webContentResidentBytes + bound,
-            "cycle-owned WebContent aggregate must stay bounded: \(trend)"
-        )
-        #expect(
-            last.appResidentBytes <= first.appResidentBytes + bound,
-            "host app memory must stay bounded across destroy/recreate cycles: \(trend)"
-        )
+        // Every collected sample must stay bounded, not only the endpoints:
+        // torn-down processes accumulating mid-loop and exiting during the
+        // settlement would otherwise spike an intermediate sample unseen
+        // (PR #574 review).
+        for (index, sample) in aggregateSamples.enumerated() {
+            #expect(
+                sample.webContentResidentBytes <= first.webContentResidentBytes + bound,
+                "cycle \(index): cycle-owned WebContent aggregate must stay bounded: \(trend)"
+            )
+            #expect(
+                sample.appResidentBytes <= first.appResidentBytes + bound,
+                "cycle \(index): host app memory must stay bounded across destroy/recreate cycles: \(trend)"
+            )
+        }
     }
 
     // MARK: helpers

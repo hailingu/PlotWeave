@@ -263,15 +263,17 @@ function elementTranslate(element: HTMLElement): { x: number; y: number } {
   return { x: Number(match[1]), y: Number(match[2]) }
 }
 
-/** 拖拽阶段：按下节点→逐步移动→松手；返回节点位移（px，图坐标）。 */
+/** 拖拽阶段：按下节点→逐步移动→松手；返回节点位移（px，图坐标）。
+ * 每轮重取节点矩形：上一轮拖动已移动节点，旧坐标处再按下会再次绕过
+ * 命中测试（PR #574 评审）。 */
 async function dragPhase(options: CanvasPerfScriptOptions): Promise<number> {
   const node = selectDragTargetNode()
-  const rect = node.getBoundingClientRect()
-  const startX = rect.left + rect.width / 2
-  const startY = rect.top + rect.height / 2
   const before = elementTranslate(node)
   const stepPx = 12
   for (let round = 0; round < options.dragRounds; round += 1) {
+    const rect = node.getBoundingClientRect()
+    const startX = rect.left + rect.width / 2
+    const startY = rect.top + rect.height / 2
     fireMouse(node, 'mousedown', startX, startY, 1)
     for (let step = 1; step <= options.dragSteps; step += 1) {
       fireMouse(
