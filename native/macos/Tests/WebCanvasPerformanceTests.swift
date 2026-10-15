@@ -99,15 +99,18 @@ struct WebCanvasPerformanceTests {
         )
     }
 
-    /// Repeated open/close cycles must not grow WebContent memory without
-    /// bound (matrix M15 invariant). Each cycle mounts a fresh hosted shell
-    /// and destroys it (`contentView = nil` runs SwiftUI dismantle →
-    /// coordinator invalidation and handler removal), so retention tied to
-    /// destruction — not merely page re-navigation — is exercised
-    /// (PR #574 review).
-    @Test func repeatedHostedCanvasCyclesKeepWebMemoryBounded() async throws {
-        var loadedSamples: [WebProcessMemorySample] = []
-        var residualSamples: [WebProcessMemorySample] = []
+    /// Repeated open/close cycles must not grow total memory without bound
+    /// (matrix M15 invariant). Each cycle mounts a fresh hosted shell and
+    /// destroys it (`contentView = nil` runs SwiftUI dismantle → coordinator
+    /// invalidation and handler removal). The bound covers the **aggregate**
+    /// of every cycle-owned WebContent pid — including destroyed-but-lingering
+    /// ones WebKit's process cache keeps alive — plus the host app's own
+    /// resident memory, so retained processes or retained Swift objects both
+    /// fail it (PR #574 reviews).
+    @Test func repeatedHostedCanvasCyclesKeepTotalMemoryBounded() async throws {
+        let preLoop = WebProcessMemorySampler.sample(tracking: [])
+        var aggregateSamples: [WebProcessMemorySample] = []
+        var cycleOwnedPids: Set<Int32> = []
         for cycle in 0..<5 {
             let webBaseline = WebProcessMemorySampler.webContentPids()
             let window = try await mountPerfShell(scale: 100)
@@ -116,32 +119,35 @@ struct WebCanvasPerformanceTests {
             try await Task.sleep(for: .seconds(1))
             // Pool reuse would return an empty diff and fail here explicitly
             // instead of silently measuring the wrong process set.
-            let tracked = WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
-            #expect(!tracked.isEmpty, "cycle \(cycle): a WebContent process must own the loaded page")
-            loadedSamples.append(WebProcessMemorySampler.sample(tracking: tracked))
+            let bornThisCycle = WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
+            #expect(!bornThisCycle.isEmpty, "cycle \(cycle): a WebContent process must own the loaded page")
+            cycleOwnedPids.formUnion(bornThisCycle)
+            aggregateSamples.append(WebProcessMemorySampler.sample(tracking: cycleOwnedPids))
 
             window.contentView = nil
             window.close()
             try await Task.sleep(for: .seconds(2))
-            residualSamples.append(WebProcessMemorySampler.sample(tracking: tracked))
         }
-        let loadedTrend = loadedSamples.map(\.description).joined(separator: " -> ")
-        let residualTrend = residualSamples.map(\.description).joined(separator: " -> ")
-        print("PW-PERF cycle-loaded-trend: \(loadedTrend)")
-        print("PW-PERF cycle-residual-trend: \(residualTrend)")
-        let first = try #require(loadedSamples.first)
-        let last = try #require(loadedSamples.last)
-        // Generous bound (400MB) catches unbounded growth without making
-        // timing noise a CI failure; the recorded trend is the real evidence.
+        // Let WebKit's process cache retire torn-down pages before the final
+        // reading; the during-loop aggregate is recorded either way.
+        try await Task.sleep(for: .seconds(8))
+        let settled = WebProcessMemorySampler.sample(tracking: cycleOwnedPids)
+        aggregateSamples.append(settled)
+        let trend = aggregateSamples.map(\.description).joined(separator: " -> ")
+        print("PW-PERF cycle-aggregate-trend: \(trend)")
+        print("PW-PERF pre-loop: \(preLoop.description)")
+
+        let first = try #require(aggregateSamples.first)
+        let last = try #require(aggregateSamples.last)
+        let bound: UInt64 = 400 * 1_048_576
         #expect(
-            last.webContentResidentBytes <= first.webContentResidentBytes + 400 * 1_048_576,
-            "repeated open/close must not grow WebContent memory without bound: \(loadedTrend)"
+            last.webContentResidentBytes <= first.webContentResidentBytes + bound,
+            "cycle-owned WebContent aggregate must stay bounded: \(trend)"
         )
-        // The residual series is informational: WebKit's process cache keeps
-        // a torn-down page's WebContent process alive briefly at roughly the
-        // same RSS, so teardown release is a platform timing fact, not an
-        // app-owned invariant; the bound above plus per-cycle fresh-pid
-        // attribution carry the no-unbounded-growth guarantee.
+        #expect(
+            last.appResidentBytes <= first.appResidentBytes + bound,
+            "host app memory must stay bounded across destroy/recreate cycles: \(trend)"
+        )
     }
 
     // MARK: helpers

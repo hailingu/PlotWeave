@@ -41,7 +41,7 @@
 
 - 夹具：`src/editor/nativeCanvas/canvasPerfFixture.ts`（新增，vitest 14 项校验规模/比例/确定性/graphRules/句柄对齐/脱敏）。规模 100/500/1000；每 10 节点一个故事单元，家族比例 beat 30% / scene 20% / dialogue 20% / branch 10% / shot 10% / image 10%；边数 = 规模×0.9−1（含 sequence/branch/attach 三语义与跨单元桥接）；图片节点统一声明 1024×1024、`outputs` 恒空（无真实媒体字节）；窗口 1280×860 下 fitView（受默认 minZoom 0.5 限制）可见节点 26–32。
 - 脚本：`src/editor/nativeCanvas/canvasPerfScript.ts`（新增）在真实 React Flow 挂载树上派生真实鼠标/滚轮事件——拖拽（2 轮×20 步，目标取视口内可见节点，评审后修正）、平移（2×20）、缩放（2×16，正负交替）、画布控件（逐个点击）；宿主侧（`WebCanvasPerformanceTests`，新增）在脚本运行中切换真实原生面板（检查器 0.6s、侧栏收/展 1.5s/2.2s）。rAF 帧间隔按阶段统计 p50/p95/max/超预算数。
-- 内存：`WebProcessMemorySampler.swift`（新增）以公开 proc API（`proc_listallpids`，buffersize 按字节传参 + `PROC_PIDTBSDINFO`/`PROC_PIDTASKINFO`）按「装载前后 WebContent pid 差集」归属本页进程；反复开关以 5 次完整销毁/重建宿主画布（新窗口 + SwiftUI dismantle → coordinator 失效）采样。
+- 内存：`WebProcessMemorySampler.swift`（新增）以公开 proc API（`proc_listallpids`，buffersize 按字节传参 + `PROC_PIDTBSDINFO`/`PROC_PIDTASKINFO`）按「装载前后 WebContent pid 差集」归属本页进程；反复开关以 5 次完整销毁/重建宿主画布（新窗口 + SwiftUI dismantle → coordinator 失效）采样，有界断言覆盖**周期自有 pid 的累计聚合**（含销毁后仍存活的进程）与**宿主 app 自身常驻内存**，循环后另设 8 秒沉降期观测进程回收。
 
 ### 3.2 测量结果（本机，测试套件内，2026-10-15 评审修正轮）
 
@@ -54,13 +54,13 @@
 *100 规模 max 620ms 为脚本首帧前的一次性长帧（含页面与控件初始化），p95 不受影响。
 
 - 平移/缩放/面板阶段：p95 18–32ms（1000 规模面板 p95 44ms / max 81ms）。
-- 打开/关闭趋势（perf:100 × 5 次完整销毁/重建宿主画布）：WebContent 每周期装载 RSS 117.9 → 114.0 → 117.4 → 119.4 → 118.0MB——**平稳、非单调**；销毁后 2 秒的残留采样显示 WebKit 进程缓存使旧 WebContent 短暂存活（RSS 基本持平），且每周期新页面获得全新进程（归属未受复用污染）。对照：同一 WebView 内 5 次 `reload()` 曾测得单调上升（115.6→189.9MB，首轮记录）——增长系重导航堆增长而非宿主销毁泄漏，长循环确认仍归 [#573](https://github.com/hailingu/PlotWeave/issues/573)。
+- 打开/关闭趋势（perf:100 × 5 次完整销毁/重建宿主画布，聚合口径）：周期自有 WebContent 的累计聚合 RSS 每周期恒约 118MB、进程数恒 1——**先前周期的进程在下一周期装载前已退出**，无残留累积；循环后 8 秒沉降读数为 0 进程（完全回收）。宿主 app 常驻内存 200.7 → 229.8MB，一次性 +29MB（pre-loop 198.1MB，WebKit 框架热身）后平台化。销毁后 2 秒内旧进程因 WebKit 进程缓存短暂存活（RSS 持平）。对照：同一 WebView 内 5 次 `reload()` 曾测得单调上升（115.6→189.9MB，首轮记录）——增长系重导航堆增长而非宿主销毁泄漏，长循环确认仍归 [#573](https://github.com/hailingu/PlotWeave/issues/573)。
 - 帧预算口径：60Hz ≈16.7ms；p50≈17ms 即贴预算运行，over16 计数见测试输出（p95 视角已列上表）。
 - 消息频率/体积：演示页无宿主命令（就绪握手与外观推送之外为 0），桥接合并性能不构成本夹具瓶颈。
 
 ### 3.3 结论与边界
 
-- 通过（结构性断言，进 CI 套件）：三规模节点/边计数、四阶段齐全、rAF 采样、拖拽位移/平移/缩放行程非零（拖拽目标为视口内可见节点）、销毁/重建周期间 WebContent 内存有界守卫（+400MB 界）且每周期归属到新进程。
+- 通过（结构性断言，进 CI 套件）：三规模节点/边计数、四阶段齐全、rAF 采样、拖拽位移/平移/缩放行程非零（拖拽目标为视口内可见节点）、销毁/重建周期的 WebContent **累计聚合**与宿主 app 内存均有界守卫（各 +400MB 界）、每周期归属到新进程且沉降后完全回收。
 - 退化位置（按 §7.2「压力场景明确退化位置」记录，不计为未通过）：1000 节点拖拽 p95 68ms、超 33ms 帧 20 个——压力规模下拖拽连续性显著退化，优化方向为既有渲染隔离/仅渲染可见元素等（后续任务）。
 - 能力边界：WebKit 无 `longtask` 条目（报告 longTasks=null）；单刷新率（60Hz/dpr2）、单机；页面为打包演示入口而非生产编辑会话（无保存链/AI 面板参与）；WebContent 进程归属依赖全机 pid 基线差集——WebKit 若复用进程池中既有进程，差集为空并以显式失败暴露（不静默测错对象），无关进程并发启动的误归属只会高估内存总和、不影响有界判断。
 - 对比缺口：Tauri 同夹具基线未取得——[#572](https://github.com/hailingu/PlotWeave/issues/572)；同 WebView 重导航堆增长的长循环确认——[#573](https://github.com/hailingu/PlotWeave/issues/573)。
@@ -70,4 +70,5 @@
 - 前端：`canvasPerfFixture.ts`（+测试）、`canvasPerfScript.ts`（+测试）、`main.tsx` hash 装配、`NativeCanvasApp`/`useDemoEditor` 支持注入图、演示页 `is-swift` 修复。路由检查全绿：`format:check`、`lint`、`check:size`（719 文件）、`typecheck:strict`、`build`、`npm test`（230 文件 / 3146 项）。
 - 原生：`NativeShellRoot`/`WebCanvasSection` 增加 `demoFragment`（默认 `fixture` 不变）；新增 `CanvasAppearanceComboTests`、`WebCanvasPerformanceTests`、`WebProcessMemorySampler`；`WebCanvasLoadingTests` 补 7 边渲染断言。原生路由完整套件 252 项 / 57 套件通过。
 - 评审轮（PR #574 review 5521422435，2026-10-15）：拖拽目标改为视口内可见节点；`proc_listallpids` 的 buffersize 按字节传参（本机实证：按元素数传参只暴露约 1/4 缓冲区）；内存周界测试改为完整销毁/重建宿主画布并显式暴露进程池复用（差集为空即失败）。修正后前端 3146 项 / 原生 252 项全绿，§3.2 数值为修正轮记录。
+- 评审轮二（PR #574 review 5526951136，2026-10-15）：周期内存断言改为周期自有 pid 的累计聚合 + 宿主 app 内存双有界（此前仅比较当前周期 RSS，销毁残留进程与宿主持有不在断言内）；`canvasPerfFixture.test.ts` 断言体提取为独立函数满足 80 行可执行单元上限。双侧套件复跑全绿（前端 3146 / 原生 252），§3.2 趋势数值为聚合口径记录。
 - 一次性产物（DerivedData、/tmp 日志）验证后清理；未触碰用户数据根。
