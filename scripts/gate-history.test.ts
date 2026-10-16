@@ -1,5 +1,6 @@
 import {
   appendFileSync,
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -247,12 +248,14 @@ function prepareIsolatedRepository(historySeed: string): {
   }
 }
 
-/** 在准备好的仓库上执行脚本副本的 materialize --stage-for-commit。 */
+/** 在准备好的仓库上执行脚本副本的 materialize --stage-for-commit；
+ * extraEnv 追加注入（如临时索引场景的 GIT_INDEX_FILE）。 */
 function runStageMaterialize(
   root: string,
   historyPath: string,
   pendingPath: string,
   pending: string | undefined,
+  extraEnv: NodeJS.ProcessEnv = {},
 ): { status: number | null; stdout: string; stderr: string } {
   if (pending !== undefined) {
     writeFileSync(pendingPath, pending)
@@ -276,6 +279,7 @@ function runStageMaterialize(
         PLOTWEAVE_GATE_HISTORY_PATH: historyPath,
         PLOTWEAVE_GATE_PENDING_PATH: pendingPath,
         PLOTWEAVE_SONAR_LOCK_DIRECTORY: resolve(root, 'gate-lock'),
+        ...extraEnv,
       },
       timeout: 60_000,
     },
@@ -525,6 +529,52 @@ describe(
         seedRecord,
         secondRecord,
       ])
+    })
+  },
+)
+
+describe(
+  '临时索引下的整体推迟（git commit -- <pathspec> / --only，PR #581 评审 5543397069）',
+  { timeout: 30_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
+    })
+
+    it('临时索引（git commit -- <pathspec> / --only 钩子环境）：整体推迟折并暂存、待物化记录原样保留（PR #581 评审 5543397069）', () => {
+      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
+        `${seedRecord}\n`,
+      )
+      const realIndex = resolve(
+        spawnSync('git', ['rev-parse', '--git-dir'], {
+          cwd: root,
+          encoding: 'utf8',
+          env: gitFixtureEnvironment(),
+        }).stdout.trim(),
+        'index',
+      )
+      const tempIndex = resolve(root, 'temp-index-copy')
+      copyFileSync(realIndex, tempIndex)
+
+      const result = runStageMaterialize(
+        root,
+        historyPath,
+        pendingPath,
+        `${secondRecord}\n`,
+        { GIT_INDEX_FILE: tempIndex },
+      )
+      const ledgerLines = readFileSync(historyPath, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+      const pendingLines = readFileSync(pendingPath, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain('不折并不暂存')
+      // 待物化记录与台账都原样保留，交给下一个普通提交折并暂存
+      expect(pendingLines).toHaveLength(1)
+      expect(ledgerLines).toEqual([seedRecord])
     })
   },
 )

@@ -15,7 +15,11 @@
 # 随下一个普通提交并入；pre-push 自 PR #581 评审 5537970549 起【不】
 # 物化：推送不触碰被跟踪台账，工作树保持干净（快路径的台账失效来源
 # 随之消失），推送产生的记录留在待物化文件、同样由下一次提交折并暂
-# 存。裸 materialize 仅作人工排水出口（并入后保持未暂存）。排水在与
+# 存。git commit -- <pathspec> / --only 使用临时索引（PR #581 评审
+# 5543397069）：此时【整体推迟】——不折并也不暂存（折并的 git add 只
+# 会写进临时索引，真实索引残留旧版、下个普通提交还会把记录反向提交
+# 掉），待物化记录原样保留、由下一个普通提交折并暂存。裸 materialize
+# 仅作人工排水出口（并入后保持未暂存）。排水在与
 # 门禁同一把互斥锁下进行（评审 5339243902）：记录追加只发生在门禁持
 # 锁期间，物化持同一把锁后「并入+清空」对并发追加原子，完整通过的
 # 运行不会因清空窗口被无声丢弃。等锁超时或配置非数字只警告并保留待
@@ -107,6 +111,30 @@ ATTRIBUTION
 # sequencer 重放不采纳追加暂存，prepare-commit-msg 回退路径不得调用。
 # 台账文件不存在、或台账与 HEAD 无差异且本次未并入新行时静默跳过；
 # 各分支都绝不阻塞已通过的门禁或本次提交。
+# 临时索引检测（PR #581 评审 5543397069）：git commit -- <pathspec> /
+# --only 为提交构建临时索引（GIT_INDEX_FILE 指向非真实索引）；此时任何
+# git add 只写临时索引——真实索引残留旧版、下个普通提交会把已物化的
+# 记录从台账反向提交掉。检测为真时整体推迟：不折并、不暂存，待物化
+# 记录原样保留给下一个普通提交。非提交环境（无 .git）按无临时索引处理。
+commit_uses_temporary_index() {
+  [ -n "${GIT_INDEX_FILE:-}" ] || return 1
+  # 普通提交的钩子环境里 GIT_INDEX_FILE 也被设置（常为相对路径
+  # 「.git/index」）；两侧都以 repository_root 前缀归一为同一逻辑路径后
+  # 比较——不用 --absolute-git-dir（macOS 上 /tmp→/private/tmp 的符号
+  # 链接会让物理路径与逻辑路径前缀不一致而误判）——只有真正指向别的
+  # 索引（pathspec 的 next-index-*.lock 等）才判为临时索引
+  git_dir=$(git rev-parse --git-dir 2>/dev/null) || return 1
+  case $git_dir in
+    /*) real_index=$git_dir/index ;;
+    *) real_index=$repository_root/$git_dir/index ;;
+  esac
+  case $GIT_INDEX_FILE in
+    /*) given_index=$GIT_INDEX_FILE ;;
+    *) given_index=$repository_root/$GIT_INDEX_FILE ;;
+  esac
+  [ "$given_index" != "$real_index" ]
+}
+
 folded_this_run=
 folded_capture=
 stage_materialized_lines() {
@@ -173,6 +201,10 @@ case ${1:-} in
       exit 2
     fi
     if [ ! -s "$pending_path" ] && [ -z "$stage_for_commit" ]; then
+      exit 0
+    fi
+    if [ -n "$stage_for_commit" ] && commit_uses_temporary_index; then
+      printf '[gate-history] 检测到临时索引（git commit -- <pathspec> / --only）：本次不折并不暂存，%s 行待物化记录保留至下一个普通提交；不阻塞本次提交。\n'         "$(grep -c '' "$pending_path" 2>/dev/null || printf 0)"
       exit 0
     fi
     if [ ! -s "$pending_path" ]; then

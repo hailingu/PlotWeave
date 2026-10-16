@@ -214,6 +214,13 @@ NODE
   ledger failure source documented in
   [Push-Path Per-Ref Gating](quality-gate-push.md#push-path-per-ref-gating-issue-405)
   is gone; a bare `gate-history.sh materialize` remains as a manual drain.
+  A path-limited commit (`git commit -- <pathspec>` / `--only`) runs hooks
+  against a temporary index — a hook `git add` there never reaches the real
+  index, leaving a stale residue that a later ordinary commit would
+  re-commit backwards — so the hook detects the temporary index and defers
+  the fold entirely to the next ordinary commit (PR #581 评审 5543397069);
+  that pathspec commit's own gate record keys its temporary-index tree,
+  which equals the commit's tree, so evidence stays consistent.
   A record-only commit burns a full gate run and is not the norm, except as
   an optional evidence-tip commit, which the server-side check exempts when
   it only touches the ledger. Records for
