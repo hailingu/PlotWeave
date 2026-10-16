@@ -291,6 +291,30 @@ describe(
       expect(result.output).toContain('没有待合并提交')
     })
 
+    it('台账超过 execFileSync 默认缓冲（>1 MiB）仍完整读取并正常判定（PR #581 评审 5542889511）', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        // 填充记录使台账体积超过 1 MiB（默认 maxBuffer），假 tree 不与
+        // 范围内任何提交树碰撞；有效记录（c1）缀在末尾
+        const padding = Array.from({ length: 12_000 }, (_, index) =>
+          JSON.stringify({
+            tree: `${'p'.repeat(39)}${index % 10}`,
+            qualityGate: 'OK',
+            newCodeUnresolvedIssues: 0,
+          }),
+        )
+        appendLedger(root, [...padding, recordLine(root, c1)])
+        commitAll(root, '物化台账')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~2', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).not.toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+    })
+
     it('缺少 --base 或未知参数：退出 2 并给出用法', () => {
       const root = createSeeded((root) => {
         writeFile(root, 'src/app.txt', 'c1\n')

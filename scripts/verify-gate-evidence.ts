@@ -71,13 +71,17 @@ class UsageError extends Error {}
 
 /** 以与推送门禁一致的对象视图执行 git（PR #442：忽略本地替换引用）。
  * stderr 显式 pipe：失败探测（如 cat-file -e）不得把子进程诊断漏进
- * 调用方输出。 */
+ * 调用方输出。maxBuffer 显式放宽到 64 MiB：execFileSync 默认仅 1 MiB，
+ * 而台账只增不减、发布范围还会枚举大量提交 sha，默认缓冲触顶会让
+ * ENOBUFS 把每个必需检查打成退出 2、阻塞全部正常 PR
+ * （PR #581 评审 5542889511）。 */
 function runGit(args: string[], allowFailure = false): string {
   try {
     return execFileSync('git', args, {
       encoding: 'utf8',
       env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 64 * 1024 * 1024,
     })
   } catch (error) {
     if (allowFailure) return ''
