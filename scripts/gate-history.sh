@@ -185,6 +185,33 @@ wait_for_gate_lock() {
   done
 }
 
+# 排水前要求工作树台账位于记录边界（PR #581 评审 5544522794）：
+# 未终止末行时只警告并保留全部输入，开发者补换行并暂存后可重试。
+# 引导态（无文件）及空文件可写入首条记录；读取失败不能当成边界通过。
+ledger_boundary_is_ready() {
+  boundary_verdict=$("$node_bin" - "$history_path" <<'BOUNDARY'
+const { readFileSync } = require('node:fs')
+try {
+  const content = readFileSync(process.argv[2])
+  process.stdout.write(content.length === 0 || content.at(-1) === 10 ? 'ready' : 'unterminated')
+} catch (error) {
+  if (error.code === 'ENOENT') process.stdout.write('ready')
+  else process.exit(1)
+}
+BOUNDARY
+  ) || boundary_verdict=
+  case $boundary_verdict in
+    ready) return 0 ;;
+    unterminated)
+      printf 'gate-history 警告：[GATE_HISTORY_UNTERMINATED_LEDGER] 台账末行没有终止换行；本次不折并、不清空待物化记录。请补换行并暂存台账后重试；不阻塞本次操作。\n' >&2
+      ;;
+    *)
+      printf 'gate-history 警告：[GATE_HISTORY_BOUNDARY_UNAVAILABLE] 无法物化：不能检查台账记录边界；保留台账与待物化记录供下次重试，不阻塞本次操作。\n' >&2
+      ;;
+  esac
+  return 1
+}
+
 case ${1:-} in
   materialize)
     stage_for_commit=
@@ -219,6 +246,9 @@ case ${1:-} in
       exit 0
     fi
     trap release_lock 0 1 2 15
+    if ! ledger_boundary_is_ready; then
+      exit 0
+    fi
     pending_lines=$(grep -c '' "$pending_path" 2>/dev/null) || pending_lines=0
     folded_capture=$(mktemp) || folded_capture=
     if [ -n "$folded_capture" ]; then

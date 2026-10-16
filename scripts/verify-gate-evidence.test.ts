@@ -495,7 +495,7 @@ describe(
         rmSync(resolve(root, ledgerPath))
         writeFile(root, 'src/app.txt', 'c2-删除台账\n')
         commitAll(root, 'c2-删除台账')
-        // c3 仅恢复台账并携带 c1 的记录（tip = 台账-only 豁免形态）
+        // c3 仅携带 c1 的记录：既缺 c2 证据，也未恢复原有历史记录
         appendLedger(root, [recordLine(root, c1)])
         commitAll(root, 'c3 恢复台账')
       })
@@ -511,7 +511,7 @@ describe(
       expect(result.status).toBe(1)
       expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
       expect(result.output).toContain('c2-删除台账')
-      expect(result.output).toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+      expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
     })
   },
 )
@@ -599,8 +599,11 @@ describe('tip 保全边界（PR #581 评审 5543678876）', () => {
   )
 
   it('首次引入台账并修改源码：仍按 tip 滞后通过', () => {
-    const root = createSeeded((root) => {
-      rmSync(resolve(root, ledgerPath))
+    const root = createRawSeeded((root) => {
+      git(root, 'init', '--initial-branch=main')
+      git(root, 'config', 'user.name', 'Scenario')
+      git(root, 'config', 'user.email', 'scenario@example.invalid')
+      writeFile(root, 'src/app.txt', 'base\n')
       commitAll(root, '无台账基线')
       appendLedger(root, [JSON.stringify({ tree: 'introduced' })])
       writeFile(root, 'src/app.txt', 'changed\n')
@@ -756,6 +759,145 @@ describe('合并 tip 的未终止末行边界（PR #581 评审 5544147742）', (
       } else {
         expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
       }
+    }
+  })
+})
+
+describe('删除再恢复的历史保全（PR #581 评审 5544522794）', () => {
+  it.each([
+    { preserve: false, gap: false, source: false },
+    { preserve: false, gap: true, source: true },
+    { preserve: true, gap: false, source: false },
+    { preserve: true, gap: true, source: true },
+  ])('保全=$preserve、连续缺文件=$gap、源码=$source', (scenario) => {
+    const root = createSeeded((root) => {
+      const history = readFileSync(resolve(root, ledgerPath), 'utf8')
+      rmSync(resolve(root, ledgerPath))
+      writeFile(root, 'src/app.txt', 'deleted\n')
+      const deleted = commitAll(root, '删除台账并修改源码')
+      const records = [recordLine(root, deleted)]
+      if (scenario.gap) {
+        writeFile(root, 'src/app.txt', 'still absent\n')
+        records.push(recordLine(root, commitAll(root, '台账继续缺失')))
+      }
+      writeFile(
+        root,
+        ledgerPath,
+        `${scenario.preserve ? history : ''}${records.join('\n')}\n`,
+      )
+      if (scenario.source) writeFile(root, 'src/app.txt', 'restored\n')
+      commitAll(root, '重建台账')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, [
+        '--base',
+        `HEAD~${scenario.gap ? 3 : 2}`,
+        ...flags,
+      ])
+
+      expect(result.status).toBe(scenario.preserve ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      if (scenario.preserve) {
+        expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+      } else {
+        expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+        expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+        expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+      }
+    }
+  })
+})
+
+/** 构造两侧各自追加、删除台账后再合并的历史，返回全部旧行与范围证据。 */
+function seedDeletedMerge(root: string): {
+  history: string
+  records: string[]
+} {
+  const history = readFileSync(resolve(root, ledgerPath), 'utf8')
+  const records: string[] = []
+  git(root, 'checkout', '-b', 'side')
+  const side = JSON.stringify({ tree: 'side-history' })
+  appendLedger(root, [side])
+  records.push(recordLine(root, commitAll(root, 'side 台账')))
+  rmSync(resolve(root, ledgerPath))
+  records.push(recordLine(root, commitAll(root, 'side 删除台账')))
+  git(root, 'checkout', 'main')
+  const main = JSON.stringify({ tree: 'main-history' })
+  appendLedger(root, [main])
+  records.push(recordLine(root, commitAll(root, 'main 台账')))
+  rmSync(resolve(root, ledgerPath))
+  records.push(recordLine(root, commitAll(root, 'main 删除台账')))
+  git(root, 'merge', '--strategy=ours', '--no-ff', '--no-commit', 'side')
+  records.push(recordLine(root, commitAll(root, '合并缺台账的分支')))
+  return { history: `${history}${side}\n${main}\n`, records }
+}
+
+describe('跨合并删除再恢复（PR #581 评审 5544522794）', () => {
+  it.each(['保留全部', '丢失 main', '丢失 side'])('%s', (mode) => {
+    let base = ''
+    const root = createSeeded((root, seededBase) => {
+      base = seededBase
+      const { history, records } = seedDeletedMerge(root)
+      const restored = history
+        .trimEnd()
+        .split('\n')
+        .filter(
+          (line) =>
+            mode === '保留全部' ||
+            JSON.parse(line).tree !==
+              (mode === '丢失 main' ? 'main-history' : 'side-history'),
+        )
+        .join('\n')
+      writeFile(root, ledgerPath, `${restored}\n${records.join('\n')}\n`)
+      commitAll(root, '恢复合并台账')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', base, ...flags])
+
+      expect(result.status).toBe(mode === '保留全部' ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      if (mode !== '保留全部') {
+        expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+      }
+    }
+  })
+})
+
+describe('非首父曾引入台账的恢复（PR #581 评审 5544522794）', () => {
+  it.each([true, false])('保留非首父历史=%s', (preserve) => {
+    let base = ''
+    const root = createRawSeeded((root) => {
+      git(root, 'init', '--initial-branch=main')
+      git(root, 'config', 'user.name', 'Scenario')
+      git(root, 'config', 'user.email', 'scenario@example.invalid')
+      writeFile(root, 'src/app.txt', 'base\n')
+      base = commitAll(root, '无台账基线')
+      git(root, 'checkout', '-b', 'side')
+      const history = `${JSON.stringify({ tree: 'side-history' })}\n`
+      writeFile(root, ledgerPath, history)
+      const records = [recordLine(root, commitAll(root, 'side 引入台账'))]
+      rmSync(resolve(root, ledgerPath))
+      records.push(recordLine(root, commitAll(root, 'side 删除台账')))
+      git(root, 'checkout', 'main')
+      git(root, 'merge', '--strategy=ours', '--no-ff', '--no-commit', 'side')
+      records.push(recordLine(root, commitAll(root, '合并缺台账的分支')))
+      writeFile(
+        root,
+        ledgerPath,
+        `${preserve ? history : ''}${records.join('\n')}\n`,
+      )
+      commitAll(root, '恢复台账')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', base, ...flags])
+
+      expect(result.status).toBe(preserve ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      if (!preserve)
+        expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
     }
   })
 })

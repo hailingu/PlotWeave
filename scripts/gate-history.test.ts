@@ -247,7 +247,7 @@ function prepareIsolatedRepository(historySeed: string): {
   }
 }
 
-/** 在准备好的仓库上执行脚本副本的 materialize --stage-for-commit；
+/** 在准备好的仓库上执行物化；stageForCommit 选择提交入口或裸物化，
  * extraEnv 追加注入（如临时索引场景的 GIT_INDEX_FILE）。 */
 function runStageMaterialize(
   root: string,
@@ -255,6 +255,7 @@ function runStageMaterialize(
   pendingPath: string,
   pending: string | undefined,
   extraEnv: NodeJS.ProcessEnv = {},
+  stageForCommit = true,
 ): { status: number | null; stdout: string; stderr: string } {
   if (pending !== undefined) {
     writeFileSync(pendingPath, pending)
@@ -268,7 +269,7 @@ function runStageMaterialize(
     [
       resolve(root, 'scripts/gate-history.sh'),
       'materialize',
-      '--stage-for-commit',
+      ...(stageForCommit ? ['--stage-for-commit'] : []),
     ],
     {
       cwd: root,
@@ -348,6 +349,17 @@ const secondRecord = JSON.stringify({
   qualityGate: 'OK',
   newCodeUnresolvedIssues: 0,
 })
+
+/** 执行真实夹具 Git 命令并保留原始输出，供 EOF 字节与暂存状态断言使用。 */
+function isolatedGit(root: string, ...args: string[]): string {
+  const result = spawnSync('git', args, {
+    cwd: root,
+    encoding: 'utf8',
+    env: gitFixtureEnvironment(),
+  })
+  expect(result.status, result.stderr).toBe(0)
+  return result.stdout
+}
 
 describe(
   '归因通过的自动暂存：工作树恰为索引内容 + 本次折并的待物化行（PR #581 评审 5537970549）',
@@ -567,6 +579,92 @@ describe('原字节归因与折并行校验分别判定（PR #581 评审 5544334
     } else {
       expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
     }
+  })
+})
+
+describe('未终止台账的折并与恢复（PR #581 评审 5544522794）', () => {
+  afterEach(() => {
+    for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
+  })
+
+  it.each([true, false])('自动暂存入口=%s：暂缓后补换行可重试', (stage) => {
+    const { root, historyPath, pendingPath } =
+      prepareIsolatedRepository(seedRecord)
+    const pending = `${secondRecord}\n`
+
+    const deferred = runStageMaterialize(
+      root,
+      historyPath,
+      pendingPath,
+      pending,
+      {},
+      stage,
+    )
+
+    expect(deferred.status).toBe(0)
+    expect(deferred.stderr).toContain('GATE_HISTORY_UNTERMINATED_LEDGER')
+    expect(
+      isolatedGit(root, 'show', ':docs/development/gate-history.jsonl'),
+    ).toBe(seedRecord)
+    expect(readFileSync(historyPath, 'utf8')).toBe(seedRecord)
+    expect(readFileSync(pendingPath, 'utf8')).toBe(pending)
+
+    writeFileSync(historyPath, `${seedRecord}\n`)
+    isolatedGit(root, 'add', '--', 'docs/development/gate-history.jsonl')
+    const recovered = runStageMaterialize(
+      root,
+      historyPath,
+      pendingPath,
+      undefined,
+      {},
+      stage,
+    )
+    const restored = readFileSync(historyPath, 'utf8')
+
+    expect(recovered.status).toBe(0)
+    expect(isolatedLedgerState(root).stagedModified).toBe(true)
+    expect(restored).toBe(`${seedRecord}\n${pending}`)
+    expect(
+      restored
+        .trimEnd()
+        .split('\n')
+        .map((line) => JSON.parse(line)),
+    ).toHaveLength(2)
+    expect(readFileSync(pendingPath, 'utf8')).toBe('')
+    expect(
+      isolatedGit(root, 'show', ':docs/development/gate-history.jsonl'),
+    ).toBe(stage ? restored : `${seedRecord}\n`)
+  })
+})
+
+describe('台账边界预检失败保留输入（PR #581 评审 5544522794）', () => {
+  afterEach(() => {
+    for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
+  })
+
+  it('Node 不可用时不折并、不清空 pending', () => {
+    const indexed = `${seedRecord}\n`
+    const { root, historyPath, pendingPath } =
+      prepareIsolatedRepository(indexed)
+    const pending = `${secondRecord}\n`
+
+    const result = runStageMaterialize(
+      root,
+      historyPath,
+      pendingPath,
+      pending,
+      {
+        PLOTWEAVE_NODE_BIN: resolve(root, 'missing-node'),
+      },
+    )
+
+    expect(result.status).toBe(0)
+    expect(result.stderr).toContain('GATE_HISTORY_BOUNDARY_UNAVAILABLE')
+    expect(readFileSync(historyPath, 'utf8')).toBe(indexed)
+    expect(readFileSync(pendingPath, 'utf8')).toBe(pending)
+    expect(
+      isolatedGit(root, 'show', ':docs/development/gate-history.jsonl'),
+    ).toBe(indexed)
   })
 })
 

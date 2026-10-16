@@ -13,7 +13,8 @@
  * 稳定诊断码（测试与 CI 按此契约断言）：
  * - [GATE_EVIDENCE_MISSING]：非 tip 提交缺失通过记录（核验失败）。
  * - [GATE_EVIDENCE_LEDGER_DESTRUCTIVE]：tip 删除、截断或重写父台账，
- *   包括向未终止的末条记录直接拼接内容（PR #581 评审 5544147742）
+ *   包括直接拼接未终止的末条记录，以及删除后重建时丢失最近历史台账
+ *   （PR #581 评审 5544147742/5544522794）
  *   （核验失败；优先于 tip 滞后容差与证据匹配，PR #581 评审 5543678876）。
  * - [GATE_EVIDENCE_TIP_LAG]：tip 缺失自身记录（告警，不失败）。
  * - [GATE_EVIDENCE_INTEGRATED_TIP_LAG]：发布范围中被集成分支的 tip
@@ -200,11 +201,20 @@ function describeCommit(sha: string): RangeCommit {
 
 /** 提交是否早于台账入库：依据是「该提交可达历史（含自身）从未触及
  * 台账路径」——只看树中无台账会把删除台账的提交误判为台账前历史
- * （PR #581 评审 5542342537），删除/恢复台账的提交都触及过路径、不豁免。 */
-function commitPredatesLedger(commit: RangeCommit): boolean {
+ * （PR #581 评审 5542342537），删除/恢复台账的提交都触及过路径、不豁免。
+ * full-history 保留合并非首父引入后又删除的路径历史，不能被 TREESAME 简化隐藏。 */
+function commitPredatesLedger(revision: string): boolean {
   return (
     runGit(
-      ['log', '--format=%H', '-1', commit.sha, '--', ledgerPath],
+      [
+        'log',
+        '--full-history',
+        '--format=%H',
+        '-1',
+        revision,
+        '--',
+        ledgerPath,
+      ],
       true,
     ).trim() === ''
   )
@@ -257,6 +267,31 @@ function ledgerContentOf(revision: string): string | null {
   return entry === '' ? null : runGit(['show', `${revision}:${ledgerPath}`])
 }
 
+/** 缺文件不等于没有历史：沿全部父链找最近现存台账，遇到快照即停止该链。
+ * 从未触及台账的历史无需继续遍历；visited 避免汇合的祖先被重复扫描
+ * （PR #581 评审 5544522794：删除再恢复不能重置保全基准）。 */
+function nearestLedgerSnapshots(revision: string): string[] {
+  const pending = [revision]
+  const visited = new Set<string>()
+  const snapshots: string[] = []
+  while (pending.length > 0) {
+    const sha = pending.pop()
+    if (sha === undefined || visited.has(sha)) continue
+    visited.add(sha)
+    const content = ledgerContentOf(sha)
+    if (content !== null) {
+      snapshots.push(content)
+    } else if (!commitPredatesLedger(sha)) {
+      const parents = runGit(['rev-list', '--parents', '-n', '1', sha])
+        .trim()
+        .split(' ')
+        .slice(1)
+      pending.push(...parents)
+    }
+  }
+  return snapshots
+}
+
 /** 单父提交保留原字节前缀；非空末行未终止时，新增内容必须先补换行，
  * 不能把原记录拼接成畸形行（PR #581 评审 5544147742）。 */
 function preservesLinearLedger(content: string, parent: string): boolean {
@@ -282,7 +317,8 @@ function preservesMergedLedger(content: string, parent: string): boolean {
   })
 }
 
-/** 在任何 tip 容差前检查父台账：单父保全原字节及记录边界，合并保全所有父记录。
+/** 在任何 tip 容差前检查父台账；缺失时回溯最近快照，首次引入才无历史约束。
+ * 单一历史保全原字节及边界，多分支历史允许交织但保全所有记录。
  * 普通与发布模式共用；不依赖 changedFiles（合并提交没有该单父差异列表）。 */
 function tipPreservesLedger(commit: RangeCommit): boolean {
   const content = ledgerContentOf(commit.sha)
@@ -290,12 +326,13 @@ function tipPreservesLedger(commit: RangeCommit): boolean {
     (sha) => sha !== '',
   )
   return parents.every((sha) => {
-    const parent = ledgerContentOf(sha)
-    if (parent === null) return true
-    if (content === null) return false
-    return commit.parentCount === 1
-      ? preservesLinearLedger(content, parent)
-      : preservesMergedLedger(content, parent)
+    const snapshots = nearestLedgerSnapshots(sha)
+    return snapshots.every((parent) => {
+      if (content === null) return false
+      return commit.parentCount === 1 && snapshots.length === 1
+        ? preservesLinearLedger(content, parent)
+        : preservesMergedLedger(content, parent)
+    })
   })
 }
 
@@ -353,7 +390,7 @@ function verifyRange(
       integratedTipWarnings.push(finding)
       continue
     }
-    if (releaseBoundary && commitPredatesLedger(commit)) {
+    if (releaseBoundary && commitPredatesLedger(commit.sha)) {
       preLedgerNotes.push(finding)
       continue
     }
