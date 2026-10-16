@@ -113,7 +113,7 @@ fn validate_phases(phases: &Value) -> Result<(), String> {
         if phase["kind"].as_str() != Some(kind) {
             return Err("PW_PERF_PHASE_ORDER".to_string());
         }
-        validate_frames(&phase["frames"], false)?;
+        validate_frames(&phase["frames"], true).map_err(|error| format!("{error}:{kind}"))?;
     }
     Ok(())
 }

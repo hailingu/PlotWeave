@@ -58,8 +58,20 @@ export interface CanvasPerfScriptResult {
 /** 携带宿主调用入口的窗口形状（验证页装配，页面生命周期内常驻）。 */
 type CanvasPerfRunnerWindow = Window & {
   __pwRunCanvasPerf?: (
-    options: CanvasPerfScriptOptions,
+    options?: CanvasPerfScriptOptions,
   ) => Promise<CanvasPerfScriptResult>
+}
+
+/** 两宿主省略参数时共用的唯一脚本配置；调整测量节奏只改这里。 */
+const DEFAULT_CANVAS_PERF_SCRIPT_OPTIONS: CanvasPerfScriptOptions = {
+  dragRounds: 2,
+  dragSteps: 20,
+  panRounds: 2,
+  panSteps: 20,
+  zoomRounds: 2,
+  zoomSteps: 16,
+  stepMs: 14,
+  settleMs: 250,
 }
 
 /** 帧样本：时间戳与相邻帧间隔；只在脚本运行期存在。 */
@@ -383,7 +395,7 @@ async function panelPhase(options: CanvasPerfScriptOptions): Promise<void> {
 
 /** 执行整段脚本并返回脱敏报告；前置条件破坏显式抛出稳定错误码。 */
 export async function runCanvasPerfScript(
-  options: CanvasPerfScriptOptions,
+  options: CanvasPerfScriptOptions = DEFAULT_CANVAS_PERF_SCRIPT_OPTIONS,
 ): Promise<CanvasPerfScriptResult> {
   const startedAt = performance.now()
   const nodes = document.querySelectorAll('.react-flow__node').length

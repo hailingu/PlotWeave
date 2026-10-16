@@ -61,3 +61,22 @@ it('固定规模图上脚本化拖拽/平移/缩放产生可观察效果与脱�
   // 脱敏不变量：报告序列化文本不含任何节点 id 片段。
   expect(JSON.stringify(result)).not.toContain('perf-s100-u')
 })
+
+it('宿主省略选项时由 Web runner 提供共同模式默认脚本', async () => {
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+  const { container } = render(
+    <NativeCanvasApp graph={canvasPerfFixture(100)} />,
+  )
+  expect(container.querySelectorAll('.react-flow__node')).toHaveLength(100)
+
+  const result = await runCanvasPerfScript()
+
+  expect(result.phases.map((phase) => phase.kind)).toEqual([
+    'drag',
+    'pan',
+    'zoom',
+    'panel',
+  ])
+  // 默认脚本约 4 秒；过短说明宿主遗漏参数后退化为空转而非共同模式。
+  expect(result.durationMs).toBeGreaterThan(3000)
+})

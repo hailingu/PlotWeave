@@ -50,22 +50,23 @@ pub fn page_web_content_pids(baseline: &HashSet<i32>) -> Result<HashSet<i32>, St
     crate::attribution::new_page_pids(baseline, &web_content_pids())
 }
 
-/// 汇总宿主与仍然存活的已归属 WebContent 进程 RSS。
-pub fn sample(tracking: &HashSet<i32>) -> MemorySample {
+/// 汇总宿主与已归属 WebContent 进程 RSS；任一进程不可读都使证据失败。
+pub fn sample(tracking: &HashSet<i32>) -> Result<MemorySample, String> {
+    let app_resident_bytes = resident_bytes(std::process::id() as i32)
+        .ok_or_else(|| "PW_PERF_HOST_RSS_UNAVAILABLE".to_string())?;
     let mut web_content_resident_bytes = 0;
     let mut web_content_process_count = 0;
     for pid in tracking {
-        let bytes = resident_bytes(*pid);
-        if bytes > 0 {
-            web_content_resident_bytes += bytes;
-            web_content_process_count += 1;
-        }
+        let bytes = resident_bytes(*pid)
+            .ok_or_else(|| format!("PW_PERF_WEBCONTENT_RSS_UNAVAILABLE:{pid}"))?;
+        web_content_resident_bytes += bytes;
+        web_content_process_count += 1;
     }
-    MemorySample {
-        app_resident_bytes: resident_bytes(std::process::id() as i32),
+    Ok(MemorySample {
+        app_resident_bytes,
         web_content_resident_bytes,
         web_content_process_count,
-    }
+    })
 }
 
 fn process_name(pid: i32) -> Option<String> {
@@ -95,7 +96,7 @@ fn process_name(pid: i32) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-fn resident_bytes(pid: i32) -> u64 {
+fn resident_bytes(pid: i32) -> Option<u64> {
     let mut info = MaybeUninit::<libc::proc_taskinfo>::zeroed();
     let size = size_of::<libc::proc_taskinfo>() as i32;
     // SAFETY: info 提供 size 字节的可写存储；仅在接口确认完整写入后读取。
@@ -109,8 +110,8 @@ fn resident_bytes(pid: i32) -> u64 {
         )
     };
     if written != size {
-        return 0;
+        return None;
     }
     // SAFETY: 上一个检查保证 proc_pidinfo 已初始化完整结构体。
-    unsafe { info.assume_init() }.pti_resident_size
+    Some(unsafe { info.assume_init() }.pti_resident_size)
 }

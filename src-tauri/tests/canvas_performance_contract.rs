@@ -4,6 +4,9 @@
 mod attribution;
 #[path = "canvas_performance/config.rs"]
 mod config;
+#[cfg(target_os = "macos")]
+#[path = "canvas_performance/memory.rs"]
+mod memory;
 #[path = "canvas_performance/report.rs"]
 mod report;
 
@@ -42,7 +45,7 @@ fn valid_report(scale: u32) -> Value {
 }
 
 #[test]
-fn perf_url_registers_every_supported_scale_and_script_options_match_swift() {
+fn perf_url_registers_every_supported_scale() {
     for scale in config::SCALES {
         let url = config::perf_url("http://127.0.0.1:4173/native-canvas.html", scale).unwrap();
         assert_eq!(
@@ -51,15 +54,6 @@ fn perf_url_registers_every_supported_scale_and_script_options_match_swift() {
         );
         assert_eq!(config::expected_edges(scale), scale / 10 * 9 - 1);
     }
-    assert_eq!(
-        config::script_options(),
-        json!({
-            "dragRounds": 2, "dragSteps": 20,
-            "panRounds": 2, "panSteps": 20,
-            "zoomRounds": 2, "zoomSteps": 16,
-            "stepMs": 14, "settleMs": 250
-        })
-    );
 }
 
 #[test]
@@ -84,6 +78,10 @@ fn report_validation_rejects_wrong_fixture_and_incomplete_interaction() {
     missing_phase["phases"].as_array_mut().unwrap().pop();
     assert!(report::validate_report(&missing_phase, 100).is_err());
 
+    let mut empty_phase = valid_report(100);
+    empty_phase["phases"][0]["frames"] = frames(0);
+    assert!(report::validate_report(&empty_phase, 100).is_err());
+
     let mut no_effect = valid_report(100);
     no_effect["effects"]["draggedNodeMovedPx"] = json!(0);
     assert!(report::validate_report(&no_effect, 100).is_err());
@@ -100,6 +98,8 @@ fn evaluation_envelope_requires_nonempty_success_payload() {
     assert_eq!(success["mountToNodesMs"], json!(12.5));
 }
 
+/// 权威合同：docs/swiftui-react-flow-p5-evidence.md §3.4「PW-PERF 机器可读证据合同」
+/// 与迁移计划 §7.2；这些 token 是两宿主证据的结构字段，不是普通文案。
 #[test]
 fn evidence_line_preserves_the_versioned_pw_perf_machine_contract() {
     let line = report::evidence_line(100, 12.5, &valid_report(100), "app=1MB", "app=2MB").unwrap();
@@ -128,4 +128,18 @@ fn memory_attribution_accepts_only_one_new_web_content_process() {
     assert_eq!(one, HashSet::from([12]));
     assert!(attribution::new_page_pids(&baseline, &baseline).is_err());
     assert!(attribution::new_page_pids(&baseline, &HashSet::from([10, 11, 12, 13])).is_err());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn memory_sampling_fails_instead_of_reporting_an_unreadable_process_as_zero() {
+    use std::collections::HashSet;
+
+    let baseline = memory::web_content_pids();
+    if let Ok(new_page) = memory::page_web_content_pids(&baseline) {
+        assert_eq!(new_page.len(), 1);
+    }
+    let host_only = memory::sample(&HashSet::new()).unwrap();
+    assert!(!host_only.description().is_empty());
+    assert!(memory::sample(&HashSet::from([-1])).is_err());
 }

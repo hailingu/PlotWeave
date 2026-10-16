@@ -18,14 +18,6 @@ struct WebCanvasPerformanceTests {
 
     private struct Timeout: Error {}
 
-    /// Scripted run parameters: ~3.5s of sustained interaction per scale.
-    private static let scriptOptions: [String: Any] = [
-        "dragRounds": 2, "dragSteps": 20,
-        "panRounds": 2, "panSteps": 20,
-        "zoomRounds": 2, "zoomSteps": 16,
-        "stepMs": 14, "settleMs": 250,
-    ]
-
     /// Registered measurement scales mirror src/editor/nativeCanvas/canvasPerfFixture.ts.
     @Test(arguments: [100, 500, 1000])
     func sustainedScriptedOperationsMatchFixtureScale(scale: Int) async throws {
@@ -75,12 +67,12 @@ struct WebCanvasPerformanceTests {
         let trackedPages = try WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
         let baseline = WebProcessMemorySampler.sample(tracking: trackedPages)
 
-        // The script task inherits main-actor isolation so the options dict
-        // never crosses actors while native panels toggle mid-run.
+        // The script task inherits main-actor isolation; the Web runner owns
+        // the single default configuration used by both host measurements.
         let scriptTask = Task { () -> String? in
             try await webView.callAsyncJavaScript(
-                "return JSON.stringify(await window.__pwRunCanvasPerf(options))",
-                arguments: ["options": Self.scriptOptions],
+                "return JSON.stringify(await window.__pwRunCanvasPerf())",
+                arguments: [:],
                 in: nil, contentWorld: .page
             ) as? String
         }
@@ -105,6 +97,10 @@ struct WebCanvasPerformanceTests {
         let phases = try #require(report["phases"] as? [[String: Any]])
         let kinds = phases.compactMap { $0["kind"] as? String }
         #expect(kinds == ["drag", "pan", "zoom", "panel"])
+        for phase in phases {
+            let frames = try #require(phase["frames"] as? [String: Any])
+            #expect((frames["samples"] as? Int ?? 0) > 0, "every phase must report rAF samples")
+        }
         let total = try #require(report["total"] as? [String: Any])
         #expect((total["samples"] as? Int ?? 0) > 0, "the rAF sampler must observe frames")
         let effects = try #require(report["effects"] as? [String: Any])

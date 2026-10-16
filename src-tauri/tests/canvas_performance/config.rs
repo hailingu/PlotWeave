@@ -1,6 +1,4 @@
-//! Tauri 性能测量的规模、URL 与脚本选项单一来源（issue #572）。
-
-use serde_json::{json, Value};
+//! Tauri 性能测量的登记规模与本机 URL 边界（issue #572）。
 
 /// 与 canvasPerfFixture 和 Swift 性能套件一致的登记规模。
 pub const SCALES: [u32; 3] = [100, 500, 1000];
@@ -33,14 +31,4 @@ pub fn perf_url(base: &str, scale: u32) -> Result<tauri::Url, String> {
     }
     url.set_fragment(Some(&format!("perf:{scale}")));
     Ok(url)
-}
-
-/// 与 WebCanvasPerformanceTests.scriptOptions 完全相同的脚本参数。
-pub fn script_options() -> Value {
-    json!({
-        "dragRounds": 2, "dragSteps": 20,
-        "panRounds": 2, "panSteps": 20,
-        "zoomRounds": 2, "zoomSteps": 16,
-        "stepMs": 14, "settleMs": 250
-    })
 }

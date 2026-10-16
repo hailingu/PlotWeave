@@ -53,7 +53,7 @@ window.__pwPerfEvaluation = null;
 (async () => {
   try {
     if (typeof window.__pwRunCanvasPerf !== 'function') throw new Error('PW_PERF_RUNNER_MISSING');
-    const report = await window.__pwRunCanvasPerf(__PW_OPTIONS__);
+    const report = await window.__pwRunCanvasPerf();
     window.__pwPerfEvaluation = { ok: true, report };
   } catch (error) {
     window.__pwPerfEvaluation = { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -88,7 +88,10 @@ pub fn run_child(scale: u32) -> i32 {
     WebviewWindow::builder(&app, "canvas-perf", tauri::WebviewUrl::External(url))
         .title("PlotWeave canvas performance")
         .inner_size(1280.0, 860.0)
+        .center()
+        .always_on_top(true)
         .visible(true)
+        .focused(true)
         .initialization_script(NAVIGATION_CLOCK)
         .on_page_load(move |window, payload| {
             if !matches!(payload.event(), PageLoadEvent::Finished)
@@ -154,11 +157,9 @@ fn measure_result(
         .filter(|value| value.is_finite() && *value >= 0.0)
         .ok_or_else(|| "PW_PERF_MOUNT_INVALID".to_string())?;
     let tracked = memory::page_web_content_pids(baseline)?;
-    let before = memory::sample(&tracked);
-    let measure_script =
-        MEASURE_SCRIPT.replace("__PW_OPTIONS__", &config::script_options().to_string());
-    let envelope = run_async_script(window, app, &measure_script)?;
-    let after = memory::sample(&tracked);
+    let before = memory::sample(&tracked)?;
+    let envelope = run_async_script(window, app, MEASURE_SCRIPT)?;
+    let after = memory::sample(&tracked)?;
     report::evidence_line(
         scale,
         mount_ms,
