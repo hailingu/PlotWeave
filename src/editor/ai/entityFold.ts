@@ -213,6 +213,23 @@ function resolveEntityTarget(
   return 'missing'
 }
 
+/** 实体 upsert 执行命令的唯一构造点（issue #553）：按种类分派到具体
+ * op 字面量——模板串 `\`upsert_${kind}\`` 得不到字面量类型，此前以 as
+ * 收口；集中构造后 entityId/ref/fields 的形态由 ValidatedCommand 判别
+ * 联合直接把关。entityId/ref 仅在在场时写入（缺省 = 新建 / 无别名）。 */
+function entityUpsertCommand(
+  kind: EntityKind,
+  fields: ValidatedEntityFields,
+  refName: string,
+  entityId?: string,
+): ValidatedCommand {
+  const alias = refName !== '' ? { ref: refName } : {}
+  const target = entityId !== undefined ? { entityId } : {}
+  return kind === 'character'
+    ? { op: 'upsert_character', ...target, ...alias, fields }
+    : { op: 'upsert_location', ...target, ...alias, fields }
+}
+
 /** 新建分支（无 entityId）：虚拟 id 进投影，登记 ref 别名，产出 create_entity
  * 预览与命令；真实 id 与默认头像样式由应用在执行期分配。 */
 function foldCreateEntity(
@@ -241,11 +258,7 @@ function foldCreateEntity(
     key: `ec${index}`,
     label: `创建 ${label} · ${normalized.name}${reasonOf(raw)}`,
   })
-  st.commands.push({
-    op: `upsert_${kind}`,
-    ...(refName !== '' ? { ref: refName } : {}),
-    fields: normalized,
-  } as ValidatedCommand)
+  st.commands.push(entityUpsertCommand(kind, normalized, refName))
 }
 
 /** 修改分支（带 entityId）：解析既有 id 或本批 ref（跨种类与未知拒绝），
@@ -288,12 +301,7 @@ function foldUpdateEntity(
     key: `eu${index}`,
     label: `修改 ${label} · ${currentName}（${Object.keys(normalized).join('、')}）${reasonOf(raw)}`,
   })
-  st.commands.push({
-    op: `upsert_${kind}`,
-    entityId: target,
-    ...(refName !== '' ? { ref: refName } : {}),
-    fields: normalized,
-  } as ValidatedCommand)
+  st.commands.push(entityUpsertCommand(kind, normalized, refName, target))
 }
 
 /** upsert_character / upsert_location 的折叠校验：缺省 entityId = 新建（虚拟

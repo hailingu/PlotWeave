@@ -210,7 +210,14 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
   it('默认 sequence：className pw-edge-sequence', () => {
     const { state, ops } = mkOps([sceneNode('s1'), sceneNode('s2')])
     const { forward } = simulateBatch(
-      [{ op: 'connect_edge', sourceId: 's1', targetId: 's2' }],
+      [
+        {
+          op: 'connect_edge',
+          sourceId: 's1',
+          targetId: 's2',
+          edgeKind: 'sequence',
+        },
+      ],
       ops,
       state.nodes,
       state.edges,
@@ -359,7 +366,14 @@ describe('simulateBatch · connect_edge（§4.4 三态边形态）', () => {
   it('undo 移除已建边', () => {
     const { state, ops } = mkOps([sceneNode('s1'), sceneNode('s2')])
     const { forward, backward } = simulateBatch(
-      [{ op: 'connect_edge', sourceId: 's1', targetId: 's2' }],
+      [
+        {
+          op: 'connect_edge',
+          sourceId: 's1',
+          targetId: 's2',
+          edgeKind: 'sequence',
+        },
+      ],
       ops,
       state.nodes,
       state.edges,
@@ -438,7 +452,12 @@ describe('simulateBatch · 混合批次', () => {
         nodeId: 's1',
         patch: { nodeType: 'scene', patch: { synopsis: '改了' } },
       },
-      { op: 'connect_edge', sourceId: 's1', targetId: 'ns' },
+      {
+        op: 'connect_edge',
+        sourceId: 's1',
+        targetId: 'ns',
+        edgeKind: 'sequence',
+      },
       { op: 'delete_node', nodeId: 'b1' },
     ]
     const { forward, backward } = simulateBatch(

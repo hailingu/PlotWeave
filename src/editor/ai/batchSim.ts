@@ -4,6 +4,11 @@
  * 批量创建时场号/镜号基线与 ref→id 引用解析都基于模拟数组，
  * 每条命令的前进/回退闭包在模拟期一次性捕获，不做运行期查询。
  * 产出的 forward/backward 闭包列表由调用方整体入栈为一条复合命令。
+ *
+ * 类型契约（issue #553）：命令载荷形态由 ValidatedCommand 判别联合承载
+ * （校验层 batchFold/entityFold 收窄，宽化收口在受控出口 patch.ts），
+ * 引擎内部零 as；分发为穷尽 switch——新增命令成员时编译期强制补齐
+ * 模拟分支，模拟器与命令处理器的漂移由类型系统发现。
  */
 import { addEdge, type Edge, type XYPosition } from '@xyflow/react'
 import {
@@ -19,10 +24,17 @@ import {
   createDocument,
   createLocation,
   EMPTY_SETTINGS,
+  type CharacterEntity,
   type DocumentEntity,
+  type LocationEntity,
   type ProjectSettings,
 } from '../settings'
-import type { ValidatedCommand, ValidatedDocumentFields } from './commands'
+import { plainObject } from './patchShape'
+import type {
+  ValidatedCommand,
+  ValidatedDocumentFields,
+  ValidatedEntityFields,
+} from './commands'
 
 /** 模拟器的虚拟终态与闭包收集。 */
 interface BatchSim {
@@ -68,12 +80,8 @@ const simCreate = (
 ): void => {
   // create 载荷与 update 补丁同一 ref 解析口径（issue 44）：新建场景/对白
   // 的绑定引用在落画布前解析为真实 id，临时 ref 不进画布、不落盘
-  const data = resolveEntityRefs(
-    cmd.nodeType,
-    (cmd.data as Record<string, unknown>) ?? {},
-    sim.entityRefToId,
-  )
-  const node = ops.buildNewNode(cmd.nodeType as CreatableType, {
+  const data = resolveEntityRefs(cmd.nodeType, cmd.data, sim.entityRefToId)
+  const node = ops.buildNewNode(cmd.nodeType, {
     selected: false,
     data,
     against: sim.nodes,
@@ -89,7 +97,9 @@ const simCreate = (
 
 /** 场景/对白载荷里的实体 ref → 真实 id（issue 44）：create 载荷与 update
  * 补丁共用同一解析（执行期一次性解析，临时 ref 不落盘——验收标准：无临时
- * ref 残留）。非 ref 值原样保留；克隆只发生在确有替换的成员上。 */
+ * ref 残留）。非 ref 值原样保留；克隆只发生在确有替换的成员上。对白行
+ * 成员经 plainObject 守卫判别（issue #553）：kind = line 且 speaker 命中
+ * 别名表才重写说话人，其余成员（旁白/未知形态）原样透传。 */
 function resolveEntityRefs(
   nodeType: string,
   fields: Record<string, unknown>,
@@ -104,20 +114,18 @@ function resolveEntityRefs(
       raw.characterIds = raw.characterIds.map(token)
   }
   if (nodeType === 'dialogue' && Array.isArray(raw.lines)) {
-    raw.lines = raw.lines.map((l) => {
-      if (
-        typeof l === 'object' &&
-        l !== null &&
-        (l as { kind?: unknown }).kind === 'line' &&
-        typeof (l as { speaker?: unknown }).speaker === 'string' &&
-        refs.has((l as { speaker: string }).speaker)
-      ) {
-        return {
-          ...(l as Record<string, unknown>),
-          speaker: refs.get((l as { speaker: string }).speaker),
+    raw.lines = raw.lines.map((line) => {
+      if (plainObject(line)) {
+        const speaker = line['speaker']
+        if (
+          line['kind'] === 'line' &&
+          typeof speaker === 'string' &&
+          refs.has(speaker)
+        ) {
+          return { ...line, speaker: refs.get(speaker) ?? speaker }
         }
       }
-      return l
+      return line
     })
   }
   return raw
@@ -136,8 +144,7 @@ const simUpdate = (
   const { nodeType, patch: originalPatch } = cmd.patch
   const patch = resolveEntityRefs(nodeType, cmd.patch.patch, sim.entityRefToId)
   const before: Record<string, unknown> = {}
-  for (const k of Object.keys(patch))
-    before[k] = (target.data as Record<string, unknown>)[k]
+  for (const k of Object.keys(patch)) before[k] = target.data[k]
   sim.nodes = sim.nodes.map((n) => (n.id === id ? mergeNodeData(n, patch) : n))
   // 分支选项级联（§8.2.2，与 EditorView.patchNode 同规则）：替换 options
   // 删掉的选项，其出口 branch 边一并移除——模拟态与真实画布同一撤销单元
@@ -212,7 +219,7 @@ const connectEdgeOf = (
   srcId: string,
   dstId: string,
 ): Edge => {
-  const kind = typeof cmd.edgeKind === 'string' ? cmd.edgeKind : 'sequence'
+  const kind = cmd.edgeKind
   if (kind === 'attach') {
     // 分镜下挂（§4.4 垂直派生边）
     return {
@@ -226,7 +233,7 @@ const connectEdgeOf = (
   if (kind === 'branch') {
     // 分支选项出口：端口绑稳定选项 id（删选项不位移其他连线）；胶囊文案
     // 由 BranchEdge 按 sourceHandle 实时派生，运行态不落镜像
-    const idx = typeof cmd.optionIndex === 'number' ? cmd.optionIndex : 0
+    const idx = cmd.optionIndex ?? 0
     const branchNode = sim.nodes.find((n) => n.id === srcId)
     const option =
       branchNode?.type === 'branch' ? branchNode.data.options[idx] : undefined
@@ -287,53 +294,72 @@ const simDisconnect = (
   )
 }
 
+/** character/location 实体桶的类型化操作集（issue #553）：桶选择在两个
+ * 具体实现中以字面量键完成——用计算键（bucket 变量）展开设定集会让
+ * TypeScript 把桶类型摊平成宽联合，是此前 as ProjectSettings 断言的
+ * 来源；操作集把「列表读取 + 以新列表回写 + 应用工厂新建」按实体种类
+ * 绑定，模拟器的实体写入全程零 cast。 */
+interface EntityBucket<E extends { id: string }> {
+  /** 设定集对应桶的当前列表。 */
+  list: (s: ProjectSettings) => E[]
+  /** 以新列表回写设定集（返回新对象，其余桶透传保真）。 */
+  store: (s: ProjectSettings, list: E[]) => ProjectSettings
+  /** 新建实体（应用工厂分配真实 id 与默认样式）。 */
+  create: (fields: ValidatedEntityFields) => E
+}
+
+/** 角色桶（issue 44）：createCharacter 分配 id 与头像渐变，bio 为可选小传。 */
+const CHARACTER_BUCKET: EntityBucket<CharacterEntity> = {
+  list: (s) => s.characters,
+  store: (s, characters) => ({ ...s, characters }),
+  create: (fields) => {
+    const c = createCharacter(fields.name ?? '')
+    if (typeof fields.bio === 'string') c.bio = fields.bio
+    return c
+  },
+}
+
+/** 地点桶（issue 44）：createLocation 分配 id，note 为可选备注。 */
+const LOCATION_BUCKET: EntityBucket<LocationEntity> = {
+  list: (s) => s.locations,
+  store: (s, locations) => ({ ...s, locations }),
+  create: (fields) => {
+    const l = createLocation(fields.name ?? '')
+    if (typeof fields.note === 'string') l.note = fields.note
+    return l
+  },
+}
+
 /** 新建实体（issue 44）：真实 id 与默认头像样式由应用工厂分配（模拟期一次），
  * 撤销-重做复用同一实体对象——往返不改变实体 id 与既有引用。 */
-const simEntityCreate = (
+const simEntityCreate = <E extends { id: string }>(
   sim: BatchSim,
   ops: BatchOps,
   cmd: Extract<
     ValidatedCommand,
     { op: 'upsert_character' | 'upsert_location' }
   >,
-  kind: 'character' | 'location',
+  bucket: EntityBucket<E>,
 ): void => {
-  const fields = cmd.fields
-  const entity =
-    kind === 'character'
-      ? (() => {
-          const c = createCharacter(fields.name ?? '')
-          if (typeof fields.bio === 'string') c.bio = fields.bio
-          return c
-        })()
-      : (() => {
-          const l = createLocation(fields.name ?? '')
-          if (typeof fields.note === 'string') l.note = fields.note
-          return l
-        })()
-  const bucket = kind === 'character' ? 'characters' : 'locations'
+  const entity = bucket.create(cmd.fields)
   const ref =
     typeof cmd.ref === 'string' && cmd.ref !== '' ? cmd.ref : undefined
   if (ref !== undefined) sim.entityRefToId.set(ref, entity.id)
-  sim.settings = {
-    ...sim.settings,
-    [bucket]: [...sim.settings[bucket], entity],
-  } as ProjectSettings
+  sim.settings = bucket.store(sim.settings, [
+    ...bucket.list(sim.settings),
+    entity,
+  ])
   sim.forward.push(() =>
-    ops.setSettings(
-      (prev) =>
-        ({ ...prev, [bucket]: [...prev[bucket], entity] }) as ProjectSettings,
+    ops.setSettings((prev) =>
+      bucket.store(prev, [...bucket.list(prev), entity]),
     ),
   )
   sim.backward.push(() =>
-    ops.setSettings(
-      (prev) =>
-        ({
-          ...prev,
-          [bucket]: (prev[bucket] as Array<{ id: string }>).filter(
-            (e) => e.id !== entity.id,
-          ),
-        }) as ProjectSettings,
+    ops.setSettings((prev) =>
+      bucket.store(
+        prev,
+        bucket.list(prev).filter((e) => e.id !== entity.id),
+      ),
     ),
   )
 }
@@ -341,68 +367,59 @@ const simEntityCreate = (
 /** 修改既有实体（issue 44）：只覆盖 fields 写到的键，未提及字段保持执行时
  * 现值；before 实体对象取自工作副本（同批先建后改不互相覆盖），undo 反序
  * 回放精确还原。 */
-const simEntityUpdate = (
+const simEntityUpdate = <E extends { id: string }>(
   sim: BatchSim,
   ops: BatchOps,
   cmd: Extract<
     ValidatedCommand,
     { op: 'upsert_character' | 'upsert_location' }
   >,
-  kind: 'character' | 'location',
+  bucket: EntityBucket<E>,
 ): void => {
-  const bucket = kind === 'character' ? 'characters' : 'locations'
   const token = typeof cmd.entityId === 'string' ? cmd.entityId : ''
   const id = sim.entityRefToId.get(token) ?? token
-  const list = sim.settings[bucket] as Array<{ id: string }>
+  const list = bucket.list(sim.settings)
   const target = list.find((e) => e.id === id)
   if (!target) return
-  const next = { ...target }
-  for (const [k, v] of Object.entries(cmd.fields))
-    (next as Record<string, unknown>)[k] = v
-  sim.settings = {
-    ...sim.settings,
-    [bucket]: list.map((e) => (e.id === id ? next : e)),
-  } as ProjectSettings
+  const next = { ...target, ...cmd.fields }
+  sim.settings = bucket.store(
+    sim.settings,
+    list.map((e) => (e.id === id ? next : e)),
+  )
   const ref =
     typeof cmd.ref === 'string' && cmd.ref !== '' ? cmd.ref : undefined
   if (ref !== undefined) sim.entityRefToId.set(ref, id)
   sim.forward.push(() =>
-    ops.setSettings(
-      (prev) =>
-        ({
-          ...prev,
-          [bucket]: (prev[bucket] as Array<{ id: string }>).map((e) =>
-            e.id === id ? next : e,
-          ),
-        }) as ProjectSettings,
+    ops.setSettings((prev) =>
+      bucket.store(
+        prev,
+        bucket.list(prev).map((e) => (e.id === id ? next : e)),
+      ),
     ),
   )
   sim.backward.push(() =>
-    ops.setSettings(
-      (prev) =>
-        ({
-          ...prev,
-          [bucket]: (prev[bucket] as Array<{ id: string }>).map((e) =>
-            e.id === id ? target : e,
-          ),
-        }) as ProjectSettings,
+    ops.setSettings((prev) =>
+      bucket.store(
+        prev,
+        bucket.list(prev).map((e) => (e.id === id ? target : e)),
+      ),
     ),
   )
 }
 
-const simUpsert = (
+const simUpsert = <E extends { id: string }>(
   sim: BatchSim,
   ops: BatchOps,
   cmd: Extract<
     ValidatedCommand,
     { op: 'upsert_character' | 'upsert_location' }
   >,
-  kind: 'character' | 'location',
+  bucket: EntityBucket<E>,
 ): void => {
   if (typeof cmd.entityId === 'string' && cmd.entityId.trim() !== '') {
-    simEntityUpdate(sim, ops, cmd, kind)
+    simEntityUpdate(sim, ops, cmd, bucket)
   } else {
-    simEntityCreate(sim, ops, cmd, kind)
+    simEntityCreate(sim, ops, cmd, bucket)
   }
 }
 
@@ -502,6 +519,14 @@ export interface BatchSimResult {
   backward: Array<() => void>
 }
 
+/** 分发穷尽性守卫（issue #553）：ValidatedCommand 新增命令成员时，
+ * default 分支的 cmd 不再是 never——落 case 前即编译失败，命令集与
+ * 模拟器实现的漂移由类型系统发现。运行期不可达；命中即抛诊断，
+ * 不静默跳过命令。 */
+function unimplementedCommand(cmd: never): never {
+  throw new Error(`simulateBatch: 未实现的命令分发：${JSON.stringify(cmd)}`)
+}
+
 /** 把一批 AI 命令在虚拟终态上折叠，产出前进/回退闭包。入参为整批
  * 校验通过的执行命令（ValidatedCommand，issue 16）；settings（issue 44）
  * 为执行时的当前设定集，实体改动与节点绑定共用一个撤销单元。 */
@@ -522,15 +547,34 @@ export function simulateBatch(
     backward: [],
   }
   for (const cmd of batch) {
-    if (cmd.op === 'create_node') simCreate(sim, ops, cmd)
-    else if (cmd.op === 'update_node') simUpdate(sim, ops, cmd)
-    else if (cmd.op === 'delete_node') simDelete(sim, ops, cmd)
-    else if (cmd.op === 'connect_edge') simConnect(sim, ops, cmd)
-    else if (cmd.op === 'disconnect_edge') simDisconnect(sim, ops, cmd)
-    else if (cmd.op === 'upsert_character')
-      simUpsert(sim, ops, cmd, 'character')
-    else if (cmd.op === 'upsert_location') simUpsert(sim, ops, cmd, 'location')
-    else if (cmd.op === 'upsert_document') simDocumentUpsert(sim, ops, cmd)
+    switch (cmd.op) {
+      case 'create_node':
+        simCreate(sim, ops, cmd)
+        break
+      case 'update_node':
+        simUpdate(sim, ops, cmd)
+        break
+      case 'delete_node':
+        simDelete(sim, ops, cmd)
+        break
+      case 'connect_edge':
+        simConnect(sim, ops, cmd)
+        break
+      case 'disconnect_edge':
+        simDisconnect(sim, ops, cmd)
+        break
+      case 'upsert_character':
+        simUpsert(sim, ops, cmd, CHARACTER_BUCKET)
+        break
+      case 'upsert_location':
+        simUpsert(sim, ops, cmd, LOCATION_BUCKET)
+        break
+      case 'upsert_document':
+        simDocumentUpsert(sim, ops, cmd)
+        break
+      default:
+        unimplementedCommand(cmd)
+    }
   }
   return { forward: sim.forward, backward: sim.backward }
 }

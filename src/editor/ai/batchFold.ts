@@ -26,6 +26,7 @@ import {
   unknownTargetFieldIssue,
 } from './payloadCheck'
 import { normalizeNodeFields, plainObject } from './patchShape'
+import type { AiNodeFieldType } from './nodeFields'
 import type { AiGraphSnapshot, BatchValidation } from './commands'
 
 /**
@@ -63,6 +64,18 @@ const EDGE_KIND_LABELS: Record<string, string> = {
   branch: '分支出口',
   attach: '分镜下挂',
 }
+
+/** 连线语义谓词（issue #553）：EDGE_KIND_LABELS 自有键 = 已知语义
+ * （§4.4 三态，原型键 issue #49 不入白名单）；收窄为 EdgeKind 后进入
+ * 执行命令的载荷类型。 */
+const isEdgeKind = (k: string): k is EdgeKind =>
+  Object.prototype.hasOwnProperty.call(EDGE_KIND_LABELS, k)
+
+/** create_node 的节点类型谓词（issue #553）：NODE_TYPE_LABELS 自有键 =
+ * 已知类型，与 AI_NODE_FIELDS 键域一致；收窄为 AiNodeFieldType 后进入
+ * 执行命令的载荷类型。 */
+const isKnownNodeType = (t: string): t is AiNodeFieldType =>
+  Object.prototype.hasOwnProperty.call(NODE_TYPE_LABELS, t)
 
 function asText(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
@@ -106,9 +119,9 @@ interface FoldState extends EntityFoldHost {
 
 /** AI 可补丁的节点类型（NODE_FIELD_KEYS 的键域）：图片节点不在此域
  * （§13 首版 AI 只读）。foldUpdate 经 payloadCheck 拒绝白名单外类型后，
- * 由此谓词收口为字面量联合，供补丁命令的判别化构造（issue 16）。 */
-type AiPatchableType = 'scene' | 'dialogue' | 'beat' | 'branch' | 'shot'
-const isAiPatchableType = (t: string | undefined): t is AiPatchableType =>
+ * 由此谓词收口为字面量联合（契约型 AiNodeFieldType），供补丁命令的
+ * 判别化构造（issue 16）与执行通道的载荷收窄（issue #553）。 */
+const isAiNodeFieldType = (t: string | undefined): t is AiNodeFieldType =>
   t !== undefined && Object.prototype.hasOwnProperty.call(NODE_FIELD_KEYS, t)
 
 /** nodeId/sourceId/targetId 解析：允许既有 id 或本批新建的 ref；
@@ -168,7 +181,7 @@ function createShapeIssue(
   raw: Record<string, unknown>,
 ): string | null {
   const nodeType = asText(raw.nodeType)
-  if (!Object.prototype.hasOwnProperty.call(NODE_TYPE_LABELS, nodeType)) {
+  if (!isKnownNodeType(nodeType)) {
     return `未知节点类型：${nodeType || '（空）'}`
   }
   const data = raw.data ?? {}
@@ -201,8 +214,7 @@ function updateShapeIssue(
  * optionIndex（上界与句柄依赖折叠态，属阶段 B）。 */
 function connectShapeIssue(raw: Record<string, unknown>): string | null {
   const kind = asText(raw.edgeKind) || 'sequence'
-  if (!Object.prototype.hasOwnProperty.call(EDGE_KIND_LABELS, kind))
-    return `未知连线类型：${kind}`
+  if (!isEdgeKind(kind)) return `未知连线类型：${kind}`
   if (kind === 'branch' && !isIntrinsicOptionIndex(raw.optionIndex)) {
     return `optionIndex 须为非负整数：${asText(raw.sourceId)} → ${asText(raw.targetId)}`
   }
@@ -264,7 +276,7 @@ function foldCreate(
   index: number,
 ): void {
   const nodeType = asText(cmd.nodeType)
-  if (!Object.prototype.hasOwnProperty.call(NODE_TYPE_LABELS, nodeType)) {
+  if (!isKnownNodeType(nodeType)) {
     return st.fail(index, `未知节点类型：${nodeType || '（空）'}`)
   }
   const data = cmd.data ?? {}
@@ -335,9 +347,9 @@ function foldUpdate(
   if (nodeType === 'branch' && Array.isArray(normalized.options)) {
     foldBranchCascade(st, id, index, normalized)
   }
-  // 键白名单已拒白名单外类型（isAiPatchableType 恒真）：运行态类型字串
+  // 键白名单已拒白名单外类型（isAiNodeFieldType 恒真）：运行态类型字串
   // 收口为字面量后判别化绑定补丁（issue 16），执行通道不再见宽 Record
-  if (!isAiPatchableType(nodeType))
+  if (!isAiNodeFieldType(nodeType))
     return st.fail(index, '节点类型不支持 AI 命令修改')
   st.commands.push({
     op: 'update_node',
@@ -468,7 +480,7 @@ function edgePortOf(
  * 文案或 null。 */
 function connectPlacementIssue(
   st: FoldState,
-  kind: string,
+  kind: EdgeKind,
   src: string,
   dst: string,
   pairLabel: string,
@@ -476,7 +488,7 @@ function connectPlacementIssue(
   const endpointIssue = connectionEndpointIssue(
     st.types.get(src),
     st.types.get(dst),
-    kind as EdgeKind,
+    kind,
   )
   if (endpointIssue) return `${endpointIssue}：${pairLabel}`
   if (kind === 'attach' && hasAttachHost(st.virtualEdges, dst)) {
@@ -496,7 +508,7 @@ function foldConnectEdge(
   pairLabel: string,
 ): void {
   const kind = asText(cmd.edgeKind) || 'sequence'
-  if (!Object.prototype.hasOwnProperty.call(EDGE_KIND_LABELS, kind)) {
+  if (!isEdgeKind(kind)) {
     return st.fail(index, `未知连线类型：${kind}`)
   }
   const port = edgePortOf(st, kind, cmd, src, dst)

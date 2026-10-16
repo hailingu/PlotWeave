@@ -246,7 +246,12 @@ describe('useAiBridge（§6/§12 AI 桥回调族）', () => {
         ref: 'ns',
         data: { name: '新场' },
       },
-      { op: 'connect_edge', sourceId: 's1', targetId: 'ns' },
+      {
+        op: 'connect_edge',
+        sourceId: 's1',
+        targetId: 'ns',
+        edgeKind: 'sequence',
+      },
       {
         op: 'update_node',
         nodeId: 'b1',
@@ -338,14 +343,25 @@ describe('useAiBridge · 原型属性类型的入站与执行边界（issue 49�
   })
 
   it.each<ValidatedCommand>([
-    { op: 'create_node', nodeType: 'toString', data: {} },
-    { op: 'create_node', nodeType: '__proto__', data: { name: 'x' } },
+    // 敌意/损坏的历史卡载荷：ValidatedCommand 判别联合（issue #553）在
+    // 编译期已拒绝协议外类型，此处的非法形态只能经 cast 伪造，用于锁定
+    // 运行时重校验仍整批拒绝（纵深防御，同上方 hostile 夹具口径）
+    {
+      op: 'create_node',
+      nodeType: 'toString',
+      data: {},
+    } as unknown as ValidatedCommand,
+    {
+      op: 'create_node',
+      nodeType: '__proto__',
+      data: { name: 'x' },
+    } as unknown as ValidatedCommand,
     {
       op: 'connect_edge',
       sourceId: 's1',
       targetId: 's2',
       edgeKind: 'constructor',
-    },
+    } as unknown as ValidatedCommand,
   ])('历史卡 $op 重校验拒绝非法类型，整批无写入且允许纠正重试', (invalid) => {
     const { result, state, commands } = setup([
       sceneNode('s1'),
