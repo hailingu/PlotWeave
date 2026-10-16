@@ -41,6 +41,10 @@ harness = false
 name = "invoke_responsiveness"
 harness = false
 
+[[test]]
+name = "canvas_performance"
+harness = false
+
 [dev-dependencies]
 # 共享内核夹具与故障注入；生产依赖不启用测试接口。
 plotweave-core = { path = "../crates/plotweave-core", features = ["test-support"] }

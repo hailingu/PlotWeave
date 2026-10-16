@@ -4,14 +4,14 @@ import Testing
 import WebKit
 @testable import PlotWeaveNative
 
-/// M15 measurement harness (plan §7.2, issue #523): the real shell hosts the
-/// shipped canvas page with a registered perf fixture (`perf:N`), the page's
-/// scripted-operation runner sustains drag/pan/zoom/control interactions while
-/// native panels toggle mid-run, and WebContent memory is sampled across
-/// repeated open/close cycles. Assertions stay structural (counts, phases,
-/// observable effects, bounded memory); the recorded p50/p95 numbers are
-/// evidence for the migration plan, not CI thresholds — baselines are fixed
-/// only after this first measurement round (§7.2).
+/// M15 measurement harness (plan §7.2, issues #523/#572): the real shell hosts
+/// the shipped canvas page with a registered perf fixture (`perf:N`), and the
+/// page's scripted-operation runner sustains drag/pan/zoom/control interactions.
+/// Native-panel mode toggles Swift panels mid-run; common-web mode keeps them
+/// collapsed for the Tauri A/B. WebContent memory is sampled across the script
+/// and repeated open/close cycles. Assertions stay structural (counts, phases,
+/// observable effects, bounded memory); recorded numbers are migration evidence,
+/// not CI thresholds.
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct WebCanvasPerformanceTests {
@@ -29,8 +29,24 @@ struct WebCanvasPerformanceTests {
     /// Registered measurement scales mirror src/editor/nativeCanvas/canvasPerfFixture.ts.
     @Test(arguments: [100, 500, 1000])
     func sustainedScriptedOperationsMatchFixtureScale(scale: Int) async throws {
+        try await measureScriptedOperations(scale: scale, nativePanelMode: true)
+    }
+
+    /// Common-mode A/B for issue #572: native panels stay collapsed and no
+    /// Swift-only panel operation is mixed into the shared Web script.
+    @Test(arguments: [100, 500, 1000])
+    func commonModeSupportsTauriBaselineComparison(scale: Int) async throws {
+        try await measureScriptedOperations(scale: scale, nativePanelMode: false)
+    }
+
+    /// Runs the shared Web fixture and script in either common or native-panel mode.
+    private func measureScriptedOperations(scale: Int, nativePanelMode: Bool) async throws {
         let webBaseline = WebProcessMemorySampler.webContentPids()
         let layout = ShellLayoutState()
+        if !nativePanelMode {
+            layout.inspectorVisible = false
+            layout.sidebarVisible = false
+        }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
             styleMask: [.titled], backing: .buffered, defer: false
@@ -68,13 +84,15 @@ struct WebCanvasPerformanceTests {
                 in: nil, contentWorld: .page
             ) as? String
         }
-        // Real native panels relayout mid-interaction (matrix M15 "面板操作").
-        try await Task.sleep(for: .milliseconds(600))
-        layout.toggleInspector()
-        try await Task.sleep(for: .milliseconds(900))
-        layout.sidebarVisible = false
-        try await Task.sleep(for: .milliseconds(700))
-        layout.sidebarVisible = true
+        if nativePanelMode {
+            // Real native panels relayout mid-interaction (matrix M15 "面板操作").
+            try await Task.sleep(for: .milliseconds(600))
+            layout.toggleInspector()
+            try await Task.sleep(for: .milliseconds(900))
+            layout.sidebarVisible = false
+            try await Task.sleep(for: .milliseconds(700))
+            layout.sidebarVisible = true
+        }
 
         let jsonString = try await scriptTask.value
         let payload = try #require(jsonString)
@@ -95,7 +113,8 @@ struct WebCanvasPerformanceTests {
         #expect((effects["zoomTravel"] as? Double ?? 0) > 0, "the scripted zoom must change scale")
 
         Self.printEvidence(
-            scale: scale, report: report, phases: phases, total: total,
+            scale: scale, mode: nativePanelMode ? "native-panels" : "common-web",
+            report: report, phases: phases, total: total,
             mountToRendered: renderedAt - mountedAt, before: baseline, after: after
         )
     }
@@ -242,6 +261,7 @@ struct WebCanvasPerformanceTests {
     /// One evidence line per scale for the P5 record (values, not thresholds).
     private static func printEvidence(
         scale: Int,
+        mode: String,
         report: [String: Any],
         phases: [[String: Any]],
         total: [String: Any],
@@ -261,9 +281,10 @@ struct WebCanvasPerformanceTests {
         let longTasks = report["longTasks"] as? [String: Any]
         let milliseconds = Double(mountToRendered.components.seconds) * 1_000
             + Double(mountToRendered.components.attoseconds) / 1e15
+        let viewport = report["viewport"] as? [String: Any]
         print(
-            "PW-PERF scale=\(scale) mountToNodes=\(String(format: "%.0f", milliseconds))ms "
-                + "visible=\(report["visibleNodeCount"] ?? -1) dpr=\((report["viewport"] as? [String: Any])?["devicePixelRatio"] ?? -1) "
+            "PW-PERF host=swift mode=\(mode) scale=\(scale) mountToNodes=\(String(format: "%.0f", milliseconds))ms "
+                + "visible=\(report["visibleNodeCount"] ?? -1) viewport=\(viewport?["width"] ?? -1)x\(viewport?["height"] ?? -1)@\(viewport?["devicePixelRatio"] ?? -1) "
                 + "total[samples=\(total["samples"] ?? -1) p50=\(ms("p50Ms", total)) p95=\(ms("p95Ms", total)) max=\(ms("maxMs", total)) over16=\(total["over16Ms"] ?? -1)] "
                 + "\(phaseText) "
                 + "longTasks=\(longTasks.map { "[samples=\($0["samples"] ?? -1) max=\(ms("maxMs", $0))]" } ?? "null") "
