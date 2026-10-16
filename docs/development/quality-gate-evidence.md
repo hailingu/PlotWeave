@@ -299,10 +299,12 @@ two complementary backstops (方案 1 + 方案 2):
    #355 adoption) are exempted with `[GATE_EVIDENCE_PRE_LEDGER_COMMIT]` —
    a commit that merely deletes the ledger has touched the path and is not
    exempt. **These tolerances are gated on the explicit `--release-boundary`
-   flag, which ci.yml passes only for the actual release PR — base `main`
-   *and* head `dev` (PR #581 评审 5542467935: base-only would hand the
-   exemptions to any task branch opening a PR straight to `main`; branch
-   protection does not restrict PR source branches)**: every other PR gets
+   flag, which ci.yml passes only for the actual release PR — base `main`,
+   head `dev`, and the head repository being this repository itself (PR
+   #581 评审 5542467935/5542611194: base-only would hand the exemptions to
+   any task branch opening a PR straight to `main`, and a short branch name
+   alone to a fork's identically named `dev`; branch protection does not
+   restrict PR source branches)**: every other PR gets
    no integration-boundary exemptions at all — its merge
    commits and non-first parents require evidence like every other commit,
    so a task branch cannot smuggle unevidenced changes through a

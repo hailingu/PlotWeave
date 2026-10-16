@@ -425,7 +425,7 @@ describe(
 )
 
 describe(
-  '折并时拒绝不一致形态（工作树不是索引 + 本次折并行的精确追加）',
+  '折并时拒绝额外工作树内容（超出本次折并行的部分不自动暂存）',
   { timeout: 30_000 },
   () => {
     afterEach(() => {
@@ -449,6 +449,16 @@ describe(
       expect(result.status).toBe(0)
       expect(state.stagedModified).toBe(false)
       expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+    })
+  },
+)
+
+describe(
+  '折并时拒绝索引特殊形态（已暂存删除与人工部分暂存，PR #581 评审 5542467935/5542611194）',
+  { timeout: 30_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
     })
 
     it('已暂存的台账删除：不把折并重建的台账暂存回去，警告 GATE_HISTORY_STAGED_DELETION（PR #581 评审 5542467935）', () => {
