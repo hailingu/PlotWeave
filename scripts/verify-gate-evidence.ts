@@ -5,13 +5,15 @@
  * 问题为 0。提交创建钩子已在门禁前把待物化记录并入并暂存进后续提交
  * （issue #548），因此范围内除最后一个提交（tip）外的每个提交都必须在
  * head 版台账中留有证据；tip 自身的门禁记录（提交与推送两轮运行）按物
- * 化时序只存在于下一次提交，仅输出告警，或在 tip 只改台账时豁免（该形
- * 态不携带源码变更）。
+ * 化时序只存在于下一次提交；先确认 tip 保全父台账，再输出滞后告警，
+ * 或在 tip 只追加合法台账记录时豁免（该形态不携带源码变更）。
  * 台账无签名（issue #431 信任边界）：本核验建立的是留证义务与绕过成
  * 本，不是对门禁执行的独立证明。
  *
  * 稳定诊断码（测试与 CI 按此契约断言）：
  * - [GATE_EVIDENCE_MISSING]：非 tip 提交缺失通过记录（核验失败）。
+ * - [GATE_EVIDENCE_LEDGER_DESTRUCTIVE]：tip 删除、截断或重写父台账
+ *   （核验失败；优先于 tip 滞后容差与证据匹配，PR #581 评审 5543678876）。
  * - [GATE_EVIDENCE_TIP_LAG]：tip 缺失自身记录（告警，不失败）。
  * - [GATE_EVIDENCE_INTEGRATED_TIP_LAG]：发布范围中被集成分支的 tip
  *   （某合并提交的非首父）缺失记录（告警，不失败）——其记录按物化时序
@@ -20,7 +22,7 @@
  *   历史从未触及台账路径——删除台账的提交不豁免）豁免记录要求（提示，
  *   不失败）。
  * - [GATE_EVIDENCE_LEDGER_ONLY_TIP]：tip 仅对台账做保留父提交原字节的
- *   合法纯追加（删除/截断/重写不豁免，PR #581 评审 5543033431），豁免
+ *   合法纯追加（删除/截断/重写失败，PR #581 评审 5543678876），豁免
  *   （提示）。
  * - [GATE_EVIDENCE_MALFORMED_LINE]：台账中无法解析的行被跳过（告警）。
  * 集成边界豁免（合并提交跳过、INTEGRATED_TIP_LAG、PRE_LEDGER_COMMIT）
@@ -30,7 +32,7 @@
  *
  * 用法：node scripts/verify-gate-evidence.ts --base <rev> [--head <rev>]
  *       [--release-boundary]
- * 退出码：0 通过（可含告警）；1 证据缺失；2 参数或 Git 错误。 */
+ * 退出码：0 通过（可含告警）；1 证据缺失或台账破坏；2 参数或 Git 错误。 */
 
 import { execFileSync } from 'node:child_process'
 
@@ -64,7 +66,7 @@ type RangeCommit = {
 /** 核验结论：缺失列表（失败项）、tip 形态与发布边界豁免统计。 */
 type Verification = {
   missing: CommitFinding[]
-  tipStatus: 'evidenced' | 'ledger-only' | 'lagging'
+  tipStatus: 'destructive' | 'evidenced' | 'ledger-only' | 'lagging'
   tipFinding: CommitFinding
   integratedTipWarnings: CommitFinding[]
   preLedgerNotes: CommitFinding[]
@@ -229,7 +231,7 @@ function linesAreParseable(lines: string[]): boolean {
 
 /** tip 是否只对台账做保留原字节的合法纯追加（PR #581 评审 5543033431：
  * 单父、变更仅落台账路径，且相对首父只是追加了可解析为 JSON 的新行——
- * 删除、截断或重写台账的 tip 不豁免，只按 tip 滞后告警；合并提交不豁免）。 */
+ * 删除、截断或重写由保全守卫先行拒绝；合并提交不豁免）。 */
 function isLedgerOnlyTip(commit: RangeCommit): boolean {
   if (
     commit.parentCount !== 1 ||
@@ -246,6 +248,46 @@ function isLedgerOnlyTip(commit: RangeCommit): boolean {
     parentLines.every((line, position) => tipLines[position] === line) &&
     linesAreParseable(appended)
   )
+}
+
+/** 区分不存在的台账与空文件；已存在路径读取失败必须显式报 Git 错误。 */
+function ledgerContentOf(revision: string): string | null {
+  const entry = runGit(['ls-tree', revision, '--', ledgerPath]).trim()
+  return entry === '' ? null : runGit(['show', `${revision}:${ledgerPath}`])
+}
+
+/** 合并允许交织分叉追加的记录，但必须保留每个父台账的记录字节与顺序。
+ * 记录包含换行符；原末行无换行时允许补换行后再追加。 */
+function preservesMergedLedger(content: string, parent: string): boolean {
+  const lines = content.match(/[^\n]*\n|[^\n]+$/g) ?? []
+  const parentLines = parent.match(/[^\n]*\n|[^\n]+$/g) ?? []
+  let cursor = 0
+  return parentLines.every((line) => {
+    let position = lines.indexOf(line, cursor)
+    if (position < 0 && !line.endsWith('\n')) {
+      position = lines.indexOf(`${line}\n`, cursor)
+    }
+    if (position < 0) return false
+    cursor = position + 1
+    return true
+  })
+}
+
+/** 在任何 tip 容差前检查父台账：单父只允许原字节前缀，合并保全所有父记录。
+ * 普通与发布模式共用；不依赖 changedFiles（合并提交没有该单父差异列表）。 */
+function tipPreservesLedger(commit: RangeCommit): boolean {
+  const content = ledgerContentOf(commit.sha)
+  const parents = [commit.firstParent, ...commit.integratedParents].filter(
+    (sha) => sha !== '',
+  )
+  return parents.every((sha) => {
+    const parent = ledgerContentOf(sha)
+    if (parent === null) return true
+    if (content === null) return false
+    return commit.parentCount === 1
+      ? content.startsWith(parent)
+      : preservesMergedLedger(content, parent)
+  })
 }
 
 /** 发布边界集合：范围内合并提交的键（跳过）与其非首父（集成分支 tip）。
@@ -269,7 +311,7 @@ function collectIntegrationBoundaries(commits: RangeCommit[]): {
   return { mergeShas, integratedTipShas }
 }
 
-/** 逐提交判定：非 tip 提交必须有证据；范围 tip 按记录/豁免/滞后三态
+/** 逐提交判定：非 tip 提交必须有证据；范围 tip 先检查台账保全，再按记录/豁免/滞后
  * 归类。--release-boundary（发布 PR）时额外容忍集成边界：范围内合并
  * 提交跳过、集成分支 tip 与台账前历史（从未触及台账路径）仅告警/豁免；
  * 普通 task PR 不启用任何集成边界豁免（PR #581 评审 5542342537）。 */
@@ -310,7 +352,9 @@ function verifyRange(
   }
   const tipFinding = { short: tip.short, subject: tip.subject, tree: tip.tree }
   let tipStatus: Verification['tipStatus'] = 'lagging'
-  if (evidenceTrees.has(tip.tree)) {
+  if (!tipPreservesLedger(tip)) {
+    tipStatus = 'destructive'
+  } else if (evidenceTrees.has(tip.tree)) {
     tipStatus = 'evidenced'
   } else if (isLedgerOnlyTip(tip)) {
     tipStatus = 'ledger-only'
@@ -368,7 +412,11 @@ function main(): number {
       `[GATE_EVIDENCE_PRE_LEDGER_COMMIT] ${finding.short}（${finding.subject}）早于台账入库，豁免记录要求。`,
     )
   }
-  if (verification.tipStatus === 'lagging') {
+  if (verification.tipStatus === 'destructive') {
+    console.log(
+      `[GATE_EVIDENCE_LEDGER_DESTRUCTIVE] tip ${verification.tipFinding.short} 删除、截断或重写了父台账；请恢复历史记录并仅追加新记录。`,
+    )
+  } else if (verification.tipStatus === 'lagging') {
     const finding = verification.tipFinding
     emitWarning(
       `[GATE_EVIDENCE_TIP_LAG] tip ${finding.short}（${finding.subject}）的门禁记录随下一次提交物化，本次不判失败；若需消除告警，可将物化记录随下一次变更提交。`,
@@ -401,7 +449,7 @@ function main(): number {
     )
     return 1
   }
-  return 0
+  return verification.tipStatus === 'destructive' ? 1 : 0
 }
 
 try {

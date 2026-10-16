@@ -278,6 +278,27 @@ macOS Git；其他 Git 版本与平台未在本次本地验证中实测。
 
 ## Server-Side Evidence Verification (issue #548)
 
+### tip 台账保全状态矩阵（PR #581 评审 5543678876）
+
+`verify-gate-evidence.ts` 在应用 tip 留证滞后容差前负责台账保全；普通任务与
+`--release-boundary` 使用同一守卫。比较对象为不可变 Git 提交，不涉及工作树
+并发写入；重试读取同一提交得到同一结论，不新增锁或恢复流程。
+
+| 前置状态 | 动作与顺序 | 可观察结果 | 不变量 | 验证 |
+| --- | --- | --- | --- | --- |
+| 父提交已有台账，tip 不改台账或保留原字节追加 | 修改源码，随后核验 tip | 可缺少自身记录并输出 `GATE_EVIDENCE_TIP_LAG` | 留证滞后不能丢失已有台账 | 既有普通 tip、单提交 PR 与追加用例 |
+| tip 仅追加合法 JSON 行 | 保全检查后判定台账-only 形态 | `GATE_EVIDENCE_LEDGER_ONLY_TIP`，退出 0 | 仅纯追加的台账补充提交可豁免 | 既有物化补充、大台账用例 |
+| 父提交已有台账（含空文件） | tip 删除、截断、重写，或删去原尾随换行；可同时修改源码 | `GATE_EVIDENCE_LEDGER_DESTRUCTIVE`，退出 1，无滞后放行 | 普通与发布模式都不得借 tip 容差破坏历史字节 | 删除、截断、重写、空台账、换行与混合变更用例 |
+| 合并的多个父提交分别含记录 | 合并保留每个父台账的完整记录及顺序，再核验 | 正常合并仍可滞后；丢弃任一父记录则退出 1 | 合并可组合分叉追加的记录，不能丢弃父提交的历史 | 合并保留、丢弃非首父记录用例 |
+| 父提交无台账，或仅追加畸形新行 | tip 引入台账或追加畸形记录 | 不因历史保全失败；畸形行仍按现有解析规则告警 | 保全守卫不把新增记录的解析策略改成历史破坏 | 首次引入、畸形行既有用例 |
+
+2026-10-16 本地验证（Node 24.18.0）：核验脚本 24/24 用例通过，覆盖上述
+矩阵；`npm run check:size && npm test -- scripts` 在沙箱外 331/331 通过，
+`sh scripts/check-static.sh` 通过。沙箱内完整脚本测试曾因禁止 `ps` / `sysctl`
+导致既有进程身份与 CPU 预算用例失败，沙箱外重跑已验证通过。本地用例运行
+真实 Git 与核验 CLI；GitHub 托管 runner 的行为以推送后的 `gate-evidence` CI
+为准。文档与 AGENTS.md 已按路由结构化审阅，无配置的自动化文档检查。
+
 The local gate's enforcement endpoint was the machine's own Git hooks; a
 `git push --no-verify` direct push, or a PR whose commits were created
 without the gate, previously had no server-side backstop. Issue #548 added
@@ -294,6 +315,11 @@ two complementary backstops (方案 1 + 方案 2):
      whose `tree` equals the commit tree with `qualityGate == "OK"` and
      `newCodeUnresolvedIssues == 0`. A missing record fails the check
      (`[GATE_EVIDENCE_MISSING]`, exit 1).
+   - 先检查 **tip 的台账保全**（[PR #581 评审 5543678876](https://github.com/hailingu/PlotWeave/pull/581#pullrequestreview-5543678876)）：
+     单父提交必须保留父台账全部原字节为前缀；合并 tip 允许组合分叉追加，
+     但必须保留每个父台账的完整记录字节与顺序。删除（包括空台账）、截断或
+     非追加重写输出 `[GATE_EVIDENCE_LEDGER_DESTRUCTIVE]` 并退出 1，
+     优先于任何 tip 留证容差；普通与发布模式一致。
    - The **tip** gets its own record only with the next commit (see the
      one-commit-lag property above), so a missing tip record is a warning
      (`[GATE_EVIDENCE_TIP_LAG]`, exit 0) — surfaced as a GitHub annotation.
@@ -301,10 +327,9 @@ two complementary backstops (方案 1 + 方案 2):
      (the parent's lines verbatim plus parseable appended records) is exempt
      (`[GATE_EVIDENCE_LEDGER_ONLY_TIP]`): it carries no ungated source
      change and destroys no evidence — a tip that deletes, truncates, or
-     rewrites the ledger is not exempt (PR #581 评审 5543033431) and only
-     gets the lag warning. Merge commits never qualify for the exemption
-     (a merge can carry content); as tips they get the lag warning like any
-     other tip.
+     rewrites a parent ledger fails the preservation check above. Merge
+     commits never qualify for the exemption (a merge can carry content);
+     as tips they get the lag warning only after preserving all parent ledgers.
    - Malformed ledger lines are skipped and warned
      (`[GATE_EVIDENCE_MALFORMED_LINE]`), matching the ledger's log
      semantics; they do not fail the check by themselves.
@@ -362,8 +387,10 @@ two complementary backstops (方案 1 + 方案 2):
 unchanged: the ledger is unsigned, so the check raises the cost of
 bypassing from "push with `--no-verify`" to "actively falsify the versioned
 ledger inside a pushed commit", and does not authenticate that the gate
-executed. A single-commit bypass PR surfaces only the tip warning — it is
-visible at merge time but not blocking. The uncovered creation paths
+executed. A single-commit bypass PR that preserves its parent ledger surfaces
+only the tip warning — it is visible at merge time but not blocking.
+Destructive ledger changes fail even in a single-commit PR. The uncovered
+creation paths
 (`git am`, plumbing, history rewriters) produce commits without records and
 therefore fail the check once they appear as non-tip commits in a PR —
 remediation is to recreate the change through the gated workflow (or let
