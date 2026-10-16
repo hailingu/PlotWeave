@@ -194,24 +194,17 @@ require_command "$curl_bin"
 require_command "$node_bin"
 require_command "$llvm_cov_bin"
 
-# 门禁并行度预算（owner 指示 2026-10-16）：把覆盖率阶段的并行执行限制在
-# 逻辑核数的 1/3（向下取整，至少 1；核数探测失败按 4 保守取值）——完整
-# 检查集与阈值不变，同样的工作量摊到更少核上执行，降低门禁期间的峰值
-# 功耗与发热。PLOTWEAVE_GATE_CPU_BUDGET 显式覆盖（正整数），非法值以
-# 稳定诊断码阻断、不静默回退；解析结果导出，rust-coverage.sh 与测试
-# 替身读取同一数值。决策与实测基线见
+# 门禁并行度预算（owner 指示 2026-10-16；默认值改固定 4 为 owner 于
+# 2026-10-16 评审 5545658713 的再次指示）：PLOTWEAVE_GATE_CPU_BUDGET
+# 未设置时默认 4——固定默认不随机器核数浮动，检查集与阈值不变，同样
+# 的工作量摊到更少核上执行，降低门禁期间的峰值功耗与发热。显式覆盖
+# 须为正整数，非法值以稳定诊断码阻断、不静默回退；解析结果导出，
+# rust-coverage.sh 与测试替身读取同一数值。决策与实测基线见
 # docs/development/quality-gate-cost.md「Gate CPU Budget」。
 gate_cpu_budget=${PLOTWEAVE_GATE_CPU_BUDGET:-}
 case $gate_cpu_budget in
   '')
-    gate_cpu_budget=$(sysctl -n hw.ncpu 2>/dev/null) || gate_cpu_budget=
-    [ -n "$gate_cpu_budget" ] ||
-      gate_cpu_budget=$(nproc 2>/dev/null) || gate_cpu_budget=
-    case $gate_cpu_budget in
-      *[!0-9]* | '') gate_cpu_budget=4 ;;
-    esac
-    [ "$gate_cpu_budget" -ge 3 ] || gate_cpu_budget=3
-    gate_cpu_budget=$((gate_cpu_budget / 3))
+    gate_cpu_budget=4
     ;;
   *[!0-9]*)
     fail '[GATE_CPU_BUDGET_INVALID] PLOTWEAVE_GATE_CPU_BUDGET 须为正整数；已拒绝，不做静默回退'
@@ -255,7 +248,7 @@ printf '%s\n' '[SonarQube] 生成最新前端覆盖率……'
 printf '%s\n' '[SonarQube] 静态检查（格式 + lint 零警告）……'
 run_step "$script_directory/check-static.sh"
 
-printf '[SonarQube] 门禁并行度预算：%s（默认逻辑核 1/3，PLOTWEAVE_GATE_CPU_BUDGET 可覆盖）\n' "$gate_cpu_budget"
+printf '[SonarQube] 门禁并行度预算：%s（未设置时默认 4，PLOTWEAVE_GATE_CPU_BUDGET 可覆盖）\n' "$gate_cpu_budget"
 
 # 前端覆盖率按 CPU 预算限核（vitest worker 上限）：完整套件、覆盖率
 # 口径与 80% 下限不变

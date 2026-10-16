@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { cpus, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -130,8 +130,8 @@ describe('Rust 跨 workspace 覆盖率', () => {
 })
 
 describe('Rust 覆盖率 CPU 预算', () => {
-  it('两个 workspace 的 llvm-cov 调用都按逻辑核数 1/3 限制 --jobs 并导出 RUST_TEST_THREADS', () => {
-    const budget = Math.max(1, Math.floor(cpus().length / 3))
+  it('两个 workspace 的 llvm-cov 调用都按默认预算 4 限制 --jobs 并导出 RUST_TEST_THREADS（评审 5545658713 owner 指示）', () => {
+    const budget = 4
     const result = runCoverage()
 
     expect(result.status, result.stderr).toBe(0)

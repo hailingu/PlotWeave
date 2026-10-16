@@ -133,9 +133,11 @@ currently do not — is recorded precisely in
 
 Recorded owner decision, taken directly from the repository owner on
 2026-10-16 (not via a tracker issue): the gate's coverage phases run with
-**parallelism capped at one third of the machine's logical CPUs**
-(`floor(cpus / 3)`, minimum 1; core-count detection failure falls back to 4
-— under a budget, a conservative miss is preferred). Motivation: the two
+**parallelism capped by a CPU budget**. The original form derived the cap
+from the machine (`floor(cpus / 3)`, minimum 1); later the same day the
+owner directed (PR #581 评审 5545658713) that the **unset default become a
+fixed `4`**, independent of core count — a deterministic default keeps
+local runs and test expectations machine-independent. Motivation: the two
 coverage phases each saturated all performance cores for tens of seconds —
 vitest forks one worker per logical core by default, and `cargo-llvm-cov`
 compiles and executes tests across all of them — which the owner
@@ -153,7 +155,7 @@ spreads the same work over fewer cores: peak power drops, wall time rises
   local), and the cap is a local-machine comfort measure, not a repo-wide
   test policy.
 - **Override**: `PLOTWEAVE_GATE_CPU_BUDGET` (positive integer) replaces the
-  computed default in both scripts. The gate resolves and validates it once
+  default (fixed `4` when unset) in both scripts. The gate resolves and validates it once
   and exports the resolved value, so `rust-coverage.sh` and the gate's test
   doubles read the same number. An invalid value (non-numeric, zero,
   negative) fails the gate with the stable diagnostic code
@@ -567,7 +569,9 @@ CPU-budget change applied to the working tree (scripts, gate tests, and the
 documents updated by the same change — the gate analyzed that tree), warm
 build caches, Node v24.18.0 (pinned). Same machine as both prior baselines,
 now on macOS 27.0.1 (they ran on 26.6.2). Budget in effect: **5**
-(16 logical CPUs → `floor(16 / 3)`).
+(16 logical CPUs → `floor(16 / 3)` — the original derived default; the
+unset default is now a fixed `4`, so these figures remain the budget-5
+measurement point).
 
 **Command** (unchanged form, run from the repository root
 `/Users/guhailin/Git/PlotWeave`):

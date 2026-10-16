@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { cpus, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
@@ -551,11 +551,11 @@ describe('SonarQube 完整提交流水线', { timeout: 30_000 }, () => {
 })
 
 describe(
-  '门禁 CPU 预算（并行度限制为逻辑核数的 1/3）',
+  '门禁 CPU 预算（未设置时默认 4，评审 5545658713 owner 指示）',
   { timeout: 30_000 },
   () => {
-    it('两个覆盖率阶段按默认预算限核：--maxWorkers / --jobs / RUST_TEST_THREADS 同值', () => {
-      const budget = Math.max(1, Math.floor(cpus().length / 3))
+    it('两个覆盖率阶段按默认预算 4 限核：--maxWorkers / --jobs / RUST_TEST_THREADS 同值', () => {
+      const budget = 4
       const result = runGate('scripts/sonar-quality-gate.sh')
 
       expect(result.status, result.stderr).toBe(0)

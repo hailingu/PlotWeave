@@ -30,23 +30,17 @@ command -v "$llvm_cov_bin" >/dev/null 2>&1 ||
   # unbound），故变量置于消息末尾
   fail "缺少命令（安装：cargo install cargo-llvm-cov）：$llvm_cov_bin"
 
-# CPU 预算与 sonar-quality-gate.sh 同源（owner 指示 2026-10-16，决策与
+# CPU 预算与 sonar-quality-gate.sh 同源（owner 指示 2026-10-16；默认值
+# 改固定 4 为 owner 于 2026-10-16 评审 5545658713 的再次指示，决策与
 # 实测基线见 docs/development/quality-gate-cost.md「Gate CPU Budget」）：
 # 优先继承 PLOTWEAVE_GATE_CPU_BUDGET（门禁解析并导出的同一数值），独立
-# 运行时按逻辑核数 1/3（向下取整，至少 1；探测失败按 4）自取。--jobs
-# 限制编译并行，RUST_TEST_THREADS 限制测试执行并行；目标选择与报告
-# 口径不变。非法覆盖以稳定诊断码阻断、不静默回退。
+# 运行且未设置时默认 4（固定值，不随机器核数浮动）。--jobs 限制编译
+# 并行，RUST_TEST_THREADS 限制测试执行并行；目标选择与报告口径不变。
+# 非法覆盖以稳定诊断码阻断、不静默回退。
 coverage_jobs=${PLOTWEAVE_GATE_CPU_BUDGET:-}
 case $coverage_jobs in
   '')
-    coverage_jobs=$(sysctl -n hw.ncpu 2>/dev/null) || coverage_jobs=
-    [ -n "$coverage_jobs" ] ||
-      coverage_jobs=$(nproc 2>/dev/null) || coverage_jobs=
-    case $coverage_jobs in
-      *[!0-9]* | '') coverage_jobs=4 ;;
-    esac
-    [ "$coverage_jobs" -ge 3 ] || coverage_jobs=3
-    coverage_jobs=$((coverage_jobs / 3))
+    coverage_jobs=4
     ;;
   *[!0-9]*)
     fail '[GATE_CPU_BUDGET_INVALID] PLOTWEAVE_GATE_CPU_BUDGET 须为正整数；已拒绝，不做静默回退'
