@@ -17,10 +17,13 @@
 # 同一提交被多个 ref 引用（分支 + 标签）只分析一次；删除 ref（本地
 # sha 全零）不导出代码，跳过。末行缺尾随换行的清单按字段残留检测并
 # fail-closed（issue #464）：真实 git 每行都以换行结束，只有手工或包装
-# 调用可产生该形态，不可静默放行。所有 ref 的门禁通过后把累积的门禁结论
-# 物化进版本化 gate-history.jsonl（issue #355；PR #415 评审 5338815626：
-# 提交创建路径只写 .git 内待物化文件、不弄脏被跟踪文件，重放/检出/
-# 合并不被打断）。
+# 调用可产生该形态，不可静默放行。推送自 PR #581 评审 5537970549 起
+# 【不】物化台账：推送产生的记录与提交侧记录一并留在 .git 内待物化文
+# 件，由下一次提交创建钩子（pre-commit / pre-merge-commit 的
+# materialize --stage-for-commit）按待物化内容字节精确归因后并入并暂
+# 存——推送不再给工作树留下未暂存的被跟踪差异，快路径的台账失效来源
+# 随之消失，人工台账改动也不会被误收编（issue #355；PR #415 评审
+# 5338815626 的未暂存写保护语义保持）。
 # 安装执行器与门禁脚本这两类分钟级子进程经 supervise_child_process 后台
 # 作业 + wait 受监督运行，INT/HUP/TERM 先整组终止子进程再走退出清理，
 # 临时 worktree 不再因前台子进程推迟 trap 而滞留数分钟；清理警告只在
@@ -308,4 +311,3 @@ fi
 rm -f "$manifest_path"
 manifest_path=
 
-"$main_root/scripts/gate-history.sh" materialize

@@ -60,6 +60,7 @@ type GateOptions = {
     | 'partial'
     | 'uncovered'
     | 'valid'
+  cpuBudget?: number | string
   formatExit?: number
   lintExit?: number
   lockName?: string
@@ -158,9 +159,12 @@ fi
 if [ "$PLOTWEAVE_TEST_NPM_EXIT" -ne 0 ]; then
   exit "$PLOTWEAVE_TEST_NPM_EXIT"
 fi
-if [ "$*" != "run test:coverage" ]; then
-  exit 0
-fi
+# 门禁下发 CPU 预算（test:coverage -- --maxWorkers N）：按前缀匹配分发，
+# 数值由「门禁 CPU 预算」用例断言
+case "$*" in
+  "run test:coverage"*) ;;
+  *) exit 0 ;;
+esac
 case "$PLOTWEAVE_TEST_COVERAGE_MODE" in
   valid)
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
@@ -198,6 +202,7 @@ function writeRustCoverageStub(paths: GateStubPaths): void {
   writeExecutable(
     paths.llvmCovPath,
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+[ -n "$RUST_TEST_THREADS" ] && printf 'rust-test-threads %s\n' "$RUST_TEST_THREADS" >> "$PLOTWEAVE_TEST_LOG"
 [ -z "$SONAR_TOKEN$PLOTWEAVE_SONAR_TOKEN$sonar_token" ] || printf 'rust-token-present\n' >> "$PLOTWEAVE_TEST_LOG"
 while [ "$#" -gt 0 ]; do
   if [ "$1" = '--output-path' ]; then
@@ -327,6 +332,9 @@ function gateEnvironment(
     PLOTWEAVE_TEST_STRICT_INDEX_EXIT: String(options.strictIndexExit ?? 0),
     PLOTWEAVE_TEST_UNRESOLVED_ISSUES: String(options.unresolvedIssues ?? 0),
     SONAR_HOST_URL: options.sonarHostUrl ?? 'http://sonar.test',
+  }
+  if (options.cpuBudget !== undefined) {
+    environment.PLOTWEAVE_GATE_CPU_BUDGET = String(options.cpuBudget)
   }
   if (options.sonarHostUrl === null) {
     delete environment.SONAR_HOST_URL
@@ -509,7 +517,8 @@ describe('SonarQube 完整提交流水线', { timeout: 30_000 }, () => {
     expect(
       result.log
         .split('\n')
-        .filter(Boolean)
+        // rust-test-threads 是 llvm-cov 桩的预算注释行，不是外部命令调用
+        .filter((line) => line && !line.startsWith('rust-test-threads'))
         .map((line) => line.split(' ')[0]),
     ).toEqual([
       'npm',
@@ -540,6 +549,48 @@ describe('SonarQube 完整提交流水线', { timeout: 30_000 }, () => {
     expect(result.log).toContain('sinceLeakPeriod=true')
   })
 })
+
+describe(
+  '门禁 CPU 预算（未设置时默认 4，评审 5545658713 owner 指示）',
+  { timeout: 30_000 },
+  () => {
+    it('两个覆盖率阶段按默认预算 4 限核：--maxWorkers / --jobs / RUST_TEST_THREADS 同值', () => {
+      const budget = 4
+      const result = runGate('scripts/sonar-quality-gate.sh')
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain(
+        `npm run test:coverage -- --maxWorkers ${budget}`,
+      )
+      // 两个 Cargo workspace 的 llvm-cov 调用各自带上 --jobs 预算
+      expect(result.log.split(`--jobs ${budget}`).length - 1).toBe(2)
+      expect(result.log).toContain(`rust-test-threads ${budget}`)
+    })
+
+    it('PLOTWEAVE_GATE_CPU_BUDGET 覆盖默认预算并下发到两个覆盖率阶段', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', { cpuBudget: 2 })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain('--maxWorkers 2')
+      expect(result.log).toContain('--jobs 2')
+      expect(result.log).toContain('rust-test-threads 2')
+    })
+
+    it.each(['0', 'x', '2.5', '-1'] as const)(
+      'PLOTWEAVE_GATE_CPU_BUDGET=%s 以稳定诊断码阻断且不启动任何检查',
+      (value) => {
+        const result = runGate('scripts/sonar-quality-gate.sh', {
+          cpuBudget: value,
+        })
+
+        expect(result.status).not.toBe(0)
+        // 稳定诊断代码契约：quality-gate-cost.md「Gate CPU Budget」
+        expect(result.stderr).toContain('[GATE_CPU_BUDGET_INVALID]')
+        expect(result.log).toBe('')
+      },
+    )
+  },
+)
 
 describe('Rust 覆盖率报告与两侧覆盖率下限', { timeout: 30_000 }, () => {
   it('Rust 覆盖率生成缺失或没有任何已覆盖行时停止，不启动扫描（issue #169）', () => {
@@ -966,7 +1017,8 @@ describe('强杀门禁后的人工恢复（issue #430）', { timeout: 30_000 }, 
       expect(
         retried.log
           .split('\n')
-          .filter(Boolean)
+          // rust-test-threads 是 llvm-cov 桩的预算注释行，不是外部命令调用
+          .filter((line) => line && !line.startsWith('rust-test-threads'))
           .map((line) => line.split(' ')[0]),
       ).toEqual([
         'npm',
@@ -1068,7 +1120,7 @@ describe('门禁测试标记隔离（issue #428）', { timeout: 30_000 }, () => 
 })
 
 describe(
-  '门禁结论摘要记录（issue #355：完整通过后写入待物化文件，推送时并入版本化凭据）',
+  '门禁结论摘要记录（issue #355：完整通过后写入待物化文件，由下一次普通提交折并暂存；推送保留待物化文件，PR #581 评审 5537970549）',
   { timeout: 30_000 },
   () => {
     it('完整通过后向待物化文件追加一行合法 JSON，且绝不直接触碰版本化文件（PR #415 评审 5338815626）', () => {
@@ -1161,7 +1213,8 @@ describe(
       expect(result.history).toBe('')
     })
 
-    // pre-push 侧「门禁通过后物化」由 scripts/gate-tree-marker.test.ts 的
+    // 推送不物化（PR #581 评审 5537970549）：记录留在待物化文件、由下
+    // 一次普通提交折并暂存，该行为由 scripts/gate-tree-marker.test.ts 的
     // 真实推送 e2e 与 scripts/pre-push-refs.test.ts 的快路径用例覆盖（issue
     // #405 起 pre-push 读取 stdin，空 stdin 不触发门禁）
   },

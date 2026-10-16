@@ -7,7 +7,7 @@ dedup marker helper `scripts/gate-tree-marker.sh` (issue #404). Like the root
 `AGENTS.md` and the other standards under `docs/development/`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-10-03
+**Last reviewed**: 2026-10-16
 
 **Status**: Active — accepted decision. Recorded 2026-09-27, resolving
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
@@ -16,7 +16,8 @@ more commands routed through it — see
 [What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces)) and by
 the issue #355 evidence record (one summary line per fully passing run,
 written to a pending file inside `.git` and materialized into the versioned
-file after a passing push — see
+file (originally after a passing push; since PR #581 评审 5537970549, at
+the next commit's fold) — see
 [Gate Run Evidence Record](quality-gate-evidence.md#gate-run-evidence-record-issue-355)); baseline
 refreshed 2026-09-30 on the pinned Node toolchain, measuring the complete
 gate as extended — that refresh fired the first distribution
@@ -42,7 +43,13 @@ cost comparison now carries the fast path's reachability caveat — the
 post-push ledger materialization and ordinary untracked files make the slow
 path the practical default — with preconditions, causality, and recovery
 conditions maintained in the push-gating topic doc (see
-[快路径可达性与恢复条件](quality-gate-push.md#快路径可达性与恢复条件issue-463)).
+[快路径可达性与恢复条件](quality-gate-push.md#快路径可达性与恢复条件issue-463));
+extended 2026-10-16 by the **gate CPU budget** (owner direction, recorded
+here rather than via a tracker issue): coverage-phase parallelism is capped
+at one third of the machine's logical cores — a scheduling change only; the
+check set, sequence, thresholds, and failure semantics are unchanged (see
+[Gate CPU Budget](#gate-cpu-budget-2026-10-16-owner-direction) and the
+re-measured [CPU-Budget Baseline](#cpu-budget-baseline-2026-10-16)).
 
 ## Required Reading
 
@@ -61,7 +68,7 @@ conditions maintained in the push-gating topic doc (see
 
 | 内容 | 唯一维护位置 |
 | --- | --- |
-| 成本决策、两次基线、慢路径成本、触发条件及复测方法 | 本文对应既有章节 |
+| 成本决策、各次成本基线、慢路径成本、触发条件及复测方法 | 本文对应既有章节 |
 | 标记归属与去重、测试隔离、共享锁恢复、测试注入边界 | [门禁生命周期](quality-gate-lifecycle.md) |
 | 逐 ref 分派、回归矩阵、残余边界、推送对象错配的历史证据 | [推送门禁](quality-gate-push.md) |
 | 台账字段、可信度边界、记录物化、可复现的查询方法 | [门禁运行证据](quality-gate-evidence.md) |
@@ -97,11 +104,18 @@ Every gated command runs the same complete sequence:
 4. `sonar-scanner` publishing the analysis, then waiting for the Quality Gate,
    then a separate check that new-code unresolved issues are zero.
 5. Since issue #355, a fully passing run appends one summary record to a
-   pending file inside `.git`, and the `pre-push` hook materializes pending
-   lines into the versioned `docs/development/gate-history.jsonl` after its
-   gate passes (see
+   pending file inside `.git`. Since issue #548 the ordinary commit paths
+   (`pre-commit` / `pre-merge-commit`) fold and stage those pending lines
+   into the commit being created before the gate runs — the only drain
+   point; since PR #581 评审 5537970549 the push path no longer
+   materializes, and push-path records drain at the next commit's fold
+   (see
    [Gate Run Evidence Record](quality-gate-evidence.md#gate-run-evidence-record-issue-355)). This step
    observes and records; it checks nothing and adds no variant of the gate.
+   The server-side evidence check issue #548 added on top (the CI
+   `gate-evidence` job reading that ledger) is verification of the recorded
+   evidence, not a gate variant, and does not change this sequence or its
+   cost.
 
 提交创建路径及同次操作去重见[标记归属与复用](quality-gate-lifecycle.md#commit-marker-ownership-and-reuse)。
 未覆盖路径与逐命令差异以[门禁覆盖清单](quality-gate-enforcement.md#what-the-gate-actually-enforces)为唯一事实源。
@@ -114,6 +128,47 @@ There is no cheaper or faster variant of that sequence, and no configuration
 that selects one. Which commit-producing commands actually reach it — and which
 currently do not — is recorded precisely in
 [What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces).
+
+### Gate CPU Budget (2026-10-16, owner direction)
+
+Recorded owner decision, taken directly from the repository owner on
+2026-10-16 (not via a tracker issue): the gate's coverage phases run with
+**parallelism capped by a CPU budget**. The original form derived the cap
+from the machine (`floor(cpus / 3)`, minimum 1); later the same day the
+owner directed (PR #581 评审 5545658713) that the **unset default become a
+fixed `4`**, independent of core count — a deterministic default keeps
+local runs and test expectations machine-independent. Motivation: the two
+coverage phases each saturated all performance cores for tens of seconds —
+vitest forks one worker per logical core by default, and `cargo-llvm-cov`
+compiles and executes tests across all of them — which the owner
+experienced as sustained chassis heat on every gated operation. The cap
+spreads the same work over fewer cores: peak power drops, wall time rises
+([CPU-Budget Baseline](#cpu-budget-baseline-2026-10-16)).
+
+- **Scope**: `scripts/sonar-quality-gate.sh` (frontend coverage runs as
+  `npm run test:coverage -- --maxWorkers <budget>`) and
+  `scripts/rust-coverage.sh` (build parallelism `--jobs <budget>`; test
+  execution `RUST_TEST_THREADS=<budget>`), including standalone
+  `rust-coverage.sh` invocations, which resolve the same default when run
+  outside the gate. Plain `npm test`, `npm run build`, and CI are
+  deliberately **not** capped — CI never runs this gate (Sonar stays
+  local), and the cap is a local-machine comfort measure, not a repo-wide
+  test policy.
+- **Override**: `PLOTWEAVE_GATE_CPU_BUDGET` (positive integer) replaces the
+  default (fixed `4` when unset) in both scripts. The gate resolves and validates it once
+  and exports the resolved value, so `rust-coverage.sh` and the gate's test
+  doubles read the same number. An invalid value (non-numeric, zero,
+  negative) fails the gate with the stable diagnostic code
+  `[GATE_CPU_BUDGET_INVALID]` — no silent fallback to full parallelism.
+- **Gate strength**: unchanged. The same complete sequence runs with the
+  same thresholds; nothing is skipped, reduced, or tiered. This is a
+  scheduling bound, not a cheaper variant: the "no environment variable …
+  reduces the check set" invariant in
+  [Impact On Gate Strength](#impact-on-gate-strength) keeps holding, because
+  `PLOTWEAVE_GATE_CPU_BUDGET` can only change how many cores execute the
+  checks, never which checks execute. Setting it to the full logical-core
+  count restores the uncapped schedule; that is an owner choice about
+  comfort, not a bypass of the gate.
 
 ### Commit Marker State And Invariant Matrix (Issue #429)
 
@@ -136,7 +191,11 @@ whole pipeline does not verify an additional invariant. Dedicated pipeline
 tests and selected real Git integration cases still execute the full gate;
 the production hooks, coverage entry, thresholds, and test parallelism remain
 unchanged. Measurements, scenario choices, and preserved integration coverage
-are recorded in [门禁测试负载与夹具成本](test-workload.md).
+are recorded in [门禁测试负载与夹具成本](test-workload.md). (Since 2026-10-16
+the *gate path* runs those same tests under the
+[Gate CPU Budget](#gate-cpu-budget-2026-10-16-owner-direction) parallelism
+cap — scheduling only; #498's statement above is a point-in-time fact as of
+2026-10-03, and the standalone `npm test` entry remains fully parallel.)
 
 Options A and B were evaluated against the measurement below and are recorded
 here as **considered and declined**, not as pending work.
@@ -230,6 +289,13 @@ The following decisions must not be conflated (评审 4120364296):
   is provably identical to the pushed commit, and the slow path is the same
   complete sequence in a temporary worktree checked out at the pushed
   commit.
+- The **CPU budget extension (2026-10-16) also deliberately changes gate
+  behavior — scheduling only**: the coverage phases run under the
+  one-third-of-cores parallelism cap recorded in
+  [Gate CPU Budget](#gate-cpu-budget-2026-10-16-owner-direction). It adds no
+  weaker variant, skip, or fast path: the check set, sequence, thresholds,
+  and failure semantics are identical, and an invalid budget *blocks* the
+  operation rather than relaxing anything.
 
   [issue #462](https://github.com/hailingu/PlotWeave/issues/462) 为慢路径依赖安装
   增加期限，并将 Sonar 环境变量与安装、检查、覆盖率执行分离；仍执行 lifecycle，
@@ -285,15 +351,19 @@ treat it as a defect in that workflow, not as sanctioned by this decision.
 
 ## Measured Baseline
 
-Two measurements live here. The **founding baseline (2026-09-27)** is what
+Three measurements live here. The **founding baseline (2026-09-27)** is what
 the decision above was taken against, as delivered by PR #403. The
 **refreshed baseline (2026-09-30)** measures the complete gate as it exists
 after the issue #404 commit-creation wiring, the issue #393 coverage floor,
 and the issue #355 evidence record were added to it, and it runs on the Node
-version pinned by `.nvmrc` (the founding run did not — see its caveats).
-Compare future measurements against the refreshed baseline; the founding one
-is retained because the decision and the alternatives analysis above were
-argued on its numbers.
+version pinned by `.nvmrc` (the founding run did not — see its caveats). The
+**CPU-budget baseline (2026-10-16)** measures the same complete gate with
+coverage-phase parallelism capped per the
+[Gate CPU Budget](#gate-cpu-budget-2026-10-16-owner-direction) — the schedule
+every gated operation uses today, so compare future measurements against it
+first. The two earlier baselines are retained because the decision and the
+alternatives analysis above were argued on their numbers; when comparing
+back to them, note the OS-version gap recorded in the CPU-budget caveats.
 
 ### Founding Baseline (2026-09-27)
 
@@ -492,6 +562,96 @@ context only.
    used Node 22 while this one uses the pinned Node 24. Compare ratios and
    per-phase shares across the two baselines, not wall-clock deltas.
 
+### CPU-Budget Baseline (2026-10-16)
+
+Taken 2026-10-16 on task branch `fix/548-gate-server-side-fallback` with the
+CPU-budget change applied to the working tree (scripts, gate tests, and the
+documents updated by the same change — the gate analyzed that tree), warm
+build caches, Node v24.18.0 (pinned). Same machine as both prior baselines,
+now on macOS 27.0.1 (they ran on 26.6.2). Budget in effect: **5**
+(16 logical CPUs → `floor(16 / 3)` — the original derived default; the
+unset default is now a fixed `4`, so these figures remain the budget-5
+measurement point).
+
+**Command** (unchanged form, run from the repository root
+`/Users/guhailin/Git/PlotWeave`):
+
+```sh
+/usr/bin/time -p sh scripts/sonar-quality-gate.sh
+```
+
+**Result**: all three runs exit 0 — `Quality Gate 已通过，新增代码未解决问题为 0`.
+
+| Measurement | Value |
+| --- | ---: |
+| Wall clock, complete gate — runs of 161.54s / 164.17s / 169.02s | **164.17s (median)** |
+| User CPU / System CPU (median run) | 315.40s / 46.82s |
+| Uncapped comparison (refreshed baseline median, 2026-09-30, same machine) | 135.49s |
+
+#### Per-phase breakdown (capped)
+
+Timed separately after the three complete runs, in the order the gate script
+runs them; the uncapped column repeats the refreshed baseline's figures.
+
+| Phase | Wall clock | Uncapped | Delta |
+| --- | ---: | ---: | ---: |
+| `scripts/check-static.sh` (format + lint + `typecheck:strict`) | 12.49s | 12.8s | ~0 (not capped; single-threaded tools) |
+| `npm run test:coverage -- --maxWorkers 5` | 53.19s | 41.8s | +11.4s (+27%) |
+| `scripts/rust-coverage.sh` (`--jobs 5`, `RUST_TEST_THREADS=5`) | 66.71s | 48.3s | +18.4s (+38%) |
+| `sonar-scanner` + Quality Gate wait (remainder) | ~31.8s | ~32.7s | ~0 (not capped) |
+| **Total (median of three complete runs)** | **~164.2s** | **~135.5s** | **+28.7s (+21%)** |
+
+**The finding that matters: the cap trades wall time for peak power.** At
+most 5 concurrent workers/jobs execute in each capped phase instead of up to
+16, which is the point of the decision — lower sustained power draw, less
+heat, on the owner's machine. Total user CPU rose slightly
+(255.86s → 315.40s): spreading the same work across fewer cores costs some
+scheduling and cache efficiency. Do not read that CPU increase as a
+regression the cap must claw back; it is the recorded price of the comfort
+the owner asked for.
+
+The Rust coverage phase's share reaches ~40.6% (66.71s / 164.17s) —
+nominally past the ~40% single-phase mark in
+[Reconsideration Triggers](#reconsideration-triggers). The crossing is
+attributable to the cap itself: that phase absorbed the largest relative
+slowdown (+38%) while the uncapped phases held steady, so the share moved
+without any change to what the phase does. The option-A-level revisit the
+mark nominally demands is therefore declined **with that attribution** in
+this change — the wall-time increase is the owner-accepted cost of the
+budget. A future share crossing measured at an uncapped or re-tuned budget
+still triggers the normal revisit.
+
+#### Environment
+
+| Component | Version |
+| --- | --- |
+| OS | macOS 27.0.1 (arm64), 16 cores / 64 GiB (same machine as both prior baselines) |
+| CPU budget in effect | 5 (`floor(16 / 3)`) |
+| Node.js | **v24.18.0** — matches the `.nvmrc` / `engines` pin |
+| npm | 11.16.0 |
+| rustc | 1.95.0 (`59807616e`, pinned by `rust-toolchain.toml`) |
+| `cargo-llvm-cov` | 0.9.0 |
+| `sonar-scanner` CLI | 7.3.0.5189 |
+| SonarQube server | 26.8.0.126808 |
+
+#### Caveats On This Baseline
+
+1. **Working tree, not a clean commit.** Measured with the CPU-budget change
+   applied in the working tree (plus a pre-existing unrelated
+   `docs/development/gate-history.jsonl` materialization modification left
+   untouched). The three runs appended their own records to the pending
+   gate-history file inside `.git`, which fold into the next ordinary
+   commit — by design, not leakage.
+2. **OS-major gap versus both prior baselines.** macOS 26.6.2 → 27.0.1 sits
+   between the refreshed and this baseline, on top of the founding→refreshed
+   Node-major gap. Compare shares and this baseline's internal deltas; treat
+   cross-baseline wall-clock deltas as approximate.
+3. **Three samples on one day.** Same as the refresh caveat: medians, not a
+   distribution across days; sub-second differences are not signal.
+4. **User CPU rose under the cap.** Repeated from the finding above so a
+   future reader does not "fix" it: +23% user CPU against +21% wall clock is
+   the efficiency cost of fewer cores, accepted with the decision.
+
 ### Push-Path Slow-Path Cost (2026-09-30, issue #405)
 
 Measured once on landing the issue #405 fix (task branch
@@ -529,13 +689,14 @@ baseline measures, with only the equality preconditions added ahead of it.
 conditional on the fast path being *reachable*, and in daily workflow it
 usually is not: besides the pushed commit being `HEAD`, the fast path also
 requires the tracked worktree and index to be identical to `HEAD` and no
-untracked non-ignored file anywhere in the repository — and two routine
-facts defeat that. The push's own trailing `materialize` dirties the tracked
-`docs/development/gate-history.jsonl` after every successful code-bearing
-push, and any untracked ordinary file (drafts, new documents, scratch notes)
-independently forces isolation. Treat the slow path as the practical default
-when estimating routine push cost; the ~44s delta therefore understates
-everyday push cost relative to the fast-path median. The preconditions, the
+untracked non-ignored file anywhere in the repository. Two routine facts
+used to defeat that. The push's own trailing `materialize` dirtied the
+tracked `docs/development/gate-history.jsonl` after every successful
+code-bearing push — that cause was removed by PR #581 评审 5537970549
+(the push path no longer materializes; the worktree stays clean after
+pushes). Any untracked ordinary file (drafts, new documents, scratch notes)
+still independently forces isolation, so treat the slow path as a realistic
+possibility when estimating routine push cost. The preconditions, the
 causality, and the recovery conditions are maintained in
 [快路径可达性与恢复条件](quality-gate-push.md#快路径可达性与恢复条件issue-463).
 
@@ -555,9 +716,14 @@ these becomes true:
   has fired and its revisit was performed in the same change (three-run
   median; outcome recorded in
   [Status Of The Alternatives](#status-of-the-alternatives): the decline
-  stands). No single phase has passed the ~40% mark, so the option-A
-  design level has not fired. It is near; re-measure before drawing any
-  conclusion from a share crossing it.
+  stands). No single phase had passed the ~40% mark at that point. Status
+  as of the [2026-10-16 CPU-budget baseline](#cpu-budget-baseline-2026-10-16):
+  the Rust coverage phase's share reaches ~40.6% — nominally past the mark,
+  but the crossing is attributable to the budget cap itself (that phase
+  absorbed the largest relative slowdown while the uncapped phases held
+  steady), and the option-A-level revisit it nominally demands is declined
+  with that attribution in the baseline section. A future crossing measured
+  at an uncapped or re-tuned budget fires the normal revisit.
 - The commit rate rises materially above the ~25/day this baseline assumes, or
   the gate is reported as a recurring source of blocked or abandoned work. The
   argument for accepting a fixed cost weakens with frequency. Because option B
@@ -621,14 +787,21 @@ Run from the repository root with `SONAR_HOST_URL` set and a token available as
 ```
 
 Take at least three complete runs and compare medians — a single run is not
-a distribution (the founding caveat 3 / refresh caveat 3).
+a distribution (the founding caveat 3 / refresh caveat 3). The gate resolves
+its CPU budget from the machine it runs on; record the budget value
+alongside the environment table so two measurements stay comparable. To
+measure an uncapped comparison run (not the daily schedule), set
+`PLOTWEAVE_GATE_CPU_BUDGET` to the full logical-core count for that run
+only.
 
 For the per-phase split, time the three non-scanner stages individually in the
-order the gate script runs them, and take the remainder as the scanner phase:
+order the gate script runs them, and take the remainder as the scanner
+phase — with the same budget the gate resolved (5 on the 16-core baseline
+machine):
 
 ```sh
 time sh scripts/check-static.sh
-time npm run test:coverage
+time npm run test:coverage -- --maxWorkers 5
 time sh scripts/rust-coverage.sh
 ```
 

@@ -162,9 +162,12 @@ function writeScenarioStubs(bin: string): void {
   writeExecutable(
     resolve(bin, 'npm'),
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-if [ "$*" = "run test:coverage" ]; then
-  printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
-fi`,
+case "$*" in
+  # 门禁下发 CPU 预算（--maxWorkers N），按前缀匹配分发
+  "run test:coverage"*)
+    printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
+    ;;
+esac`,
   )
   writeExecutable(
     resolve(bin, 'cargo-llvm-cov'),
@@ -518,28 +521,44 @@ describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_0
     expect(lines).toHaveLength(1)
     const record = JSON.parse(lines[0] ?? '')
     // 核验路径：读者用 git rev-parse <commit>^{tree} 对照记录的 tree 即可
-    // 复核「该提交内容通过过门禁调用」；记录行在推送物化后进入版本化文件
+    // 复核「该提交内容通过过门禁调用」；推送保留 pending，下一普通提交物化
     const commitTree = scenario.git(['rev-parse', 'HEAD^{tree}']).stdout.trim()
     expect(record.tree).toBe(commitTree)
     expect(record.head).toMatch(/^[0-9a-f]{40}$/)
     expect(record.qualityGate).toBe('OK')
     expect(record.newCodeUnresolvedIssues).toBe(0)
-    // 提交创建路径绝不触碰版本化文件（PR #415 评审 5338815626）
+    // 无待物化行时提交路径不触碰版本化文件；有待物化行时由 pre-commit
+    // 的 materialize --stage-for-commit 并入并暂存（issue #548）。本用例
+    // 起始无待物化行，保持 PR #415 评审 5338815626 的隔离断言
     expect(existsSync(resolve(scenario.root, 'gate-history.jsonl'))).toBe(false)
   })
 
-  it('推送门禁通过后物化待物化行到版本化文件并清空（issue #355）', () => {
+  it('推送不触碰台账：记录留在待物化文件，由下一个普通提交折并自动暂存（issue #355；PR #581 评审 5537970549）', () => {
     const scenario = prepareHookScenario('OK', true)
     expect(scenario.git(['commit', '--allow-empty', '-m', 'x']).status).toBe(0)
-    // 裸远端触发 pre-push：门禁后再物化
+    // 裸远端触发 pre-push：门禁通过但推送不再物化
     const remote = resolve(scenario.root, 'origin.git')
     expect(scenario.git(['init', '--bare', '-q', remote]).status).toBe(0)
     expect(scenario.git(['remote', 'add', 'origin', remote]).status).toBe(0)
 
     const push = scenario.git(['push', '-u', 'origin', 'main'])
     expect(push.status, push.stderr).toBe(0)
-    // 提交一次 + 推送一次，各恰一次门禁调用
+    // 提交一次 + 推送一次，各恰一次门禁调用；两轮记录都在待物化文件，
+    // 版本化台账不出现（推送不再给工作树留下被跟踪差异）
     expect(scenario.gateRuns()).toBe(2)
+    expect(existsSync(resolve(scenario.root, 'gate-history.jsonl'))).toBe(false)
+    const pendingAfterPush = readFileSync(
+      resolve(scenario.root, 'gate-pending.jsonl'),
+      'utf8',
+    )
+      .split('\n')
+      .filter(Boolean)
+    expect(pendingAfterPush).toHaveLength(2)
+
+    // 下一个普通提交把两轮记录折并入库并自动暂存（字节精确归因）；
+    // 该提交自身的记录按滞后一次提交留在待物化文件
+    expect(scenario.git(['commit', '--allow-empty', '-m', 'y']).status).toBe(0)
+    expect(scenario.gateRuns()).toBe(3)
     const history = readFileSync(
       resolve(scenario.root, 'gate-history.jsonl'),
       'utf8',
@@ -551,48 +570,103 @@ describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_0
       expect(JSON.parse(line).qualityGate).toBe('OK')
     }
     expect(
-      readFileSync(resolve(scenario.root, 'gate-pending.jsonl'), 'utf8'),
+      readFileSync(resolve(scenario.root, 'gate-pending.jsonl'), 'utf8')
+        .split('\n')
+        .filter(Boolean),
+    ).toHaveLength(1)
+    expect(
+      scenario.git(['status', '--porcelain', '--', 'gate-history.jsonl'])
+        .stdout,
     ).toBe('')
   })
 })
 
-describe('门禁结论记录在重放时的隔离（PR #415）', { timeout: 30_000 }, () => {
-  it('携带记录行的相邻提交可整体重放：重放不给版本化文件留未暂存改动（PR #415 评审 5338815626）', () => {
-    const scenario = prepareHookScenario()
-    // 版本化记录文件指进仓库内成为被跟踪文件，模拟机制的常态路径：
-    // 后一笔提交携带前一笔的记录行入库
-    const trackedHistory = resolve(scenario.root, 'tracked-history.jsonl')
-    const git = (args: string[]) =>
-      spawnSync('git', args, {
-        cwd: scenario.root,
-        encoding: 'utf8',
-        env: {
-          ...scenario.env,
-          PLOTWEAVE_GATE_HISTORY_PATH: trackedHistory,
-        },
-      })
-    writeFileSync(trackedHistory, '{"seed":1}\n')
-    expect(git(['add', 'tracked-history.jsonl']).status).toBe(0)
-    expect(git(['commit', '-m', 'c1']).status).toBe(0)
-    appendFileSync(trackedHistory, '{"seed":2}\n')
-    expect(git(['add', 'tracked-history.jsonl']).status).toBe(0)
-    expect(git(['commit', '-m', 'c2']).status).toBe(0)
+describe(
+  '门禁结论记录在重放时的隔离（PR #415；issue #548 提交路径暂存）',
+  { timeout: 30_000 },
+  () => {
+    it('携带记录行的相邻提交可整体重放：重放不触碰台账、不留未暂存改动，重放记录留在待物化文件随下一个普通提交并入', () => {
+      const scenario = prepareHookScenario()
+      // 版本化记录文件指进仓库内成为被跟踪文件，模拟机制的常态路径：
+      // 后一笔提交经 pre-commit 的 materialize --stage-for-commit 携带
+      // 前一笔的记录行入库（issue #548）
+      const trackedHistory = resolve(scenario.root, 'tracked-history.jsonl')
+      const pending = resolve(scenario.root, 'gate-pending.jsonl')
+      const git = (args: string[]) =>
+        spawnSync('git', args, {
+          cwd: scenario.root,
+          encoding: 'utf8',
+          env: {
+            ...scenario.env,
+            PLOTWEAVE_GATE_HISTORY_PATH: trackedHistory,
+          },
+        })
+      writeFileSync(trackedHistory, '{"seed":1}\n')
+      expect(git(['add', 'tracked-history.jsonl']).status).toBe(0)
+      expect(git(['commit', '-m', 'c1']).status).toBe(0)
+      appendFileSync(trackedHistory, '{"seed":2}\n')
+      expect(git(['add', 'tracked-history.jsonl']).status).toBe(0)
+      expect(git(['commit', '-m', 'c2']).status).toBe(0)
+      // c1 的门禁记录已随 c2 的 pre-commit 并入暂存，c2 的台账尾行是 c1 记录
+      const committedAfterSetup = readFileSync(trackedHistory, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+      expect(committedAfterSetup.slice(0, 2)).toEqual([
+        '{"seed":1}',
+        '{"seed":2}',
+      ])
+      expect(JSON.parse(committedAfterSetup[2] ?? '').qualityGate).toBe('OK')
 
-    // 重放两笔（--force-rebase 强制重建提交以触发提交创建钩子；onto
-    // 为原父提交时 git 会快进复用原提交、不经钩子）：每笔各一次完整
-    // 门禁；记录只进待物化文件，重放不得因版本化文件的未暂存改动中止
-    const rebase = git(['rebase', '--force-rebase', 'HEAD~2'])
-    expect(rebase.status).toBe(0)
-    expect(rebase.stderr).not.toContain('would be overwritten')
-    expect(scenario.gateRuns()).toBe(4)
-    expect(
-      git(['status', '--porcelain', '--', 'tracked-history.jsonl']).stdout,
-    ).toBe('')
-    expect(
-      readFileSync(trackedHistory, 'utf8').split('\n').filter(Boolean),
-    ).toEqual(['{"seed":1}', '{"seed":2}'])
-  })
-})
+      // 重放两笔（--force-rebase 强制重建提交以触发提交创建钩子；onto
+      // 为原父提交时 git 会快进复用原提交、不经钩子）：每笔各一次完整
+      // 门禁；prepare-commit-msg 回退路径不物化台账——sequencer 重放不
+      // 采纳追加暂存，物化会留下脏工作树中止后续重放（PR #415 评审
+      // 5338815626；issue #548 保持该保护）；重放记录只进待物化文件
+      const rebase = git(['rebase', '--force-rebase', 'HEAD~2'])
+      expect(rebase.status, rebase.stderr).toBe(0)
+      expect(rebase.stderr).not.toContain('would be overwritten')
+      expect(scenario.gateRuns()).toBe(4)
+      expect(
+        git(['status', '--porcelain', '--', 'tracked-history.jsonl']).stdout,
+      ).toBe('')
+      expect(
+        readFileSync(trackedHistory, 'utf8').split('\n').filter(Boolean),
+      ).toEqual(committedAfterSetup)
+      // c2 自身的门禁记录（在其 pre-commit 折叠之后产生）与两笔重放的
+      // 门禁记录共 3 行留在待物化文件，等待下一个普通提交收编
+      const pendingAfterRebase = readFileSync(pending, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+      expect(pendingAfterRebase).toHaveLength(3)
+      for (const line of pendingAfterRebase) {
+        expect(JSON.parse(line).qualityGate).toBe('OK')
+      }
+
+      // 下一个普通提交（pre-commit 路径）把重放记录并入并暂存进该提交：
+      // 重放提交由此在版本化台账中获得证据（issue #548 服务端核验依赖）；
+      // 该提交自身的门禁记录按滞后一次提交留在待物化文件
+      expect(
+        git(['commit', '--allow-empty', '-m', 'c3 收编重放记录']).status,
+      ).toBe(0)
+      expect(scenario.gateRuns()).toBe(5)
+      const ledgerLines = readFileSync(trackedHistory, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+      expect(ledgerLines.slice(0, 3)).toEqual(committedAfterSetup)
+      const folded = ledgerLines.slice(3).map((line) => JSON.parse(line))
+      expect(folded).toHaveLength(3)
+      for (const record of folded) {
+        expect(record.qualityGate).toBe('OK')
+      }
+      expect(
+        git(['status', '--porcelain', '--', 'tracked-history.jsonl']).stdout,
+      ).toBe('')
+      expect(
+        readFileSync(pending, 'utf8').split('\n').filter(Boolean),
+      ).toHaveLength(1)
+    })
+  },
+)
 
 describe('提交中止后的操作隔离（issue #429）', { timeout: 30_000 }, () => {
   it('无暂存内容中止后，同树 --no-verify 提交仍执行门禁调用（issue #429）', () => {

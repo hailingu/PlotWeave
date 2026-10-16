@@ -163,3 +163,11 @@ worktree. A shell that exports it can therefore analyze an arbitrary
 directory instead of the state a Git operation is about to record or push —
 the same class of explicit evasion as `--no-verify`, prohibited by
 `AGENTS.md`.
+`PLOTWEAVE_GATE_CPU_BUDGET` (`scripts/sonar-quality-gate.sh`,
+`scripts/rust-coverage.sh`, 2026-10-16) is recorded here for inventory
+completeness but is a **run-control override, not a check-set injection**:
+it only bounds coverage-phase parallelism (vitest `--maxWorkers`,
+`cargo-llvm-cov --jobs`, `RUST_TEST_THREADS`) and cannot skip, weaken, or
+redirect any check — large values restore the uncapped schedule and invalid
+values block the operation. Its contract and measured cost live in
+[Gate CPU Budget](quality-gate-cost.md#gate-cpu-budget-2026-10-16-owner-direction).

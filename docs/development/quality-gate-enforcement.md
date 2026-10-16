@@ -638,6 +638,20 @@ So the accurate statement of the invariant is:
 > `prepare-commit-msg` since issue #404 (single-use marker; the editor-abort
 > residue noted in [marker ownership](quality-gate-lifecycle.md#commit-marker-ownership-and-reuse) bounds the claim).
 
+**Server-side backstop (issue #548, 2026-10-16).** The push-time
+`--no-verify` bypass is now contained server-side rather than left to local
+discipline alone: GitHub branch protection on `dev` and `main` rejects
+direct pushes entirely (pull request required, administrators included,
+force pushes and deletions blocked), and the required `gate-evidence` CI
+check fails a pull request whose non-tip commits lack passing records in
+the versioned gate ledger, surfacing the push-side tip lag as a warning
+annotation. The local prohibition in AGENTS.md is unchanged, and the
+uncovered creation paths listed below remain uncovered locally — commits
+from those paths now fail the server-side evidence check when they appear
+as non-tip commits in a PR. Semantics and remaining boundaries are recorded
+in [Server-Side Evidence
+Verification](quality-gate-evidence.md#server-side-evidence-verification-issue-548).
+
 An earlier revision of the cost decision record claimed that no commit is ever created without
 the full gate having run, and that the only shared hook for `revert` and
 `cherry-pick` was `prepare-commit-msg` *and* `commit-msg`. Both claims were
@@ -741,7 +755,10 @@ subject to the commit-tree/working-tree mismatch described above. A push with no
 analysis of the pushed state is possible when no earlier gate analyzed
 that state, for example after one of the uncovered creation paths. The
 prohibition in `AGENTS.md` covers this push-time bypass regardless of any
-earlier analysis.
+earlier analysis. Since issue #548 (2026-10-16) this bypass is also
+contained server-side: branch protection rejects direct pushes to
+`dev`/`main`, and the required `gate-evidence` check fails un-evidenced PR
+commits (see the server-side backstop note above).
 
 Push-time analysis since the issue #405 fix (2026-09-30) covers every
 pushed ref at that ref's own commit — a pristine temporary-worktree checkout

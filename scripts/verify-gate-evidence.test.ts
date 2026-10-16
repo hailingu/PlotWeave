@@ -1,0 +1,1039 @@
+/** verify-gate-evidence.ts 的行为测试（issue #548）：在真实临时 Git 仓库
+ * 中按物化时序构造台账演进，断言核验的退出码与稳定诊断码——诊断码是
+ * scripts/verify-gate-evidence.ts 文件头文档化的机器可读契约，本文件按
+ * 契约断言，不校验普通措辞。用例按「非 tip 证据判定 / tip 形态判定 /
+ * 解析、范围与参数」分组，各 describe 回调保持在可执行单元行数上限内。 */
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  gitFixtureEnvironment,
+  gitScenarioFixture,
+} from './git-scenario-fixture'
+
+const repositoryRoot = resolve(import.meta.dirname, '..')
+const verifierPath = resolve(repositoryRoot, 'scripts/verify-gate-evidence.ts')
+const ledgerPath = 'docs/development/gate-history.jsonl'
+const environment = gitFixtureEnvironment()
+
+const fixtures: Array<ReturnType<typeof gitScenarioFixture>> = []
+
+/** 在隔离环境中执行真实 git；失败即抛出，夹具播种不应有 git 错误。 */
+function git(root: string, ...args: string[]): string {
+  const result = spawnSync('git', args, {
+    cwd: root,
+    encoding: 'utf8',
+    env: environment,
+  })
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} 失败：${result.stderr}`)
+  }
+  return result.stdout.trim()
+}
+
+function writeFile(root: string, path: string, content: string): void {
+  const target = resolve(root, path)
+  mkdirSync(resolve(target, '..'), { recursive: true })
+  writeFileSync(target, content)
+}
+
+/** 向台账追加记录行；不动其他文件，配合调用方的提交构成物化形态。 */
+function appendLedger(root: string, lines: string[]): void {
+  if (lines.length === 0) return
+  let existing = ''
+  try {
+    existing = readFileSync(resolve(root, ledgerPath), 'utf8')
+  } catch {
+    existing = ''
+  }
+  writeFile(root, ledgerPath, `${existing}${lines.join('\n')}\n`)
+}
+
+function commitAll(root: string, message: string): string {
+  git(root, 'add', '-A')
+  git(root, 'commit', '-q', '-m', message)
+  return git(root, 'rev-parse', 'HEAD')
+}
+
+/** 生成一条台账通过记录行；覆盖项用于构造不通过或滞后的形态。 */
+function recordLine(
+  root: string,
+  rev: string,
+  overrides: { qualityGate?: string; newCode?: number } = {},
+): string {
+  return JSON.stringify({
+    timestamp: '2026-10-16T00:00:00Z',
+    tree: git(root, 'rev-parse', `${rev}^{tree}`),
+    head: git(root, 'rev-parse', rev),
+    qualityGate: overrides.qualityGate ?? 'OK',
+    newCodeUnresolvedIssues: overrides.newCode ?? 0,
+    frontendLineCoveragePercent: 96,
+    rustLineCoveragePercent: 85,
+  })
+}
+
+/** 播种基础场景：init + 历史台账记录 + base 提交，返回 base。 */
+function seedBase(root: string): string {
+  git(root, 'init', '--initial-branch=main')
+  git(root, 'config', 'user.name', 'Scenario')
+  git(root, 'config', 'user.email', 'scenario@example.invalid')
+  appendLedger(root, [
+    JSON.stringify({
+      tree: 'f'.repeat(40),
+      qualityGate: 'OK',
+      newCodeUnresolvedIssues: 0,
+    }),
+  ])
+  writeFile(root, 'src/app.txt', 'base\n')
+  return commitAll(root, 'base')
+}
+
+/** 建场景并返回仓库根：seed 在首次 create 时执行一次。 */
+function createSeeded(seed: (root: string, base: string) => void): string {
+  const fixture = gitScenarioFixture((root) => {
+    seed(root, seedBase(root))
+  })
+  fixtures.push(fixture)
+  return fixture.create()
+}
+
+/** 同上但不预置基线：种子自建完整历史（发布形态需要早于台账入库的
+ * base 提交，不能经 seedBase 预写台账）。 */
+function createRawSeeded(seed: (root: string) => void): string {
+  const fixture = gitScenarioFixture(seed)
+  fixtures.push(fixture)
+  return fixture.create()
+}
+
+/** 在场景仓库上执行核验脚本，收集状态与合并输出。 */
+function runVerifier(
+  root: string,
+  args: string[],
+): { status: number | null; output: string } {
+  const result = spawnSync(process.execPath, [verifierPath, ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    env: environment,
+  })
+  return { status: result.status, output: `${result.stdout}${result.stderr}` }
+}
+
+afterEach(() => {
+  for (const fixture of fixtures.splice(0)) fixture.dispose()
+})
+
+describe(
+  '非 tip 提交的证据判定（verify-gate-evidence.ts，issue #548）',
+  { timeout: 60_000 },
+  () => {
+    it('非 tip 提交缺失通过记录：退出 1 并逐条列出 GATE_EVIDENCE_MISSING', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1-绕过\n')
+        commitAll(root, 'c1-绕过')
+        writeFile(root, 'src/app.txt', 'c2\n')
+        commitAll(root, 'c2')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~2', '--head', 'HEAD'])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('c1-绕过')
+      expect(result.output).toContain('修复指引')
+    })
+
+    it('记录存在但 qualityGate 非 OK 或新增问题非零：不构成证据，退出 1', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        writeFile(root, 'src/app.txt', 'c2\n')
+        const c2 = commitAll(root, 'c2')
+        appendLedger(root, [
+          recordLine(root, c1, { qualityGate: 'ERROR' }),
+          recordLine(root, c1, { newCode: 2 }),
+          recordLine(root, c2),
+        ])
+        commitAll(root, '物化台账')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~3', '--head', 'HEAD'])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('（c1）')
+    })
+
+    it('revert 台账补充提交会把此前的证据一并剥离：非 tip 提交判缺失、退出 1', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        appendLedger(root, [recordLine(root, c1)])
+        commitAll(root, '物化台账')
+        // revert 撤销台账补充提交，c1 的证据行随台账回到补充前状态
+        git(root, 'revert', '--no-edit', 'HEAD')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~3', '--head', 'HEAD'])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('（c1）')
+    })
+  },
+)
+
+describe(
+  'tip 形态判定（verify-gate-evidence.ts，issue #548）',
+  { timeout: 60_000 },
+  () => {
+    it('tip 自身记录滞后一次提交：通过但输出 GATE_EVIDENCE_TIP_LAG 告警', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        writeFile(root, 'src/app.txt', 'c2\n')
+        appendLedger(root, [recordLine(root, c1)])
+        commitAll(root, 'c2')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~2', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+    })
+
+    it('单提交 PR 且 tip 未留证：通过但告警滞后', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        commitAll(root, 'c1')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~1', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+    })
+
+    it('tip 仅改台账（物化补充提交）：豁免且无告警', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        appendLedger(root, [recordLine(root, c1)])
+        commitAll(root, 'chore 物化台账')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~2', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+      expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+    })
+
+    it('合并提交不适用台账-only 豁免：作为 tip 滞后仅告警，范围内其余提交留证即通过', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        git(root, 'checkout', '-b', 'side', 'main~1')
+        writeFile(root, 'src/side.txt', 'side\n')
+        const s1 = commitAll(root, 's1')
+        git(root, 'checkout', 'main')
+        appendLedger(root, [recordLine(root, c1), recordLine(root, s1)])
+        const c2 = commitAll(root, '物化台账')
+        git(root, 'merge', '--no-ff', '--no-commit', 'side')
+        appendLedger(root, [recordLine(root, c2)])
+        commitAll(root, 'merge side')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~3', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+      expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+      expect(result.output).not.toContain('[GATE_EVIDENCE_MISSING]')
+    })
+  },
+)
+
+describe(
+  '台账解析、范围与参数（verify-gate-evidence.ts，issue #548）',
+  { timeout: 60_000 },
+  () => {
+    it('台账畸形行跳过并告警，有效记录仍参与判定', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        writeFile(root, 'src/app.txt', 'c2\n')
+        const c2 = commitAll(root, 'c2')
+        appendLedger(root, [
+          '{broken-json',
+          recordLine(root, c1),
+          recordLine(root, c2),
+        ])
+        commitAll(root, '物化台账')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~3', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('GATE_EVIDENCE_MALFORMED_LINE')
+      expect(result.output).not.toContain('[GATE_EVIDENCE_MISSING]')
+    })
+
+    it('范围内无提交（head 即基）：通过', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        commitAll(root, 'c1')
+      })
+
+      const result = runVerifier(root, ['--base', 'HEAD', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('没有待合并提交')
+    })
+
+    it('台账超过 execFileSync 默认缓冲（>1 MiB）仍完整读取并正常判定（PR #581 评审 5542889511）', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        const c1 = commitAll(root, 'c1')
+        // 填充记录使台账体积超过 1 MiB（默认 maxBuffer），假 tree 不与
+        // 范围内任何提交树碰撞；有效记录（c1）缀在末尾
+        const padding = Array.from({ length: 12_000 }, (_, index) =>
+          JSON.stringify({
+            tree: `${'p'.repeat(39)}${index % 10}`,
+            qualityGate: 'OK',
+            newCodeUnresolvedIssues: 0,
+          }),
+        )
+        appendLedger(root, [...padding, recordLine(root, c1)])
+        commitAll(root, '物化台账')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~2', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).not.toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+    })
+
+    it('缺少 --base 或未知参数：退出 2 并给出用法', () => {
+      const root = createSeeded((root) => {
+        writeFile(root, 'src/app.txt', 'c1\n')
+        commitAll(root, 'c1')
+      })
+
+      const missingBase = runVerifier(root, ['--head', 'HEAD'])
+      const unknownFlag = runVerifier(root, ['--base', 'main~1', '--fast'])
+
+      expect(missingBase.status).toBe(2)
+      expect(missingBase.output).toContain('用法')
+      expect(unknownFlag.status).toBe(2)
+      expect(unknownFlag.output).toContain('未知参数')
+    })
+  },
+)
+
+describe(
+  '发布集成边界的豁免通过（--release-boundary，dev → main 形态，PR #581 评审 5542207474）',
+  { timeout: 60_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of fixtures.splice(0)) fixture.dispose()
+    })
+
+    it('合并提交跳过、被集成分支 tip 与台账前历史豁免：发布范围通过且仅告警', () => {
+      const root = createRawSeeded((root) => {
+        // base 与 c1 早于台账入库（树中无台账路径）
+        git(root, 'init', '--initial-branch=main')
+        git(root, 'config', 'user.name', 'Scenario')
+        git(root, 'config', 'user.email', 'scenario@example.invalid')
+        writeFile(root, 'src/app.txt', 'base\n')
+        const b0 = commitAll(root, 'release-base')
+        git(root, 'tag', 'release-base', b0)
+        writeFile(root, 'src/app.txt', 'c1\n')
+        commitAll(root, 'c1')
+        // c2 引入台账；自身记录与 s1 的记录随合并提交 M1 写入
+        appendLedger(root, [
+          JSON.stringify({
+            tree: 'f'.repeat(40),
+            qualityGate: 'OK',
+            newCodeUnresolvedIssues: 0,
+          }),
+        ])
+        const c2 = commitAll(root, 'c2 引入台账')
+        git(root, 'checkout', '-q', '-b', 'side1', 'main')
+        writeFile(root, 'src/side1.txt', 'side1\n')
+        const s1 = commitAll(root, 's1')
+        git(root, 'checkout', '-q', 'main')
+        git(root, 'merge', '--no-ff', '--no-commit', 'side1')
+        appendLedger(root, [recordLine(root, c2), recordLine(root, s1)])
+        commitAll(root, 'M1')
+        // side2 的 tip t1 无入库记录：其记录按物化时序留在开发者本地
+        git(root, 'checkout', '-q', '-b', 'side2', 'main')
+        writeFile(root, 'src/side2.txt', 'side2\n')
+        commitAll(root, 't1')
+        git(root, 'checkout', '-q', 'main')
+        git(root, 'merge', '--no-ff', '--no-commit', 'side2')
+        commitAll(root, 'M2')
+      })
+
+      const result = runVerifier(root, [
+        '--base',
+        'release-base',
+        '--head',
+        'HEAD',
+        '--release-boundary',
+      ])
+
+      expect(result.status).toBe(0)
+      expect(result.output).not.toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('GATE_EVIDENCE_PRE_LEDGER_COMMIT')
+      expect(result.output).toContain('GATE_EVIDENCE_INTEGRATED_TIP_LAG')
+      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+      expect(result.output).toContain('合并提交跳过 1')
+    })
+  },
+)
+
+describe(
+  '发布范围内普通直链提交缺证据仍失败（--release-boundary，PR #581 评审 5542207474）',
+  { timeout: 60_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of fixtures.splice(0)) fixture.dispose()
+    })
+
+    it('豁免不外溢：发布范围内普通直链提交缺记录仍失败', () => {
+      const root = createRawSeeded((root) => {
+        git(root, 'init', '--initial-branch=main')
+        git(root, 'config', 'user.name', 'Scenario')
+        git(root, 'config', 'user.email', 'scenario@example.invalid')
+        writeFile(root, 'src/app.txt', 'base\n')
+        const b0 = commitAll(root, 'release-base')
+        git(root, 'tag', 'release-base', b0)
+        writeFile(root, 'src/app.txt', 'c1\n')
+        commitAll(root, 'c1')
+        appendLedger(root, [
+          JSON.stringify({
+            tree: 'f'.repeat(40),
+            qualityGate: 'OK',
+            newCodeUnresolvedIssues: 0,
+          }),
+        ])
+        const c2 = commitAll(root, 'c2 引入台账')
+        // c2 的直链后继提交：既非合并、非集成分支 tip、也非范围 tip
+        writeFile(root, 'src/dev-direct.txt', 'direct\n')
+        commitAll(root, 'c2b-直链绕过')
+        git(root, 'checkout', '-q', '-b', 'side1', 'main')
+        writeFile(root, 'src/side1.txt', 'side1\n')
+        const s1 = commitAll(root, 's1')
+        git(root, 'checkout', '-q', 'main')
+        git(root, 'merge', '--no-ff', '--no-commit', 'side1')
+        appendLedger(root, [recordLine(root, c2), recordLine(root, s1)])
+        commitAll(root, 'M1')
+      })
+
+      const result = runVerifier(root, [
+        '--base',
+        'release-base',
+        '--head',
+        'HEAD',
+        '--release-boundary',
+      ])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('c2b-直链绕过')
+    })
+  },
+)
+
+describe(
+  '集成边界豁免的模式门控与删除台账反例（PR #581 评审 5542342537）',
+  { timeout: 60_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of fixtures.splice(0)) fixture.dispose()
+    })
+
+    it('task PR（无 --release-boundary）：合并提交与非首父同样必须留证', () => {
+      const root = createSeeded((root) => {
+        git(root, 'checkout', '-q', '-b', 'side', 'main')
+        writeFile(root, 'src/side.txt', 'side\n')
+        commitAll(root, 's1-无记录')
+        git(root, 'checkout', '-q', 'main')
+        git(root, 'merge', '--no-ff', '--no-commit', 'side')
+        commitAll(root, 'merge side')
+        writeFile(root, 'src/app.txt', 'tip\n')
+        commitAll(root, 'tip')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~2', '--head', 'HEAD'])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).not.toContain('GATE_EVIDENCE_INTEGRATED_TIP_LAG')
+      expect(result.output).not.toContain('GATE_EVIDENCE_PRE_LEDGER_COMMIT')
+    })
+
+    it('删除台账的提交不属台账前历史：发布模式下仍判缺失（零记录不可借道删除）', () => {
+      const root = createRawSeeded((root) => {
+        git(root, 'init', '--initial-branch=main')
+        git(root, 'config', 'user.name', 'Scenario')
+        git(root, 'config', 'user.email', 'scenario@example.invalid')
+        writeFile(root, 'src/app.txt', 'base\n')
+        const b0 = commitAll(root, 'release-base')
+        git(root, 'tag', 'release-base', b0)
+        appendLedger(root, [
+          JSON.stringify({
+            tree: 'f'.repeat(40),
+            qualityGate: 'OK',
+            newCodeUnresolvedIssues: 0,
+          }),
+        ])
+        const c1 = commitAll(root, 'c1 引入台账')
+        // c2 删除台账并改源码：触及台账路径，不属于台账前历史
+        rmSync(resolve(root, ledgerPath))
+        writeFile(root, 'src/app.txt', 'c2-删除台账\n')
+        commitAll(root, 'c2-删除台账')
+        // c3 仅携带 c1 的记录：既缺 c2 证据，也未恢复原有历史记录
+        appendLedger(root, [recordLine(root, c1)])
+        commitAll(root, 'c3 恢复台账')
+      })
+
+      const result = runVerifier(root, [
+        '--base',
+        'release-base',
+        '--head',
+        'HEAD',
+        '--release-boundary',
+      ])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('c2-删除台账')
+      expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+    })
+  },
+)
+
+describe(
+  '破坏历史台账的 tip 必须失败（PR #581 评审 5543678876）',
+  { timeout: 60_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of fixtures.splice(0)) fixture.dispose()
+    })
+
+    it('tip 删除整个台账：退出 1，不能落入 tip 滞后容差', () => {
+      const root = createSeeded((root) => {
+        rmSync(resolve(root, ledgerPath))
+        commitAll(root, '删除台账')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~1', '--head', 'HEAD'])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_LEDGER_DESTRUCTIVE]')
+      expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+      expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+    })
+
+    it('tip 重写既有台账行（非纯追加）：退出 1，不能落入 tip 滞后容差', () => {
+      const root = createSeeded((root) => {
+        writeFile(
+          root,
+          ledgerPath,
+          `${JSON.stringify({
+            tree: 'e'.repeat(40),
+            qualityGate: 'OK',
+            newCodeUnresolvedIssues: 0,
+          })}\n`,
+        )
+        commitAll(root, '重写台账')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~1', '--head', 'HEAD'])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_LEDGER_DESTRUCTIVE]')
+      expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+      expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+    })
+  },
+)
+
+describe('tip 保全边界（PR #581 评审 5543678876）', () => {
+  it.each(['截断末条记录', '删去尾随换行', '删除空台账', '修改源码并重写台账'])(
+    '%s：普通与发布模式均失败',
+    (mutation) => {
+      const root = createSeeded((root) => {
+        const initial = readFileSync(resolve(root, ledgerPath), 'utf8')
+        const parent = `${initial}${JSON.stringify({ tree: 'second' })}\n`
+        writeFile(root, ledgerPath, mutation === '删除空台账' ? '' : parent)
+        commitAll(root, '父台账')
+        if (mutation === '删除空台账') {
+          rmSync(resolve(root, ledgerPath))
+        } else if (mutation === '截断末条记录') {
+          writeFile(root, ledgerPath, initial)
+        } else if (mutation === '删去尾随换行') {
+          writeFile(root, ledgerPath, parent.slice(0, -1))
+        } else {
+          writeFile(
+            root,
+            ledgerPath,
+            `${JSON.stringify({ tree: 'rewritten' })}\n`,
+          )
+          writeFile(root, 'src/app.txt', 'changed\n')
+        }
+        commitAll(root, '破坏台账')
+      })
+
+      for (const flags of [[], ['--release-boundary']]) {
+        const result = runVerifier(root, ['--base', 'HEAD~1', ...flags])
+
+        expect(result.status).toBe(1)
+        expect(result.output).toContain('[GATE_EVIDENCE_LEDGER_DESTRUCTIVE]')
+        expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+      }
+    },
+  )
+
+  it('首次引入台账并修改源码：仍按 tip 滞后通过', () => {
+    const root = createRawSeeded((root) => {
+      git(root, 'init', '--initial-branch=main')
+      git(root, 'config', 'user.name', 'Scenario')
+      git(root, 'config', 'user.email', 'scenario@example.invalid')
+      writeFile(root, 'src/app.txt', 'base\n')
+      commitAll(root, '无台账基线')
+      appendLedger(root, [JSON.stringify({ tree: 'introduced' })])
+      writeFile(root, 'src/app.txt', 'changed\n')
+      commitAll(root, '引入台账')
+    })
+
+    const result = runVerifier(root, ['--base', 'HEAD~1'])
+
+    expect(result.status).toBe(0)
+    expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+    expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+  })
+})
+
+describe('合并 tip 保全所有父台账（PR #581 评审 5543678876）', () => {
+  it.each([true, false])('保留非首父记录 = %s', (preserveSide) => {
+    const root = createSeeded((root) => {
+      git(root, 'checkout', '-b', 'side')
+      const sideLine = JSON.stringify({ tree: 'side-history' })
+      appendLedger(root, [sideLine])
+      const side = commitAll(root, 'side')
+      git(root, 'checkout', 'main')
+      appendLedger(root, [JSON.stringify({ tree: 'main-history' })])
+      commitAll(root, 'main')
+      git(root, 'merge', '--strategy=ours', '--no-ff', '--no-commit', 'side')
+      appendLedger(root, [
+        ...(preserveSide ? [sideLine] : []),
+        recordLine(root, side),
+      ])
+      commitAll(root, 'merge side')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~1', ...flags])
+
+      expect(result.status).toBe(preserveSide ? 0 : 1)
+      if (preserveSide) {
+        expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+      } else {
+        expect(result.output).toContain('[GATE_EVIDENCE_LEDGER_DESTRUCTIVE]')
+        expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+      }
+    }
+  })
+})
+
+describe('未终止末行的追加边界（PR #581 评审 5544147742）', () => {
+  it.each([
+    { suffix: 'GARBAGE', status: 1 },
+    { suffix: '{"tree":"new"}\n', status: 1 },
+    { suffix: '', status: 0 },
+    { suffix: '\n', status: 0 },
+    { suffix: '\n{"tree":"new"}\n', status: 0 },
+    { suffix: '\nGARBAGE\n', status: 0 },
+  ])('末行后追加 $suffix：退出 $status', ({ suffix, status }) => {
+    const root = createSeeded((root) => {
+      const parent = readFileSync(resolve(root, ledgerPath), 'utf8').slice(
+        0,
+        -1,
+      )
+      writeFile(root, ledgerPath, parent)
+      commitAll(root, '父台账末行未终止')
+      writeFile(root, ledgerPath, `${parent}${suffix}`)
+      writeFile(root, 'src/app.txt', 'changed\n')
+      commitAll(root, 'tip 追加')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~1', ...flags])
+
+      expect(result.status).toBe(status)
+      if (status === 1) {
+        expect(result.output).toContain('[GATE_EVIDENCE_LEDGER_DESTRUCTIVE]')
+        expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+      } else {
+        expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+        expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+      }
+    }
+  })
+
+  it('空台账可直接写入第一条记录', () => {
+    const root = createSeeded((root) => {
+      writeFile(root, ledgerPath, '')
+      commitAll(root, '空父台账')
+      appendLedger(root, [JSON.stringify({ tree: 'first' })])
+      commitAll(root, '首条记录')
+    })
+
+    const result = runVerifier(root, ['--base', 'HEAD~1'])
+
+    expect(result.status).toBe(0)
+    expect(result.output).toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+  })
+
+  it('未终止末行补换行后仅追加合法台账：仍享有台账-only 豁免', () => {
+    const root = createSeeded((root) => {
+      const parent = readFileSync(resolve(root, ledgerPath), 'utf8').slice(
+        0,
+        -1,
+      )
+      writeFile(root, ledgerPath, parent)
+      commitAll(root, '父台账末行未终止')
+      writeFile(
+        root,
+        ledgerPath,
+        `${parent}\n${JSON.stringify({ tree: 'new' })}\n`,
+      )
+      commitAll(root, '追加独立记录')
+    })
+
+    const result = runVerifier(root, ['--base', 'HEAD~1'])
+
+    expect(result.status).toBe(0)
+    expect(result.output).toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+    expect(result.output).not.toContain('GATE_EVIDENCE_MALFORMED_LINE')
+  })
+})
+
+describe('合并 tip 的未终止末行边界（PR #581 评审 5544147742）', () => {
+  it.each([
+    { suffix: '\n', status: 0 },
+    { suffix: 'GARBAGE\n', status: 1 },
+  ])('末行后追加 $suffix：退出 $status', ({ suffix, status }) => {
+    const root = createSeeded((root) => {
+      const parent = readFileSync(resolve(root, ledgerPath), 'utf8').slice(
+        0,
+        -1,
+      )
+      writeFile(root, ledgerPath, parent)
+      commitAll(root, '父台账末行未终止')
+      git(root, 'checkout', '-b', 'side')
+      writeFile(root, 'src/side.txt', 'side\n')
+      const side = commitAll(root, 'side')
+      git(root, 'checkout', 'main')
+      git(root, 'merge', '--strategy=ours', '--no-ff', '--no-commit', 'side')
+      writeFile(
+        root,
+        ledgerPath,
+        `${parent}${suffix}${recordLine(root, side)}\n`,
+      )
+      commitAll(root, 'merge side')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~1', ...flags])
+
+      expect(result.status).toBe(status)
+      expect(result.output).not.toContain('[GATE_EVIDENCE_MISSING]')
+      if (status === 1) {
+        expect(result.output).toContain('[GATE_EVIDENCE_LEDGER_DESTRUCTIVE]')
+        expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+      } else {
+        expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+      }
+    }
+  })
+})
+
+describe('删除再恢复的历史保全（PR #581 评审 5544522794）', () => {
+  it.each([
+    { preserve: false, gap: false, source: false },
+    { preserve: false, gap: true, source: true },
+    { preserve: true, gap: false, source: false },
+    { preserve: true, gap: true, source: true },
+  ])('保全=$preserve、连续缺文件=$gap、源码=$source', (scenario) => {
+    const root = createSeeded((root) => {
+      const history = readFileSync(resolve(root, ledgerPath), 'utf8')
+      rmSync(resolve(root, ledgerPath))
+      writeFile(root, 'src/app.txt', 'deleted\n')
+      const deleted = commitAll(root, '删除台账并修改源码')
+      const records = [recordLine(root, deleted)]
+      if (scenario.gap) {
+        writeFile(root, 'src/app.txt', 'still absent\n')
+        records.push(recordLine(root, commitAll(root, '台账继续缺失')))
+      }
+      writeFile(
+        root,
+        ledgerPath,
+        `${scenario.preserve ? history : ''}${records.join('\n')}\n`,
+      )
+      if (scenario.source) writeFile(root, 'src/app.txt', 'restored\n')
+      commitAll(root, '重建台账')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, [
+        '--base',
+        `HEAD~${scenario.gap ? 3 : 2}`,
+        ...flags,
+      ])
+
+      expect(result.status).toBe(scenario.preserve ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      if (scenario.preserve) {
+        expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+      } else {
+        expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+        expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+        expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+      }
+    }
+  })
+})
+
+/** 构造两侧各自追加、删除台账后再合并的历史，返回全部旧行与范围证据。 */
+function seedDeletedMerge(root: string): {
+  history: string
+  records: string[]
+} {
+  const history = readFileSync(resolve(root, ledgerPath), 'utf8')
+  const records: string[] = []
+  git(root, 'checkout', '-b', 'side')
+  const side = JSON.stringify({ tree: 'side-history' })
+  appendLedger(root, [side])
+  records.push(recordLine(root, commitAll(root, 'side 台账')))
+  rmSync(resolve(root, ledgerPath))
+  records.push(recordLine(root, commitAll(root, 'side 删除台账')))
+  git(root, 'checkout', 'main')
+  const main = JSON.stringify({ tree: 'main-history' })
+  appendLedger(root, [main])
+  records.push(recordLine(root, commitAll(root, 'main 台账')))
+  rmSync(resolve(root, ledgerPath))
+  records.push(recordLine(root, commitAll(root, 'main 删除台账')))
+  git(root, 'merge', '--strategy=ours', '--no-ff', '--no-commit', 'side')
+  records.push(recordLine(root, commitAll(root, '合并缺台账的分支')))
+  return { history: `${history}${side}\n${main}\n`, records }
+}
+
+describe('跨合并删除再恢复（PR #581 评审 5544522794）', () => {
+  it.each(['保留全部', '丢失 main', '丢失 side'])('%s', (mode) => {
+    let base = ''
+    const root = createSeeded((root, seededBase) => {
+      base = seededBase
+      const { history, records } = seedDeletedMerge(root)
+      const restored = history
+        .trimEnd()
+        .split('\n')
+        .filter(
+          (line) =>
+            mode === '保留全部' ||
+            JSON.parse(line).tree !==
+              (mode === '丢失 main' ? 'main-history' : 'side-history'),
+        )
+        .join('\n')
+      writeFile(root, ledgerPath, `${restored}\n${records.join('\n')}\n`)
+      commitAll(root, '恢复合并台账')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', base, ...flags])
+
+      expect(result.status).toBe(mode === '保留全部' ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      if (mode !== '保留全部') {
+        expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+      }
+    }
+  })
+})
+
+describe('非首父曾引入台账的恢复（PR #581 评审 5544522794）', () => {
+  it.each([true, false])('保留非首父历史=%s', (preserve) => {
+    let base = ''
+    const root = createRawSeeded((root) => {
+      git(root, 'init', '--initial-branch=main')
+      git(root, 'config', 'user.name', 'Scenario')
+      git(root, 'config', 'user.email', 'scenario@example.invalid')
+      writeFile(root, 'src/app.txt', 'base\n')
+      base = commitAll(root, '无台账基线')
+      git(root, 'checkout', '-b', 'side')
+      const history = `${JSON.stringify({ tree: 'side-history' })}\n`
+      writeFile(root, ledgerPath, history)
+      const records = [recordLine(root, commitAll(root, 'side 引入台账'))]
+      rmSync(resolve(root, ledgerPath))
+      records.push(recordLine(root, commitAll(root, 'side 删除台账')))
+      git(root, 'checkout', 'main')
+      git(root, 'merge', '--strategy=ours', '--no-ff', '--no-commit', 'side')
+      records.push(recordLine(root, commitAll(root, '合并缺台账的分支')))
+      writeFile(
+        root,
+        ledgerPath,
+        `${preserve ? history : ''}${records.join('\n')}\n`,
+      )
+      commitAll(root, '恢复台账')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', base, ...flags])
+
+      expect(result.status).toBe(preserve ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      if (!preserve)
+        expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+    }
+  })
+})
+
+describe('非 tip 损坏不能被后续追加掩盖（PR #581 评审 5544964915）', () => {
+  it.each([
+    { rewrite: false, source: false, restore: false },
+    { rewrite: true, source: false, restore: false },
+    { rewrite: false, source: true, restore: false },
+    { rewrite: false, source: true, restore: true },
+    { rewrite: true, source: true, restore: true },
+  ])('重写=$rewrite、源码 tip=$source、恢复=$restore', (scenario) => {
+    const root = createSeeded((root) => {
+      const history = readFileSync(resolve(root, ledgerPath), 'utf8')
+      writeFile(
+        root,
+        ledgerPath,
+        scenario.rewrite ? `${JSON.stringify({ tree: 'rewritten' })}\n` : '',
+      )
+      writeFile(root, 'src/app.txt', 'damaged\n')
+      const damaged = commitAll(root, '中间提交损坏台账')
+      if (scenario.restore) appendLedger(root, history.trimEnd().split('\n'))
+      appendLedger(root, [recordLine(root, damaged)])
+      if (scenario.source) writeFile(root, 'src/app.txt', 'tip\n')
+      commitAll(root, 'tip 追加证据')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~2', ...flags])
+
+      expect(result.status).toBe(scenario.restore ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      if (scenario.restore) {
+        expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+      } else {
+        expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+        expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+        expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+      }
+    }
+  })
+})
+
+describe('范围内新增记录也须保全（PR #581 评审 5544964915）', () => {
+  it.each([true, false])('保留中间新增记录=%s', (preserve) => {
+    const root = createSeeded((root) => {
+      const baseline = readFileSync(resolve(root, ledgerPath), 'utf8')
+      const introduced = JSON.stringify({ tree: 'range-history' })
+      appendLedger(root, [introduced])
+      const appended = commitAll(root, '范围内追加记录')
+      writeFile(root, ledgerPath, baseline)
+      const truncated = commitAll(root, '截断范围内新记录')
+      appendLedger(root, [
+        ...(preserve ? [introduced] : []),
+        recordLine(root, appended),
+        recordLine(root, truncated),
+      ])
+      commitAll(root, 'tip 补充证据')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~3', ...flags])
+
+      expect(result.status).toBe(preserve ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      expect(result.output.includes('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')).toBe(
+        !preserve,
+      )
+    }
+  })
+})
+
+describe('非 tip 合并不能隐藏一侧记录丢失（PR #581 评审 5544964915）', () => {
+  it.each([true, false])('head 恢复非首父记录=%s', (preserve) => {
+    let base = ''
+    const root = createSeeded((root, seededBase) => {
+      base = seededBase
+      git(root, 'checkout', '-b', 'side')
+      const sideHistory = JSON.stringify({ tree: 'side-history' })
+      appendLedger(root, [sideHistory])
+      const side = commitAll(root, 'side 追加记录')
+      git(root, 'checkout', 'main')
+      appendLedger(root, [JSON.stringify({ tree: 'main-history' })])
+      const main = commitAll(root, 'main 追加记录')
+      git(root, 'merge', '--strategy=ours', '--no-ff', '--no-commit', 'side')
+      const merged = commitAll(root, '合并丢失 side 记录')
+      appendLedger(root, [
+        ...(preserve ? [sideHistory] : []),
+        recordLine(root, side),
+        recordLine(root, main),
+        recordLine(root, merged),
+      ])
+      commitAll(root, '普通 tip 追加证据')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', base, ...flags])
+
+      expect(result.status).toBe(preserve ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      expect(result.output.includes('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')).toBe(
+        !preserve,
+      )
+    }
+  })
+})
+
+describe('修复旧畸形行时仍保全历史字节（PR #581 评审 5544964915）', () => {
+  it.each([true, false])('追加保留旧快照=%s', (preserve) => {
+    const root = createSeeded((root) => {
+      appendLedger(root, ['+{"tree":"old"}'])
+      const malformed = commitAll(root, '旧畸形行入库')
+      const history = readFileSync(resolve(root, ledgerPath), 'utf8')
+      writeFile(root, ledgerPath, history.replace('+{"tree"', '{"tree"'))
+      const repaired = commitAll(root, '修正畸形行')
+      if (preserve) appendLedger(root, history.trimEnd().split('\n'))
+      appendLedger(root, [
+        recordLine(root, malformed),
+        recordLine(root, repaired),
+      ])
+      commitAll(root, 'tip 追加证据与历史快照')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~3', ...flags])
+
+      expect(result.status).toBe(preserve ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      expect(result.output.includes('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')).toBe(
+        !preserve,
+      )
+      if (preserve) {
+        expect(result.output).toContain('GATE_EVIDENCE_MALFORMED_LINE')
+        expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+        expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+      }
+    }
+  })
+})

@@ -103,11 +103,13 @@ enforce_line_coverage_floor() {
 # 门禁结论摘要记录（issue #355）：完整通过后把关键结论——UTC 时间、被检
 # 索引树（与 gate-tree-marker 同键）、运行时 HEAD、Quality Gate 状态、新
 # 增代码未解决问题数、前端与 Rust 行覆盖率——追加为 .git 内待物化文件的
-# 一行 JSON。只记结论：令牌与原始扫描产物均不入库。提交创建路径绝不直
-# 接改动被跟踪的版本化 gate-history.jsonl（PR #415 评审 5338815626：那样
-# 会给重放/检出/合并留下未暂存改动而中止操作）；待物化行由 pre-push 门禁
-# 通过后的 scripts/gate-history.sh materialize 并入版本化文件。写入尽力而
-# 为：任一步失败只向标准错误警告、不阻塞已通过的门禁（与树标记同哲学）。
+# 一行 JSON。只记结论：令牌与原始扫描产物均不入库。门禁运行绝不直接改动
+# 被跟踪的版本化 gate-history.jsonl（PR #415 评审 5338815626：那样会给
+# 重放/检出/合并留下未暂存改动而中止操作）；待物化行由下一次提交创建钩
+# 子的 scripts/gate-history.sh materialize --stage-for-commit 按内容字节
+# 精确归因后并入并暂存（issue #548；PR #581 评审 5537970549：推送不再
+# 物化）。写入尽力而为：任一步失败只向标准错误警告、不阻塞已通过的门禁
+# （与树标记同哲学）。
 append_gate_history_record() {
   gate_tree=$(git write-tree 2>/dev/null) || gate_tree=
   gate_head=$(git rev-parse HEAD 2>/dev/null) || gate_head=
@@ -122,7 +124,7 @@ append_gate_history_record() {
     "$frontend_percent" \
     "$rust_percent" \
     >> "$gate_pending_path" 2>/dev/null; then
-    printf '[SonarQube] 门禁结论已记录，待推送时并入版本化 gate-history.jsonl。\n'
+    printf '[SonarQube] 门禁结论已记录，待下一次提交的物化并入版本化 gate-history.jsonl。\n'
   else
     printf 'SonarQube 警告：无法写入门禁记录 %s；本次结论未入库，不阻塞已通过的操作。\n' \
       "$gate_pending_path" >&2
@@ -192,6 +194,28 @@ require_command "$curl_bin"
 require_command "$node_bin"
 require_command "$llvm_cov_bin"
 
+# 门禁并行度预算（owner 指示 2026-10-16；默认值改固定 4 为 owner 于
+# 2026-10-16 评审 5545658713 的再次指示）：PLOTWEAVE_GATE_CPU_BUDGET
+# 未设置时默认 4——固定默认不随机器核数浮动，检查集与阈值不变，同样
+# 的工作量摊到更少核上执行，降低门禁期间的峰值功耗与发热。显式覆盖
+# 须为正整数，非法值以稳定诊断码阻断、不静默回退；解析结果导出，
+# rust-coverage.sh 与测试替身读取同一数值。决策与实测基线见
+# docs/development/quality-gate-cost.md「Gate CPU Budget」。
+gate_cpu_budget=${PLOTWEAVE_GATE_CPU_BUDGET:-}
+case $gate_cpu_budget in
+  '')
+    gate_cpu_budget=4
+    ;;
+  *[!0-9]*)
+    fail '[GATE_CPU_BUDGET_INVALID] PLOTWEAVE_GATE_CPU_BUDGET 须为正整数；已拒绝，不做静默回退'
+    ;;
+  *)
+    [ "$gate_cpu_budget" -ge 1 ] ||
+      fail '[GATE_CPU_BUDGET_INVALID] PLOTWEAVE_GATE_CPU_BUDGET 须为正整数；已拒绝，不做静默回退'
+    ;;
+esac
+export PLOTWEAVE_GATE_CPU_BUDGET=$gate_cpu_budget
+
 mkdir "$lock_directory" 2>/dev/null || fail_lock_acquisition
 trap release_lock 0
 trap 'handle_gate_signal 129' 1
@@ -224,7 +248,11 @@ printf '%s\n' '[SonarQube] 生成最新前端覆盖率……'
 printf '%s\n' '[SonarQube] 静态检查（格式 + lint 零警告）……'
 run_step "$script_directory/check-static.sh"
 
-run_step "$npm_bin" run test:coverage
+printf '[SonarQube] 门禁并行度预算：%s（未设置时默认 4，PLOTWEAVE_GATE_CPU_BUDGET 可覆盖）\n' "$gate_cpu_budget"
+
+# 前端覆盖率按 CPU 预算限核（vitest worker 上限）：完整套件、覆盖率
+# 口径与 80% 下限不变
+run_step "$npm_bin" run test:coverage -- --maxWorkers "$gate_cpu_budget"
 
 [ -s "$coverage_report_path" ] ||
   fail "覆盖率报告缺失或为空：$coverage_report_path"
