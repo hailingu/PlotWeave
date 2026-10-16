@@ -12,7 +12,8 @@
  *
  * 稳定诊断码（测试与 CI 按此契约断言）：
  * - [GATE_EVIDENCE_MISSING]：非 tip 提交缺失通过记录（核验失败）。
- * - [GATE_EVIDENCE_LEDGER_DESTRUCTIVE]：tip 删除、截断或重写父台账
+ * - [GATE_EVIDENCE_LEDGER_DESTRUCTIVE]：tip 删除、截断或重写父台账，
+ *   包括向未终止的末条记录直接拼接内容（PR #581 评审 5544147742）
  *   （核验失败；优先于 tip 滞后容差与证据匹配，PR #581 评审 5543678876）。
  * - [GATE_EVIDENCE_TIP_LAG]：tip 缺失自身记录（告警，不失败）。
  * - [GATE_EVIDENCE_INTEGRATED_TIP_LAG]：发布范围中被集成分支的 tip
@@ -256,6 +257,14 @@ function ledgerContentOf(revision: string): string | null {
   return entry === '' ? null : runGit(['show', `${revision}:${ledgerPath}`])
 }
 
+/** 单父提交保留原字节前缀；非空末行未终止时，新增内容必须先补换行，
+ * 不能把原记录拼接成畸形行（PR #581 评审 5544147742）。 */
+function preservesLinearLedger(content: string, parent: string): boolean {
+  const requiresTerminator =
+    parent !== '' && !parent.endsWith('\n') && content !== parent
+  return content.startsWith(requiresTerminator ? `${parent}\n` : parent)
+}
+
 /** 合并允许交织分叉追加的记录，但必须保留每个父台账的记录字节与顺序。
  * 记录包含换行符；原末行无换行时允许补换行后再追加。 */
 function preservesMergedLedger(content: string, parent: string): boolean {
@@ -273,7 +282,7 @@ function preservesMergedLedger(content: string, parent: string): boolean {
   })
 }
 
-/** 在任何 tip 容差前检查父台账：单父只允许原字节前缀，合并保全所有父记录。
+/** 在任何 tip 容差前检查父台账：单父保全原字节及记录边界，合并保全所有父记录。
  * 普通与发布模式共用；不依赖 changedFiles（合并提交没有该单父差异列表）。 */
 function tipPreservesLedger(commit: RangeCommit): boolean {
   const content = ledgerContentOf(commit.sha)
@@ -285,7 +294,7 @@ function tipPreservesLedger(commit: RangeCommit): boolean {
     if (parent === null) return true
     if (content === null) return false
     return commit.parentCount === 1
-      ? content.startsWith(parent)
+      ? preservesLinearLedger(content, parent)
       : preservesMergedLedger(content, parent)
   })
 }

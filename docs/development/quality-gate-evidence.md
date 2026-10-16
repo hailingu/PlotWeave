@@ -289,15 +289,26 @@ macOS Git；其他 Git 版本与平台未在本次本地验证中实测。
 | 父提交已有台账，tip 不改台账或保留原字节追加 | 修改源码，随后核验 tip | 可缺少自身记录并输出 `GATE_EVIDENCE_TIP_LAG` | 留证滞后不能丢失已有台账 | 既有普通 tip、单提交 PR 与追加用例 |
 | tip 仅追加合法 JSON 行 | 保全检查后判定台账-only 形态 | `GATE_EVIDENCE_LEDGER_ONLY_TIP`，退出 0 | 仅纯追加的台账补充提交可豁免 | 既有物化补充、大台账用例 |
 | 父提交已有台账（含空文件） | tip 删除、截断、重写，或删去原尾随换行；可同时修改源码 | `GATE_EVIDENCE_LEDGER_DESTRUCTIVE`，退出 1，无滞后放行 | 普通与发布模式都不得借 tip 容差破坏历史字节 | 删除、截断、重写、空台账、换行与混合变更用例 |
+| 父台账非空且末行无换行 | tip 把垃圾或另一条 JSON 直接接在原记录后 | `GATE_EVIDENCE_LEDGER_DESTRUCTIVE`，退出 1 | 字节前缀保全不能允许追加内容改变既有记录的解析边界 | 本轮未终止末行反例（评审 5544147742） |
+| 同上 | tip 保持末行不动，或先补 `\n` 再追加独立记录 | 正常滞后告警；仅合法台账追加可豁免 | 原记录无尾随换行本身不构成失败，补终止换行不破坏历史 | 末行未改、仅补换行、补换行后追加用例 |
+| 父台账为空或末行已终止 | 从首行或下一行开始追加 | 沿用原有正常追加与畸形新行告警规则 | 记录边界守卫只限制对既有未终止记录的拼接 | 空台账首条、既有完整行与畸形追加用例 |
 | 合并的多个父提交分别含记录 | 合并保留每个父台账的完整记录及顺序，再核验 | 正常合并仍可滞后；丢弃任一父记录则退出 1 | 合并可组合分叉追加的记录，不能丢弃父提交的历史 | 合并保留、丢弃非首父记录用例 |
 | 父提交无台账，或仅追加畸形新行 | tip 引入台账或追加畸形记录 | 不因历史保全失败；畸形行仍按现有解析规则告警 | 保全守卫不把新增记录的解析策略改成历史破坏 | 首次引入、畸形行既有用例 |
 
-2026-10-16 本地验证（Node 24.18.0）：核验脚本 24/24 用例通过，覆盖上述
+2026-10-16 首轮本地验证（Node 24.18.0）：核验脚本 24/24 用例通过，覆盖当时的
 矩阵；`npm run check:size && npm test -- scripts` 在沙箱外 331/331 通过，
 `sh scripts/check-static.sh` 通过。沙箱内完整脚本测试曾因禁止 `ps` / `sysctl`
 导致既有进程身份与 CPU 预算用例失败，沙箱外重跑已验证通过。本地用例运行
 真实 Git 与核验 CLI；GitHub 托管 runner 的行为以推送后的 `gate-evidence` CI
 为准。文档与 AGENTS.md 已按路由结构化审阅，无配置的自动化文档检查。
+
+2026-10-16 追加边界复核（评审 5544147742）：先复现直接拼接垃圾与 JSON
+两例退出 0 的缺陷，再由 `preservesLinearLedger` 强制未终止末行的追加边界。
+核验脚本 34/34 用例通过，普通与发布模式覆盖未终止末行的非法拼接、合法补行
+及合并入口；空台账与仅台账物化补充用例验证共享守卫的正常路径。
+`npm run check:size && npm test -- scripts` 在沙箱外 341/341 通过，
+`sh scripts/check-static.sh` 通过；文档与 AGENTS.md 结构化审阅通过，
+无配置的自动化文档检查。不可变提交读取与既有锁策略未变，不新增并发或恢复分支。
 
 The local gate's enforcement endpoint was the machine's own Git hooks; a
 `git push --no-verify` direct push, or a PR whose commits were created
@@ -316,7 +327,11 @@ two complementary backstops (方案 1 + 方案 2):
      `newCodeUnresolvedIssues == 0`. A missing record fails the check
      (`[GATE_EVIDENCE_MISSING]`, exit 1).
    - 先检查 **tip 的台账保全**（[PR #581 评审 5543678876](https://github.com/hailingu/PlotWeave/pull/581#pullrequestreview-5543678876)）：
-     单父提交必须保留父台账全部原字节为前缀；合并 tip 允许组合分叉追加，
+     单父提交必须保留父台账全部原字节为前缀；非空父台账末行没有终止换行时，
+     后续内容必须先补 `\n`，防止直接拼接把原 JSON 记录改成畸形行
+     （[评审 5544147742](https://github.com/hailingu/PlotWeave/pull/581#pullrequestreview-5544147742)）。
+     末行保持不动、仅补换行、空台账写入首条记录均可通过此检查。
+     合并 tip 允许组合分叉追加，
      但必须保留每个父台账的完整记录字节与顺序。删除（包括空台账）、截断或
      非追加重写输出 `[GATE_EVIDENCE_LEDGER_DESTRUCTIVE]` 并退出 1，
      优先于任何 tip 留证容差；普通与发布模式一致。

@@ -646,3 +646,116 @@ describe('合并 tip 保全所有父台账（PR #581 评审 5543678876）', () =
     }
   })
 })
+
+describe('未终止末行的追加边界（PR #581 评审 5544147742）', () => {
+  it.each([
+    { suffix: 'GARBAGE', status: 1 },
+    { suffix: '{"tree":"new"}\n', status: 1 },
+    { suffix: '', status: 0 },
+    { suffix: '\n', status: 0 },
+    { suffix: '\n{"tree":"new"}\n', status: 0 },
+    { suffix: '\nGARBAGE\n', status: 0 },
+  ])('末行后追加 $suffix：退出 $status', ({ suffix, status }) => {
+    const root = createSeeded((root) => {
+      const parent = readFileSync(resolve(root, ledgerPath), 'utf8').slice(
+        0,
+        -1,
+      )
+      writeFile(root, ledgerPath, parent)
+      commitAll(root, '父台账末行未终止')
+      writeFile(root, ledgerPath, `${parent}${suffix}`)
+      writeFile(root, 'src/app.txt', 'changed\n')
+      commitAll(root, 'tip 追加')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~1', ...flags])
+
+      expect(result.status).toBe(status)
+      if (status === 1) {
+        expect(result.output).toContain('[GATE_EVIDENCE_LEDGER_DESTRUCTIVE]')
+        expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+      } else {
+        expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+        expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+      }
+    }
+  })
+
+  it('空台账可直接写入第一条记录', () => {
+    const root = createSeeded((root) => {
+      writeFile(root, ledgerPath, '')
+      commitAll(root, '空父台账')
+      appendLedger(root, [JSON.stringify({ tree: 'first' })])
+      commitAll(root, '首条记录')
+    })
+
+    const result = runVerifier(root, ['--base', 'HEAD~1'])
+
+    expect(result.status).toBe(0)
+    expect(result.output).toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+  })
+
+  it('未终止末行补换行后仅追加合法台账：仍享有台账-only 豁免', () => {
+    const root = createSeeded((root) => {
+      const parent = readFileSync(resolve(root, ledgerPath), 'utf8').slice(
+        0,
+        -1,
+      )
+      writeFile(root, ledgerPath, parent)
+      commitAll(root, '父台账末行未终止')
+      writeFile(
+        root,
+        ledgerPath,
+        `${parent}\n${JSON.stringify({ tree: 'new' })}\n`,
+      )
+      commitAll(root, '追加独立记录')
+    })
+
+    const result = runVerifier(root, ['--base', 'HEAD~1'])
+
+    expect(result.status).toBe(0)
+    expect(result.output).toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+    expect(result.output).not.toContain('GATE_EVIDENCE_MALFORMED_LINE')
+  })
+})
+
+describe('合并 tip 的未终止末行边界（PR #581 评审 5544147742）', () => {
+  it.each([
+    { suffix: '\n', status: 0 },
+    { suffix: 'GARBAGE\n', status: 1 },
+  ])('末行后追加 $suffix：退出 $status', ({ suffix, status }) => {
+    const root = createSeeded((root) => {
+      const parent = readFileSync(resolve(root, ledgerPath), 'utf8').slice(
+        0,
+        -1,
+      )
+      writeFile(root, ledgerPath, parent)
+      commitAll(root, '父台账末行未终止')
+      git(root, 'checkout', '-b', 'side')
+      writeFile(root, 'src/side.txt', 'side\n')
+      const side = commitAll(root, 'side')
+      git(root, 'checkout', 'main')
+      git(root, 'merge', '--strategy=ours', '--no-ff', '--no-commit', 'side')
+      writeFile(
+        root,
+        ledgerPath,
+        `${parent}${suffix}${recordLine(root, side)}\n`,
+      )
+      commitAll(root, 'merge side')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~1', ...flags])
+
+      expect(result.status).toBe(status)
+      expect(result.output).not.toContain('[GATE_EVIDENCE_MISSING]')
+      if (status === 1) {
+        expect(result.output).toContain('[GATE_EVIDENCE_LEDGER_DESTRUCTIVE]')
+        expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+      } else {
+        expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+      }
+    }
+  })
+})
