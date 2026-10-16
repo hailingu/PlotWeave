@@ -16,12 +16,18 @@
  * - [GATE_EVIDENCE_INTEGRATED_TIP_LAG]：发布范围中被集成分支的 tip
  *   （某合并提交的非首父）缺失记录（告警，不失败）——其记录按物化时序
  *   留在开发者本地下一次提交中，晚于本次发布落地（PR #581 评审）。
- * - [GATE_EVIDENCE_PRE_LEDGER_COMMIT]：台账尚未入库的历史提交（其树中
- *   不存在台账路径）豁免记录要求（提示，不失败）。
+ * - [GATE_EVIDENCE_PRE_LEDGER_COMMIT]：早于台账入库的历史提交（其可达
+ *   历史从未触及台账路径——删除台账的提交不豁免）豁免记录要求（提示，
+ *   不失败）。
  * - [GATE_EVIDENCE_LEDGER_ONLY_TIP]：tip 仅改台账，豁免（提示）。
  * - [GATE_EVIDENCE_MALFORMED_LINE]：台账中无法解析的行被跳过（告警）。
+ * 集成边界豁免（合并提交跳过、INTEGRATED_TIP_LAG、PRE_LEDGER_COMMIT）
+ * 仅在 --release-boundary 时启用——ci.yml 只在 dev → main 发布 PR
+ * （base 为 main）传入；普通 task PR 中合并提交与其非首父同样必须留证
+ * （PR #581 评审 5542342537）。
  *
  * 用法：node scripts/verify-gate-evidence.ts --base <rev> [--head <rev>]
+ *       [--release-boundary]
  * 退出码：0 通过（可含告警）；1 证据缺失；2 参数或 Git 错误。 */
 
 import { execFileSync } from 'node:child_process'
@@ -80,10 +86,19 @@ function runGit(args: string[], allowFailure = false): string {
   }
 }
 
-/** 解析命令行参数；--base 必填，--head 缺省 HEAD。 */
-function parseArguments(argv: string[]): { base: string; head: string } {
+/** 解析命令行参数；--base 必填，--head 缺省 HEAD，--release-boundary
+ * 仅由 ci.yml 在 dev → main 发布 PR（base 为 main）传入：集成边界豁免
+ * （合并提交跳过、集成分支 tip 告警、台账前历史豁免）只在发布范围
+ * 启用——普通 task PR 中合并提交与其非首父同样必须留证（PR #581 评审
+ * 5542342537：无条件豁免会让任务 PR 用「合并 + tip」形态零记录通过）。 */
+function parseArguments(argv: string[]): {
+  base: string
+  head: string
+  releaseBoundary: boolean
+} {
   let base: string | undefined
   let head = 'HEAD'
+  let releaseBoundary = false
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--base' && argv[index + 1] !== undefined) {
@@ -92,6 +107,8 @@ function parseArguments(argv: string[]): { base: string; head: string } {
     } else if (argument === '--head' && argv[index + 1] !== undefined) {
       head = argv[index + 1]
       index += 1
+    } else if (argument === '--release-boundary') {
+      releaseBoundary = true
     } else {
       throw new UsageError(`未知参数或缺值：${argument}`)
     }
@@ -99,7 +116,7 @@ function parseArguments(argv: string[]): { base: string; head: string } {
   if (base === undefined) {
     throw new UsageError('缺少 --base <rev>（PR 目标分支或合并基）')
   }
-  return { base, head }
+  return { base, head, releaseBoundary }
 }
 
 /** 读取 head 版台账并提取通过记录的 tree 集合；畸形行计数告警但不失败。 */
@@ -169,14 +186,16 @@ function describeCommit(sha: string): RangeCommit {
   }
 }
 
-/** 提交树中是否已存在台账路径（issue #355 之前的历史提交豁免依据）。 */
-function commitHasLedger(commit: RangeCommit): boolean {
-  try {
-    runGit(['cat-file', '-e', `${commit.sha}:${ledgerPath}`])
-    return true
-  } catch {
-    return false
-  }
+/** 提交是否早于台账入库：依据是「该提交可达历史（含自身）从未触及
+ * 台账路径」——只看树中无台账会把删除台账的提交误判为台账前历史
+ * （PR #581 评审 5542342537），删除/恢复台账的提交都触及过路径、不豁免。 */
+function commitPredatesLedger(commit: RangeCommit): boolean {
+  return (
+    runGit(
+      ['log', '--format=%H', '-1', commit.sha, '--', ledgerPath],
+      true,
+    ).trim() === ''
+  )
 }
 
 /** tip 是否只改台账：单父、有变更、且全部变更落在台账路径（合并提交不豁免）。 */
@@ -209,17 +228,22 @@ function collectIntegrationBoundaries(commits: RangeCommit[]): {
   return { mergeShas, integratedTipShas }
 }
 
-/** 逐提交判定：发布边界（合并提交/集成分支 tip/台账前历史）之外的
- * 非 tip 提交必须有证据；范围 tip 按记录/豁免/滞后三态归类。 */
+/** 逐提交判定：非 tip 提交必须有证据；范围 tip 按记录/豁免/滞后三态
+ * 归类。--release-boundary（发布 PR）时额外容忍集成边界：范围内合并
+ * 提交跳过、集成分支 tip 与台账前历史（从未触及台账路径）仅告警/豁免；
+ * 普通 task PR 不启用任何集成边界豁免（PR #581 评审 5542342537）。 */
 function verifyRange(
   commits: RangeCommit[],
   evidenceTrees: Set<string>,
+  releaseBoundary: boolean,
 ): Verification {
   const missing: CommitFinding[] = []
   const integratedTipWarnings: CommitFinding[] = []
   const preLedgerNotes: CommitFinding[] = []
   const tip = commits[commits.length - 1]
-  const { mergeShas, integratedTipShas } = collectIntegrationBoundaries(commits)
+  const { mergeShas, integratedTipShas } = releaseBoundary
+    ? collectIntegrationBoundaries(commits)
+    : { mergeShas: new Set<string>(), integratedTipShas: new Set<string>() }
   let skippedMerges = 0
   for (const commit of commits) {
     if (commit === tip) continue
@@ -237,7 +261,7 @@ function verifyRange(
       integratedTipWarnings.push(finding)
       continue
     }
-    if (!commitHasLedger(commit)) {
+    if (releaseBoundary && commitPredatesLedger(commit)) {
       preLedgerNotes.push(finding)
       continue
     }
@@ -271,7 +295,7 @@ function emitWarning(message: string): void {
 
 /** 核验主流程：参数解析 → 范围枚举 → 台账比对 → 结论输出与退出码。 */
 function main(): number {
-  const { base, head } = parseArguments(process.argv.slice(2))
+  const { base, head, releaseBoundary } = parseArguments(process.argv.slice(2))
   const commits = listRangeCommits(base, head)
   if (commits.length === 0) {
     console.log('[gate-evidence] 范围内没有待合并提交，核验通过。')
@@ -284,7 +308,7 @@ function main(): number {
     )
   }
   const described = commits.map((sha) => describeCommit(sha))
-  const verification = verifyRange(described, trees)
+  const verification = verifyRange(described, trees, releaseBoundary)
   const evidencedCount = described.filter((commit) =>
     trees.has(commit.tree),
   ).length

@@ -279,8 +279,8 @@ two complementary backstops (方案 1 + 方案 2):
    rebased branch pushed without it fails the check on the replayed
    non-tip commits.
 
-   **Release-PR integration boundary (PR #581 评审 5542207474).** A
-   `dev → main` release PR's range enumerates GitHub-created merge commits
+   **Release-PR integration boundary (PR #581 评审 5542207474/5542342537).**
+   A `dev → main` release PR's range enumerates GitHub-created merge commits
    and every integrated task branch — including each task's tip, whose
    records by the one-commit-lag design are still materializing on the
    developer's machine when the release opens. The verifier therefore
@@ -290,10 +290,17 @@ two complementary backstops (方案 1 + 方案 2):
    constituent task PRs, which branch protection makes mandatory), the
    non-first parent of an in-range merge — an integrated branch tip — gets
    the `[GATE_EVIDENCE_INTEGRATED_TIP_LAG]` warning like a range tip, and
-   commits whose tree predates the versioned ledger entirely (issue #355
-   adoption) are exempted with `[GATE_EVIDENCE_PRE_LEDGER_COMMIT]`. Every
-   other commit in the release range still requires evidence, so the
-   tolerances do not spill over ordinary history.
+   commits whose reachable history never touched the ledger path (issue
+   #355 adoption) are exempted with `[GATE_EVIDENCE_PRE_LEDGER_COMMIT]` —
+   a commit that merely deletes the ledger has touched the path and is not
+   exempt. **These tolerances are gated on the explicit `--release-boundary`
+   flag, which ci.yml passes only when the PR base is `main`**: an ordinary
+   task PR gets no integration-boundary exemptions at all — its merge
+   commits and non-first parents require evidence like every other commit,
+   so a task branch cannot smuggle unevidenced changes through a
+   merge-plus-tip shape. Every other commit in the release range still
+   requires evidence, so the tolerances do not spill over ordinary history
+   either.
 
 2. **Branch protection（方案 2）.** GitHub branch protection is enabled on
    `dev` and `main` (owner decision, 2026-10-16): pull requests required

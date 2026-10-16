@@ -3,7 +3,7 @@
  * scripts/verify-gate-evidence.ts 文件头文档化的机器可读契约，本文件按
  * 契约断言，不校验普通措辞。用例按「非 tip 证据判定 / tip 形态判定 /
  * 解析、范围与参数」分组，各 describe 回调保持在可执行单元行数上限内。 */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -357,6 +357,7 @@ describe(
         'release-base',
         '--head',
         'HEAD',
+        '--release-boundary',
       ])
 
       expect(result.status).toBe(0)
@@ -402,11 +403,81 @@ describe(
         'release-base',
         '--head',
         'HEAD',
+        '--release-boundary',
       ])
 
       expect(result.status).toBe(1)
       expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
       expect(result.output).toContain('c2b-直链绕过')
+    })
+  },
+)
+
+describe(
+  '集成边界豁免的模式门控与删除台账反例（PR #581 评审 5542342537）',
+  { timeout: 60_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of fixtures.splice(0)) fixture.dispose()
+    })
+
+    it('task PR（无 --release-boundary）：合并提交与非首父同样必须留证', () => {
+      const root = createSeeded((root) => {
+        git(root, 'checkout', '-q', '-b', 'side', 'main')
+        writeFile(root, 'src/side.txt', 'side\n')
+        commitAll(root, 's1-无记录')
+        git(root, 'checkout', '-q', 'main')
+        git(root, 'merge', '--no-ff', '--no-commit', 'side')
+        commitAll(root, 'merge side')
+        writeFile(root, 'src/app.txt', 'tip\n')
+        commitAll(root, 'tip')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~2', '--head', 'HEAD'])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).not.toContain('GATE_EVIDENCE_INTEGRATED_TIP_LAG')
+      expect(result.output).not.toContain('GATE_EVIDENCE_PRE_LEDGER_COMMIT')
+    })
+
+    it('删除台账的提交不属台账前历史：发布模式下仍判缺失（零记录不可借道删除）', () => {
+      const root = createRawSeeded((root) => {
+        git(root, 'init', '--initial-branch=main')
+        git(root, 'config', 'user.name', 'Scenario')
+        git(root, 'config', 'user.email', 'scenario@example.invalid')
+        writeFile(root, 'src/app.txt', 'base\n')
+        const b0 = commitAll(root, 'release-base')
+        git(root, 'tag', 'release-base', b0)
+        appendLedger(root, [
+          JSON.stringify({
+            tree: 'f'.repeat(40),
+            qualityGate: 'OK',
+            newCodeUnresolvedIssues: 0,
+          }),
+        ])
+        const c1 = commitAll(root, 'c1 引入台账')
+        // c2 删除台账并改源码：触及台账路径，不属于台账前历史
+        rmSync(resolve(root, ledgerPath))
+        writeFile(root, 'src/app.txt', 'c2-删除台账\n')
+        commitAll(root, 'c2-删除台账')
+        // c3 仅恢复台账并携带 c1 的记录（tip = 台账-only 豁免形态）
+        appendLedger(root, [recordLine(root, c1)])
+        commitAll(root, 'c3 恢复台账')
+      })
+
+      const result = runVerifier(root, [
+        '--base',
+        'release-base',
+        '--head',
+        'HEAD',
+        '--release-boundary',
+      ])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('c2-删除台账')
+      expect(result.output).toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
     })
   },
 )

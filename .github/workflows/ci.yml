@@ -142,4 +142,8 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: 校验 PR 提交的门禁证据（issue #548）
-        run: node scripts/verify-gate-evidence.ts --base "origin/${{ github.event.pull_request.base.ref }}" --head "${{ github.event.pull_request.head.sha }}"
+        env:
+          # 集成边界豁免仅发布 PR（base 为 main）启用（PR #581 评审
+          # 5542342537）；task PR 中合并提交与非首父同样必须留证
+          RELEASE_BOUNDARY: ${{ github.event.pull_request.base.ref == 'main' && '1' || '' }}
+        run: node scripts/verify-gate-evidence.ts --base "origin/${{ github.event.pull_request.base.ref }}" --head "${{ github.event.pull_request.head.sha }}" ${RELEASE_BOUNDARY:+--release-boundary}
