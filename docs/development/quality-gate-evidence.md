@@ -181,9 +181,10 @@ NODE
   run `materialize --stage-for-commit` **before** the gate, folding the
   pending lines into the versioned file and `git add`ing the ledger into
   the commit being created. Auto-staging is attribution-guarded by the
-  **exact pending bytes** (PR #581 评审 5537970549): it fires only while
+  **exact pending bytes** (PR #581 评审 5537970549/5544334841): it fires only while
   the worktree ledger is byte-exactly the index content plus the lines
-  folded in this run, each parseable as JSON — the developer's staged
+  folded in this run, each parseable as JSON; EOF newline bytes are not
+  normalized, and only folded content is decoded for JSON validation — the developer's staged
   selection is preserved verbatim, and any other unstaged ledger change
   (a syntactically valid manual append included; a modified/deleted
   existing line; a malformed or polluted line; a manual partial staging; an
@@ -265,16 +266,33 @@ NODE
 | 同上，修改既有提交 | `git commit --amend -a` → 钩子暂存 → Git 采纳锁索引 | 修改后的提交保留原台账并追加记录，无索引残留 | amend 不改变活动索引的物化义务 | 全量提交用例 `--amend -a` |
 | pending 有记录，提交限定路径 | `git commit -- <pathspec>` / `--only` → 下一普通提交 | 限定提交保留台账与 pending；下一普通提交入库记录并清空 pending | 不向 pathspec 临时索引写入会与真实索引分离的台账，也不丢失待物化记录 | 两个限定提交与恢复用例 |
 | 普通索引，台账含不可归因改动或已暂存删除 | 折并后归因拒绝自动暂存 | 警告且保留开发者索引选择 | 放行 `index.lock` 不放宽内容归因守卫 | 既有额外工作树内容、部分暂存、已暂存删除用例 |
+| pending 为空，工作树仅增加或删除 EOF 换行 | 调用提交侧物化归因 | `GATE_HISTORY_UNATTRIBUTED_CHANGE`，索引与工作树各保留原字节 | 自动暂存不得收编任何非本次折并的字节改动 | EOF 换行增删回归（评审 5544334841） |
+| 同上，但索引已含开发者选定的台账改动 | 归因失败后检查暂存区 | 原选定内容逐字保留，未暂存的 EOF 改动仍未暂存 | 归因基准是有效索引，不能覆盖部分暂存选择 | EOF 换行与部分暂存组合用例 |
+| pending 有合法 JSON，尾部可有或无换行 | 先按原字节追加，再归因 | 仅当工作树恰为索引字节与本次 pending 字节拼接时自动暂存 | JSON 校验与字节归因相互独立，不能归一化索引或工作树 | 合法折并与末行未终止用例；额外工作树内容既有用例 |
+| pending 含畸形新行 | 追加后逐行 JSON 校验失败 | 警告、保留原索引；折并内容留在工作树供人工处理 | 字节精确匹配不能代替折并行的合法性检查 | 畸形折并行反例 |
 
-此修复只改变索引分类；并发排水仍由既有门禁互斥锁保护，锁超时与恢复继续由
+最初的索引修复只改变索引分类；并发排水仍由既有门禁互斥锁保护，锁超时与恢复继续由
 既有物化测试覆盖。sequencer 回退入口仍不调用物化。本地真实 Git 用例覆盖当前
 macOS Git；其他 Git 版本与平台未在本次本地验证中实测。
 
-2026-10-16 本地验证：Node 24.18.0、Git 2.48.1；上述矩阵对应的物化测试
+EOF 归因修复由 `ledger_change_attribution` 负责，`pre-commit` 与
+`pre-merge-commit` 共用同一入口；不改变排水、锁超时或临时索引延后规则。
+比较时读取索引、工作树与折并捕获文件的原始字节，仅将折并内容解码后逐行
+验证 JSON；并发排水仍由既有互斥锁负责，不新增重试或恢复状态。
+
+2026-10-16 索引分类修复的本地验证：Node 24.18.0、Git 2.48.1；当时的物化测试
 21/21 通过，`npm run check:size && npm test -- scripts` 的规模检查通过，完整
 脚本测试在沙箱外重跑后 324/324 通过（沙箱内禁止 `ps` / `sysctl`，既有进程
 身份与 CPU 预算用例不能正常验证）；`sh scripts/check-static.sh` 通过。
 文档与 AGENTS.md 按路由完成结构化审阅，无配置的自动化文档检查。
+
+2026-10-16 EOF 归因复核（评审 5544334841）：先观察 4 个换行增删与部分
+暂存反例错误地改写索引，再改用原始字节拼接比较。物化测试 28/28、
+`npm run check:size && npm test -- scripts` 在沙箱外 348/348 通过，
+覆盖新增矩阵行及既有索引、锁和恢复用例；`sh scripts/check-static.sh`、
+`sh -n scripts/gate-history.sh` 与 diff 检查通过。文档及 AGENTS.md 完成
+结构化审阅，无配置的自动化文档检查。平台验证边界仍为上述 macOS Git，
+没有新增其他平台实测。
 
 ## Server-Side Evidence Verification (issue #548)
 

@@ -460,6 +460,53 @@ describe(
   },
 )
 
+describe('EOF 换行改动的归因（PR #581 评审 5544334841）', () => {
+  afterEach(() => {
+    for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
+  })
+
+  it.each([
+    { terminated: true, partial: false },
+    { terminated: false, partial: false },
+    { terminated: true, partial: true },
+    { terminated: false, partial: true },
+  ])(
+    '原末行已终止=$terminated、已有部分暂存=$partial：不收编未暂存换行',
+    ({ terminated, partial }) => {
+      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
+        `${seedRecord}${terminated ? '\n' : ''}`,
+      )
+      const selected = partial ? `${seedRecord}\n${secondRecord}` : seedRecord
+      const indexed = `${selected}${terminated ? '\n' : ''}`
+      if (partial) {
+        writeFileSync(historyPath, indexed)
+        const staged = spawnSync(
+          'git',
+          ['add', '--', 'docs/development/gate-history.jsonl'],
+          { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
+        )
+        expect(staged.status).toBe(0)
+      }
+      const unstaged = `${selected}${terminated ? '' : '\n'}`
+      writeFileSync(historyPath, unstaged)
+
+      const result = runStageMaterialize(root, historyPath, pendingPath, '')
+      const index = spawnSync(
+        'git',
+        ['show', ':docs/development/gate-history.jsonl'],
+        { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
+      )
+
+      expect(result.status).toBe(0)
+      expect(index.status).toBe(0)
+      expect(index.stdout).toBe(indexed)
+      expect(readFileSync(historyPath, 'utf8')).toBe(unstaged)
+      expect(readFileSync(pendingPath, 'utf8')).toBe('')
+      expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+    },
+  )
+})
+
 describe(
   '折并时拒绝额外工作树内容（超出本次折并行的部分不自动暂存）',
   { timeout: 30_000 },
@@ -488,6 +535,40 @@ describe(
     })
   },
 )
+
+describe('原字节归因与折并行校验分别判定（PR #581 评审 5544334841）', () => {
+  afterEach(() => {
+    for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
+  })
+
+  it.each([
+    { pending: secondRecord, attributed: true },
+    { pending: `${secondRecord}\n`, attributed: true },
+    { pending: 'GARBAGE\n', attributed: false },
+  ])('折并 $pending：自动暂存=$attributed', ({ pending, attributed }) => {
+    const indexed = `${seedRecord}\n`
+    const { root, historyPath, pendingPath } =
+      prepareIsolatedRepository(indexed)
+
+    const result = runStageMaterialize(root, historyPath, pendingPath, pending)
+    const index = spawnSync(
+      'git',
+      ['show', ':docs/development/gate-history.jsonl'],
+      { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
+    )
+
+    expect(result.status).toBe(0)
+    expect(index.status).toBe(0)
+    expect(index.stdout).toBe(attributed ? indexed + pending : indexed)
+    expect(readFileSync(historyPath, 'utf8')).toBe(indexed + pending)
+    expect(readFileSync(pendingPath, 'utf8')).toBe('')
+    if (attributed) {
+      expect(result.stderr).not.toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+    } else {
+      expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+    }
+  })
+})
 
 describe(
   '折并时拒绝索引特殊形态（已暂存删除与人工部分暂存，PR #581 评审 5542467935/5542611194）',

@@ -44,10 +44,11 @@ pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-$(git rev-parse --git-path plotweave
 
 # 台账改动的归因判定（PR #581 评审 5537970549）：自动暂存只收编本次
 # 折并的待物化行本身。判定用钉版 Node 对比三个输入：有效索引版、工作
-# 树版与本次折并的待物化行；工作树必须恰为「索引内容逐行 + 本次折并
-# 行」（字节精确，开发者已暂存选择被逐字保留）且折并行每行可解析为
-# JSON。工作树多出的任何行——人工合法 JSON 追加、修改/删除既有行、
-# 污染前缀——都使归因失败。任何无法判定（Node 不可用/崩溃、非 Git 环
+# 树版与本次折并的待物化行；工作树原始字节必须恰为「索引字节 + 本次
+# 折并字节」（开发者已暂存选择被逐字保留），仅折并内容另做逐行 JSON
+# 校验。不得归一化 EOF 换行，否则会收编开发者的未暂存换行改动
+# （PR #581 评审 5544334841）。任何其他字节差异——人工合法 JSON 追加、
+# 修改/删除既有行、污染前缀——都使归因失败。任何无法判定（Node 不可用/崩溃、非 Git 环
 # 境读不到索引）都视为不可归因，宁可退回人工暂存；判定输出 attributed，
 # 索引中无该路径而 HEAD 中存在时输出 staged-deletion（PR #581 评审
 # 5542467935：那是开发者已暂存的台账删除，不得把重建的台账自动暂存回去
@@ -66,24 +67,16 @@ ledger_change_attribution() {
   fi
   verdict=$("$node_bin" - "$index_temp" "$history_path" "${folded_capture:-}" <<'ATTRIBUTION'
 const { readFileSync } = require('node:fs')
-const read = (path) => {
-  try {
-    return readFileSync(path, 'utf8')
-  } catch {
-    return ''
-  }
-}
+const read = (path) => path ? readFileSync(path) : Buffer.alloc(0)
 const toLines = (text) => {
   const lines = text.split('\n')
   if (lines[lines.length - 1] === '') lines.pop()
   return lines
 }
-const index = toLines(read(process.argv[2]))
-const work = toLines(read(process.argv[3]))
-const folded = toLines(read(process.argv[4]))
-const same = (left, right) =>
-  left.length === right.length && left.every((line, position) => line === right[position])
-const parseable = folded.every((line) => {
+const index = read(process.argv[2])
+const work = read(process.argv[3])
+const folded = read(process.argv[4])
+const parseable = toLines(folded.toString('utf8')).every((line) => {
   try {
     JSON.parse(line)
     return true
@@ -91,7 +84,7 @@ const parseable = folded.every((line) => {
     return false
   }
 })
-if (parseable && same(work, index.concat(folded))) {
+if (parseable && work.equals(Buffer.concat([index, folded]))) {
   process.stdout.write('attributed')
 }
 ATTRIBUTION
