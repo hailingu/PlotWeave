@@ -16,7 +16,7 @@ import type {
   ValidatedEntityFields,
 } from './commands'
 
-describe('ValidatedCommand 判别联合（issue #553）', () => {
+describe('ValidatedCommand 判别联合 · 载荷形态进入类型系统（issue #553）', () => {
   it('op 域锁定：八个执行命令成员，新增命令须显式扩展契约与模拟分发', () => {
     expectTypeOf<ValidatedCommand['op']>().toEqualTypeOf<
       | 'create_node'
@@ -70,7 +70,9 @@ describe('ValidatedCommand 判别联合（issue #553）', () => {
     } satisfies ValidatedCommand
     expect(upsert.fields.name).toBe('林一')
   })
+})
 
+describe('ValidatedCommand 判别联合 · 非法形态编译期拒绝（issue #553）', () => {
   it('非法形态编译期拒绝：协议外类型 / 缺 data / 非法连线语义 / 非字符串实体值', () => {
     // 负向断言采用 serialize.type.test.ts 的赋值行先例：编译错误落在
     // expect-error 指令紧邻的下一行，Prettier 重排对象字面量不改变判定行
