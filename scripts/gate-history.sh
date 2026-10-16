@@ -44,12 +44,22 @@ pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-$(git rev-parse --git-path plotweave
 # 行」（字节精确，开发者已暂存选择被逐字保留）且折并行每行可解析为
 # JSON。工作树多出的任何行——人工合法 JSON 追加、修改/删除既有行、
 # 污染前缀——都使归因失败。任何无法判定（Node 不可用/崩溃、非 Git 环
-# 境读不到索引）都视为不可归因，宁可退回人工暂存；判定输出 attributed。
+# 境读不到索引）都视为不可归因，宁可退回人工暂存；判定输出 attributed，
+# 索引中无该路径而 HEAD 中存在时输出 staged-deletion（PR #581 评审
+# 5542467935：那是开发者已暂存的台账删除，不得把重建的台账自动暂存回去
+# 替换删除；两者皆无才是台账引导态，按空索引继续判定）。
 ledger_change_attribution() {
   ledger_directory=$(CDPATH= cd -- "$(dirname -- "$history_path")" && pwd) || return 1
   ledger_name=$(basename -- "$history_path")
   index_temp=$(mktemp) || return 1
-  git -C "$ledger_directory" show ":./$ledger_name" >"$index_temp" 2>/dev/null || : >"$index_temp"
+  if ! git -C "$ledger_directory" show ":./$ledger_name" >"$index_temp" 2>/dev/null; then
+    if git -C "$ledger_directory" cat-file -e "HEAD:./$ledger_name" 2>/dev/null; then
+      rm -f "$index_temp"
+      printf 'staged-deletion'
+      return 0
+    fi
+    : >"$index_temp"
+  fi
   verdict=$("$node_bin" - "$index_temp" "$history_path" "${folded_capture:-}" <<'ATTRIBUTION'
 const { readFileSync } = require('node:fs')
 const read = (path) => {
@@ -87,14 +97,16 @@ ATTRIBUTION
 }
 
 # 提交创建路径的暂存（issue #548）：把版本化台账 git add 进即将创建的
-# 提交——仅归因判定通过（见上）时执行，否则保留原暂存状态并警告
-# [GATE_HISTORY_UNATTRIBUTED_CHANGE]；git add 失败只警告
-# [GATE_HISTORY_STAGE_FAILED]。只在普通提交与合并提交钩子（pre-commit /
-# pre-merge-commit）调用：这些路径的暂存可靠进入提交且不留未暂存残留
-# （PR #415 评审 5338815626 的中止形态是未暂存写）；sequencer 重放不
-# 采纳追加暂存，prepare-commit-msg 回退路径不得调用。台账文件不存在、
-# 或台账与 HEAD 无差异且本次未并入新行时静默跳过；三者都绝不阻塞已通
-# 过的门禁或本次提交。
+# 提交——仅归因判定通过（见上）时执行；判定为 staged-deletion（已暂存
+# 的台账删除）时警告 [GATE_HISTORY_STAGED_DELETION] 并保留删除、不把
+# 折并重建的台账暂存回去（PR #581 评审 5542467935）；其余不可归因情形
+# 保留原暂存状态并警告 [GATE_HISTORY_UNATTRIBUTED_CHANGE]；git add 失
+# 败只警告 [GATE_HISTORY_STAGE_FAILED]。只在普通提交与合并提交钩子
+# （pre-commit / pre-merge-commit）调用：这些路径的暂存可靠进入提交且
+# 不留未暂存残留（PR #415 评审 5338815626 的中止形态是未暂存写）；
+# sequencer 重放不采纳追加暂存，prepare-commit-msg 回退路径不得调用。
+# 台账文件不存在、或台账与 HEAD 无差异且本次未并入新行时静默跳过；
+# 各分支都绝不阻塞已通过的门禁或本次提交。
 folded_this_run=
 folded_capture=
 stage_materialized_lines() {
@@ -106,11 +118,21 @@ stage_materialized_lines() {
     git diff --cached --quiet HEAD -- "$history_path" 2>/dev/null; then
     return 0
   fi
-  if [ "$(ledger_change_attribution)" != 'attributed' ]; then
-    printf 'gate-history 警告：[GATE_HISTORY_UNATTRIBUTED_CHANGE] 台账 %s 存在不可归因于门禁物化的改动（工作树多出本次折并之外的内容：人工追加、修改/删除既有行或污染行）或无法完成归因判定；保留原暂存状态，请人工核验后随下一次变更提交；不阻塞本次操作。\n' \
-      "$history_path" >&2
-    return 0
-  fi
+  attribution=$(ledger_change_attribution)
+  case $attribution in
+    attributed)
+      ;;
+    staged-deletion)
+      printf 'gate-history 警告：[GATE_HISTORY_STAGED_DELETION] 台账 %s 的删除已被暂存：本次折并只重建了工作树文件，不自动暂存以替换该删除；请人工核验（如确需删除，请同时清理待物化记录后人工提交）；不阻塞本次操作。\n' \
+        "$history_path" >&2
+      return 0
+      ;;
+    *)
+      printf 'gate-history 警告：[GATE_HISTORY_UNATTRIBUTED_CHANGE] 台账 %s 存在不可归因于门禁物化的改动（工作树多出本次折并之外的内容：人工追加、修改/删除既有行或污染行）或无法完成归因判定；保留原暂存状态，请人工核验后随下一次变更提交；不阻塞本次操作。\n' \
+        "$history_path" >&2
+      return 0
+      ;;
+  esac
   if git add -- "$history_path" 2>/dev/null; then
     printf '[gate-history] 已暂存物化记录，随本提交入库。\n'
   else

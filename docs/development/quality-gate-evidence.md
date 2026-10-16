@@ -189,7 +189,12 @@ NODE
   existing line; a malformed or polluted line; a manual partial staging; an
   undecidable state with Node unavailable) warns
   `[GATE_HISTORY_UNATTRIBUTED_CHANGE]` and keeps the developer's staging
-  untouched. The lines are carried by that commit, so no unstaged residue
+  untouched. A **staged deletion** of the ledger — the path absent from the
+  index while present in `HEAD` — is its own state (PR #581 评审
+  5542467935): the fold rebuilds only the worktree file, the hook warns
+  `[GATE_HISTORY_STAGED_DELETION]` and keeps the deletion staged instead of
+  resurrecting the ledger via `git add` (a both-absent path is the bootstrap
+  state and still folds normally). The lines are carried by that commit, so no unstaged residue
   remains while the operation proceeds — the PR #415 breakage was an
   *unstaged* write; this path folds and stages into the same commit. The
   record for commit C's own gate run is therefore versioned in the **next**
@@ -294,8 +299,11 @@ two complementary backstops (方案 1 + 方案 2):
    #355 adoption) are exempted with `[GATE_EVIDENCE_PRE_LEDGER_COMMIT]` —
    a commit that merely deletes the ledger has touched the path and is not
    exempt. **These tolerances are gated on the explicit `--release-boundary`
-   flag, which ci.yml passes only when the PR base is `main`**: an ordinary
-   task PR gets no integration-boundary exemptions at all — its merge
+   flag, which ci.yml passes only for the actual release PR — base `main`
+   *and* head `dev` (PR #581 评审 5542467935: base-only would hand the
+   exemptions to any task branch opening a PR straight to `main`; branch
+   protection does not restrict PR source branches)**: every other PR gets
+   no integration-boundary exemptions at all — its merge
    commits and non-first parents require evidence like every other commit,
    so a task branch cannot smuggle unevidenced changes through a
    merge-plus-tip shape. Every other commit in the release range still

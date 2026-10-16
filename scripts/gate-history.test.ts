@@ -232,6 +232,9 @@ function prepareIsolatedRepository(historySeed: string): {
       resolve(root, 'docs/development/gate-history.jsonl'),
       historySeed,
     )
+    // 目录保留文件：git rm 台账后目录不被修剪，贴合真实仓库形态
+    //（评审 5542467935 的复现前提是折并能重建工作树文件）
+    writeFileSync(resolve(root, 'docs/development/.keepme'), '')
     run(['add', '-A'])
     run(['commit', '-m', 'base'])
   })
@@ -446,6 +449,34 @@ describe(
       expect(result.status).toBe(0)
       expect(state.stagedModified).toBe(false)
       expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+    })
+
+    it('已暂存的台账删除：不把折并重建的台账暂存回去，警告 GATE_HISTORY_STAGED_DELETION（PR #581 评审 5542467935）', () => {
+      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
+        `${seedRecord}\n`,
+      )
+      spawnSync(
+        'git',
+        ['rm', '-q', '--', 'docs/development/gate-history.jsonl'],
+        { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
+      )
+
+      const result = runStageMaterialize(
+        root,
+        historyPath,
+        pendingPath,
+        `${secondRecord}\n`,
+      )
+      const stagedBlob = spawnSync(
+        'git',
+        ['cat-file', '-e', ':docs/development/gate-history.jsonl'],
+        { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
+      )
+
+      expect(result.status).toBe(0)
+      expect(result.stderr).toContain('GATE_HISTORY_STAGED_DELETION')
+      // 删除保留在索引中：git add 未执行，索引里没有台账 blob
+      expect(stagedBlob.status).not.toBe(0)
     })
 
     it('人工部分暂存（索引为 HEAD 之外的中间形态）：不覆盖并警告', () => {
