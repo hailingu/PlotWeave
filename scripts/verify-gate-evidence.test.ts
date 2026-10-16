@@ -901,3 +901,139 @@ describe('非首父曾引入台账的恢复（PR #581 评审 5544522794）', () 
     }
   })
 })
+
+describe('非 tip 损坏不能被后续追加掩盖（PR #581 评审 5544964915）', () => {
+  it.each([
+    { rewrite: false, source: false, restore: false },
+    { rewrite: true, source: false, restore: false },
+    { rewrite: false, source: true, restore: false },
+    { rewrite: false, source: true, restore: true },
+    { rewrite: true, source: true, restore: true },
+  ])('重写=$rewrite、源码 tip=$source、恢复=$restore', (scenario) => {
+    const root = createSeeded((root) => {
+      const history = readFileSync(resolve(root, ledgerPath), 'utf8')
+      writeFile(
+        root,
+        ledgerPath,
+        scenario.rewrite ? `${JSON.stringify({ tree: 'rewritten' })}\n` : '',
+      )
+      writeFile(root, 'src/app.txt', 'damaged\n')
+      const damaged = commitAll(root, '中间提交损坏台账')
+      if (scenario.restore) appendLedger(root, history.trimEnd().split('\n'))
+      appendLedger(root, [recordLine(root, damaged)])
+      if (scenario.source) writeFile(root, 'src/app.txt', 'tip\n')
+      commitAll(root, 'tip 追加证据')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~2', ...flags])
+
+      expect(result.status).toBe(scenario.restore ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      if (scenario.restore) {
+        expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+      } else {
+        expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
+        expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+        expect(result.output).not.toContain('GATE_EVIDENCE_TIP_LAG')
+      }
+    }
+  })
+})
+
+describe('范围内新增记录也须保全（PR #581 评审 5544964915）', () => {
+  it.each([true, false])('保留中间新增记录=%s', (preserve) => {
+    const root = createSeeded((root) => {
+      const baseline = readFileSync(resolve(root, ledgerPath), 'utf8')
+      const introduced = JSON.stringify({ tree: 'range-history' })
+      appendLedger(root, [introduced])
+      const appended = commitAll(root, '范围内追加记录')
+      writeFile(root, ledgerPath, baseline)
+      const truncated = commitAll(root, '截断范围内新记录')
+      appendLedger(root, [
+        ...(preserve ? [introduced] : []),
+        recordLine(root, appended),
+        recordLine(root, truncated),
+      ])
+      commitAll(root, 'tip 补充证据')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~3', ...flags])
+
+      expect(result.status).toBe(preserve ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      expect(result.output.includes('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')).toBe(
+        !preserve,
+      )
+    }
+  })
+})
+
+describe('非 tip 合并不能隐藏一侧记录丢失（PR #581 评审 5544964915）', () => {
+  it.each([true, false])('head 恢复非首父记录=%s', (preserve) => {
+    let base = ''
+    const root = createSeeded((root, seededBase) => {
+      base = seededBase
+      git(root, 'checkout', '-b', 'side')
+      const sideHistory = JSON.stringify({ tree: 'side-history' })
+      appendLedger(root, [sideHistory])
+      const side = commitAll(root, 'side 追加记录')
+      git(root, 'checkout', 'main')
+      appendLedger(root, [JSON.stringify({ tree: 'main-history' })])
+      const main = commitAll(root, 'main 追加记录')
+      git(root, 'merge', '--strategy=ours', '--no-ff', '--no-commit', 'side')
+      const merged = commitAll(root, '合并丢失 side 记录')
+      appendLedger(root, [
+        ...(preserve ? [sideHistory] : []),
+        recordLine(root, side),
+        recordLine(root, main),
+        recordLine(root, merged),
+      ])
+      commitAll(root, '普通 tip 追加证据')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', base, ...flags])
+
+      expect(result.status).toBe(preserve ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      expect(result.output.includes('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')).toBe(
+        !preserve,
+      )
+    }
+  })
+})
+
+describe('修复旧畸形行时仍保全历史字节（PR #581 评审 5544964915）', () => {
+  it.each([true, false])('追加保留旧快照=%s', (preserve) => {
+    const root = createSeeded((root) => {
+      appendLedger(root, ['+{"tree":"old"}'])
+      const malformed = commitAll(root, '旧畸形行入库')
+      const history = readFileSync(resolve(root, ledgerPath), 'utf8')
+      writeFile(root, ledgerPath, history.replace('+{"tree"', '{"tree"'))
+      const repaired = commitAll(root, '修正畸形行')
+      if (preserve) appendLedger(root, history.trimEnd().split('\n'))
+      appendLedger(root, [
+        recordLine(root, malformed),
+        recordLine(root, repaired),
+      ])
+      commitAll(root, 'tip 追加证据与历史快照')
+    })
+
+    for (const flags of [[], ['--release-boundary']]) {
+      const result = runVerifier(root, ['--base', 'HEAD~3', ...flags])
+
+      expect(result.status).toBe(preserve ? 0 : 1)
+      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+      expect(result.output.includes('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')).toBe(
+        !preserve,
+      )
+      if (preserve) {
+        expect(result.output).toContain('GATE_EVIDENCE_MALFORMED_LINE')
+        expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+        expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+      }
+    }
+  })
+})

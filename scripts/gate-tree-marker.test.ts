@@ -521,7 +521,7 @@ describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_0
     expect(lines).toHaveLength(1)
     const record = JSON.parse(lines[0] ?? '')
     // 核验路径：读者用 git rev-parse <commit>^{tree} 对照记录的 tree 即可
-    // 复核「该提交内容通过过门禁调用」；记录行在推送物化后进入版本化文件
+    // 复核「该提交内容通过过门禁调用」；推送保留 pending，下一普通提交物化
     const commitTree = scenario.git(['rev-parse', 'HEAD^{tree}']).stdout.trim()
     expect(record.tree).toBe(commitTree)
     expect(record.head).toMatch(/^[0-9a-f]{40}$/)
