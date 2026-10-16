@@ -245,4 +245,46 @@ describe('useAutoLayout · 测量守卫与减少动态（PR #111 评审）', () 
       expect.objectContaining({ duration: 400 }),
     )
   })
+
+  // 媒体查询分叉场景（迁移计划 §2.2）：宿主快照已推 reduce-motion，
+  // WKWebView 的 prefers-reduced-motion 尚未/不会跟随——JS 动画同样降级。
+  it('宿主直推 reduce-motion 属性（媒体查询未报）同样即时适配（issue #568）', () => {
+    vi.spyOn(window, 'matchMedia').mockImplementation((() => ({
+      matches: false,
+    })) as unknown as typeof window.matchMedia)
+    document.documentElement.dataset.hostReduceMotion = 'true'
+    try {
+      const project = makeProject(
+        [sceneNode('s1', 0, 0), sceneNode('s2', 800, 600)],
+        [seqEdge('s1', 's2')],
+      )
+      const { result, fitView } = setup(project)
+      act(() => result.current.layout.onAutoLayout())
+      expect(fitView).toHaveBeenCalledWith(
+        expect.objectContaining({ duration: 0 }),
+      )
+    } finally {
+      delete document.documentElement.dataset.hostReduceMotion
+    }
+  })
+
+  it('宿主属性为 false 时不引入降级，保留 400ms 动画（issue #568）', () => {
+    vi.spyOn(window, 'matchMedia').mockImplementation((() => ({
+      matches: false,
+    })) as unknown as typeof window.matchMedia)
+    document.documentElement.dataset.hostReduceMotion = 'false'
+    try {
+      const project = makeProject(
+        [sceneNode('s1', 0, 0), sceneNode('s2', 800, 600)],
+        [seqEdge('s1', 's2')],
+      )
+      const { result, fitView } = setup(project)
+      act(() => result.current.layout.onAutoLayout())
+      expect(fitView).toHaveBeenCalledWith(
+        expect.objectContaining({ duration: 400 }),
+      )
+    } finally {
+      delete document.documentElement.dataset.hostReduceMotion
+    }
+  })
 })

@@ -302,7 +302,7 @@ xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNati
 
 - 真实系统外观/辅助设置切换的人工目验（M13 完整矩阵：浅↔深、减少透明度、增强对比度、减少动态效果组合）待所有者执行——自动化测试以受控 reader 验证了推送链路，未模拟真实系统设置事件。P1 第 6 项暂不勾选，待此目验后完成（与第 3 项同模式）。
 - `tokens.css` / `nodes.css` 的浅深、对比度、透明度令牌块未镜像 data-attr 选择器：宿主语义与 WKWebView 媒体查询同源（NSApp/NSWorkspace），当前无分叉场景，重复大块变量有漂移风险；M13/P5 实测发现某条媒体查询不生效时再按 data 属性补镜像。
-- `data-host-reduce-motion` 语义已同步，但 Web 端尚无消费点（nodes.css 现有 `prefers-reduced-motion` 规则未镜像），随 M13 视觉收敛处理。
+- `data-host-reduce-motion` 语义已同步，但 Web 端尚无消费点（nodes.css 现有 `prefers-reduced-motion` 规则未镜像），随 M13 视觉收敛处理。——2026-10-16 已随 [#568](https://github.com/hailingu/PlotWeave/issues/568) 修复：五个样式表的动效退化规则已镜像 `:root[data-host-reduce-motion='true']` 属性路径，`useAutoLayout` 的 JS 动画与媒体查询/宿主属性取或，M13 组合扫描可断言计算样式；见 [P5 证据记录](swiftui-react-flow-p5-evidence.md) M13「后续补强」。
 - 截图仍缺屏幕录制授权；本会话未启动应用实例（生命周期验证在测试宿主内完成）。
 - 未运行 SonarQube 门禁：本次未提交、未推送（提交前按 `AGENTS.md` 执行）。
 - `native/macos/build/` 与 `native/macos/App/WebCanvas/` 为一次性构建产物（gitignore），沿用所有者决策保留供启动，不进入提交。

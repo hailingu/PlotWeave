@@ -497,6 +497,16 @@
   opacity: 0.3;
   transition: opacity 140ms;
 }
+
+/* WK 的媒体查询可能晚于/分叉于宿主快照；宿主直推的 reduce-motion 属性
+ * 同等退化动效（issue #568，与 RT/IC 的属性路径对齐）。 */
+:root[data-host-reduce-motion='true'] .pw-card,
+:root[data-host-reduce-motion='true'] .pw-gear,
+:root[data-host-reduce-motion='true'] .pw-branch-opt,
+:root[data-host-reduce-motion='true'] .react-flow__node.pw-node-dim {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pw-card,
   .pw-gear,
