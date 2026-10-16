@@ -263,10 +263,14 @@ two complementary backstops (方案 1 + 方案 2):
    - The **tip** gets its own record only with the next commit (see the
      one-commit-lag property above), so a missing tip record is a warning
      (`[GATE_EVIDENCE_TIP_LAG]`, exit 0) — surfaced as a GitHub annotation.
-     A tip whose only change is the ledger itself is exempt
+     A tip whose only change is a **byte-preserving append** to the ledger
+     (the parent's lines verbatim plus parseable appended records) is exempt
      (`[GATE_EVIDENCE_LEDGER_ONLY_TIP]`): it carries no ungated source
-     change. Merge commits never qualify for the exemption (a merge can
-     carry content); as tips they get the lag warning like any other tip.
+     change and destroys no evidence — a tip that deletes, truncates, or
+     rewrites the ledger is not exempt (PR #581 评审 5543033431) and only
+     gets the lag warning. Merge commits never qualify for the exemption
+     (a merge can carry content); as tips they get the lag warning like any
+     other tip.
    - Malformed ledger lines are skipped and warned
      (`[GATE_EVIDENCE_MALFORMED_LINE]`), matching the ledger's log
      semantics; they do not fail the check by themselves.

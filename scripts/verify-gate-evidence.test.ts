@@ -515,3 +515,47 @@ describe(
     })
   },
 )
+
+describe(
+  '台账-only 豁免仅限保留原字节的纯追加（PR #581 评审 5543033431）',
+  { timeout: 60_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of fixtures.splice(0)) fixture.dispose()
+    })
+
+    it('tip 删除整个台账：不豁免，仅按 tip 滞后告警', () => {
+      const root = createSeeded((root) => {
+        rmSync(resolve(root, ledgerPath))
+        commitAll(root, '删除台账')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~1', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+    })
+
+    it('tip 重写既有台账行（非纯追加）：不豁免，仅按 tip 滞后告警', () => {
+      const root = createSeeded((root) => {
+        writeFile(
+          root,
+          ledgerPath,
+          `${JSON.stringify({
+            tree: 'e'.repeat(40),
+            qualityGate: 'OK',
+            newCodeUnresolvedIssues: 0,
+          })}\n`,
+        )
+        commitAll(root, '重写台账')
+      })
+
+      const result = runVerifier(root, ['--base', 'main~1', '--head', 'HEAD'])
+
+      expect(result.status).toBe(0)
+      expect(result.output).not.toContain('GATE_EVIDENCE_LEDGER_ONLY_TIP')
+      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+    })
+  },
+)

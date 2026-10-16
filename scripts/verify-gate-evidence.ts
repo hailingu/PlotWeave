@@ -19,7 +19,9 @@
  * - [GATE_EVIDENCE_PRE_LEDGER_COMMIT]：早于台账入库的历史提交（其可达
  *   历史从未触及台账路径——删除台账的提交不豁免）豁免记录要求（提示，
  *   不失败）。
- * - [GATE_EVIDENCE_LEDGER_ONLY_TIP]：tip 仅改台账，豁免（提示）。
+ * - [GATE_EVIDENCE_LEDGER_ONLY_TIP]：tip 仅对台账做保留父提交原字节的
+ *   合法纯追加（删除/截断/重写不豁免，PR #581 评审 5543033431），豁免
+ *   （提示）。
  * - [GATE_EVIDENCE_MALFORMED_LINE]：台账中无法解析的行被跳过（告警）。
  * 集成边界豁免（合并提交跳过、INTEGRATED_TIP_LAG、PRE_LEDGER_COMMIT）
  * 仅在 --release-boundary 时启用——ci.yml 只在 dev → main 发布 PR
@@ -52,6 +54,8 @@ type RangeCommit = {
   subject: string
   tree: string
   parentCount: number
+  /** 首父提交（台账-only 豁免的纯追加比对基准）。 */
+  firstParent: string
   /** 首父之外的全部父提交（合并提交的第二/更多父 = 被集成分支 tip）。 */
   integratedParents: string[]
   changedFiles: string[]
@@ -185,6 +189,7 @@ function describeCommit(sha: string): RangeCommit {
     subject: runGit(['log', '-1', '--format=%s', sha]).trim(),
     tree: runGit(['rev-parse', `${sha}^{tree}`]).trim(),
     parentCount: parentShas.length,
+    firstParent: parentShas[0] ?? '',
     integratedParents: parentShas.slice(1),
     changedFiles,
   }
@@ -202,12 +207,44 @@ function commitPredatesLedger(commit: RangeCommit): boolean {
   )
 }
 
-/** tip 是否只改台账：单父、有变更、且全部变更落在台账路径（合并提交不豁免）。 */
+/** 把台账内容按行拆开（容忍尾随换行差异；读取失败按空内容）。 */
+function ledgerLinesOf(revision: string): string[] {
+  const content = runGit(['show', `${revision}:${ledgerPath}`], true)
+  const lines = content.split('\n')
+  if (lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
+
+/** 行集合是否均为可解析 JSON（与归因守卫同口径的合法记录形态）。 */
+function linesAreParseable(lines: string[]): boolean {
+  return lines.every((line) => {
+    try {
+      JSON.parse(line)
+      return true
+    } catch {
+      return false
+    }
+  })
+}
+
+/** tip 是否只对台账做保留原字节的合法纯追加（PR #581 评审 5543033431：
+ * 单父、变更仅落台账路径，且相对首父只是追加了可解析为 JSON 的新行——
+ * 删除、截断或重写台账的 tip 不豁免，只按 tip 滞后告警；合并提交不豁免）。 */
 function isLedgerOnlyTip(commit: RangeCommit): boolean {
+  if (
+    commit.parentCount !== 1 ||
+    commit.changedFiles.length === 0 ||
+    !commit.changedFiles.every((path) => path === ledgerPath)
+  ) {
+    return false
+  }
+  const parentLines = ledgerLinesOf(commit.firstParent)
+  const tipLines = ledgerLinesOf(commit.sha)
+  const appended = tipLines.slice(parentLines.length)
   return (
-    commit.parentCount === 1 &&
-    commit.changedFiles.length > 0 &&
-    commit.changedFiles.every((path) => path === ledgerPath)
+    appended.length > 0 &&
+    parentLines.every((line, position) => tipLines[position] === line) &&
+    linesAreParseable(appended)
   )
 }
 
