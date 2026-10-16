@@ -1,6 +1,5 @@
 import {
   appendFileSync,
-  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -287,6 +286,39 @@ function runStageMaterialize(
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
 
+/** 在真实 Git 提交钩子中运行物化，验证 Git 自身选择的索引及最终提交/索引状态。 */
+function commitWithMaterialize(
+  root: string,
+  pendingPath: string,
+  args: string[],
+) {
+  cpSync(
+    resolve(repositoryRoot, 'scripts/gate-history.sh'),
+    resolve(root, 'scripts/gate-history.sh'),
+  )
+  const hooksPath = resolve(root, 'commit-hooks')
+  mkdirSync(hooksPath, { recursive: true })
+  writeFileSync(
+    resolve(hooksPath, 'pre-commit'),
+    '#!/bin/sh\nexec sh scripts/gate-history.sh materialize --stage-for-commit\n',
+    { mode: 0o755 },
+  )
+  return spawnSync(
+    'git',
+    ['-c', `core.hooksPath=${hooksPath}`, 'commit', '-m', 'change', ...args],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...gitFixtureEnvironment(),
+        PLOTWEAVE_GATE_PENDING_PATH: pendingPath,
+        PLOTWEAVE_SONAR_LOCK_DIRECTORY: resolve(root, 'gate-lock'),
+      },
+      timeout: 60_000,
+    },
+  )
+}
+
 /** 读取仓库内台账的工作树内容与暂存状态（porcelain 首列）。 */
 function isolatedLedgerState(root: string): {
   content: string
@@ -534,6 +566,52 @@ describe(
 )
 
 describe(
+  '全量提交采纳台账折并（git commit -a / --amend -a，PR #581）',
+  { timeout: 30_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
+    })
+
+    it.each([['-a'], ['--amend', '-a']])(
+      '%j 将 pending 随本提交入库且不留索引残留',
+      (...args) => {
+        const { root, historyPath, pendingPath } = prepareIsolatedRepository(
+          `${seedRecord}\n`,
+        )
+        writeFileSync(resolve(root, 'docs/development/.keepme'), 'changed\n')
+        writeFileSync(pendingPath, `${secondRecord}\n`)
+
+        const result = commitWithMaterialize(root, pendingPath, args)
+        const committed = spawnSync(
+          'git',
+          ['show', 'HEAD:docs/development/gate-history.jsonl'],
+          { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
+        )
+
+        expect(result.status, result.stderr).toBe(0)
+        expect(committed.status).toBe(0)
+        expect(committed.stdout).toBe(`${seedRecord}\n${secondRecord}\n`)
+        expect(readFileSync(historyPath, 'utf8')).toBe(committed.stdout)
+        expect(readFileSync(pendingPath, 'utf8')).toBe('')
+        const state = spawnSync(
+          'git',
+          [
+            'status',
+            '--porcelain',
+            '--',
+            'docs/development/gate-history.jsonl',
+          ],
+          { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
+        )
+        expect(state.status).toBe(0)
+        expect(state.stdout).toBe('')
+      },
+    )
+  },
+)
+
+describe(
   '临时索引下的整体推迟（git commit -- <pathspec> / --only，PR #581 评审 5543397069）',
   { timeout: 30_000 },
   () => {
@@ -541,41 +619,49 @@ describe(
       for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
     })
 
-    it('临时索引（git commit -- <pathspec> / --only 钩子环境）：整体推迟折并暂存、待物化记录原样保留（PR #581 评审 5543397069）', () => {
-      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
-        `${seedRecord}\n`,
-      )
-      const realIndex = resolve(
-        spawnSync('git', ['rev-parse', '--git-dir'], {
-          cwd: root,
-          encoding: 'utf8',
-          env: gitFixtureEnvironment(),
-        }).stdout.trim(),
-        'index',
-      )
-      const tempIndex = resolve(root, 'temp-index-copy')
-      copyFileSync(realIndex, tempIndex)
+    it.each([['--'], ['--only']])(
+      '%j 提交保留 pending，下一普通提交折并且不留索引残留',
+      (...args) => {
+        const { root, historyPath, pendingPath } = prepareIsolatedRepository(
+          `${seedRecord}\n`,
+        )
+        writeFileSync(resolve(root, 'docs/development/.keepme'), 'changed\n')
+        writeFileSync(pendingPath, `${secondRecord}\n`)
 
-      const result = runStageMaterialize(
-        root,
-        historyPath,
-        pendingPath,
-        `${secondRecord}\n`,
-        { GIT_INDEX_FILE: tempIndex },
-      )
-      const ledgerLines = readFileSync(historyPath, 'utf8')
-        .split('\n')
-        .filter(Boolean)
-      const pendingLines = readFileSync(pendingPath, 'utf8')
-        .split('\n')
-        .filter(Boolean)
+        const result = commitWithMaterialize(root, pendingPath, [
+          ...args,
+          'docs/development/.keepme',
+        ])
 
-      expect(result.status).toBe(0)
-      expect(result.stdout).toContain('不折并不暂存')
-      // 待物化记录与台账都原样保留，交给下一个普通提交折并暂存
-      expect(pendingLines).toHaveLength(1)
-      expect(ledgerLines).toEqual([seedRecord])
-    })
+        expect(result.status, result.stderr).toBe(0)
+        expect(readFileSync(pendingPath, 'utf8')).toBe(`${secondRecord}\n`)
+        expect(readFileSync(historyPath, 'utf8')).toBe(`${seedRecord}\n`)
+        const recovery = commitWithMaterialize(root, pendingPath, [
+          '--allow-empty',
+        ])
+        const committed = spawnSync(
+          'git',
+          ['show', 'HEAD:docs/development/gate-history.jsonl'],
+          { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
+        )
+        const state = spawnSync(
+          'git',
+          [
+            'status',
+            '--porcelain',
+            '--',
+            'docs/development/gate-history.jsonl',
+          ],
+          { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
+        )
+        expect(recovery.status, recovery.stderr).toBe(0)
+        expect(committed.status).toBe(0)
+        expect(committed.stdout).toBe(`${seedRecord}\n${secondRecord}\n`)
+        expect(readFileSync(pendingPath, 'utf8')).toBe('')
+        expect(state.status).toBe(0)
+        expect(state.stdout).toBe('')
+      },
+    )
   },
 )
 

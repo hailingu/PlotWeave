@@ -112,14 +112,15 @@ ATTRIBUTION
 # 台账文件不存在、或台账与 HEAD 无差异且本次未并入新行时静默跳过；
 # 各分支都绝不阻塞已通过的门禁或本次提交。
 # 临时索引检测（PR #581 评审 5543397069）：git commit -- <pathspec> /
-# --only 为提交构建临时索引（GIT_INDEX_FILE 指向非真实索引）；此时任何
+# --only 为提交构建临时索引（GIT_INDEX_FILE 指向非真实索引及其锁文件）；此时任何
 # git add 只写临时索引——真实索引残留旧版、下个普通提交会把已物化的
 # 记录从台账反向提交掉。检测为真时整体推迟：不折并、不暂存，待物化
 # 记录原样保留给下一个普通提交。非提交环境（无 .git）按无临时索引处理。
 commit_uses_temporary_index() {
   [ -n "${GIT_INDEX_FILE:-}" ] || return 1
   # 普通提交的钩子环境里 GIT_INDEX_FILE 也被设置（常为相对路径
-  # 「.git/index」）；两侧都以 repository_root 前缀归一为同一逻辑路径后
+  # 「.git/index」）；-a / --amend -a 使用 Git 会采纳的 index.lock，
+  # 同样允许折并暂存。两侧都以 repository_root 前缀归一为同一逻辑路径后
   # 比较——不用 --absolute-git-dir（macOS 上 /tmp→/private/tmp 的符号
   # 链接会让物理路径与逻辑路径前缀不一致而误判）——只有真正指向别的
   # 索引（pathspec 的 next-index-*.lock 等）才判为临时索引
@@ -132,7 +133,7 @@ commit_uses_temporary_index() {
     /*) given_index=$GIT_INDEX_FILE ;;
     *) given_index=$repository_root/$GIT_INDEX_FILE ;;
   esac
-  [ "$given_index" != "$real_index" ]
+  [ "$given_index" != "$real_index" ] && [ "$given_index" != "$real_index.lock" ]
 }
 
 folded_this_run=

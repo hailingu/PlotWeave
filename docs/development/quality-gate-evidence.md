@@ -221,6 +221,9 @@ NODE
   the fold entirely to the next ordinary commit (PR #581 评审 5543397069);
   that pathspec commit's own gate record keys its temporary-index tree,
   which equals the commit's tree, so evidence stays consistent.
+  `git commit -a` / `--amend -a` 使用的 `index.lock` 则是 Git 会在提交后
+  采纳的活动索引，和普通 `index` 一样折并并暂存台账；它不属于上述需推迟的
+  pathspec 临时索引（[PR #581](https://github.com/hailingu/PlotWeave/pull/581)）。
   A record-only commit burns a full gate run and is not the norm, except as
   an optional evidence-tip commit, which the server-side check exempts when
   it only touches the ledger. Records for
@@ -248,6 +251,30 @@ NODE
   never reach the record path (the gate passes them via stdin/environment
   exclusively), and raw scan artifacts stay unversioned — the issue #355
   acceptance criteria require both.
+
+### 提交索引与物化状态矩阵（PR #581）
+
+`gate-history.sh` 的 `commit_uses_temporary_index` 负责识别有效索引，
+`materialize --stage-for-commit` 负责决定是否折并；入口为 `pre-commit` 与
+`pre-merge-commit`。全量与限定提交用例在 `scripts/gate-history.test.ts` 中执行
+真实 Git 提交，断言最终提交内容与台账状态；内容归因用例直接执行物化脚本。
+
+| 前置状态 | 动作与顺序 | 可观察结果 | 不变量 | 验证 |
+| --- | --- | --- | --- | --- |
+| pending 有记录，台账无额外改动 | `git commit -a` 在 `index.lock` 上运行钩子 | 记录进入本提交，pending 清空，台账状态干净 | Git 采纳的活动索引必须携带本次可归因的折并记录 | 全量提交用例 `-a` |
+| 同上，修改既有提交 | `git commit --amend -a` → 钩子暂存 → Git 采纳锁索引 | 修改后的提交保留原台账并追加记录，无索引残留 | amend 不改变活动索引的物化义务 | 全量提交用例 `--amend -a` |
+| pending 有记录，提交限定路径 | `git commit -- <pathspec>` / `--only` → 下一普通提交 | 限定提交保留台账与 pending；下一普通提交入库记录并清空 pending | 不向 pathspec 临时索引写入会与真实索引分离的台账，也不丢失待物化记录 | 两个限定提交与恢复用例 |
+| 普通索引，台账含不可归因改动或已暂存删除 | 折并后归因拒绝自动暂存 | 警告且保留开发者索引选择 | 放行 `index.lock` 不放宽内容归因守卫 | 既有额外工作树内容、部分暂存、已暂存删除用例 |
+
+此修复只改变索引分类；并发排水仍由既有门禁互斥锁保护，锁超时与恢复继续由
+既有物化测试覆盖。sequencer 回退入口仍不调用物化。本地真实 Git 用例覆盖当前
+macOS Git；其他 Git 版本与平台未在本次本地验证中实测。
+
+2026-10-16 本地验证：Node 24.18.0、Git 2.48.1；上述矩阵对应的物化测试
+21/21 通过，`npm run check:size && npm test -- scripts` 的规模检查通过，完整
+脚本测试在沙箱外重跑后 324/324 通过（沙箱内禁止 `ps` / `sysctl`，既有进程
+身份与 CPU 预算用例不能正常验证）；`sh scripts/check-static.sh` 通过。
+文档与 AGENTS.md 按路由完成结构化审阅，无配置的自动化文档检查。
 
 ## Server-Side Evidence Verification (issue #548)
 
