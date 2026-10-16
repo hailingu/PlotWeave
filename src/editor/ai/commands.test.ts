@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { validateAiBatch } from './batchFold'
-import type { AiGraphSnapshot, BatchValidation } from './commands'
+import type {
+  AiGraphSnapshot,
+  BatchValidation,
+  ValidatedCommand,
+} from './commands'
 import { wouldCreateCycle } from '../graphRules'
 import { entSnap, richSnap, snap } from './testGraphs'
 
@@ -708,9 +712,13 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
       snap(),
     )
     expect(v.ok).toBe(true)
-    const cmd = v.commands[0] as { data: { lines: Array<{ id: string }> } }
-    expect(cmd.data.lines[0].id).toMatch(/^line-/)
-    expect(cmd.data.lines[1].id).toBe('line-keep')
+    const cmd = v.commands[0] as Extract<
+      ValidatedCommand,
+      { op: 'create_node' }
+    >
+    const lines = cmd.data['lines'] as Array<{ id: string }>
+    expect(lines[0].id).toMatch(/^line-/)
+    expect(lines[1].id).toBe('line-keep')
   })
 
   it('create_node 分支：字符串选项升级为 {id,label}；缺 id 对象只补 id；已有 id 保留', () => {
@@ -732,13 +740,18 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
       snap(),
     )
     expect(v.ok).toBe(true)
-    const cmd = v.commands[0] as {
-      data: { options: Array<{ id: string; label: string }> }
-    }
-    expect(cmd.data.options.map((o) => o.label)).toEqual(['追', '不追', '观望'])
-    expect(cmd.data.options[0].id).toMatch(/^opt-/)
-    expect(cmd.data.options[1].id).toMatch(/^opt-/)
-    expect(cmd.data.options[2].id).toBe('opt-keep')
+    const cmd = v.commands[0] as Extract<
+      ValidatedCommand,
+      { op: 'create_node' }
+    >
+    const options = cmd.data['options'] as Array<{
+      id: string
+      label: string
+    }>
+    expect(options.map((o) => o.label)).toEqual(['追', '不追', '观望'])
+    expect(options[0].id).toMatch(/^opt-/)
+    expect(options[1].id).toMatch(/^opt-/)
+    expect(options[2].id).toBe('opt-keep')
   })
 
   it('create_node 分镜：refs 无 id 回填 ref- 前缀 id', () => {
@@ -759,8 +772,12 @@ describe('列表项稳定 id 归一化（S6479 信任边界：AI 可送旧形态
       snap(),
     )
     expect(v.ok).toBe(true)
-    const cmd = v.commands[0] as { data: { refs: Array<{ id: string }> } }
-    expect(cmd.data.refs[0].id).toMatch(/^ref-/)
+    const cmd = v.commands[0] as Extract<
+      ValidatedCommand,
+      { op: 'create_node' }
+    >
+    const refs = cmd.data['refs'] as Array<{ id: string }>
+    expect(refs[0].id).toMatch(/^ref-/)
   })
 
   it('update_node 的 patch 按快照中既有节点类型同样归一化', () => {
@@ -1628,9 +1645,13 @@ describe('对白行判别字段与可选字段（信任边界：不被下次加�
       snap(),
     )
     expect(ok.ok).toBe(true)
-    const cmd = ok.commands[0] as { data: { lines: Array<{ kind: string }> } }
-    expect(cmd.data.lines[0].kind).toBe('line')
-    expect(cmd.data.lines[1].kind).toBe('action')
+    const cmd = ok.commands[0] as Extract<
+      ValidatedCommand,
+      { op: 'create_node' }
+    >
+    const lines = cmd.data['lines'] as Array<{ kind: string }>
+    expect(lines[0].kind).toBe('line')
+    expect(lines[1].kind).toBe('action')
   })
 
   it('可选字段 side/vo 异型拒绝', () => {

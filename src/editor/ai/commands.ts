@@ -1,4 +1,6 @@
+import type { EdgeKind } from '../graphRules'
 import type { NodeDataPatch } from '../nodes/patch'
+import type { AiNodeFieldType } from './nodeFields'
 
 /**
  * AI 批量命令的解析与校验（docs/ui-design.md §6 改动预览卡、数据模型 §12）。
@@ -95,28 +97,74 @@ export interface ValidatedDocumentFields {
 }
 
 /** 校验通过的执行命令（BatchValidation.commands → applyAiBatch →
- * simulateBatch 的形态）：与入站 AiCommand 同构，唯一差别是 update_node
+ * simulateBatch 的形态，issue #553 起为显式判别联合）：载荷形态由校验
+ * 路径实际保证并进入类型系统——create 的 nodeType 收窄为协议成员
+ * （AI_NODE_FIELDS 键域）且 data 恒为归一化记录、connect 的 edgeKind
+ * 已判定补全（入站缺省 sequence）、ref/entityId 为字符串，update_node
  * 的 patch 已按目标节点类型完成键白名单与值形状校验并判别化绑定
  * NodeDataPatch（issue 16），upsert 的 fields 已按实体种类完成白名单与
- * 值形状校验（issue 44；文档通道 issue 56）——执行与撤销路径不再接受
- * 宽 Record 补丁。 */
+ * 值形状校验（issue 44；文档通道 issue 56）——执行与撤销路径（batchSim）
+ * 零 as 消费，新增命令成员时模拟分发由穷尽性守卫强制补齐。可选成员
+ * 显式含 undefined（issue #231）：校验构造点对「无别名」即写 undefined。 */
 export type ValidatedCommand =
-  | Extract<
-      AiCommand,
-      { op: 'create_node' | 'delete_node' | 'connect_edge' | 'disconnect_edge' }
-    >
-  | (Omit<Extract<AiCommand, { op: 'update_node' }>, 'patch'> & {
+  | {
+      op: 'create_node'
+      /** 目标节点类型：协议成员字面量（图片节点 §13 AI 只读，不入写通道）。 */
+      nodeType: AiNodeFieldType
+      /** 本批新建的临时别名；缺省/空 = 无别名。 */
+      ref?: string | undefined
+      /** 归一化后的建节点载荷（foldCreate 恒产出，最小为空记录）。 */
+      data: Record<string, unknown>
+      reason?: string | undefined
+    }
+  | {
+      op: 'update_node'
+      nodeId: string
       patch: NodeDataPatch
-    })
-  | (Omit<
-      Extract<AiCommand, { op: 'upsert_character' | 'upsert_location' }>,
-      'fields'
-    > & {
+      reason?: string | undefined
+    }
+  | { op: 'delete_node'; nodeId: string; reason?: string | undefined }
+  | {
+      op: 'connect_edge'
+      sourceId: string
+      targetId: string
+      /** 连线语义（§4.4）已判定：入站缺省由校验补全为 sequence。 */
+      edgeKind: EdgeKind
+      /** edgeKind = branch 时的选项下标（0 基，已校验落界）。 */
+      optionIndex?: number | undefined
+      reason?: string | undefined
+    }
+  | {
+      op: 'disconnect_edge'
+      sourceId: string
+      targetId: string
+      reason?: string | undefined
+    }
+  | {
+      op: 'upsert_character'
+      /** 修改目标实体 id（或本批 ref 别名）；缺省 = 新建。 */
+      entityId?: string | undefined
+      /** 新建的临时别名 / 修改时挂的引用别名，供本批后续命令绑定。 */
+      ref?: string | undefined
+      /** 已校验的白名单字段（name/bio，全字符串值）。 */
       fields: ValidatedEntityFields
-    })
-  | (Omit<Extract<AiCommand, { op: 'upsert_document' }>, 'fields'> & {
+      reason?: string | undefined
+    }
+  | {
+      op: 'upsert_location'
+      entityId?: string | undefined
+      ref?: string | undefined
+      /** 已校验的白名单字段（name/note，全字符串值）。 */
+      fields: ValidatedEntityFields
+      reason?: string | undefined
+    }
+  | {
+      op: 'upsert_document'
+      entityId?: string | undefined
+      ref?: string | undefined
       fields: ValidatedDocumentFields
-    })
+      reason?: string | undefined
+    }
 
 /** 执行命令 → 入站形态（applyAiBatch 重校验用）：判别补丁剥回模型侧的
  * 宽 Record——validateAiBatch 的契约是入站信任边界，目标节点类型必须
