@@ -1,0 +1,58 @@
+# 依赖与供应链浮现机制（issue #552 方案 1）：Dependabot 按 ecosystem 周粒度
+# 开 PR——只开 PR、从不自动合并，合并仍走既有分支保护与 ci.yml 必需检查。
+# 目标分支固定 dev：依赖更新属于普通任务变更（AGENTS.md 分支策略：任务 PR
+# 面向 dev），不直接面向 main。npm 只覆盖根 package.json；cargo 按仓库的
+# 双 Cargo workspace（src-tauri 与 crates）拆成两条；github-actions 覆盖
+# .github/workflows（native 应用无第三方 Swift 包依赖，不在覆盖面内）。
+# minor/patch 按 ecosystem 分组合并降噪；major 单独成 PR 逐个评审——本仓库
+# react / vitest / typescript 等大版本滞后是代际决策，需要评审而非批量跟随。
+# 工具链钉版（.nvmrc / rust-toolchain.toml）不属于这些 ecosystem，不受影响。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: cargo
+    directory: /crates
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5

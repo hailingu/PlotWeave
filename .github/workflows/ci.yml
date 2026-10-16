@@ -29,6 +29,12 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      # 依赖审计（issue #552 方案 2）：--audit-level=high 仅在 high/critical
+      # 漏洞时非零退出；先以 continue-on-error 告警起步（issue 口径：避免
+      # 误伤，稳定后删除该行转 error 阻断）。
+      - name: npm audit --audit-level=high（issue #552；warning 起步）
+        run: npm audit --audit-level=high
+        continue-on-error: true
       - run: npm ci
       - name: format:check（src 行）
         run: npm run format:check
@@ -65,6 +71,21 @@ jobs:
           workspaces: |
             src-tauri
             crates
+      # 依赖审计（issue #552 方案 2）：cargo-audit 用预编译二进制安装
+      # （taiki-e/install-action），只读两个 workspace 的 Cargo.lock，
+      # 不参与编译。漏洞级 advisory 使步骤失败（阻断合入）；
+      # unmaintained / unsound / yanked 等 informational warning 不失败
+      # ——当前 src-tauri 锁文件存在 8 条，处置记录见
+      # docs/development/workflow.md。工具跟随 latest：advisory DB 运行
+      # 时拉取，扫描器版本陈旧不构成漏报。
+      - name: 安装 cargo-audit（issue #552）
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@latest
+      - name: cargo audit src-tauri/Cargo.lock（issue #552）
+        run: cargo audit --color never --file src-tauri/Cargo.lock
+      - name: cargo audit crates/Cargo.lock（issue #552）
+        run: cargo audit --color never --file crates/Cargo.lock
       # Tauri 使用的 Rust 内核与历史 P2 C ABI 保留 workspace 路由检查；
       # Swift 原生应用使用独立 Swift 服务，不链接 Rust 或该 C ABI。
       # 双 workspace 漂移护栏（issue #549）：plotweave-core 闭包共享包
