@@ -17,10 +17,9 @@
 - 预期：四项语义属性落页且被 Web 令牌层实际消费（计算样式，非仅属性反射）。
 - 实际 / 通过：9/9 组合通过——`color-scheme` 计算值跟随宿主；RT 或 IC 下画布控件 `backdrop-filter` 退化为 `none`、IC 下边框升为 2px；演示画布根类为 `canvas-root is-swift`。
 - 同轮修复：演示/验证页此前固定 `className="canvas-root"`，Swift 宿主下 RT/IC 退化 CSS（前缀 `.canvas-root.is-swift`）不生效；现与生产 `EditorCanvasRegion` 同源判定（`isSwiftHost()`）。
-- 后续补强（2026-10-16，[#568](https://github.com/hailingu/PlotWeave/issues/568) 修复）：RM 组合增加节点卡计算 `transition-duration` 等价断言（降级 ⇔ 宿主属性或媒体查询任一为真）；属性驱动路径修复前该断言在真实 WebKit 上失败（3 组合），修复后 9/9 通过。
+- 后续补强（2026-10-16，[#568](https://github.com/hailingu/PlotWeave/issues/568) 修复）：reduce-motion 此前无属性驱动的令牌消费路径（RT/IC 有、RM 无），现已接线——动效退化规则补 `:root[data-host-reduce-motion='true']` 属性分支（五个样式表），`useAutoLayout` 的 JS 动画与媒体查询/宿主属性取或；RM 组合增加节点卡计算 `transition-duration` 等价断言（降级 ⇔ 宿主属性或媒体查询任一为真），属性驱动路径修复前该断言在真实 WebKit 上失败（3 组合），修复后 9/9 通过。
 - 信息性观察：本机媒体查询 `prefers-reduced-motion` 为 false，与真实系统设置一致；宿主快照与媒体查询的真实系统切换分叉场景仍未实测（断言经强制快照构造，机器无关）。
-- 未通过 / 未执行（各自独立 issue）：
-  - reduce-motion 语义无属性驱动的令牌消费路径（RT/IC 有、RM 无）——[#568](https://github.com/hailingu/PlotWeave/issues/568)：已于 2026-10-16 修复（动效退化规则接线 `:root[data-host-reduce-motion='true']` 属性路径，`useAutoLayout` 的 JS 动画与媒体查询/宿主属性取或），见上「后续补强」。
+- 未通过 / 未执行（各自独立 issue，#568 已由上述后续补强解决、不在本清单）：
   - VoiceOver 真机巡检与 Web AX 树验证（测试宿主内 WKWebView 不暴露内容 AX 树）——[#569](https://github.com/hailingu/PlotWeave/issues/569)。
   - 中文输入法真机组合输入——[#570](https://github.com/hailingu/PlotWeave/issues/570)。
   - 视觉目验/截图/录屏（屏幕录制授权缺失）——[#571](https://github.com/hailingu/PlotWeave/issues/571)。
