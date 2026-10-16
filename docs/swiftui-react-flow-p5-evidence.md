@@ -92,7 +92,7 @@
 | 本地生产画布资源已由 HTTP 伺服，规模为 100/500/1000 | 每规模启动独立 Tauri 子进程 → document-start 计时 → 节点与边全部就绪 → 300ms 沉降 → 同一脚本选项 | 返回版本化脱敏报告，输出 mount、viewport、四阶段帧统计与脚本前后 RSS | 夹具规模、脚本选项和报告口径只能有一个来源；页面 runner 与宿主校验 | URL / 报告合同测试 + 三规模真实 Wry 测量 |
 | Swift 与 Tauri 做共同模式对比 | 两宿主顺序执行同一生产 bundle；Swift 收起原生面板且不中途切换，Tauri 不增加宿主操作 | 两边都有 `common-web` 记录；既有 Swift 原生面板压力轮单列 | A/B 不把 Swift 独有面板操作算入 Web 宿主差异；两性能套件 | 两宿主同轮实测；viewport 以页面报告为准，不预设完全相等 |
 | URL、规模、页面报告或 JS 执行无效 | 解析配置 / 等待就绪 / 回收 evaluation | 明确错误并以非零状态结束；空载荷、错误载荷不得进入证据 | 配置与报告边界 fail closed；Tauri harness | 合同测试覆盖非法配置、错误结构、空载荷；真实加载失败以宿主导超时兜底 |
-| 任一 drag/pan/zoom/panel 阶段没有 rAF 样本 | 校验该阶段 frames，即使 total 与效果有效 | 整份报告被拒绝，不输出缺少阶段指标的宿主对比 | 四阶段各自必须有独立帧样本；报告校验器 | 空阶段合同回归 + Swift 同口径结构断言 |
+| 任一 drag/pan/zoom/panel 阶段或 total 没有 rAF 样本，或 samples>0 但 p50/p95 为 null | 校验 frames，即使效果有效 | 整份报告被拒绝，不输出缺少核心指标的宿主对比 | 总体与四阶段各自必须有独立帧样本及数值百分位数；报告校验器 | 空阶段与 null 百分位合同回归 + Swift 同口径结构断言 |
 | 脚本轮数、步数或节奏需要调整 | 两宿主不携带参数调用 `__pwRunCanvasPerf()` | 页面 runner 的默认值同时驱动 Tauri 与 Swift | 脚本选项只能由 Web runner 拥有；宿主不得各存一份字面量 | 前端默认值行为回归 + 两宿主真实测量 |
 | 已归属 WebContent PID 在脚本前或后不可读 / 已退出 | 读取该 PID 或宿主 RSS | 当前规模失败，不写 `webProcesses=0` 的有效证据 | RSS 采样只能成功或显式失败，不能用 0 冒充可读；采样器 | 不可读 PID 合同回归 + 真实前后采样 |
 | 装载前后的 WebContent PID 差集为空或多于一个 | 在脚本运行前尝试归属内存进程 | 中止该规模，不输出可误用的内存对比 | 内存证据只接受单元素差集；采样器与独立子进程边界 | 差集纯逻辑测试 + 真实采样；外部应用不受控制，仍要求安静机器 |
@@ -155,5 +155,6 @@ xcodebuild -project native/macos/PlotWeaveNative.xcodeproj \
 - #572 先红后绿与真实边界：合同测试先因测量模块缺失失败，实现后 6/6 通过，并以实际 Swift 编译器结果锁定 12.5ms 按半偶规则显示为 12ms；首次真实 Wry 运行揭示 async Promise evaluation 返回空及失败退出码未传播，改为 worker 轮询和显式原子退出状态后三规模通过，非法 URL 实测退出码 1。完整 `src-tauri` 路由通过（`check:size` 740 文件、workspace drift 0、`cargo fmt --check`、`clippy --all-targets -D warnings`、`cargo test`，库 385 项及合同 6 项均绿）；完整 native 路由通过（280 tests / 62 suites，175.660s），共同模式之外的既有回归未退化。
 - #572 文档结构化审查：已核对 §3.4 的矩阵到实测映射、迁移计划状态/M15/§7.2、P1 历史规格与解决注记；#573 与人工验收缺口保持独立，`git diff --check` 通过。文档没有配置的自动化语义检查。
 - PR #585 首轮评审（review 5551499836）：逐阶段缺样本与 RSS 不可读改为 fail-closed，脚本选项收归 Web runner 默认值，`PW-PERF` 精确 token 测试补上 §3.4 机器合同引用。三项行为回归均先红（缺省选项 TypeError、RSS Result 缺失编译错误、空阶段断言失败）后绿；前端 232 文件 / 3242 项、Rust 库 385 项与合同 7 项、native 280 tests / 62 suites（175.985s）全绿。最终实测另确认 3 份缺帧报告被拒绝而未进入证据。
+- PR #585 后续评审（comment 4297921455）：补 `samples>0` 但 p50/p95 为 null 的拒绝分支，total 与四阶段统一要求数值百分位，Swift 经同一帧指标 helper 断言；null 百分位合同先红后绿，Rust 库 385 项与合同 7 项、native 280 tests / 62 suites（175.377s）全绿。上述权威实测报告各字段均已是数值，不需要以新测量替换。
 - 文档无配置的自动化语义检查；已按结构化审查核对 §3.2 逐项输出、§3.3 结论、迁移计划 M15/§7.2 与 Swift 测试规范，三个文档的 Prettier 检查通过。
 - 一次性产物（DerivedData、打包 Web 资源、/tmp 日志）验证后清理；未触碰用户数据根。

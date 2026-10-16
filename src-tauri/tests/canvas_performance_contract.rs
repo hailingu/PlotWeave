@@ -82,6 +82,14 @@ fn report_validation_rejects_wrong_fixture_and_incomplete_interaction() {
     empty_phase["phases"][0]["frames"] = frames(0);
     assert!(report::validate_report(&empty_phase, 100).is_err());
 
+    let mut null_phase_percentile = valid_report(100);
+    null_phase_percentile["phases"][0]["frames"]["p95Ms"] = Value::Null;
+    assert!(report::validate_report(&null_phase_percentile, 100).is_err());
+
+    let mut null_total_percentile = valid_report(100);
+    null_total_percentile["total"]["p50Ms"] = Value::Null;
+    assert!(report::validate_report(&null_total_percentile, 100).is_err());
+
     let mut no_effect = valid_report(100);
     no_effect["effects"]["draggedNodeMovedPx"] = json!(0);
     assert!(report::validate_report(&no_effect, 100).is_err());

@@ -39,7 +39,7 @@ pub fn validate_report(report: &Value, scale: u32) -> Result<(), String> {
     }
     validate_viewport(&report["viewport"])?;
     validate_phases(&report["phases"])?;
-    validate_frames(&report["total"], true)?;
+    validate_frames(&report["total"])?;
     for effect in ["draggedNodeMovedPx", "panTranslatePx", "zoomTravel"] {
         if report["effects"][effect].as_f64().unwrap_or(0.0) <= 0.0 {
             return Err(format!("PW_PERF_EFFECT_MISSING:{effect}"));
@@ -113,18 +113,18 @@ fn validate_phases(phases: &Value) -> Result<(), String> {
         if phase["kind"].as_str() != Some(kind) {
             return Err("PW_PERF_PHASE_ORDER".to_string());
         }
-        validate_frames(&phase["frames"], true).map_err(|error| format!("{error}:{kind}"))?;
+        validate_frames(&phase["frames"]).map_err(|error| format!("{error}:{kind}"))?;
     }
     Ok(())
 }
 
-fn validate_frames(frames: &Value, require_samples: bool) -> Result<(), String> {
+fn validate_frames(frames: &Value) -> Result<(), String> {
     let samples = frames["samples"].as_u64();
-    if samples.is_none() || (require_samples && samples == Some(0)) {
+    if samples.is_none() || samples == Some(0) {
         return Err("PW_PERF_FRAMES_MISSING".to_string());
     }
     for field in ["p50Ms", "p95Ms"] {
-        if !frames[field].is_null() && frames[field].as_f64().is_none() {
+        if frames[field].as_f64().is_none() {
             return Err(format!("PW_PERF_FRAME_STAT_INVALID:{field}"));
         }
     }

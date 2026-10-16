@@ -99,10 +99,10 @@ struct WebCanvasPerformanceTests {
         #expect(kinds == ["drag", "pan", "zoom", "panel"])
         for phase in phases {
             let frames = try #require(phase["frames"] as? [String: Any])
-            #expect((frames["samples"] as? Int ?? 0) > 0, "every phase must report rAF samples")
+            Self.expectFrameMetrics(frames)
         }
         let total = try #require(report["total"] as? [String: Any])
-        #expect((total["samples"] as? Int ?? 0) > 0, "the rAF sampler must observe frames")
+        Self.expectFrameMetrics(total)
         let effects = try #require(report["effects"] as? [String: Any])
         #expect((effects["draggedNodeMovedPx"] as? Double ?? 0) > 0, "the scripted drag must move a node")
         #expect((effects["panTranslatePx"] as? Double ?? 0) > 0, "the scripted pan must translate the viewport")
@@ -252,6 +252,13 @@ struct WebCanvasPerformanceTests {
         }
         struct FixtureTimeout: Error { let detail: String }
         throw FixtureTimeout(detail: "expected \(nodes) nodes/\(edges) edges, got \(lastCounts)")
+    }
+
+    /// Requires samples and numeric p50/p95 for every total or phase report.
+    private static func expectFrameMetrics(_ frames: [String: Any]) {
+        #expect((frames["samples"] as? Int ?? 0) > 0, "every report must contain rAF samples")
+        #expect((frames["p50Ms"] as? Double) != nil, "sampled reports must contain numeric p50")
+        #expect((frames["p95Ms"] as? Double) != nil, "sampled reports must contain numeric p95")
     }
 
     /// One evidence line per scale for the P5 record (values, not thresholds).
