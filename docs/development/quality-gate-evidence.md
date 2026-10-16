@@ -209,12 +209,9 @@ NODE
   ledger failure source documented in
   [Push-Path Per-Ref Gating](quality-gate-push.md#push-path-per-ref-gating-issue-405)
   is gone; a bare `gate-history.sh materialize` remains as a manual drain.
-  The versioned file is additionally touched after a passing `pre-push`,
-  which folds the push-tail records (the tip's commit-side and push runs)
-  and leaves them unstaged; stage them together with the next change.
-  Committing the file alone burns a full gate run on a record-only commit —
-  not the norm, except as an optional evidence-tip commit, which the
-  server-side check exempts when it only touches the ledger. Records for
+  A record-only commit burns a full gate run and is not the norm, except as
+  an optional evidence-tip commit, which the server-side check exempts when
+  it only touches the ledger. Records for
   commit-side runs of commits that are never pushed stay in the local
   pending file: nothing leaves the machine, so there is no external claim
   to verify. If the commit-time `git add` fails (best-effort), the folded
@@ -281,6 +278,22 @@ two complementary backstops (方案 1 + 方案 2):
    message names that step (`git commit --allow-empty` then re-push); a
    rebased branch pushed without it fails the check on the replayed
    non-tip commits.
+
+   **Release-PR integration boundary (PR #581 评审 5542207474).** A
+   `dev → main` release PR's range enumerates GitHub-created merge commits
+   and every integrated task branch — including each task's tip, whose
+   records by the one-commit-lag design are still materializing on the
+   developer's machine when the release opens. The verifier therefore
+   recognizes the integration boundary instead of demanding impossible
+   records: merge commits in the range are skipped (server integration
+   points never ran a local gate; their content was covered by the
+   constituent task PRs, which branch protection makes mandatory), the
+   non-first parent of an in-range merge — an integrated branch tip — gets
+   the `[GATE_EVIDENCE_INTEGRATED_TIP_LAG]` warning like a range tip, and
+   commits whose tree predates the versioned ledger entirely (issue #355
+   adoption) are exempted with `[GATE_EVIDENCE_PRE_LEDGER_COMMIT]`. Every
+   other commit in the release range still requires evidence, so the
+   tolerances do not spill over ordinary history.
 
 2. **Branch protection（方案 2）.** GitHub branch protection is enabled on
    `dev` and `main` (owner decision, 2026-10-16): pull requests required

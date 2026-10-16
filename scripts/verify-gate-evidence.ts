@@ -13,6 +13,11 @@
  * 稳定诊断码（测试与 CI 按此契约断言）：
  * - [GATE_EVIDENCE_MISSING]：非 tip 提交缺失通过记录（核验失败）。
  * - [GATE_EVIDENCE_TIP_LAG]：tip 缺失自身记录（告警，不失败）。
+ * - [GATE_EVIDENCE_INTEGRATED_TIP_LAG]：发布范围中被集成分支的 tip
+ *   （某合并提交的非首父）缺失记录（告警，不失败）——其记录按物化时序
+ *   留在开发者本地下一次提交中，晚于本次发布落地（PR #581 评审）。
+ * - [GATE_EVIDENCE_PRE_LEDGER_COMMIT]：台账尚未入库的历史提交（其树中
+ *   不存在台账路径）豁免记录要求（提示，不失败）。
  * - [GATE_EVIDENCE_LEDGER_ONLY_TIP]：tip 仅改台账，豁免（提示）。
  * - [GATE_EVIDENCE_MALFORMED_LINE]：台账中无法解析的行被跳过（告警）。
  *
@@ -41,24 +46,32 @@ type RangeCommit = {
   subject: string
   tree: string
   parentCount: number
+  /** 首父之外的全部父提交（合并提交的第二/更多父 = 被集成分支 tip）。 */
+  integratedParents: string[]
   changedFiles: string[]
 }
 
-/** 核验结论：缺失列表（失败项）与 tip 形态。 */
+/** 核验结论：缺失列表（失败项）、tip 形态与发布边界豁免统计。 */
 type Verification = {
   missing: CommitFinding[]
   tipStatus: 'evidenced' | 'ledger-only' | 'lagging'
   tipFinding: CommitFinding
+  integratedTipWarnings: CommitFinding[]
+  preLedgerNotes: CommitFinding[]
+  skippedMerges: number
 }
 
 class UsageError extends Error {}
 
-/** 以与推送门禁一致的对象视图执行 git（PR #442：忽略本地替换引用）。 */
+/** 以与推送门禁一致的对象视图执行 git（PR #442：忽略本地替换引用）。
+ * stderr 显式 pipe：失败探测（如 cat-file -e）不得把子进程诊断漏进
+ * 调用方输出。 */
 function runGit(args: string[], allowFailure = false): string {
   try {
     return execFileSync('git', args, {
       encoding: 'utf8',
       env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
   } catch (error) {
     if (allowFailure) return ''
@@ -137,9 +150,10 @@ function describeCommit(sha: string): RangeCommit {
       .trim()
       .split('\n')[0]
       ?.split(' ') ?? []
+  const parentShas = parents.slice(1)
   const changedFiles =
-    parents.length === 2
-      ? runGit(['diff', '--name-only', parents[1] ?? '', sha])
+    parentShas.length === 1
+      ? runGit(['diff', '--name-only', parentShas[0] ?? '', sha])
           .trim()
           .split('\n')
           .filter((path) => path !== '')
@@ -149,8 +163,19 @@ function describeCommit(sha: string): RangeCommit {
     short: runGit(['rev-parse', '--short', sha]).trim(),
     subject: runGit(['log', '-1', '--format=%s', sha]).trim(),
     tree: runGit(['rev-parse', `${sha}^{tree}`]).trim(),
-    parentCount: parents.length - 1,
+    parentCount: parentShas.length,
+    integratedParents: parentShas.slice(1),
     changedFiles,
+  }
+}
+
+/** 提交树中是否已存在台账路径（issue #355 之前的历史提交豁免依据）。 */
+function commitHasLedger(commit: RangeCommit): boolean {
+  try {
+    runGit(['cat-file', '-e', `${commit.sha}:${ledgerPath}`])
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -163,23 +188,60 @@ function isLedgerOnlyTip(commit: RangeCommit): boolean {
   )
 }
 
-/** 逐提交判定：非 tip 必须有证据；tip 按记录/豁免/滞后三态归类。 */
+/** 发布边界集合：范围内合并提交的键（跳过）与其非首父（集成分支 tip）。
+ * 服务端集成的合并提交在本地未经门禁、其内容已由各组成 PR 的核验覆
+ * 盖（分支保护保证入库必经 PR）；被集成分支的 tip 在自己的 PR 里按
+ * tip 滞后豁免，其记录随开发者下一次提交物化、晚于发布落地。 */
+function collectIntegrationBoundaries(commits: RangeCommit[]): {
+  mergeShas: Set<string>
+  integratedTipShas: Set<string>
+} {
+  const mergeShas = new Set<string>()
+  const integratedTipShas = new Set<string>()
+  for (const commit of commits) {
+    if (commit.parentCount >= 2) {
+      mergeShas.add(commit.sha)
+      for (const parent of commit.integratedParents) {
+        integratedTipShas.add(parent)
+      }
+    }
+  }
+  return { mergeShas, integratedTipShas }
+}
+
+/** 逐提交判定：发布边界（合并提交/集成分支 tip/台账前历史）之外的
+ * 非 tip 提交必须有证据；范围 tip 按记录/豁免/滞后三态归类。 */
 function verifyRange(
   commits: RangeCommit[],
   evidenceTrees: Set<string>,
 ): Verification {
   const missing: CommitFinding[] = []
+  const integratedTipWarnings: CommitFinding[] = []
+  const preLedgerNotes: CommitFinding[] = []
   const tip = commits[commits.length - 1]
+  const { mergeShas, integratedTipShas } = collectIntegrationBoundaries(commits)
+  let skippedMerges = 0
   for (const commit of commits) {
-    const evidenced = evidenceTrees.has(commit.tree)
     if (commit === tip) continue
-    if (!evidenced) {
-      missing.push({
-        short: commit.short,
-        subject: commit.subject,
-        tree: commit.tree,
-      })
+    const finding: CommitFinding = {
+      short: commit.short,
+      subject: commit.subject,
+      tree: commit.tree,
     }
+    if (mergeShas.has(commit.sha)) {
+      skippedMerges += 1
+      continue
+    }
+    if (evidenceTrees.has(commit.tree)) continue
+    if (integratedTipShas.has(commit.sha)) {
+      integratedTipWarnings.push(finding)
+      continue
+    }
+    if (!commitHasLedger(commit)) {
+      preLedgerNotes.push(finding)
+      continue
+    }
+    missing.push(finding)
   }
   const tipFinding = { short: tip.short, subject: tip.subject, tree: tip.tree }
   let tipStatus: Verification['tipStatus'] = 'lagging'
@@ -188,7 +250,14 @@ function verifyRange(
   } else if (isLedgerOnlyTip(tip)) {
     tipStatus = 'ledger-only'
   }
-  return { missing, tipStatus, tipFinding }
+  return {
+    missing,
+    tipStatus,
+    tipFinding,
+    integratedTipWarnings,
+    preLedgerNotes,
+    skippedMerges,
+  }
 }
 
 /** 输出告警：GitHub Actions 中以工作流命令呈现为注解，本地为纯文本。 */
@@ -224,6 +293,16 @@ function main(): number {
       `[GATE_EVIDENCE_MISSING] ${finding.short}（${finding.subject}）在 head 版台账没有通过记录（tree ${finding.tree}）`,
     )
   }
+  for (const finding of verification.integratedTipWarnings) {
+    emitWarning(
+      `[GATE_EVIDENCE_INTEGRATED_TIP_LAG] ${finding.short}（${finding.subject}）是被集成分支的 tip：其记录随开发者下一次提交物化、晚于本次发布落地，本次不判失败。`,
+    )
+  }
+  for (const finding of verification.preLedgerNotes) {
+    console.log(
+      `[GATE_EVIDENCE_PRE_LEDGER_COMMIT] ${finding.short}（${finding.subject}）早于台账入库，豁免记录要求。`,
+    )
+  }
   if (verification.tipStatus === 'lagging') {
     const finding = verification.tipFinding
     emitWarning(
@@ -234,8 +313,22 @@ function main(): number {
       `[GATE_EVIDENCE_LEDGER_ONLY_TIP] tip ${verification.tipFinding.short} 仅改台账，豁免自身记录要求。`,
     )
   }
+  const boundarySummary = [
+    verification.skippedMerges > 0
+      ? `合并提交跳过 ${verification.skippedMerges}`
+      : '',
+    verification.integratedTipWarnings.length > 0
+      ? `集成 tip 告警 ${verification.integratedTipWarnings.length}`
+      : '',
+    verification.preLedgerNotes.length > 0
+      ? `台账前历史豁免 ${verification.preLedgerNotes.length}`
+      : '',
+  ]
+    .filter((part) => part !== '')
+    .join('，')
   console.log(
-    `[gate-evidence] 范围 ${described.length} 个提交，${evidencedCount} 个有台账证据，tip 状态 ${verification.tipStatus}。`,
+    `[gate-evidence] 范围 ${described.length} 个提交，${evidencedCount} 个有台账证据，tip 状态 ${verification.tipStatus}` +
+      (boundarySummary === '' ? '。' : `（${boundarySummary}）。`),
   )
   if (verification.missing.length > 0) {
     console.log(

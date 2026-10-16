@@ -98,6 +98,14 @@ function createSeeded(seed: (root: string, base: string) => void): string {
   return fixture.create()
 }
 
+/** 同上但不预置基线：种子自建完整历史（发布形态需要早于台账入库的
+ * base 提交，不能经 seedBase 预写台账）。 */
+function createRawSeeded(seed: (root: string) => void): string {
+  const fixture = gitScenarioFixture(seed)
+  fixtures.push(fixture)
+  return fixture.create()
+}
+
 /** 在场景仓库上执行核验脚本，收集状态与合并输出。 */
 function runVerifier(
   root: string,
@@ -296,6 +304,109 @@ describe(
       expect(missingBase.output).toContain('用法')
       expect(unknownFlag.status).toBe(2)
       expect(unknownFlag.output).toContain('未知参数')
+    })
+  },
+)
+
+describe(
+  '发布 PR 的集成边界（dev → main 形态，PR #581 评审 5542207474）',
+  { timeout: 60_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of fixtures.splice(0)) fixture.dispose()
+    })
+
+    it('合并提交跳过、被集成分支 tip 与台账前历史豁免：发布范围通过且仅告警', () => {
+      const root = createRawSeeded((root) => {
+        // base 与 c1 早于台账入库（树中无台账路径）
+        git(root, 'init', '--initial-branch=main')
+        git(root, 'config', 'user.name', 'Scenario')
+        git(root, 'config', 'user.email', 'scenario@example.invalid')
+        writeFile(root, 'src/app.txt', 'base\n')
+        const b0 = commitAll(root, 'release-base')
+        git(root, 'tag', 'release-base', b0)
+        writeFile(root, 'src/app.txt', 'c1\n')
+        commitAll(root, 'c1')
+        // c2 引入台账；自身记录与 s1 的记录随合并提交 M1 写入
+        appendLedger(root, [
+          JSON.stringify({
+            tree: 'f'.repeat(40),
+            qualityGate: 'OK',
+            newCodeUnresolvedIssues: 0,
+          }),
+        ])
+        const c2 = commitAll(root, 'c2 引入台账')
+        git(root, 'checkout', '-q', '-b', 'side1', 'main')
+        writeFile(root, 'src/side1.txt', 'side1\n')
+        const s1 = commitAll(root, 's1')
+        git(root, 'checkout', '-q', 'main')
+        git(root, 'merge', '--no-ff', '--no-commit', 'side1')
+        appendLedger(root, [recordLine(root, c2), recordLine(root, s1)])
+        commitAll(root, 'M1')
+        // side2 的 tip t1 无入库记录：其记录按物化时序留在开发者本地
+        git(root, 'checkout', '-q', '-b', 'side2', 'main')
+        writeFile(root, 'src/side2.txt', 'side2\n')
+        commitAll(root, 't1')
+        git(root, 'checkout', '-q', 'main')
+        git(root, 'merge', '--no-ff', '--no-commit', 'side2')
+        commitAll(root, 'M2')
+      })
+
+      const result = runVerifier(root, [
+        '--base',
+        'release-base',
+        '--head',
+        'HEAD',
+      ])
+
+      expect(result.status).toBe(0)
+      expect(result.output).not.toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('GATE_EVIDENCE_PRE_LEDGER_COMMIT')
+      expect(result.output).toContain('GATE_EVIDENCE_INTEGRATED_TIP_LAG')
+      expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
+      expect(result.output).toContain('合并提交跳过 1')
+    })
+
+    it('豁免不外溢：发布范围内普通直链提交缺记录仍失败', () => {
+      const root = createRawSeeded((root) => {
+        git(root, 'init', '--initial-branch=main')
+        git(root, 'config', 'user.name', 'Scenario')
+        git(root, 'config', 'user.email', 'scenario@example.invalid')
+        writeFile(root, 'src/app.txt', 'base\n')
+        const b0 = commitAll(root, 'release-base')
+        git(root, 'tag', 'release-base', b0)
+        writeFile(root, 'src/app.txt', 'c1\n')
+        commitAll(root, 'c1')
+        appendLedger(root, [
+          JSON.stringify({
+            tree: 'f'.repeat(40),
+            qualityGate: 'OK',
+            newCodeUnresolvedIssues: 0,
+          }),
+        ])
+        const c2 = commitAll(root, 'c2 引入台账')
+        // c2 的直链后继提交：既非合并、非集成分支 tip、也非范围 tip
+        writeFile(root, 'src/dev-direct.txt', 'direct\n')
+        commitAll(root, 'c2b-直链绕过')
+        git(root, 'checkout', '-q', '-b', 'side1', 'main')
+        writeFile(root, 'src/side1.txt', 'side1\n')
+        const s1 = commitAll(root, 's1')
+        git(root, 'checkout', '-q', 'main')
+        git(root, 'merge', '--no-ff', '--no-commit', 'side1')
+        appendLedger(root, [recordLine(root, c2), recordLine(root, s1)])
+        commitAll(root, 'M1')
+      })
+
+      const result = runVerifier(root, [
+        '--base',
+        'release-base',
+        '--head',
+        'HEAD',
+      ])
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('[GATE_EVIDENCE_MISSING]')
+      expect(result.output).toContain('c2b-直链绕过')
     })
   },
 )
