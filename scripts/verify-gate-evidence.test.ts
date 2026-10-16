@@ -309,7 +309,7 @@ describe(
 )
 
 describe(
-  '发布 PR 的集成边界（dev → main 形态，PR #581 评审 5542207474）',
+  '发布集成边界的豁免通过（--release-boundary，dev → main 形态，PR #581 评审 5542207474）',
   { timeout: 60_000 },
   () => {
     afterEach(() => {
@@ -366,6 +366,16 @@ describe(
       expect(result.output).toContain('GATE_EVIDENCE_INTEGRATED_TIP_LAG')
       expect(result.output).toContain('GATE_EVIDENCE_TIP_LAG')
       expect(result.output).toContain('合并提交跳过 1')
+    })
+  },
+)
+
+describe(
+  '发布范围内普通直链提交缺证据仍失败（--release-boundary，PR #581 评审 5542207474）',
+  { timeout: 60_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of fixtures.splice(0)) fixture.dispose()
     })
 
     it('豁免不外溢：发布范围内普通直链提交缺记录仍失败', () => {
