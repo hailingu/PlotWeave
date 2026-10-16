@@ -1120,7 +1120,7 @@ describe('门禁测试标记隔离（issue #428）', { timeout: 30_000 }, () => 
 })
 
 describe(
-  '门禁结论摘要记录（issue #355：完整通过后写入待物化文件，推送时并入版本化凭据）',
+  '门禁结论摘要记录（issue #355：完整通过后写入待物化文件，由下一次普通提交折并暂存；推送保留待物化文件，PR #581 评审 5537970549）',
   { timeout: 30_000 },
   () => {
     it('完整通过后向待物化文件追加一行合法 JSON，且绝不直接触碰版本化文件（PR #415 评审 5338815626）', () => {
@@ -1213,7 +1213,8 @@ describe(
       expect(result.history).toBe('')
     })
 
-    // pre-push 侧「门禁通过后物化」由 scripts/gate-tree-marker.test.ts 的
+    // 推送不物化（PR #581 评审 5537970549）：记录留在待物化文件、由下
+    // 一次普通提交折并暂存，该行为由 scripts/gate-tree-marker.test.ts 的
     // 真实推送 e2e 与 scripts/pre-push-refs.test.ts 的快路径用例覆盖（issue
     // #405 起 pre-push 读取 stdin，空 stdin 不触发门禁）
   },
