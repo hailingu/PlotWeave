@@ -44,10 +44,10 @@ fold pending lines into the versioned ledger and `git add` it into the
 commit being created, so the versioned ledger lags one commit (the
 `prepare-commit-msg` fallback gate — revert, cherry-pick, rebase replays —
 deliberately does not touch the ledger; see the timing property below).
-After the `pre-push` gate passes, the hook runs
-`scripts/gate-history.sh materialize`, which folds the remaining push-tail
-lines into the versioned `docs/development/gate-history.jsonl` and clears
-the pending file. Each record line:
+Since PR #581 评审 5537970549, `pre-push` does not materialize either:
+push-path records accumulate in the pending file and drain at the next
+commit's fold, leaving the worktree clean after every push. Each record
+line:
 
 | Field | Meaning |
 | --- | --- |
@@ -164,7 +164,7 @@ NODE
   that lock, so a concurrently passing gate cannot have its record truncated
   away in the drain window (PR #415 评审 5339243902). A lock-wait timeout —
   or a malformed timeout configuration — warns and leaves the lines pending
-  for the next push; materialize never blocks or fails the push. If the
+  for the next fold; materialize never blocks or fails the operation. If the
   append into the versioned file succeeds but the pending-file truncation
   fails, the next materialize can duplicate lines — benign under log
   semantics — and a materialize killed with SIGKILL can leave a stale lock.
@@ -175,36 +175,40 @@ NODE
   new way to fail a clean gate or push.
 - *Materialize timing and the one-commit lag.* Gate runs write only to the
   pending file inside `.git`, so they never dirty the tracked file mid-gate
-  and never interfere with subsequent Git steps. Since issue #548,
-  `pre-commit` and `pre-merge-commit` — the ordinary commit and merge
-  paths, which reliably adopt hook staging — fold the pending lines into
-  the versioned file and `git add` the ledger into the commit being created
-  **before** the gate runs; the staging also picks up the previous push's
-  unstaged materialized tail, automating the previously manual
-  "stage with the next change" discipline. Auto-staging is attribution-
-  guarded (PR #581 评审 5537676738): it fires only for content attributable
-  to gate materialization — either the lines folded in this run form a pure
-  parseable-JSON append on top of the index (the developer's staged
-  selection is preserved verbatim), or the worktree is a pure
-  parseable-JSON append over `HEAD` with no distinct partial staging in the
-  index. A modified/deleted existing line, a malformed appended line, a
-  manual partial staging, or an undecidable state (Node unavailable) warns
+  and never interfere with subsequent Git steps. The pending file drains
+  **only at commit-creation folds**: `pre-commit` and `pre-merge-commit` —
+  the ordinary commit and merge paths, which reliably adopt hook staging —
+  run `materialize --stage-for-commit` **before** the gate, folding the
+  pending lines into the versioned file and `git add`ing the ledger into
+  the commit being created. Auto-staging is attribution-guarded by the
+  **exact pending bytes** (PR #581 评审 5537970549): it fires only while
+  the worktree ledger is byte-exactly the index content plus the lines
+  folded in this run, each parseable as JSON — the developer's staged
+  selection is preserved verbatim, and any other unstaged ledger change
+  (a syntactically valid manual append included; a modified/deleted
+  existing line; a malformed or polluted line; a manual partial staging; an
+  undecidable state with Node unavailable) warns
   `[GATE_HISTORY_UNATTRIBUTED_CHANGE]` and keeps the developer's staging
-  untouched. The lines are carried by that
-  commit, so no unstaged residue remains while the operation proceeds —
-  the PR #415 breakage was an *unstaged* write; this path folds and stages
-  into the same commit. The record for commit C's own gate run is
-  therefore versioned in the **next** ordinary commit (C's tree contains
-  the staged lines, so it cannot contain its own record — self-reference).
-  The `prepare-commit-msg` fallback gate — automatic `git revert` /
-  `git cherry-pick` commits and every `git rebase` replay — deliberately
-  does **not** materialize: sequencer replays do not adopt hook-added
-  staging, and the folded-but-uncommitted lines would abort the next replay
-  (measured in this change's fixtures; the PR #415 protection is kept).
-  Those runs' records stay in the pending file and fold with the next
-  ordinary commit — after rebasing a branch, one follow-up ordinary commit
-  (`git commit --allow-empty` qualifies, and lands as the exempt
-  ledger-only tip) restores replay evidence before pushing.
+  untouched. The lines are carried by that commit, so no unstaged residue
+  remains while the operation proceeds — the PR #415 breakage was an
+  *unstaged* write; this path folds and stages into the same commit. The
+  record for commit C's own gate run is therefore versioned in the **next**
+  ordinary commit (C's tree contains the staged lines, so it cannot contain
+  its own record — self-reference). The `prepare-commit-msg` fallback gate
+  — automatic `git revert` / `git cherry-pick` commits and every
+  `git rebase` replay — deliberately does **not** materialize: sequencer
+  replays do not adopt hook-added staging, and the folded-but-uncommitted
+  lines would abort the next replay (measured in this change's fixtures;
+  the PR #415 protection is kept). Those runs' records stay in the pending
+  file and fold with the next ordinary commit — after rebasing a branch,
+  one follow-up ordinary commit (`git commit --allow-empty` qualifies, and
+  lands as the exempt ledger-only tip) restores replay evidence before
+  pushing. `pre-push` does not materialize (PR #581 评审 5537970549):
+  push-path records drain at the next commit's fold like every other
+  record, the worktree stays clean after pushes, and the fast path's
+  ledger failure source documented in
+  [Push-Path Per-Ref Gating](quality-gate-push.md#push-path-per-ref-gating-issue-405)
+  is gone; a bare `gate-history.sh materialize` remains as a manual drain.
   The versioned file is additionally touched after a passing `pre-push`,
   which folds the push-tail records (the tip's commit-side and push runs)
   and leaves them unstaged; stage them together with the next change.

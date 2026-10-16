@@ -120,8 +120,8 @@ jobs:
   # runner 上不可达，改为服务端复核其版本化自述证据 docs/development/
   # gate-history.jsonl（issue #355）：PR 范围内除 tip 外的每个提交必须在
   # head 版台账中存在 tree 匹配且 Quality Gate OK、新增代码未解决问题为 0
-  # 的通过记录；tip 自身的推送尾记录按物化时序滞后一次提交，仅注解告警
-  # 或按「仅改台账的 tip」豁免。与分支保护（issue #548 方案 2）互补：
+  # 的通过记录；tip 自身的门禁记录（提交与推送两轮）按物化时序滞后
+  # 一次提交，仅注解告警或按「仅改台账的 tip」豁免。与分支保护（issue #548 方案 2）互补：
   # 本校验证明门禁确曾通过并留证，分支保护关闭直推。只读台账、不新增
   # 本地门禁变体（quality-gate-cost.md 的单一成本决策不变）。语义与容差
   # 见 docs/development/quality-gate-evidence.md。仅 PR 事件运行：push 到

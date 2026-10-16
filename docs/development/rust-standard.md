@@ -72,7 +72,12 @@ Rust coverage is measured and imported into the quality report
 `scripts/rust-coverage.sh` runs `cargo-llvm-cov llvm-cov --lib
 --test media_format_leaf --lcov --manifest-path src-tauri/Cargo.toml` plus
 `cargo-llvm-cov llvm-cov --workspace --lib --test abi --lcov
---manifest-path crates/Cargo.toml`. It validates each report (non-empty,
+--manifest-path crates/Cargo.toml` — each invocation additionally carries
+`--jobs <budget>` and executes with `RUST_TEST_THREADS=<budget>`, bounding
+compile and test-execution parallelism per the gate CPU budget (owner
+decision 2026-10-16, see
+[Gate CPU Budget](quality-gate-cost.md#gate-cpu-budget-2026-10-16-owner-direction)).
+It validates each report (non-empty,
 source records and covered lines), then merges them into
 `src-tauri/target/coverage/lcov-rust.info`. Identical source-path/line records
 are counted once, with hits combined across both workspaces. The quality

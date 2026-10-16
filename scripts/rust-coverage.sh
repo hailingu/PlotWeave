@@ -30,10 +30,39 @@ command -v "$llvm_cov_bin" >/dev/null 2>&1 ||
   # unbound），故变量置于消息末尾
   fail "缺少命令（安装：cargo install cargo-llvm-cov）：$llvm_cov_bin"
 
+# CPU 预算与 sonar-quality-gate.sh 同源（owner 指示 2026-10-16，决策与
+# 实测基线见 docs/development/quality-gate-cost.md「Gate CPU Budget」）：
+# 优先继承 PLOTWEAVE_GATE_CPU_BUDGET（门禁解析并导出的同一数值），独立
+# 运行时按逻辑核数 1/3（向下取整，至少 1；探测失败按 4）自取。--jobs
+# 限制编译并行，RUST_TEST_THREADS 限制测试执行并行；目标选择与报告
+# 口径不变。非法覆盖以稳定诊断码阻断、不静默回退。
+coverage_jobs=${PLOTWEAVE_GATE_CPU_BUDGET:-}
+case $coverage_jobs in
+  '')
+    coverage_jobs=$(sysctl -n hw.ncpu 2>/dev/null) || coverage_jobs=
+    [ -n "$coverage_jobs" ] ||
+      coverage_jobs=$(nproc 2>/dev/null) || coverage_jobs=
+    case $coverage_jobs in
+      *[!0-9]* | '') coverage_jobs=4 ;;
+    esac
+    [ "$coverage_jobs" -ge 3 ] || coverage_jobs=3
+    coverage_jobs=$((coverage_jobs / 3))
+    ;;
+  *[!0-9]*)
+    fail '[GATE_CPU_BUDGET_INVALID] PLOTWEAVE_GATE_CPU_BUDGET 须为正整数；已拒绝，不做静默回退'
+    ;;
+  *)
+    [ "$coverage_jobs" -ge 1 ] ||
+      fail '[GATE_CPU_BUDGET_INVALID] PLOTWEAVE_GATE_CPU_BUDGET 须为正整数；已拒绝，不做静默回退'
+    ;;
+esac
+export RUST_TEST_THREADS=$coverage_jobs
+
 # 两个 Cargo workspace 独立采样；任何失败均阻断，临时报告随脚本退出删除。
 trap 'rm -f "$tauri_report_path" "$crates_report_path"' 0
 
 printf '%s\n' '[coverage] 生成 Rust 语句覆盖率（LCOV，lib + media_format_leaf 目标，稳定版工具链无分支口径）……'
+printf '[coverage] 并行度预算：%s（编译 --jobs 与 RUST_TEST_THREADS 同值）\n' "$coverage_jobs"
 # llvm-cov 不创建报告父目录：先建（首次运行 target/coverage 不存在）
 mkdir -p "$(dirname "$rust_coverage_report_path")"
 # 目标选择（PR #223 评审）：--lib 度量产品库由库测试套件执行的语句，
@@ -43,7 +72,8 @@ mkdir -p "$(dirname "$rust_coverage_report_path")"
 # -Z coverage-options=branch（rust-toolchain.toml 钉死稳定版），故不启用。
 "$llvm_cov_bin" llvm-cov --lib --test media_format_leaf --lcov \
   --output-path "$tauri_report_path" \
-  --manifest-path src-tauri/Cargo.toml
+  --manifest-path src-tauri/Cargo.toml \
+  --jobs "$coverage_jobs"
 
 # core 的单元测试及 FFI 的 ABI 集成测试在独立 workspace 内执行；只执行
 # 宿主测试会把迁出的内核单元测试遗漏，不能用较小的报告代替原有度量。
@@ -51,7 +81,8 @@ set -- "$tauri_report_path"
 if [ -f crates/Cargo.toml ]; then
   "$llvm_cov_bin" llvm-cov --workspace --lib --test abi --lcov \
     --output-path "$crates_report_path" \
-    --manifest-path crates/Cargo.toml
+    --manifest-path crates/Cargo.toml \
+    --jobs "$coverage_jobs"
   set -- "$tauri_report_path" "$crates_report_path"
 fi
 # issue #405：当前脚本也检查历史被推树；尚未提取 core 的树只有宿主

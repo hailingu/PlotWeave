@@ -1,13 +1,14 @@
 /** 核心迁出后，覆盖率流水线仍须度量两个 workspace 并对共享源码去重。 */
 import { spawnSync } from 'node:child_process'
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpus, tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -15,11 +16,12 @@ const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryRoots: string[] = []
 
 /** LLVM 工具是外部慢边界；替身保留命令选择、报告路径与退出语义。 */
-function runCoverage(mode = 'valid') {
+function runCoverage(mode = 'valid', budget?: number | string) {
   const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-rust-coverage-'))
   temporaryRoots.push(sandbox)
   const llvm = resolve(sandbox, 'llvm-cov')
   const report = resolve(sandbox, 'lcov.info')
+  const llvmLog = resolve(sandbox, 'llvm-invocations.log')
   mkdirSync(resolve(sandbox, 'src-tauri'))
   writeFileSync(resolve(sandbox, 'src-tauri/Cargo.toml'), '')
   if (mode !== 'legacy') {
@@ -29,6 +31,8 @@ function runCoverage(mode = 'valid') {
   writeFileSync(
     llvm,
     `#!/bin/sh
+printf 'cargo-llvm-cov %s\\n' "$*" >> "${llvmLog}"
+[ -n "\${RUST_TEST_THREADS:-}" ] && printf 'rust-test-threads %s\\n' "$RUST_TEST_THREADS" >> "${llvmLog}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --output-path) output=$2; shift ;;
@@ -58,9 +62,16 @@ fi
       PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
       PLOTWEAVE_RUST_COVERAGE_REPORT_PATH: report,
       PLOTWEAVE_TEST_MODE: mode,
+      ...(budget !== undefined
+        ? { PLOTWEAVE_GATE_CPU_BUDGET: String(budget) }
+        : {}),
     },
   })
-  return { ...result, report }
+  return {
+    ...result,
+    invocations: existsSync(llvmLog) ? readFileSync(llvmLog, 'utf8') : '',
+    report,
+  }
 }
 
 /** 按 LCOV 的 SF/DA 契约读取命中数，而非检查脚本布局或普通文案。 */
@@ -115,5 +126,38 @@ describe('Rust 跨 workspace 覆盖率', () => {
     expect(lineHits(readFileSync(result.report, 'utf8'))).toEqual(
       new Map([['src-tauri/src/lib.rs', new Map([[1, 1]])]]),
     )
+  })
+})
+
+describe('Rust 覆盖率 CPU 预算', () => {
+  it('两个 workspace 的 llvm-cov 调用都按逻辑核数 1/3 限制 --jobs 并导出 RUST_TEST_THREADS', () => {
+    const budget = Math.max(1, Math.floor(cpus().length / 3))
+    const result = runCoverage()
+
+    expect(result.status, result.stderr).toBe(0)
+    const invocations = result.invocations
+      .split('\n')
+      .filter((line) => line.startsWith('cargo-llvm-cov'))
+    expect(invocations).toHaveLength(2)
+    for (const line of invocations) {
+      expect(line).toContain(`--jobs ${budget}`)
+    }
+    expect(result.invocations).toContain(`rust-test-threads ${budget}`)
+  })
+
+  it('PLOTWEAVE_GATE_CPU_BUDGET 覆盖默认预算并同步到测试执行并行度', () => {
+    const result = runCoverage('valid', 2)
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.invocations).toContain('--jobs 2')
+    expect(result.invocations).toContain('rust-test-threads 2')
+  })
+
+  it('非法预算以稳定诊断码阻断，不生成报告', () => {
+    const result = runCoverage('valid', 'zero')
+
+    expect(result.status).not.toBe(0)
+    // 稳定诊断代码契约：quality-gate-cost.md「Gate CPU Budget」
+    expect(result.stderr).toContain('[GATE_CPU_BUDGET_INVALID]')
   })
 })

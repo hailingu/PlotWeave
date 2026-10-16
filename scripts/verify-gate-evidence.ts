@@ -4,8 +4,9 @@
  * （门禁校验的索引树）等于提交树、qualityGate 为 OK 且新增代码未解决
  * 问题为 0。提交创建钩子已在门禁前把待物化记录并入并暂存进后续提交
  * （issue #548），因此范围内除最后一个提交（tip）外的每个提交都必须在
- * head 版台账中留有证据；tip 自身的推送尾记录按物化时序只存在于下一次
- * 提交，仅输出告警，或在 tip 只改台账时豁免（该形态不携带源码变更）。
+ * head 版台账中留有证据；tip 自身的门禁记录（提交与推送两轮运行）按物
+ * 化时序只存在于下一次提交，仅输出告警，或在 tip 只改台账时豁免（该形
+ * 态不携带源码变更）。
  * 台账无签名（issue #431 信任边界）：本核验建立的是留证义务与绕过成
  * 本，不是对门禁执行的独立证明。
  *
@@ -226,7 +227,7 @@ function main(): number {
   if (verification.tipStatus === 'lagging') {
     const finding = verification.tipFinding
     emitWarning(
-      `[GATE_EVIDENCE_TIP_LAG] tip ${finding.short}（${finding.subject}）的推送尾记录随下一次提交物化，本次不判失败；若需消除告警，可将物化记录随下一次变更提交。`,
+      `[GATE_EVIDENCE_TIP_LAG] tip ${finding.short}（${finding.subject}）的门禁记录随下一次提交物化，本次不判失败；若需消除告警，可将物化记录随下一次变更提交。`,
     )
   } else if (verification.tipStatus === 'ledger-only') {
     console.log(

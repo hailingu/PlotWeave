@@ -162,9 +162,12 @@ function writeScenarioStubs(bin: string): void {
   writeExecutable(
     resolve(bin, 'npm'),
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-if [ "$*" = "run test:coverage" ]; then
-  printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
-fi`,
+case "$*" in
+  # 门禁下发 CPU 预算（--maxWorkers N），按前缀匹配分发
+  "run test:coverage"*)
+    printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
+    ;;
+esac`,
   )
   writeExecutable(
     resolve(bin, 'cargo-llvm-cov'),
@@ -530,18 +533,32 @@ describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_0
     expect(existsSync(resolve(scenario.root, 'gate-history.jsonl'))).toBe(false)
   })
 
-  it('推送门禁通过后物化待物化行到版本化文件并清空（issue #355）', () => {
+  it('推送不触碰台账：记录留在待物化文件，由下一个普通提交折并自动暂存（issue #355；PR #581 评审 5537970549）', () => {
     const scenario = prepareHookScenario('OK', true)
     expect(scenario.git(['commit', '--allow-empty', '-m', 'x']).status).toBe(0)
-    // 裸远端触发 pre-push：门禁后再物化
+    // 裸远端触发 pre-push：门禁通过但推送不再物化
     const remote = resolve(scenario.root, 'origin.git')
     expect(scenario.git(['init', '--bare', '-q', remote]).status).toBe(0)
     expect(scenario.git(['remote', 'add', 'origin', remote]).status).toBe(0)
 
     const push = scenario.git(['push', '-u', 'origin', 'main'])
     expect(push.status, push.stderr).toBe(0)
-    // 提交一次 + 推送一次，各恰一次门禁调用
+    // 提交一次 + 推送一次，各恰一次门禁调用；两轮记录都在待物化文件，
+    // 版本化台账不出现（推送不再给工作树留下被跟踪差异）
     expect(scenario.gateRuns()).toBe(2)
+    expect(existsSync(resolve(scenario.root, 'gate-history.jsonl'))).toBe(false)
+    const pendingAfterPush = readFileSync(
+      resolve(scenario.root, 'gate-pending.jsonl'),
+      'utf8',
+    )
+      .split('\n')
+      .filter(Boolean)
+    expect(pendingAfterPush).toHaveLength(2)
+
+    // 下一个普通提交把两轮记录折并入库并自动暂存（字节精确归因）；
+    // 该提交自身的记录按滞后一次提交留在待物化文件
+    expect(scenario.git(['commit', '--allow-empty', '-m', 'y']).status).toBe(0)
+    expect(scenario.gateRuns()).toBe(3)
     const history = readFileSync(
       resolve(scenario.root, 'gate-history.jsonl'),
       'utf8',
@@ -553,7 +570,13 @@ describe('提交与推送的门禁结论记录（issue #355）', { timeout: 30_0
       expect(JSON.parse(line).qualityGate).toBe('OK')
     }
     expect(
-      readFileSync(resolve(scenario.root, 'gate-pending.jsonl'), 'utf8'),
+      readFileSync(resolve(scenario.root, 'gate-pending.jsonl'), 'utf8')
+        .split('\n')
+        .filter(Boolean),
+    ).toHaveLength(1)
+    expect(
+      scenario.git(['status', '--porcelain', '--', 'gate-history.jsonl'])
+        .stdout,
     ).toBe('')
   })
 })

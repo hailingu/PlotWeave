@@ -297,9 +297,12 @@ function writeScenarioStubs(bin: string): void {
   writeExecutable(
     resolve(bin, 'npm'),
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-if [ "$*" = "run test:coverage" ]; then
-  printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
-fi`,
+case "$*" in
+  # 门禁下发 CPU 预算（--maxWorkers N），按前缀匹配分发
+  "run test:coverage"*)
+    printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
+    ;;
+esac`,
   )
   writeExecutable(
     resolve(bin, 'cargo-llvm-cov'),
@@ -837,7 +840,9 @@ describe(
       expect(scenario.installRuns()).toBe(0)
       expect(scenario.worktreeCount()).toBe(1)
       expectRecordedCommit(scenario, scenario.headSha())
-      expect(readRecords(scenario.historyPath).length).toBeGreaterThanOrEqual(1)
+      // 推送不物化（PR #581 评审 5537970549）：记录留在待物化文件
+      expect(readRecords(scenario.historyPath)).toHaveLength(0)
+      expect(readRecords(scenario.pendingPath).length).toBeGreaterThanOrEqual(1)
     })
 
     it('快路径门禁失败仍阻止推送：远端不出现该 ref', () => {
@@ -1066,7 +1071,7 @@ describe(
       ).toBe('')
     })
 
-    it('stdin 无待推 ref：不执行门禁，仍物化待物化行', () => {
+    it('stdin 无待推 ref：不执行门禁、不物化，待物化行原样保留（PR #581 评审 5537970549）', () => {
       const scenario = preparePushScenario({ withRemote: false })
       const seed =
         '{"timestamp":"2026-01-01T00:00:00Z","tree":"seed-tree","head":"seed-head",' +
@@ -1078,8 +1083,8 @@ describe(
 
       expect(result.status).toBe(0)
       expect(scenario.gateRuns()).toBe(0)
-      expect(readRecords(scenario.historyPath)).toHaveLength(1)
-      expect(readRecords(scenario.pendingPath)).toHaveLength(0)
+      expect(readRecords(scenario.historyPath)).toHaveLength(0)
+      expect(readRecords(scenario.pendingPath)).toHaveLength(1)
     })
 
     it('仅删除行（本地 sha 全零）不执行门禁', () => {

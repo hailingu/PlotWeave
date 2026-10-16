@@ -304,22 +304,27 @@ const seedRecord = JSON.stringify({
   newCodeUnresolvedIssues: 0,
 })
 
+const secondRecord = JSON.stringify({
+  tree: 'b'.repeat(40),
+  qualityGate: 'OK',
+  newCodeUnresolvedIssues: 0,
+})
+
 describe(
-  '归因判定的自动暂存（materialize --stage-for-commit，issue #548；PR #581 评审 5537676738）',
+  '归因通过的自动暂存：工作树恰为索引内容 + 本次折并的待物化行（PR #581 评审 5537970549）',
   { timeout: 30_000 },
   () => {
     afterEach(() => {
       for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
     })
 
-    it('待物化行并入后自动暂存进本提交（合法 JSON 纯追加）', () => {
+    it('待物化行并入后自动暂存进本提交（字节精确匹配）', () => {
       const { root, historyPath, pendingPath } = prepareIsolatedRepository('')
-
       const result = runStageMaterialize(
         root,
         historyPath,
         pendingPath,
-        '{"qualityGate":"OK"}\n',
+        `${seedRecord}\n`,
       )
       const state = isolatedLedgerState(root)
 
@@ -329,41 +334,68 @@ describe(
       expect(state.stagedModified).toBe(true)
     })
 
-    it('无待物化行时收编推送物化遗留的未暂存合法追加（stage-only 路径）', () => {
+    it('开发者已暂存自己的台账选择：折并行恰在其上时暂存且选择逐字保留', () => {
       const { root, historyPath, pendingPath } = prepareIsolatedRepository(
         `${seedRecord}\n`,
       )
-      appendFileSync(
-        historyPath,
-        `${JSON.stringify({ tree: 'b'.repeat(40), qualityGate: 'OK', newCodeUnresolvedIssues: 0 })}\n`,
-      )
+      writeFileSync(historyPath, `${seedRecord}\n${secondRecord}\n`)
+      spawnSync('git', ['add', '--', 'docs/development/gate-history.jsonl'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: gitFixtureEnvironment(),
+      })
+      const thirdRecord = JSON.stringify({
+        tree: 'c'.repeat(40),
+        qualityGate: 'OK',
+        newCodeUnresolvedIssues: 0,
+      })
 
-      const result = runStageMaterialize(root, historyPath, pendingPath, '')
+      const result = runStageMaterialize(
+        root,
+        historyPath,
+        pendingPath,
+        `${thirdRecord}\n`,
+      )
       const state = isolatedLedgerState(root)
 
       expect(result.status).toBe(0)
-      expect(state.stagedModified).toBe(true)
       expect(result.stdout).toContain('已暂存物化记录')
+      expect(state.content.split('\n').filter(Boolean)).toEqual([
+        seedRecord,
+        secondRecord,
+        thirdRecord,
+      ])
     })
   },
 )
 
 describe(
-  '归因判定拒绝的暂存（台账不可归因改动保留原状态并警告，PR #581 评审 5537676738）',
+  '无折并时拒绝未归因台账改动（pending 为空，工作树改动不自动暂存）',
   { timeout: 30_000 },
   () => {
     afterEach(() => {
       for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
     })
 
-    it('修改既有记录行：不暂存并输出 GATE_HISTORY_UNATTRIBUTED_CHANGE', () => {
+    it('人工追加的合法 JSON 行（评审场景：与门禁产物语法不可区分）：不暂存并警告', () => {
       const { root, historyPath, pendingPath } = prepareIsolatedRepository(
         `${seedRecord}\n`,
       )
-      writeFileSync(
-        historyPath,
-        `${JSON.stringify({ tree: 'c'.repeat(40), qualityGate: 'OK', newCodeUnresolvedIssues: 0 })}\n`,
+      appendFileSync(historyPath, `${secondRecord}\n`)
+
+      const result = runStageMaterialize(root, historyPath, pendingPath, '')
+      const state = isolatedLedgerState(root)
+
+      expect(result.status).toBe(0)
+      expect(state.stagedModified).toBe(false)
+      expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+    })
+
+    it('修改既有记录行：不暂存并警告', () => {
+      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
+        `${seedRecord}\n`,
       )
+      writeFileSync(historyPath, `${secondRecord}\n`)
 
       const result = runStageMaterialize(root, historyPath, pendingPath, '')
       const state = isolatedLedgerState(root)
@@ -377,7 +409,7 @@ describe(
       const { root, historyPath, pendingPath } = prepareIsolatedRepository(
         `${seedRecord}\n`,
       )
-      appendFileSync(historyPath, `+${seedRecord}\n`)
+      appendFileSync(historyPath, `+${secondRecord}\n`)
 
       const result = runStageMaterialize(root, historyPath, pendingPath, '')
       const state = isolatedLedgerState(root)
@@ -386,36 +418,72 @@ describe(
       expect(state.stagedModified).toBe(false)
       expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
     })
+  },
+)
 
-    it('人工部分暂存（索引与工作树均为 HEAD 之外的不同形态）：不覆盖并警告', () => {
+describe(
+  '折并时拒绝不一致形态（工作树不是索引 + 本次折并行的精确追加）',
+  { timeout: 30_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
+    })
+
+    it('工作树在折并行之外多出一行合法 JSON：不暂存并警告', () => {
       const { root, historyPath, pendingPath } = prepareIsolatedRepository(
         `${seedRecord}\n`,
       )
-      const appended = `${JSON.stringify({ tree: 'd'.repeat(40), qualityGate: 'OK', newCodeUnresolvedIssues: 0 })}\n`
-      writeFileSync(historyPath, `${seedRecord}\n${appended}`)
+      appendFileSync(historyPath, `${secondRecord}\n`)
+
+      const result = runStageMaterialize(
+        root,
+        historyPath,
+        pendingPath,
+        `${secondRecord}\n`,
+      )
+      const state = isolatedLedgerState(root)
+
+      expect(result.status).toBe(0)
+      expect(state.stagedModified).toBe(false)
+      expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+    })
+
+    it('人工部分暂存（索引为 HEAD 之外的中间形态）：不覆盖并警告', () => {
+      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
+        `${seedRecord}\n`,
+      )
+      writeFileSync(historyPath, `${seedRecord}\n${secondRecord}\n`)
       spawnSync('git', ['add', '--', 'docs/development/gate-history.jsonl'], {
         cwd: root,
         encoding: 'utf8',
         env: gitFixtureEnvironment(),
       })
-      appendFileSync(
+      const thirdRecord = JSON.stringify({
+        tree: 'd'.repeat(40),
+        qualityGate: 'OK',
+        newCodeUnresolvedIssues: 0,
+      })
+      appendFileSync(historyPath, `${thirdRecord}\n`)
+
+      const result = runStageMaterialize(
+        root,
         historyPath,
-        `${JSON.stringify({ tree: 'e'.repeat(40), qualityGate: 'OK', newCodeUnresolvedIssues: 0 })}\n`,
+        pendingPath,
+        `${thirdRecord}\n`,
       )
 
-      const result = runStageMaterialize(root, historyPath, pendingPath, '')
-      const state = isolatedLedgerState(root)
-
       expect(result.status).toBe(0)
-      // 部分暂存保持原状：暂存区仍是人工选定的第一行追加，未被整文件覆盖
+      // 部分暂存保持原状：暂存区仍是人工选定的两行，未被整文件覆盖
       expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
       const staged = spawnSync(
         'git',
         ['show', ':docs/development/gate-history.jsonl'],
         { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
       ).stdout
-      expect(staged.split('\n').filter(Boolean)).toHaveLength(2)
-      expect(state.stagedModified).toBe(true)
+      expect(staged.split('\n').filter(Boolean)).toEqual([
+        seedRecord,
+        secondRecord,
+      ])
     })
   },
 )
@@ -441,7 +509,7 @@ describe(
       )
       writeFileSync(historyPath, '')
       const pendingPath = resolve(sandbox, 'gate-pending.jsonl')
-      writeFileSync(pendingPath, '{"qualityGate":"OK"}\n')
+      writeFileSync(pendingPath, `${seedRecord}\n`)
 
       const result = runStageMaterialize(
         sandbox,
@@ -452,8 +520,7 @@ describe(
 
       expect(result.status).toBe(0)
       expect(
-        historyPath &&
-          readFileSync(historyPath, 'utf8').split('\n').filter(Boolean),
+        readFileSync(historyPath, 'utf8').split('\n').filter(Boolean),
       ).toHaveLength(1)
       expect(result.stderr).toContain('GATE_HISTORY_STAGE_FAILED')
     })
