@@ -18,6 +18,13 @@ struct WebCanvasPerformanceTests {
 
     private struct Timeout: Error {}
 
+    /// Comparison-only RSS failure; teardown trend tests intentionally allow zero processes.
+    private struct ComparisonMemoryFailure: Error, Equatable {
+        let appResidentBytes: UInt64
+        let expectedProcesses: Int
+        let actualProcesses: Int
+    }
+
     /// Registered measurement scales mirror src/editor/nativeCanvas/canvasPerfFixture.ts.
     @Test(arguments: [100, 500, 1000])
     func sustainedScriptedOperationsMatchFixtureScale(scale: Int) async throws {
@@ -29,6 +36,27 @@ struct WebCanvasPerformanceTests {
     @Test(arguments: [100, 500, 1000])
     func commonModeSupportsTauriBaselineComparison(scale: Int) async throws {
         try await measureScriptedOperations(scale: scale, nativePanelMode: false)
+    }
+
+    /// A lost host or tracked WebContent process must not become valid zero-RSS evidence.
+    @Test func comparisonMemoryRejectsLostTrackedProcess() throws {
+        let trackedPages: Set<Int32> = [42]
+        let valid = WebProcessMemorySample(
+            appResidentBytes: 1, webContentResidentBytes: 1, webContentProcessCount: 1
+        )
+        try Self.requireComparisonMemory(valid, trackedPages: trackedPages)
+        let lostPage = WebProcessMemorySample(
+            appResidentBytes: 1, webContentResidentBytes: 0, webContentProcessCount: 0
+        )
+        #expect(throws: ComparisonMemoryFailure.self) {
+            try Self.requireComparisonMemory(lostPage, trackedPages: trackedPages)
+        }
+        let lostHost = WebProcessMemorySample(
+            appResidentBytes: 0, webContentResidentBytes: 1, webContentProcessCount: 1
+        )
+        #expect(throws: ComparisonMemoryFailure.self) {
+            try Self.requireComparisonMemory(lostHost, trackedPages: trackedPages)
+        }
     }
 
     /// Runs the shared Web fixture and script in either common or native-panel mode.
@@ -66,6 +94,7 @@ struct WebCanvasPerformanceTests {
         // awaits in this window. Reuse or ambiguous diffs throw before sampling.
         let trackedPages = try WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
         let baseline = WebProcessMemorySampler.sample(tracking: trackedPages)
+        try Self.requireComparisonMemory(baseline, trackedPages: trackedPages)
 
         // The script task inherits main-actor isolation; the Web runner owns
         // the single default configuration used by both host measurements.
@@ -90,6 +119,7 @@ struct WebCanvasPerformanceTests {
         let payload = try #require(jsonString)
         let report = try Self.parse(payload)
         let after = WebProcessMemorySampler.sample(tracking: trackedPages)
+        try Self.requireComparisonMemory(after, trackedPages: trackedPages)
 
         #expect(report["nodeCount"] as? Int == scale)
         #expect(report["edgeCount"] as? Int == scale / 10 * 9 - 1)
@@ -252,6 +282,20 @@ struct WebCanvasPerformanceTests {
         }
         struct FixtureTimeout: Error { let detail: String }
         throw FixtureTimeout(detail: "expected \(nodes) nodes/\(edges) edges, got \(lastCounts)")
+    }
+
+    /// Requires the host and every attributed page to remain readable across a comparison.
+    private static func requireComparisonMemory(
+        _ sample: WebProcessMemorySample, trackedPages: Set<Int32>
+    ) throws {
+        guard sample.appResidentBytes > 0,
+            sample.webContentProcessCount == trackedPages.count else {
+            throw ComparisonMemoryFailure(
+                appResidentBytes: sample.appResidentBytes,
+                expectedProcesses: trackedPages.count,
+                actualProcesses: sample.webContentProcessCount
+            )
+        }
     }
 
     /// Requires samples and numeric p50/p95 for every total or phase report.
