@@ -6,9 +6,10 @@ import WebKit
 /// M13 automated slice (plan §6 M13, issue #523): every host appearance
 /// combination — light/dark × reduce-transparency / increase-contrast /
 /// reduce-motion — must land on the real shipped page and be consumed by the
-/// web token layer, not merely reflected as data attributes: `color-scheme`
-/// and the canvas controls' material degradation are asserted through
-/// computed styles in real WebKit. VoiceOver navigation with a real screen
+/// web token layer, not merely reflected as data attributes: `color-scheme`,
+/// the canvas controls' material degradation, and the node cards' motion
+/// degradation are asserted through computed styles in real WebKit.
+/// VoiceOver navigation with a real screen
 /// reader, real input-method composition, human visual review, and web
 /// accessibility-tree exposure (the WKWebView content AX tree does not come
 /// up in the test host without a running AX client) stay manual gaps tracked
@@ -100,6 +101,15 @@ struct CanvasAppearanceComboTests {
                 facts.controlsBorderWidth == (combo.increaseContrast ? "2px" : "1px"),
                 "combo: increased contrast thickens the controls border"
             )
+            // Issue #568: host reduce-motion must degrade motion through the
+            // attribute-driven path even when WebKit's own media query
+            // disagrees with the forced snapshot; the media-query path stays
+            // defense-in-depth, so degradation == attribute OR media query.
+            let motionDegraded = combo.reduceMotion || facts.mediaReduceMotion
+            #expect(
+                (facts.cardTransitionDuration == "0s") == motionDegraded,
+                "combo: node card motion degrades iff host reduce-motion or the page media query asks for it"
+            )
             #expect(facts.reduceTransparency == combo.reduceTransparency)
             #expect(facts.increaseContrast == combo.increaseContrast)
             #expect(facts.reduceMotion == combo.reduceMotion)
@@ -122,6 +132,7 @@ struct CanvasAppearanceComboTests {
         let reduceMotion: Bool
         let mediaReduceMotion: Bool
         let canvasClass: String
+        let cardTransitionDuration: String
     }
 
     /// Bundle entry with the 9-node demo fragment; standalone webview drive.
@@ -140,6 +151,7 @@ struct CanvasAppearanceComboTests {
           const controls = document.querySelector('.react-flow__controls');
           const style = controls ? getComputedStyle(controls) : null;
           const canvas = document.querySelector('.canvas-root');
+          const card = document.querySelector('.pw-card');
           return [
             getComputedStyle(root).colorScheme,
             style ? String(style.backdropFilter) : 'no-controls',
@@ -148,7 +160,8 @@ struct CanvasAppearanceComboTests {
             root.getAttribute('data-host-increase-contrast'),
             root.getAttribute('data-host-reduce-motion'),
             String(window.matchMedia('(prefers-reduced-motion: reduce)').matches),
-            canvas ? canvas.className : 'no-canvas'
+            canvas ? canvas.className : 'no-canvas',
+            card ? getComputedStyle(card).transitionDuration : 'no-card'
           ];
         })()
         """
@@ -162,7 +175,8 @@ struct CanvasAppearanceComboTests {
             increaseContrast: try #require(facts[4]) == "true",
             reduceMotion: try #require(facts[5]) == "true",
             mediaReduceMotion: try #require(facts[6]) == "true",
-            canvasClass: try #require(facts[7])
+            canvasClass: try #require(facts[7]),
+            cardTransitionDuration: try #require(facts[8])
         )
     }
 

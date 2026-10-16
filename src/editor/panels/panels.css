@@ -518,7 +518,11 @@
   text-align: center;
 }
 
-/* 减弱动态：折叠改为瞬时宽度切换 */
+/* 减弱动态：折叠改为瞬时宽度切换；宿主直推属性与媒体查询同口径（issue #568）。 */
+:root[data-host-reduce-motion='true'] .pw-panel {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pw-panel {
     transition: none;
