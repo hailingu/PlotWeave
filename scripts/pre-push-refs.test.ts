@@ -228,10 +228,13 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
   mkdirSync(resolve(sandbox, 'scripts'), { recursive: true })
   mkdirSync(resolve(sandbox, '.githooks'), { recursive: true })
   for (const script of [
+    'check-docs.sh',
     'check-file-size.ts',
     'check-static.sh',
     'file-size-baseline.json',
     'gate-history.sh',
+    'gate-scope-core.ts',
+    'gate-scope.ts',
     'gate-tree-marker.sh',
     'pre-push-install.mjs',
     'pre-push-install-launcher.mjs',
@@ -1524,5 +1527,70 @@ describe('pre-push 清理警告的真实性（issue #465）', { timeout: 30_000 
     } finally {
       pruneLeftoverTempWorktree(scenario)
     }
+  })
+})
+
+describe('推送范围分流（owner 指示 2026-10-18）', { timeout: 30_000 }, () => {
+  /** 在场景沙箱提交一个仅含指定文件的变更分支（跳过 commit 钩子，
+   * 只验证 push 路由本身）。 */
+  function commitScopeBranch(
+    scenario: PushScenario,
+    file: string,
+    branch: string,
+  ): void {
+    const base = scenario.headSha()
+    expect(scenario.git(['checkout', '-q', '-b', branch]).status).toBe(0)
+    mkdirSync(resolve(scenario.root, file, '..'), { recursive: true })
+    writeFileSync(resolve(scenario.root, file), 'scope probe\n')
+    expect(scenario.git(['add', file]).status).toBe(0)
+    expect(
+      scenario.git([
+        '-c',
+        'core.hooksPath=/dev/null',
+        'commit',
+        '-q',
+        '-m',
+        `scope ${file}`,
+      ]).status,
+    ).toBe(0)
+    // 新分支无远端旧 tip；固定基线与 main 的差异，避免依赖宿主 refs。
+    scenario.env.PLOTWEAVE_GATE_SCOPE_BASE = base
+  }
+
+  it('仅文档推送跳过依赖安装、代码回归、覆盖率与 Sonar', () => {
+    const scenario = preparePushScenario()
+    commitScopeBranch(scenario, 'docs/scope.md', 'docs-only')
+
+    const push = scenario.git(['push', 'origin', 'docs-only'])
+
+    expect(push.status, push.stderr).toBe(0)
+    expect(scenario.gateRuns()).toBe(0)
+    expect(scenario.installRuns()).toBe(0)
+    expect(`${push.stdout}\n${push.stderr}`).toContain('仅文档变更')
+    expect(`${push.stdout}\n${push.stderr}`).toContain('[check-docs]')
+    expect(
+      scenario.git(['ls-remote', 'origin', 'refs/heads/docs-only']).stdout,
+    ).not.toBe('')
+  })
+
+  it.each([
+    ['src/scope.ts', 'frontend'],
+    ['src-tauri/src/scope.rs', 'rust'],
+    ['native/macos/Scope.swift', 'native'],
+  ] as const)('单栈 %s 只分派 %s 范围并复用另一侧 LCOV', (file, scope) => {
+    const scenario = preparePushScenario()
+    commitScopeBranch(scenario, file, `stack-${scope}`)
+
+    const push = scenario.git(['push', 'origin', `stack-${scope}`])
+
+    expect(push.status, push.stderr).toBe(0)
+    // 被推提交即 HEAD 且工作树干净：快路径在当前树执行，不安装依赖。
+    expect(scenario.installRuns()).toBe(0)
+    expect(scenario.gateRuns()).toBe(1)
+    expect(`${push.stdout}\n${push.stderr}`).toContain(`变更范围：${scope}`)
+    const log = readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')
+    expect(log).toContain(`gate-scope ${scope}`)
+    expect(log).toContain('reused-frontend ')
+    expect(log).toContain('reused-rust ')
   })
 })

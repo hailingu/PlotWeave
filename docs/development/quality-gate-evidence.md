@@ -31,10 +31,11 @@ This is the retained P3 evidence-credibility boundary from
 [issue #431](https://github.com/hailingu/PlotWeave/issues/431); no authenticity
 anchor or new enforcement mechanism is introduced.
 
-**What is recorded.** After a run passes the *complete* sequence — static
-checks, both coverage reports, the scanner, Quality Gate `OK`, and zero
-new-code unresolved issues — `scripts/sonar-quality-gate.sh` appends exactly
-one JSON line to a pending file inside `.git`
+**What is recorded.** After a scoped run passes its required sequence — static
+checks, the changed stack's full coverage (or the reused unchanged-stack
+reports), the scanner, Quality Gate `OK`, and zero new-code unresolved issues —
+`scripts/sonar-quality-gate.sh` appends exactly one JSON line to a pending
+file inside `.git`
 (`plotweave-gate-history.pending`), never to the tracked file mid-gate
 (PR #415 评审 5338815626: a gate-side write to the tracked file leaves an
 unstaged change that aborts the next rebase replay, checkout, or merge
@@ -54,9 +55,18 @@ line:
 | `timestamp` | UTC ISO-8601 time of the record append, second precision. |
 | `tree` | The gated **index tree** (`git write-tree`) — the same key the dedup marker uses, and the value a reader compares against `git rev-parse <commit>^{tree}` to find a success claim for that content. Matching does not authenticate the claim. |
 | `head` | The commit `HEAD` pointed at during the run — the parent of the commit being created on pre-commit-style paths, the tip being pushed on `pre-push`. Provenance context, not the content-matching key; it does not authenticate execution. |
-| `qualityGate` | The Quality Gate status for this run's analysis (`OK`; only fully passing runs are recorded). |
+| `scope` | The push scope recorded by owner decision 2026-10-18: `full`, `frontend`, `rust`, or `native`. A commit-gate run records `full` (the default). |
+| `qualityGate` | The Quality Gate status for this run's analysis (`OK`; only fully passing runs are recorded). Native scope records the Sonar result for the reused frontend/Rust reports; native source itself is not a Sonar source. |
 | `newCodeUnresolvedIssues` | Unresolved issue count on new code for this run (`0`; only fully passing runs are recorded). |
 | `frontendLineCoveragePercent` / `rustLineCoveragePercent` | Line coverage computed from the same LCOV reports this run submitted (`DA` records with execution count > 0 count as covered). |
+
+**Docs-only pushes (2026-10-18).** A push whose changed paths are all
+documentation runs only `scripts/check-docs.sh` and writes **no** push-path
+ledger record; it also does not run coverage or Sonar. The ordinary
+commit-creation gate record for that tree remains the evidence. A docs-only
+commit created without the commit hook has no record, which is the existing
+hook-coverage boundary rather than a new exemption. The evidence verifier and
+its tip-lag semantics are unchanged.
 
 **Reproducible claim lookup and coverage check.** From the repository root,
 run the following with the pinned Node version. Replace the argument `HEAD`

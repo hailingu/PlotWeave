@@ -106,12 +106,20 @@ Audit-step status against the lockfiles as of 2026-10-16: `npm audit --audit-lev
 
 ## Commit And Push Gates
 
-The versioned `pre-commit`, `pre-merge-commit`, `prepare-commit-msg`, and `pre-push` hooks run the same complete quality gate. At a high level it:
+The versioned commit-creating hooks (`pre-commit`, `pre-merge-commit`, `prepare-commit-msg`) run the complete quality gate. `pre-push` is scope-routed by owner decision 2026-10-18:
+
+- **docs-only** (`docs/**`, root Markdown, `LICENSE`): only `scripts/check-docs.sh`; no static checks, coverage, Sonar, or push ledger record. The commit-gate record remains the evidence.
+- **single implementation stack** (`frontend` = `src/**` and frontend-only root configs; `rust` = `src-tauri/**` + `crates/**` + `rust-toolchain.toml`; `native` = `native/**`): run that stack's full regression and full coverage; reuse the other frontend/Rust stack's most recent LCOV for Sonar. Native runs `npm run build:native-canvas` plus serial `xcodebuild test` and records that native code is outside Sonar.
+- **cross-stack, tooling (`.githooks/**`, `scripts/**`, `.github/**`, root linters), unknown paths, empty ranges, or an undeterminable base**: the complete gate.
+
+The complete gate at a high level:
 
 1. Runs formatting, lint, maintained-file size, and strict type checks.
 2. Generates frontend and Rust coverage and enforces the versioned 80% overall line-coverage floor for each report.
 3. Runs SonarQube, waits for an `OK` Quality Gate, and requires zero unresolved issues on new code.
 4. Records the passing run through the repository's gate-evidence workflow.
+
+The scoped push is fail-closed: a missing reused LCOV, unsupported scope, or classification error blocks the push. It is not an exemption from the commit gates. Details and boundaries are in [Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18) and [Scoped Push Cost](quality-gate-cost.md#scoped-push-cost-2026-10-18-owner-direction).
 
 A failed or unavailable required check blocks the Git operation. Do not use `--no-verify`, test injection variables, exclusions, or suppressions to evade the gate. The full command coverage, known boundaries, per-ref push behavior, evidence semantics, lock recovery, and cost decision are maintained in:
 
