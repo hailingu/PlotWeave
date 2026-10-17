@@ -376,6 +376,80 @@ xcodebuild -project native/macos/PlotWeaveNative.xcodeproj \
 
 验证：临时宿主通过 Swift 6 `-warnings-as-errors` 编译，三份有效 Vite 生产构建通过；16 个宿主／320 轮／336 个唯一文档的日志语义审计通过，宿主均正常退出。结构化审查核对矩阵到结果、各 bundle 控制、测量判据和 vmmap 列含义；文档没有配置的自动化语义检查。一次性资源、脚本、模块缓存、堆扫描和日志在记录后清理。无业务存储、网络、锁、连接池或下游负载，吞吐、排队、CPU 和 I/O 不属本轮目标；未改变 SIP、使用私有 API 或施加全机内存压力。没有改生产或版本化测试源码，未重跑完整原生套件；下述既有失败继续保留，#573 与 PR #586 仍未修复／未验收。
 
+#### 端口查询缓存与卸载前失效对照（2026-10-17）
+
+本轮继续拆分上节的端口测量路径，成功标准是保持端口 DOM 不变，分别检验原生查询、遍历、几何读取与 bounds 写入，并找到可独立复测的释放条件。当前分类为调查证据，仍沿用 #573 的 P3 极端重载范围；没有修改生产源码、版本化测试或依赖，也没有确认普通使用影响。环境为同一 macOS 27.0.1 / Xcode 27；本机 WebKit.framework 的 CFBundleVersion 读数为 `22625.1.29.11.28`。
+
+先用三份一次性 Vite bundle 保留相同应用模块集合和生产 React，仅对自定义节点的两个精确端口查询作诊断替换；然后使用完全不加载 React、Flow 或应用模块、没有 Element 原型改写的独立原生 DOM 脚本。四阶段均在执行前补充矩阵；每次构建／切换资源后重新建立对应控制。所有组为 100 节点、0 边，非静态组 200 个端口；Flow 组固定 connectOnClick=false，端口均为无事件回调的普通 DIV。独立原生脚本仍复用同一 CSS 和公开 API 宿主，绝对内存单列。
+
+| 前置状态                          | 动作与顺序                                                                                               | 不变量／责任方                                                                                                 | 对应验证与缺口                                                                                                                   |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| 每臂新宿主                        | 初读→20 次 mount、120ms 等待、unmount、120ms 等待、reload→末读→heap/vmmap                                | 宿主检查唯一新增且固定的 WebContent PID、非零 RSS/footprint 与 3GiB 上界；安静环境归属前提保持                 | 26 个独立宿主、520 轮、546 个唯一 token；每臂 21 次 boot、20 次 pagehide.persisted=false、正常退出；单元素差集仍非系统级归属证明 |
+| 静态／完整端口测量／跳过原生查询  | 同 NodeWrapper 与 style，临时包装仅匹配节点上的 .source/.target，其他调用透明转发                        | DOM 端口 0/200/200，handleBounds 0/200/0；100 个节点均有正尺寸；mode 控制不引入跨页 DOM 引用                   | v1 阴／阳性为 1/21，跳过查询为 2；v2 完整／跳过为 21/3，v3 完整为 21                                                             |
+| 查询后丢弃／再遍历／读取后丢弃    | 原生 qSA 后分别只读 length、Array.from 遍历、再读 rect/id/position/offset，向 Flow 返回空数组            | 每页 200 次原生查询、200 命中；前三者遍历为 0/200/200、端口 rect 为 0/0/200，bounds 均 0；临时包装负责         | 三组均为 21；端口几何与 bounds 状态写入不是该触发条件的必要步骤                                                                  |
+| 完整测量的返回形状／查询 API 对照 | rect 复制为同值普通对象；另组仅把两次精确 qSA 替为 getElementsByClassName，Flow 仍 Array.from 后测量     | rect-copy 仍 200 次原生 rect 与 200 bounds；live 组 qSA 为 0、live 查询与 rect 均 200、bounds 200              | rect-copy 为 21；live 两次为 2/1，全部 20 页几何摘要与各自完整组一致；动态交互／NodeList API 合同未验收                          |
+| 不挂载 React／Flow 的原生 DOM     | 同布局、正尺寸检查；分别无查询、qSA、querySelector、getElementsByClassName                               | 原生方法直接调用，不经过原型包装；查询组各 200 调用／命中，端口 rect 与 bounds 均 0；root.replaceChildren 清理 | 分别为 3/21/4/3；原生 qSA 新宿主复测仍 21；首次仍加载公共 bundle，后续纯脚本消除此边界                                           |
+| 卸载前使相关查询失效              | 原生组先对 100 个查询节点逐个 replaceChildren；或对 200 端口同步移除并加回 source/target，再执行正常卸载 | 挂载语义完全不变；清理计数为 100 节点／200 端口／100 次子树变更或 400 次 class 变更；Flow 挂载仍有 200 bounds  | 原生清子树／相关 class 均为 2；Flow 相关 class 两次均为 2；几何摘要与完整组一致；未修改 React 所属子树结构                       |
+| 无关 class 对照                   | 同样 200 端口、400 次 class 变更，改为增加再移除 pw-unrelated，再正常卸载                                | source/target 成员保持不变，操作次数与同步卸载顺序相同；不在修改和 root.unmount 之间 await                     | 两次均为 21；任意 class 写入或多做清理操作不足以解释相关 class 组的下降                                                          |
+| 无框架独立脚本                    | 无查询／qSA／qSA 后清各查询节点子树，各新宿主 20 轮                                                      | 没有 React、Flow、应用模块导入或原型包装；同宿主、DOM、CSS、计数与清理判据                                     | 结果见下表；这是独立脚本控制，不能将所有绝对内存与公共 bundle 混比                                                               |
+| 清理、导航或失败                  | 每页 root/节点/边/端口/bounds 归零、flow/store 引用清空再导航，末页不挂载；异常／超时／PID 歧义即终止    | JSON 原始值跨桥，mount/cleanup=1/1；末读在扫描之前；finally 仅退出自有宿主                                     | 全部有效运行完成语义审计；未故意注入失败，无 Inspector、强制 GC、弱引用台账、私有 API 或全机内存压力                             |
+
+下表每行各为独立宿主的 20 次重载。Document 与 LocalDOMWindow 原生分配数逐行相同；StaticElementList 和 Div 也是分配计数，不能单凭类型计数指定持有根。WebKit 已分配取 vmmap 的 BYTES ALLOCATED（M/K 分别按 MiB/KiB 换算），末读 RSS/footprint 早于扫描，二者不是原子快照；没有把 zone 地址空间当实际分配字节。
+
+| 模式                       | 资源 | Document | StaticElementList | Div   | WebKit 已分配（MiB） | 末读 RSS / footprint（MiB） |
+| -------------------------- | ---- | -------- | ----------------- | ----- | -------------------- | --------------------------- |
+| 静态自定义节点             | v1   | 1        | 3                 | 2     | 14.8                 | 104.8 / 104.4               |
+| 普通 DIV 端口，完整测量    | v1   | 21       | 4,066             | 4,116 | 56.9                 | 153.0 / 166.6               |
+| 跳过两类原生端口查询       | v1   | 2        | 6                 | 316   | 28.5                 | 98.5 / 125.2                |
+| 仅 qSA 后丢弃结果          | v1   | 21       | 4,069             | 4,230 | 67.5                 | 156.8 / 184.7               |
+| qSA＋遍历后丢弃            | v1   | 21       | 4,069             | 4,116 | 69.2                 | 156.5 / 185.6               |
+| qSA＋端口读取后丢弃        | v1   | 21       | 4,069             | 4,234 | 72.1                 | 162.3 / 188.9               |
+| 完整测量，rect 数值复制    | v1   | 21       | 4,066             | 4,116 | 63.3                 | 153.0 / 175.5               |
+| 完整测量复测               | v2   | 21       | 4,069             | 4,118 | 73.1                 | 160.6 / 187.6               |
+| 跳过查询复测               | v2   | 3        | 18                | 630   | 28.6                 | 102.0 / 131.2               |
+| Flow 改用 live collection  | v2   | 2        | 6                 | 4     | 34.5                 | 97.8 / 124.4                |
+| 原生 DOM，无查询           | v2   | 3        | 12                | 307   | 20.1                 | 65.3 / 100.1                |
+| 原生 DOM，qSA              | v2   | 21       | 4,063             | 4,004 | 53.5                 | 123.4 / 161.5               |
+| 原生 DOM，querySelector    | v2   | 4        | 12                | 610   | 11.1                 | 66.8 / 100.0                |
+| 原生 DOM，live collection  | v2   | 3        | 13                | 608   | 13.7                 | 66.3 / 100.3                |
+| 完整测量再复测             | v3   | 21       | 4,063             | 4,116 | 73.6                 | 152.0 / 180.5               |
+| 原生 DOM，qSA 复测         | v3   | 21       | 4,064             | 4,105 | 57.2                 | 120.3 / 155.5               |
+| 原生 qSA，卸载前清节点子树 | v3   | 2        | 209               | 305   | 15.5                 | 74.2 / 108.5                |
+| 原生 qSA，卸载前切换相关类 | v3   | 2        | 6                 | 305   | 18.5                 | 70.8 / 103.6                |
+| Flow，卸载前切换相关类     | v3   | 2        | 209               | 316   | 29.2                 | 103.6 / 125.3               |
+| Flow，卸载前切换无关类     | v3   | 21       | 4,064             | 4,118 | 63.8                 | 170.4 / 192.3               |
+| Flow，live collection 复测 | v3   | 1        | 3                 | 2     | 15.8                 | 116.5 / 139.9               |
+| Flow，切换相关类复测       | v3   | 2        | 6                 | 316   | 28.0                 | 98.4 / 123.8                |
+| Flow，切换无关类复测       | v3   | 21       | 4,072             | 4,234 | 74.8                 | 160.8 / 182.4               |
+| 纯脚本，无查询             | pure | 3        | 9                 | 304   | 8.0                  | 44.5 / 87.8                 |
+| 纯脚本，qSA                | pure | 21       | 4,066             | 4,205 | 24.3                 | 64.5 / 110.9                |
+| 纯脚本，qSA＋清节点子树    | pure | 3        | 9                 | 605   | 5.7                  | 49.5 / 90.3                 |
+
+资源 SHA-256：
+
+- v1 脚本：`e33941f9310469307b1cff0794e65513334034f31933fa061aed44577d411e17`。
+- v2 脚本：`eeffe15aae765cba3047f8acad48bd17dfc52d7c6cbf9990e90a06cdbd73087f`。
+- v3 脚本：`f7fcf75be3a7cf2cf9c5027337efaa563d6a70df7f6c6dbd5e72584544adb98b`。
+- pure 脚本：`5297c954020c8013737b61dc3cc1907fc68e8ae676d639df4fe7aca998cc1f64`。
+- 四阶段 CSS 相同：`9809a2cc55585a43b012b2bea3217da26ce584994a6e7c0ac80e8bd96f151941`；宿主源码：`ab43bb85e72c66ff726ee6be2ebe72fc019038d6850d0513fba7d847c80f81aa`。v3 最后两项复测未重建 bundle。
+
+复现最小条件可表述为：用原生 DOM 创建 100 个节点，各含一个 .source 和一个 .target 子 DIV；验证正尺寸后，对每节点调用两次 querySelectorAll，只读取结果长度而不保存；以根的 replaceChildren 移除整个图，再在同一个 WKWebView 内导航到新文档。重复 20 次后为 21 个 Document。只在卸载步骤先对 100 个节点各调用一次 replaceChildren，再移除整个根，结果为 3。纯脚本没有端口几何、Flow store、React root、端口事件回调或应用模块；保留共同 CSS 和宿主意味着不能外推到所有页面、浏览器版本或导航类型。
+
+Flow 的保留测量对照同样有效：live collection 两组和相关 class 失效两组均仍有 200 个端口 bounds；每页坐标／尺寸和方向摘要与对应完整组一致（Σx=14,200、Σy=3,200、Σwidth=Σheight=1,600、top/bottom 各 100，逐页比较容差 1e-7）。这只覆盖固定合成布局的摘要；尚未验证逐端口映射、动态增删、嵌套节点、缩放、拖拽和真实连线，不能将临时原型替换或 class 切换直接纳入生产实现。querySelector 的单元素返回也不等价于多端口查询。
+
+源码交叉核对使用 WebKit 官方仓库固定修订 `a5cb75b185b29fd58ceb6bdb72e67443e03cf918`，尚未确认该修订与本机 WebKit 二进制完全一致：
+
+- ContainerNode 的 querySelectorAll 可将结果交给 Document 缓存；Document 以查询上下文的弱键保存条目，条目包含 Ref<NodeList>。弱键本身不说明条目里的强引用已释放。[ContainerNode.cpp](https://github.com/WebKit/WebKit/blob/a5cb75b185b29fd58ceb6bdb72e67443e03cf918/Source/WebCore/dom/ContainerNode.cpp#L1341)、[Document.cpp](https://github.com/WebKit/WebKit/blob/a5cb75b185b29fd58ceb6bdb72e67443e03cf918/Source/WebCore/dom/Document.cpp#L1321)、[Document.h](https://github.com/WebKit/WebKit/blob/a5cb75b185b29fd58ceb6bdb72e67443e03cf918/Source/WebCore/dom/Document.h#L2567)。
+- StaticElementList 保存 Vector<Ref<Element>>，所以 JavaScript 局部 NodeList 变量离开作用域，并不能单独证明原生结果中的元素引用已经释放。[StaticNodeList.h](https://github.com/WebKit/WebKit/blob/a5cb75b185b29fd58ceb6bdb72e67443e03cf918/Source/WebCore/dom/StaticNodeList.h#L76)。
+- Document 的子树失效逻辑沿起点及祖先处理上下文；class 失效还比较被查询 class 的成员变化。修改整体祖先与修改各查询节点内部，因而具有可检验的差异；本轮“相关类有效、无关类无效”的结果与这个机制一致。[Document.cpp](https://github.com/WebKit/WebKit/blob/a5cb75b185b29fd58ceb6bdb72e67443e03cf918/Source/WebCore/dom/Document.cpp#L1362)、[Node.cpp](https://github.com/WebKit/WebKit/blob/a5cb75b185b29fd58ceb6bdb72e67443e03cf918/Source/WebCore/dom/Node.cpp#L1066)。
+- 该修订的 critical memory release 路径也会清理查询结果缓存；本轮没有触发该内部路径或施加内存压力，不能据当前残留断言内存压力下也永不回收。[MemoryRelease.cpp](https://github.com/WebKit/WebKit/blob/a5cb75b185b29fd58ceb6bdb72e67443e03cf918/Source/WebCore/page/MemoryRelease.cpp#L146)。
+
+**当前最强解释是查询结果缓存及其失效／释放路径参与了旧文档保留。** 依据是 qSA 后立即丢弃仍为 21、无框架脚本复现、StaticElementList 约 4,000 个的同步累积，以及两类有针对性的卸载变更可降到 2～3；相同次数无关 class 变更仍为 21，端口几何与 bounds 状态写入不是必要步骤。它比仅观察 RSS 不下降更能缩小方向，但仍是机制推断：没有本机 WebKit 的 C++ 持有图、malloc/free 历史或与系统构建逐项匹配的源码，尚不能指定该弱键容器中的确切条目、析构顺序或缺陷行。原生对象分配尚存也不能排除未来 GC、缓存清理或内存压力释放；低计数组 1～4 个 Document 和 RSS 高水位不代表所有资源已回收，也未证明长期平台化。
+
+下一步优先把卸载前失效的候选放到真实 NativeCanvasApp／shell 的验证夹具中：挂载期间保持端口和连线语义，覆盖空图、多个端口、节点删除／重建、重复清理、销毁与导航次序；再用生产资源执行既有 100 次重载回归和完整原生路由。替换查询 API 涉及静态／live 集合语义，卸载 class 变更涉及观察器和 React 清理次序，两者都需要独立行为回归后才能选生产方案。当前不引入全局 Element 补丁、修改依赖文件或关闭端口交互。
+
+验证：一次性宿主通过 Swift 6 -warnings-as-errors 编译，三份 Vite 生产构建与纯脚本 node --check 通过；26 宿主／520 轮／546 个文档的挂载、卸载、事件顺序、固定 PID、数值和清理计数语义审计通过，宿主均正常退出。新增证据逐项核对矩阵与原始日志、几何摘要、单位和上游固定修订，文档没有配置的自动化语义检查；仅格式化本轮新增段落并执行 git diff --check，原有文档字节保留。一次性脚本、宿主、模块缓存、构建、扫描和日志在记录后清理。无业务存储、网络、锁、连接池或下游负载，吞吐、排队、CPU 和 I/O 不属本轮目标。没有修改生产或版本化测试源码，未重跑完整原生套件；下述既有失败、迁移计划 M15/§7.2 未验收与 #573／PR #586 未修复状态继续保留。
+
 新增重载回归用例时的完整原生路由已执行：`npm run check:size`（740 文件）和 `npm run build:native-canvas` 通过；`xcodebuild ... -parallel-testing-enabled NO test` 执行 284 tests / 62 suites（306.684s），283 项通过，新增长循环用例失败（22 issues），退出码 65。既有回归通过不改变整套未通过的结论。文档无配置的自动化语义检查；已结构化核对矩阵、逐轮采样、诊断限制及迁移计划 M15/§7.2 的未验收状态，Prettier 与 `git diff --check` 通过。
 
 仓库内复现命令（`-only-testing` 的 Swift Testing 函数名包含括号）：
