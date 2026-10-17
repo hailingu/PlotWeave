@@ -132,7 +132,7 @@ struct NativeSettingsEditingTests {
             window = Self.makeWindow(size: NSSize(width: 800, height: 1500))
             webWindow = Self.makeWindow(size: NSSize(width: 900, height: 600))
             let configuration = WKWebViewConfiguration()
-            webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 600), configuration: configuration)
+            webView = try IsolatedWebViewFixture.makeWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 600), configuration: configuration)
             let content = NSHostingView(rootView: NativeSettingsView(state: state))
             content.sizingOptions = []
             window.contentView = content

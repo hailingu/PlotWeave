@@ -186,7 +186,7 @@ struct NativeAiDraftTests {
                 </script>
                 """.utf8).write(to: entry)
             let configuration = WKWebViewConfiguration()
-            webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300), configuration: configuration)
+            webView = try IsolatedWebViewFixture.makeWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300), configuration: configuration)
             coordinator = WebCanvasCoordinator(state: canvas, appearance: CanvasAppearanceState(), entryURL: entry,
                                                services: NativeHostServices(dataRoot: nil, quit: HostQuitController()))
             configuration.userContentController.add(coordinator, name: WebCanvasCoordinator.bridgeName)

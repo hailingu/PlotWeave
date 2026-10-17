@@ -347,7 +347,7 @@ struct NativeLibraryQuitEligibilityTests {
                 </script>
                 """.utf8).write(to: page)
             let configuration = WKWebViewConfiguration()
-            webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 300, height: 200), configuration: configuration)
+            webView = try IsolatedWebViewFixture.makeWebView(frame: NSRect(x: 0, y: 0, width: 300, height: 200), configuration: configuration)
             coordinator = WebCanvasCoordinator(
                 state: pageState, appearance: CanvasAppearanceState(), entryURL: page,
                 services: services, onProjection: nil

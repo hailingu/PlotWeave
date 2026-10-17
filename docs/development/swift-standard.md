@@ -125,8 +125,14 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   WKWebView directly or mount it through the shell also use the test-only
   `WebKitTestIsolation` suite trait, together with `.serialized`. Its shared
   async permit spans the entire suite, including suspension and teardown;
-  PID-difference attribution rejects calls outside that scope. New WebKit
-  fixture owners must join this same scope (PR #574, issue #575).
+  PID-difference attribution rejects calls outside that scope. Test code
+  never constructs `WKWebView` directly: every fixture goes through
+  `IsolatedWebViewFixture.makeWebView`, which proves the shared permit
+  before construction and otherwise throws `exclusiveSuiteScopeRequired`,
+  so a suite that forgets the trait fails at its first fixture instead of
+  silently reopening cross-suite pollution (PR #574, issue #575). Shell-mounted
+  fixtures construct their web view in production code and rely on the trait
+  plus this guard's review, not on the factory.
 
 ## Before Writing Code
 

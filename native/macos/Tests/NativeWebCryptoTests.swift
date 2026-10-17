@@ -14,7 +14,7 @@ struct NativeWebCryptoTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let entry = root.appendingPathComponent("crypto.html")
         try Data("<!doctype html><script>window.fixtureReady=true;</script>".utf8).write(to: entry)
-        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        let webView = try IsolatedWebViewFixture.makeWebView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
         defer { webView.stopLoading(); try? FileManager.default.removeItem(at: root) }
         webView.loadFileURL(entry, allowingReadAccessTo: root)
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
