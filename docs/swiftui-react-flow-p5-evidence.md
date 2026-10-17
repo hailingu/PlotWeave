@@ -232,6 +232,41 @@ xcodebuild -project native/macos/PlotWeaveNative.xcodeproj \
 
 本次临时程序通过 `xcrun swiftc -swift-version 6 -warnings-as-errors ... -framework AppKit -framework WebKit` 编译；诊断 200 次和干净对照各 50 次，共 300 次重载完成，正常清理三个自有宿主。语义校验覆盖固定 PID、新文档、精确循环、非零采样和诊断地址交集，均通过；Instruments 追踪失败单独记录，未冒充通过。未改生产源码或版本化测试，本次不重跑完整原生套件，以下既有失败状态保持不变。文档经过矩阵到实测结果的结构化审查、Prettier 与 `git diff --check`；一次性可执行文件、trace、日志及模块缓存在记录结果后清理。
 
+#### 具名对象与组件回收追踪（2026-10-17）
+
+本轮进一步按“具体对象是否还活着、通过什么路径被保留”检查。一次性 Vite 入口直接加载现有 `NativeCanvasApp`、100 节点／89 边夹具及样式，使用生产 React；只在临时构建中插入探针，未改生产源码或依赖。它与上轮原封不动的生产资源实验不同：入口增加可重复 `createRoot → render → root.unmount → root=null` 的控制，省去正式入口的部分职责，bundle 未压缩，因此绝对内存不能作为生产基线。临时 AppKit/WKWebView 宿主保持 1280×860、固定单个 WebContent PID、非零 RSS/footprint、单操作超时与 3GiB footprint 中止规则；只传递 JSON 字符串，不把 DOM／store 对象传给原生或检查器控制台。
+
+| 前置状态                | 动作与顺序                                                        | 观察判据                                         | 不变量 / 责任方                                                   | 实测与边界                                                             |
+| ----------------------- | ----------------------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 同一文档、每轮全新夹具  | 挂载并确认规模，卸载后等待 120ms，再独立任务采样                  | store、图数组、DOM、组件标记的弱引用与 finalizer | 探针仅持有 WeakRef、弱键和字符串元数据；临时入口 / React 生命周期 | 共 120 轮，最终 11 类各 120 个目标均回收；标记不能代表所有 React Fiber |
+| 已知持有／释放对象      | 强持有阳性对照，立即释放阴性对照；随后清空阳性引用                | 弱引用结果与快照 GC root 路径相符                | 探针不能自持有目标；诊断工具                                      | 阴性回收；阳性经 Window 属性持有，清空后回收                           |
+| 每轮卸载完成            | 统计 window/document 监听、timer、RAF、Observer                   | 是否随轮数增加活动资源                           | 弱记录不能反向持有回调／Observer；资源包装器                      | 最终只有一个页面级 selectionchange 监听；一次性监听不作残留判断        |
+| 新进程、相同诊断 bundle | 每页挂载→卸载→reload；与从不挂载组各 20 次对照                    | 原生 Document 分配是否随导航累积                 | 每次新 token、pagehide.persisted=false、同一 PID；宿主            | 均通过结构校验；跨 realm 后不再用旧页 finalizer 判漏                   |
+| 卸载前仍有 Observer     | 先显式 disconnect 全部三个 Observer，再卸载／重载 20 次           | 与普通卸载组比较原生分配数                       | 每页恰好三次 disconnect、观察目标归零；临时包装器                 | Document 仍为 21，不支持该条件单独足以解决                             |
+| 检查器连接、卸载完成    | 每页最多三次快照与独立任务采样；11 类均回收且无活 Observer 才导航 | 禁止把未确认回收的页面纳入成功对照               | 有界确认与失败即停；临时驱动                                      | 5 次确认后导航，第 6 页未满足而停止；不是完成了 20 次的实验            |
+
+追踪的 11 类为 React Flow store、nodeLookup、edgeLookup、组件生命周期标记、editor、nodes 数组、edges 数组、nodeEditApi、canvas DOM、首个节点 DOM 和首条边 DOM。每个目标附一个非枚举诊断标记；WeakRef/FinalizationRegistry 的元数据只保留字符串。50 轮首次采样各类尚有最近 3 个目标存活，稍后全部回收；100／120 轮即时采样各剩最近 1 个，后续快照与独立采样也全部回收。最终 1,320 个目标均弱引用清空且收到 finalizer，360 个 ResizeObserver 的弱引用全部清空，mount/cleanup 为 120/120，根容器为空、节点／边 DOM 数为 0，外观回调为 undefined。没有发现这些被追踪目标在同文档内按代累积。
+
+资源探针只覆盖 window/document 上非 once 监听、timer、RAF 与三类 Observer，不代表所有资源。最终活动 timer/RAF 均为 0；唯一留下的是首次 React 根创建时安装的 document selectionchange 委托监听，此后 120 轮数量不变。Observer 元数据的历史 targets 数即使为 1，也不能推翻其 WeakRef 已清空的结果。阳性对照在 100 轮后的快照中有明确路径 `GC root → Structure → Window.__pwStrongControl → Object`；清空属性后弱引用与 finalizer 均确认回收。阴性对照也回收，说明探针能够区分已知持有与已知释放。
+
+导出的 Web Inspector v3 堆图按[官方节点／边格式](https://github.com/WebKit/WebKit/blob/main/Source/WebInspectorUI/UserInterface/Workers/HeapSnapshot/HeapSnapshot.js)校验引用 ID，并遍历 GC root 路径。100 轮与沉降后的 120 轮快照可见对象 selfSize 合计为 8,388,287／7,825,867 字节；Array 类节点均为 151、Map 均为 15。WeakRef 节点从 1,404 增至 1,684，恰好对应新增 20×(11 个目标 + 3 个 Observer) 的探针记录；它们保留弱引用容器和字符串元数据，不表示业务目标仍活着。后份快照已没有目标的诊断标记边。这个诊断台账本身会增长，不能直接把总 Object／string 节点增长判成应用泄漏。
+
+检查器确认回收的跨导航对照得到一个具体的暂存候选。首个试跑在第二页一次快照后未能确认全部回收而停止，额外快照后清空；独立重试限定每页最多三次，前 5 页均满足全部目标回收才导航，第 6 页仍剩 nodes／edges 数组而触发 `PW_GC_NOT_CONFIRMED`。第三次快照捕获的具名对象路径包括 `GC root → FunctionCodeBlock → JSLexicalEnvironment → initialState → nodes/edges`，以及同一 initialState 的 nodeLookup／edgeLookup；部分 DOM 的最短路径仅到内部根，未给出原生持有者。随后独立采样中 lookup／DOM 已回收，数组仍存活；再取一次快照后，数组也弱引用清空且收到 finalizer。依赖中的 Zustand 确有 initialState／getInitialState 闭包，但该路径只能证明快照时的保留，不能证明应用永久强持有、JIT 根的具体来源或该闭包就是 #573 根因。此次没有放宽失败判据、继续把它计作完整 20 次成功实验。
+
+三个未连接检查器的全新宿主对照如下，先完成趋势采样再运行 `heap --sortBySize --noContent <PID>` 与 `vmmap -summary <PID>`。MiB 按 1,048,576 字节换算；每臂一次，未追加本轮长时间空闲测量，不作统计性能承诺。
+
+| 20 次重载的操作                                         | 初始 RSS / footprint（MiB） | 末读 RSS / footprint（MiB） | 随后 WebKit 已分配（MiB） | HTMLDocument 分配数 |
+| ------------------------------------------------------- | --------------------------- | --------------------------- | ------------------------- | ------------------- |
+| 加载 bundle，从不挂载画布；用两次 report 对齐控制调用数 | 38.4 / 41.1                 | 69.2 / 61.2                 | 10.0                      | 1                   |
+| 每页挂载后显式 React 卸载                               | 42.1 / 40.4                 | 244.4 / 206.8               | 45.6                      | 21                  |
+| 卸载前 disconnect 全部三个 Observer                     | 38.5 / 41.1                 | 226.5 / 237.0               | 45.0                      | 21                  |
+
+三组均有 21 个不同 boot token、20 次 pagehide.persisted=false、固定 PID 与完整规模／清理校验；挂载两组各有 2,400 个 SVGPathElement、4,202 个 HTMLDivElement 和 4,200 个 HTMLSpanElement 原生分配，从不挂载组为 0／2／0。检查器连接的部分对照在第 6 页停止时仍有 6 个原生 HTMLDocument 分配，虽然前 5 次导航前这些具名 JS 目标和 Observer 已确认回收。检查器、导航时序和覆盖范围均有限，不能据此排除所有未追踪 JS 对象，也不能把这些原生计数直接升级为真实强引用泄漏。
+
+同文档组的原生 HTMLDocument 在 50／120 轮均仅为 1，地址相同；但 WebKit zone 已分配仍从 51.1 增至 88.8MiB，最终诊断 RSS/footprint 为 521.0/117.4MiB。它包含探针、检查器和分配器扫描影响，证明“部分具体对象已回收”与“RSS 回落”不是同一判据，也不证明全部原生分配已经释放。结合无检查器的重载组，下一步应缩小触发跨导航原生 DOM 分配保留的最小组件／渲染路径，并取得原生持有或释放事件；尚没有依据提交全局 disconnect、强制 GC 或改写 Zustand 的生产修复。上一轮 SIP 阻止分配事件追踪的缺口保留，本轮未修改系统保护或重试 Instruments。
+
+本轮一次性宿主经 `xcrun swiftc -swift-version 6 -warnings-as-errors ...` 编译，Vite 构建通过；日志语义校验覆盖 120 轮计数、11 类目标的弱引用／finalizer、资源基线、对照对象引用链、三组 20 次导航及部分 GC 对照的失败即停，均符合各自判据。部分 GC 对照明确未完成目标轮数。诊断 bundle SHA-256 为 `3f331eaba63b70485e836e331023e76c0e73520f21edb329d6e091738fa1624f`，用于区别本轮资源与上轮生产资源；一次性入口／宿主、堆图、日志与模块缓存在记录结果后删除，自有宿主正常退出。没有改生产源码或版本化测试，本轮未重跑完整原生套件；#573 仍未修复，PR #586 保持调查草稿。
+
 新增重载回归用例时的完整原生路由已执行：`npm run check:size`（740 文件）和 `npm run build:native-canvas` 通过；`xcodebuild ... -parallel-testing-enabled NO test` 执行 284 tests / 62 suites（306.684s），283 项通过，新增长循环用例失败（22 issues），退出码 65。既有回归通过不改变整套未通过的结论。文档无配置的自动化语义检查；已结构化核对矩阵、逐轮采样、诊断限制及迁移计划 M15/§7.2 的未验收状态，Prettier 与 `git diff --check` 通过。
 
 仓库内复现命令（`-only-testing` 的 Swift Testing 函数名包含括号）：
