@@ -40,7 +40,7 @@ npm run build:native
 open -n native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app
 ```
 
-默认入口运行真实项目应用；`#fixture` 仅为不落盘的隔离演示。原生开发数据位于 Application Support 下独立的 `dev.plotweave.PlotWeaveNative.development` 目录，不读取旧 Tauri 数据或历史 Keychain。AI 功能需要重新配置可用的 Provider。真实公网 TLS、计费模型、视觉、中文输入法、VoiceOver 与性能尚未验收，已验证能力及边界见[功能补齐记录](docs/swiftui-react-flow-feature-parity.md)。
+默认入口运行真实项目应用；`#fixture` 仅为不落盘的隔离演示。原生开发数据位于 Application Support 下独立的 `dev.plotweave.PlotWeaveNative.development` 目录，不读取旧 Tauri 数据或历史 Keychain。AI 功能需要重新配置可用的 Provider。PlotWeave **不支持 VoiceOver**（[所有者决策，issue #569](https://github.com/hailingu/PlotWeave/issues/569)）。真实公网 TLS、计费模型、视觉、中文输入法与性能尚未验收，已验证能力及边界见[功能补齐记录](docs/swiftui-react-flow-feature-parity.md)。
 
 保留的 Tauri 基线另需 [Rust 1.95.0](rust-toolchain.toml)，通过 `npm run tauri dev` 启动。上述源码构建均不等同于经过签名、公证与安装验收的发行安装包；完整开发与验证步骤见[开发工作流](docs/development/workflow.md)。
 
