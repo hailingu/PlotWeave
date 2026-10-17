@@ -290,6 +290,64 @@ struct WebCanvasPerformanceTests {
         }
     }
 
+    /// Issue #573 isolates same-view navigation from the destroy/recreate boundary.
+    /// Every reload must replace the document, render the full fixture, and keep
+    /// the original readable process before its RSS can enter the trend. The
+    /// broad M15 bound is a regression guard; plateau acceptance uses the
+    /// recorded late-window deltas, not a machine-specific CI timing threshold.
+    @Test func repeatedReloadsRecordLongMemoryTrend() async throws {
+        let webBaseline = WebProcessMemorySampler.webContentPids()
+        let window = try await mountPerfShell(scale: 100)
+        defer {
+            window.contentView = nil
+            if window.isVisible { window.close() }
+        }
+        let webView = try await waitForWebView(in: window)
+        try await waitForFixture(webView, nodes: 100, edges: 89, deadline: .seconds(90))
+        try await Task.sleep(for: .seconds(1))
+        let trackedPages = try WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
+        let first = WebProcessMemorySampler.sample(tracking: trackedPages)
+        try Self.requireComparisonMemory(first, trackedPages: trackedPages)
+        let bound: UInt64 = 400 * 1_048_576
+        print("PW-RELOAD pids=\(trackedPages.sorted()) cycle=0 \(first.description)")
+        for cycle in 1...100 {
+            _ = try await webView.evaluateJavaScript("window.__pwReloadProbe = true; null")
+            _ = try #require(webView.reload())
+            try await waitForReloadedFixture(webView)
+            try await Task.sleep(for: .seconds(1))
+            let currentPages = try WebProcessMemorySampler.pageWebContentPids(since: webBaseline)
+            try Self.requireCondition(currentPages == trackedPages, "reloadProcessChanged")
+            let sample = WebProcessMemorySampler.sample(tracking: trackedPages)
+            try Self.requireComparisonMemory(sample, trackedPages: trackedPages)
+            print("PW-RELOAD cycle=\(cycle) \(sample.description)")
+            #expect(sample.webContentResidentBytes <= first.webContentResidentBytes + bound)
+            #expect(sample.appResidentBytes <= first.appResidentBytes + bound)
+        }
+        try await Task.sleep(for: .seconds(15))
+        let settled = WebProcessMemorySampler.sample(tracking: trackedPages)
+        try Self.requireComparisonMemory(settled, trackedPages: trackedPages)
+        print("PW-RELOAD settled+15s \(settled.description)")
+        #expect(settled.webContentResidentBytes <= first.webContentResidentBytes + bound)
+        #expect(settled.appResidentBytes <= first.appResidentBytes + bound)
+    }
+
+    /// The previous page's ready DOM cannot satisfy a reload measurement.
+    private func waitForReloadedFixture(_ webView: WKWebView) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(90))
+        while ContinuousClock.now < deadline {
+            if !webView.isLoading {
+                let ready = try await webView.evaluateJavaScript("""
+                    window.__pwReloadProbe === undefined &&
+                    document.querySelectorAll('.react-flow__node').length === 100 &&
+                    document.querySelectorAll('.react-flow__edge').length === 89
+                    """) as? Bool
+                if ready == true { return }
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw Timeout()
+    }
+
     // MARK: helpers
 
     /// Mounts a fresh hosted shell window for the requested perf scale.

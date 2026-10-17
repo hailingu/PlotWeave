@@ -4,7 +4,7 @@
  * 固定脚本驱动拖拽、平移、缩放与画布控件，报告只含数值统计（脱敏），
  * 并证明三类操作都产生了可观察的图效果——脚本空转会让测量失真。
  */
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { NativeCanvasApp } from './NativeCanvasApp'
 import { canvasPerfFixture } from './canvasPerfFixture'
@@ -19,6 +19,7 @@ class ResizeObserverStub {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -63,13 +64,27 @@ it('固定规模图上脚本化拖拽/平移/缩放产生可观察效果与脱�
 })
 
 it('宿主省略选项时由 Web runner 提供共同模式默认脚本', async () => {
+  // 验证默认节奏而非 CI 墙钟速度；真实浏览器性能仍由原生 WKWebView 套件测量。
+  vi.useFakeTimers({
+    toFake: [
+      'setTimeout',
+      'clearTimeout',
+      'requestAnimationFrame',
+      'cancelAnimationFrame',
+      'performance',
+    ],
+  })
   vi.stubGlobal('ResizeObserver', ResizeObserverStub)
   const { container } = render(
     <NativeCanvasApp graph={canvasPerfFixture(100)} />,
   )
   expect(container.querySelectorAll('.react-flow__node')).toHaveLength(100)
 
-  const result = await runCanvasPerfScript()
+  const result = await act(async () => {
+    const pending = runCanvasPerfScript()
+    await vi.advanceTimersByTimeAsync(5000)
+    return pending
+  })
 
   expect(result.phases.map((phase) => phase.kind)).toEqual([
     'drag',
@@ -77,6 +92,6 @@ it('宿主省略选项时由 Web runner 提供共同模式默认脚本', async (
     'zoom',
     'panel',
   ])
-  // 默认脚本约 4 秒；过短说明宿主遗漏参数后退化为空转而非共同模式。
+  // 逻辑时间保留约 4 秒的默认脚本；过短仍能检出遗漏默认参数导致的空转。
   expect(result.durationMs).toBeGreaterThan(3000)
 })
