@@ -330,7 +330,7 @@ xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNati
 
 ### 性能基线准备（第 4 项推进，夹具与指标规格定稿）
 
-按计划 §7.2 固定以下夹具规格（实现与测量属后续切片，此处为定稿记录）：
+按计划 §7.2 固定以下夹具规格（实现与测量属后续切片，此处为定稿记录）。**历史口径说明（2026-10-17）**：最终实现采用 89/449/899 边、统一合成 1024×1024 图片声明和 5 次销毁/重建周界；下表保留 P1 当时的规划，不能作为 #572 对比数值的来源，最终实现与结果以 [P5 证据 §3](swiftui-react-flow-p5-evidence.md#3-m15--固定规模图的持续操作与内存首轮测量) 为准：
 
 | 夹具 | 节点 / 边 | 家族比例（剧本/对白/节奏/角色/场景/生成图） | 图片资产 | 视口与可见性 |
 | --- | --- | --- | --- | --- |
@@ -343,6 +343,8 @@ xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNati
 已可引用的原生首片观测：真实 WKWebView 冷加载→ready 约 0.30 秒（`WebCanvasLoadingTests` 两次加载合计约 0.30 秒的单次本机观测，见「画布加载超时修复」节，不作为性能承诺）。
 
 **Tauri 对比接缝（登记待做）**：演示夹具当前不在 Tauri 壳内，严格同夹具对比需二选一——(a) 以 Tauri dev 入口伺服 `native-canvas.html`（vite dev server 多页面可直接伺服该页）；(b) 构造同规模项目文件驱动 Tauri 完整编辑器（含持久化路径，超出 P1 范围）。P1 采用 (a) 的路径，属下一切片工作；未完成前不以浏览器单测或主观数据冒充基线。
+
+**解决注记（2026-10-17，[#572](https://github.com/hailingu/PlotWeave/issues/572)）**：最终采用等价脱敏入口的生产构建，而非 React/Vite 开发模式：同一 `build:native-canvas` 产物由 `vite preview` 伺服给独立 Tauri/Wry harness，并由 Swift app bundle 使用；`eval_with_callback` 只执行同步读取，异步脚本结果由 worker 轮询，避免阻塞主线程。三规模双宿主记录、实际 viewport、帧统计和内存见 [P5 证据 §3.4](swiftui-react-flow-p5-evidence.md#34-tauri-同夹具基线issue-572)；本节的「登记待做」现已关闭。
 
 ### 所有者目验指引（第 3、6 项收尾与第 5 项视觉验证）
 
