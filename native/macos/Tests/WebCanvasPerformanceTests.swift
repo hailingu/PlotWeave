@@ -25,6 +25,11 @@ struct WebCanvasPerformanceTests {
         let actualProcesses: Int
     }
 
+    /// A structural report failure that must abort before PW-PERF is emitted.
+    private struct CanvasReportFailure: Error, Equatable {
+        let detail: String
+    }
+
     /// Registered measurement scales mirror src/editor/nativeCanvas/canvasPerfFixture.ts.
     @Test(arguments: [100, 500, 1000])
     func sustainedScriptedOperationsMatchFixtureScale(scale: Int) async throws {
@@ -56,6 +61,22 @@ struct WebCanvasPerformanceTests {
         )
         #expect(throws: ComparisonMemoryFailure.self) {
             try Self.requireComparisonMemory(lostHost, trackedPages: trackedPages)
+        }
+    }
+
+    /// Invalid frame metrics must throw before any machine-readable evidence is printed.
+    @Test func frameMetricsRejectMissingSamplesAndPercentiles() throws {
+        let valid: [String: Any] = ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0]
+        try Self.requireFrameMetrics(valid)
+        let invalid: [[String: Any]] = [
+            ["samples": 0, "p50Ms": 17.0, "p95Ms": 18.0],
+            ["samples": 1, "p50Ms": NSNull(), "p95Ms": 18.0],
+            ["samples": 1, "p50Ms": 17.0, "p95Ms": NSNull()],
+        ]
+        for frames in invalid {
+            #expect(throws: (any Error).self) {
+                try Self.requireFrameMetrics(frames)
+            }
         }
     }
 
@@ -116,27 +137,27 @@ struct WebCanvasPerformanceTests {
         }
 
         let jsonString = try await scriptTask.value
-        let payload = try #require(jsonString)
+        let payload = try Self.requireValue(jsonString, "payload")
         let report = try Self.parse(payload)
         let after = WebProcessMemorySampler.sample(tracking: trackedPages)
         try Self.requireComparisonMemory(after, trackedPages: trackedPages)
 
-        #expect(report["nodeCount"] as? Int == scale)
-        #expect(report["edgeCount"] as? Int == scale / 10 * 9 - 1)
-        #expect((report["visibleNodeCount"] as? Int ?? 0) > 0, "at fitView zoom nodes must be visible")
-        let phases = try #require(report["phases"] as? [[String: Any]])
+        try Self.requireCondition(report["nodeCount"] as? Int == scale, "nodeCount")
+        try Self.requireCondition(report["edgeCount"] as? Int == scale / 10 * 9 - 1, "edgeCount")
+        try Self.requireCondition((report["visibleNodeCount"] as? Int ?? 0) > 0, "visibleNodeCount")
+        let phases = try Self.requireValue(report["phases"] as? [[String: Any]], "phases")
         let kinds = phases.compactMap { $0["kind"] as? String }
-        #expect(kinds == ["drag", "pan", "zoom", "panel"])
+        try Self.requireCondition(kinds == ["drag", "pan", "zoom", "panel"], "phaseKinds")
         for phase in phases {
-            let frames = try #require(phase["frames"] as? [String: Any])
-            Self.expectFrameMetrics(frames)
+            let frames = try Self.requireValue(phase["frames"] as? [String: Any], "frames")
+            try Self.requireFrameMetrics(frames)
         }
-        let total = try #require(report["total"] as? [String: Any])
-        Self.expectFrameMetrics(total)
-        let effects = try #require(report["effects"] as? [String: Any])
-        #expect((effects["draggedNodeMovedPx"] as? Double ?? 0) > 0, "the scripted drag must move a node")
-        #expect((effects["panTranslatePx"] as? Double ?? 0) > 0, "the scripted pan must translate the viewport")
-        #expect((effects["zoomTravel"] as? Double ?? 0) > 0, "the scripted zoom must change scale")
+        let total = try Self.requireValue(report["total"] as? [String: Any], "total")
+        try Self.requireFrameMetrics(total)
+        let effects = try Self.requireValue(report["effects"] as? [String: Any], "effects")
+        try Self.requireCondition((effects["draggedNodeMovedPx"] as? Double ?? 0) > 0, "dragEffect")
+        try Self.requireCondition((effects["panTranslatePx"] as? Double ?? 0) > 0, "panEffect")
+        try Self.requireCondition((effects["zoomTravel"] as? Double ?? 0) > 0, "zoomEffect")
 
         Self.printEvidence(
             scale: scale, mode: nativePanelMode ? "native-panels" : "common-web",
@@ -236,8 +257,10 @@ struct WebCanvasPerformanceTests {
 
     /// Parses the runner's JSON payload.
     private static func parse(_ json: String) throws -> [String: Any] {
-        let data = try #require(json.data(using: .utf8))
-        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let data = try requireValue(json.data(using: .utf8), "jsonData")
+        return try requireValue(
+            JSONSerialization.jsonObject(with: data) as? [String: Any], "jsonObject"
+        )
     }
 
     /// Depth-first search for the shell's hosted web view.
@@ -298,11 +321,23 @@ struct WebCanvasPerformanceTests {
         }
     }
 
-    /// Requires samples and numeric p50/p95 for every total or phase report.
-    private static func expectFrameMetrics(_ frames: [String: Any]) {
-        #expect((frames["samples"] as? Int ?? 0) > 0, "every report must contain rAF samples")
-        #expect((frames["p50Ms"] as? Double) != nil, "sampled reports must contain numeric p50")
-        #expect((frames["p95Ms"] as? Double) != nil, "sampled reports must contain numeric p95")
+    /// Throws unless samples and numeric p50/p95 exist for a total or phase report.
+    private static func requireFrameMetrics(_ frames: [String: Any]) throws {
+        let samples = try requireValue(frames["samples"] as? Int, "samples")
+        try requireCondition(samples > 0, "samples")
+        _ = try requireValue(frames["p50Ms"] as? Double, "p50Ms")
+        _ = try requireValue(frames["p95Ms"] as? Double, "p95Ms")
+    }
+
+    /// Returns a required report value or throws before evidence formatting.
+    private static func requireValue<T>(_ value: T?, _ detail: String) throws -> T {
+        guard let value else { throw CanvasReportFailure(detail: detail) }
+        return value
+    }
+
+    /// Enforces a report predicate without relying on non-throwing test expectations.
+    private static func requireCondition(_ condition: Bool, _ detail: String) throws {
+        guard condition else { throw CanvasReportFailure(detail: detail) }
     }
 
     /// One evidence line per scale for the P5 record (values, not thresholds).
