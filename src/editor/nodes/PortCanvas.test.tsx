@@ -103,6 +103,55 @@ function port(name: string): HTMLElement {
   return screen.getByLabelText(name)
 }
 
+describe('移除端口的查询失效（#573）', () => {
+  it('移除分支选项时失效旧端口查询，保留存活端口身份和脱离端口的类成员', () => {
+    const { rerender } = render(<CanvasFixture />)
+    const removed = port('分支出口：隐瞒')
+    const retained = port('分支出口：坦白')
+    const classes = new Set(removed.classList)
+    // #573 的失效合同：相关 source/target 类发生可逆变更；Happy DOM 不证明 WebKit 原生回收。
+    const observer = new MutationObserver(() => undefined)
+    observer.observe(removed, {
+      attributes: true,
+      attributeOldValue: true,
+      attributeFilter: ['class'],
+    })
+    const retainedObserver = new MutationObserver(() => undefined)
+    retainedObserver.observe(retained, {
+      attributes: true,
+      attributeOldValue: true,
+      attributeFilter: ['class'],
+    })
+    rerender(
+      <CanvasFixture
+        options={[
+          { id: 'a', label: '坦白' },
+          { id: 'c', label: '沉默' },
+        ]}
+      />,
+    )
+    const changes = observer.takeRecords()
+    const retainedChanges = retainedObserver.takeRecords()
+    observer.disconnect()
+    retainedObserver.disconnect()
+    expect(
+      changes.some(
+        (change) =>
+          change.attributeName === 'class' &&
+          !change.oldValue?.split(/\s+/).includes('source'),
+      ),
+    ).toBe(true)
+    expect(removed.isConnected).toBe(false)
+    expect(new Set(removed.classList)).toEqual(classes)
+    expect(port('分支出口：坦白')).toBe(retained)
+    expect(
+      retainedChanges.some(
+        (change) => !change.oldValue?.split(/\s+/).includes('source'),
+      ),
+    ).toBe(false)
+  })
+})
+
 describe('外置端口与分支连接', () => {
   it('输入和输出具有不同方向标记，三行各有一个稳定出口，输入没有箭头', () => {
     render(<CanvasFixture />)

@@ -1,6 +1,8 @@
 import { Handle, Position } from '@xyflow/react'
+import { useCallback, useRef } from 'react'
 
 import { usePortActive } from './usePortActive'
+import { invalidateHandleQueries } from './handleQueryCache'
 
 /** 外置连接端口：圆形输入与居中箭头方形输出，保留 React Flow 的连接与命中语义。 */
 export function NodePort({
@@ -19,8 +21,16 @@ export function NodePort({
   readonly className?: string
 }) {
   const active = usePortActive(nodeId, type, id)
+  const currentHandle = useRef<HTMLDivElement | null>(null)
+  /** React's null ref releases removed ports; a stable callback leaves ordinary renders untouched. */
+  const bindHandle = useCallback((handle: HTMLDivElement | null): void => {
+    const previous = currentHandle.current
+    currentHandle.current = handle
+    if (previous && previous !== handle) invalidateHandleQueries([previous])
+  }, [])
   return (
     <Handle
+      ref={bindHandle}
       type={type}
       position={position}
       {...(id !== undefined && { id })}

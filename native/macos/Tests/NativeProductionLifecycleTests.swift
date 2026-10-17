@@ -9,6 +9,79 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeProductionLifecycleTests {
+    /// Dynamic ports, deleted nodes and empty graphs survive permanent page disposal and actual same-view reload.
+    @Test(arguments: [false, true])
+    func pageDisposalAfterDynamicPortsReloadsSavedProject(retainNode: Bool) async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let metadata = try await projects.invoke(command: "create_project", args: ["name": .string("页面卸载回归")])
+        let id = try #require(metadata["id"]?.string)
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let webView = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(webView)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        try await exerciseDynamicPorts(mounted.state, webView: webView, projectId: id)
+        if retainNode {
+            _ = try await mounted.state.request("editor.create", args: ["projectId": .string(id), "nodeType": .string("branch")])
+            try await wait { mounted.state.editor["nodes"]?.arrayValue?.count == 1 }
+            try await waitForPortCount(webView, count: 3)
+        }
+        // The ordinary home transition flushes actual storage before the destructive navigation under test.
+        _ = try await mounted.state.request("app.home")
+        try await wait { mounted.state.route == "home" }
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        try await waitForPortCount(webView, count: retainNode ? 3 : 0)
+        #expect(try await webView.evaluateJavaScript("document.getElementById('root').childElementCount > 0") as? Bool == true)
+        _ = try await webView.evaluateJavaScript("window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:false})); null")
+        #expect(try await webView.evaluateJavaScript("document.getElementById('root').childElementCount") as? Int == 0)
+        try await waitForPortCount(webView, count: 0)
+        let coordinator = try #require(webView.navigationDelegate as? WebCanvasCoordinator)
+        let oldSession = coordinator.sessionId
+        coordinator.loadCanvas(into: webView)
+        try await wait { coordinator.sessionId != oldSession && !webView.isLoading }
+        try await waitForHostReady(webView)
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        #expect(findWebView(mounted.window.contentView) === webView)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.editor["nodes"]?.arrayValue?.count == (retainNode ? 1 : 0) }
+        try await waitForPortCount(webView, count: retainNode ? 3 : 0)
+        let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+        #expect(saved["graph"]?["nodes"]?.arrayValue?.count == (retainNode ? 1 : 0))
+        await fixture.services.close()
+    }
+
+    /// Native production intents change the real React Flow port DOM before deleting its owning branch.
+    private func exerciseDynamicPorts(_ state: NativeApplicationState, webView: WKWebView, projectId: String) async throws {
+        _ = try await state.request("editor.create", args: ["projectId": .string(projectId), "nodeType": .string("branch")])
+        try await wait { state.editor["nodes"]?.arrayValue?.count == 1 }
+        let node = try #require(state.editor["nodes"]?.arrayValue?.first?["id"]?.string)
+        try await waitForPortCount(webView, count: 3)
+        _ = try await state.request("editor.insertListItem", args: ["projectId": .string(projectId), "id": .string(node), "field": .string("options")])
+        try await waitForPortCount(webView, count: 4)
+        _ = try await state.request("editor.select", args: ["projectId": .string(projectId), "id": .string(node)])
+        try await wait { state.editor["selected"]?["id"]?.string == node }
+        let option = try #require(state.editor["selected"]?["data"]?["options"]?.arrayValue?.first?["id"]?.string)
+        _ = try await state.request("editor.deleteListItem", args: ["projectId": .string(projectId), "id": .string(node), "field": .string("options"), "itemId": .string(option)])
+        try await waitForPortCount(webView, count: 3)
+        _ = try await state.request("editor.delete", args: ["projectId": .string(projectId), "id": .string(node)])
+        try await wait { state.editor["nodes"]?.arrayValue?.isEmpty == true }
+        try await waitForPortCount(webView, count: 0)
+    }
+
+    /// Observe actual public handle DOM; no React or native projection mock can satisfy this check.
+    private func waitForPortCount(_ webView: WKWebView, count: Int) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+        while ContinuousClock.now < deadline {
+            if try await webView.evaluateJavaScript("document.querySelectorAll('.react-flow__handle').length") as? Int == count { return }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        throw HostFailure(code: "PW_FIXTURE_PORT_TIMEOUT", message: "真实分支端口数量未达到预期 \(count)")
+    }
+
     /// Real canvas editing survives debounce, the quit fixed point and a second page opening the saved project.
     @Test func nativeProjectEditFlushAndReloadUsesActualIndependentStorage() async throws {
         let fixture = Fixture()
@@ -255,10 +328,10 @@ struct NativeProductionLifecycleTests {
     }
 
     /// Bounded polling observes actual state transitions and reports a useful last-state failure.
-    private func wait(_ predicate: () -> Bool) async throws {
+    private func wait(sourceLocation: SourceLocation = #_sourceLocation, _ predicate: () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(12))
         while !predicate() && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(30)) }
-        try #require(predicate(), "生产原生页面未在期限内完成业务状态转换")
+        try #require(predicate(), "生产原生页面未在期限内完成业务状态转换", sourceLocation: sourceLocation)
     }
 
     /// Probes the real native ready guard without admitting a business intent.
