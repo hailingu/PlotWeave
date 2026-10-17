@@ -13,6 +13,8 @@
 
 ## 1. M13 — 浅深色与辅助功能组合（自动化切片）
 
+2026-10-18 范围决策（[issue #569](https://github.com/hailingu/PlotWeave/issues/569)）：所有者明确要求不支持 VoiceOver，取消原生界面与画布的相关人工／Web AX 验收，按不计划支持关闭该 issue。此次仅确认系统设置中 VoiceOver 为关闭；未完成真实导航、朗读或 rotor 巡检，不记录为验收通过。字幕面板原已开启，本轮未改动其设置。原有键盘、语义标签、axe 与外观变体不变；输入法及视觉缺口仍分别由 #570／#571 跟踪。
+
 - 命令：上述原生路由命令（套件 `CanvasAppearanceComboTests`，新增）。
 - 步骤：真实 WKWebView 加载发货页 `#fixture`；对 9 组组合（浅/深 × 无 / 仅 RT / 仅 IC / 仅 RM / 全开）经受控读取器强制宿主快照并 `refresh()` 推送。
 - 预期：四项语义属性落页且被 Web 令牌层实际消费（计算样式，非仅属性反射）。
@@ -21,7 +23,6 @@
 - 后续补强（2026-10-16，[#568](https://github.com/hailingu/PlotWeave/issues/568) 修复）：reduce-motion 此前无属性驱动的令牌消费路径（RT/IC 有、RM 无），现已接线——动效退化规则补 `:root[data-host-reduce-motion='true']` 属性分支（五个样式表），`useAutoLayout` 的 JS 动画与媒体查询/宿主属性取或；RM 组合增加节点卡计算 `transition-duration` 等价断言（降级 ⇔ 宿主属性或媒体查询任一为真），属性驱动路径修复前该断言在真实 WebKit 上失败（3 组合），修复后 9/9 通过。
 - 信息性观察：本机媒体查询 `prefers-reduced-motion` 为 false，与真实系统设置一致；宿主快照与媒体查询的真实系统切换分叉场景仍未实测（断言经强制快照构造，机器无关）。
 - 未通过 / 未执行（各自独立 issue，#568 已由上述后续补强解决、不在本清单）：
-  - VoiceOver 真机巡检与 Web AX 树验证（测试宿主内 WKWebView 不暴露内容 AX 树）——[#569](https://github.com/hailingu/PlotWeave/issues/569)。
   - 中文输入法真机组合输入——[#570](https://github.com/hailingu/PlotWeave/issues/570)。
   - 视觉目验/截图/录屏（屏幕录制授权缺失）——[#571](https://github.com/hailingu/PlotWeave/issues/571)。
 
