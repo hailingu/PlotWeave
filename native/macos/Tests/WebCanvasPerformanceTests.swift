@@ -1,4 +1,5 @@
 import AppKit
+import CoreFoundation
 import SwiftUI
 import Testing
 import WebKit
@@ -66,6 +67,9 @@ struct WebCanvasPerformanceTests {
 
     /// Invalid frame metrics must throw before any machine-readable evidence is printed.
     @Test func frameMetricsRejectMissingSamplesAndPercentiles() throws {
+        let jsonTrue = try Self.requireValue(
+            JSONSerialization.jsonObject(with: Data("true".utf8), options: .fragmentsAllowed) as? NSNumber, "jsonTrue"
+        )
         let valid: [String: Any] = [
             "samples": 1, "p50Ms": 17.0, "p95Ms": 18.0,
             "maxMs": 20.0, "over16Ms": 1, "over33Ms": 0,
@@ -80,6 +84,10 @@ struct WebCanvasPerformanceTests {
             ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": 1, "over33Ms": NSNull()],
             ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": -1.0, "over16Ms": 1, "over33Ms": 0],
             ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": -1, "over33Ms": 0],
+            ["samples": jsonTrue, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": 1, "over33Ms": 0],
+            ["samples": 1, "p50Ms": jsonTrue, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": 1, "over33Ms": 0],
+            ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": 1.5, "over33Ms": 0],
+            ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": 1, "over33Ms": jsonTrue],
         ]
         for frames in invalid {
             #expect(throws: (any Error).self) {
@@ -90,6 +98,9 @@ struct WebCanvasPerformanceTests {
 
     /// Version, viewport, and optional long-task evidence must fail closed too.
     @Test func reportMetadataRejectsInvalidVersionViewportAndLongTasks() throws {
+        let jsonTrue = try Self.requireValue(
+            JSONSerialization.jsonObject(with: Data("true".utf8), options: .fragmentsAllowed) as? NSNumber, "jsonTrue"
+        )
         let valid: [String: Any] = [
             "version": 1,
             "viewport": ["width": 1280, "height": 860, "devicePixelRatio": 2],
@@ -104,7 +115,17 @@ struct WebCanvasPerformanceTests {
         invalidLongTasks["longTasks"] = ["samples": 1]
         var negativeLongTasks = valid
         negativeLongTasks["longTasks"] = ["samples": -1, "maxMs": 0.0]
-        for report in [invalidVersion, invalidViewport, invalidLongTasks, negativeLongTasks] {
+        var booleanVersion = valid
+        booleanVersion["version"] = jsonTrue
+        var booleanViewport = valid
+        booleanViewport["viewport"] = ["width": 1280, "height": 860, "devicePixelRatio": jsonTrue]
+        var booleanLongTasks = valid
+        booleanLongTasks["longTasks"] = ["samples": jsonTrue, "maxMs": 0.0]
+        let invalid = [
+            invalidVersion, invalidViewport, invalidLongTasks, negativeLongTasks,
+            booleanVersion, booleanViewport, booleanLongTasks,
+        ]
+        for report in invalid {
             #expect(throws: (any Error).self) {
                 try Self.requireReportMetadata(report)
             }
@@ -174,9 +195,12 @@ struct WebCanvasPerformanceTests {
         let after = WebProcessMemorySampler.sample(tracking: trackedPages)
         try Self.requireComparisonMemory(after, trackedPages: trackedPages)
 
-        try Self.requireCondition(report["nodeCount"] as? Int == scale, "nodeCount")
-        try Self.requireCondition(report["edgeCount"] as? Int == scale / 10 * 9 - 1, "edgeCount")
-        try Self.requireCondition((report["visibleNodeCount"] as? Int ?? 0) > 0, "visibleNodeCount")
+        let nodeCount = try Self.requireInteger(report["nodeCount"], "nodeCount")
+        try Self.requireCondition(nodeCount == scale, "nodeCount")
+        let edgeCount = try Self.requireInteger(report["edgeCount"], "edgeCount")
+        try Self.requireCondition(edgeCount == scale / 10 * 9 - 1, "edgeCount")
+        let visibleNodeCount = try Self.requireInteger(report["visibleNodeCount"], "visibleNodeCount")
+        try Self.requireCondition(visibleNodeCount > 0, "visibleNodeCount")
         let phases = try Self.requireValue(report["phases"] as? [[String: Any]], "phases")
         let kinds = phases.compactMap { $0["kind"] as? String }
         try Self.requireCondition(kinds == ["drag", "pan", "zoom", "panel"], "phaseKinds")
@@ -187,9 +211,9 @@ struct WebCanvasPerformanceTests {
         let total = try Self.requireValue(report["total"] as? [String: Any], "total")
         try Self.requireFrameMetrics(total)
         let effects = try Self.requireValue(report["effects"] as? [String: Any], "effects")
-        try Self.requireCondition((effects["draggedNodeMovedPx"] as? Double ?? 0) > 0, "dragEffect")
-        try Self.requireCondition((effects["panTranslatePx"] as? Double ?? 0) > 0, "panEffect")
-        try Self.requireCondition((effects["zoomTravel"] as? Double ?? 0) > 0, "zoomEffect")
+        _ = try Self.requirePositiveNumber(effects["draggedNodeMovedPx"], "dragEffect")
+        _ = try Self.requirePositiveNumber(effects["panTranslatePx"], "panEffect")
+        _ = try Self.requirePositiveNumber(effects["zoomTravel"], "zoomEffect")
 
         Self.printEvidence(
             scale: scale, mode: nativePanelMode ? "native-panels" : "common-web",
@@ -355,35 +379,30 @@ struct WebCanvasPerformanceTests {
 
     /// Validates the report version, positive viewport, and optional long-task shape.
     private static func requireReportMetadata(_ report: [String: Any]) throws {
-        try requireCondition(report["version"] as? Int == 1, "version")
+        let version = try requireInteger(report["version"], "version")
+        try requireCondition(version == 1, "version")
         let viewport = try requireValue(report["viewport"] as? [String: Any], "viewport")
         for field in ["width", "height", "devicePixelRatio"] {
-            let value = try requireValue(viewport[field], field)
-            let number = try requireValue(value as? NSNumber, field)
-            try requireCondition(number.doubleValue > 0, field)
+            _ = try requirePositiveNumber(viewport[field], field)
         }
         if !(report["longTasks"] is NSNull) {
             let tasks = try requireValue(report["longTasks"] as? [String: Any], "longTasks")
-            let samples = try requireValue(tasks["samples"] as? Int, "longTasks.samples")
+            let samples = try requireInteger(tasks["samples"], "longTasks.samples")
             try requireCondition(samples >= 0, "longTasks.samples")
-            let maxMs = try requireValue(tasks["maxMs"] as? Double, "longTasks.maxMs")
-            try requireCondition(maxMs >= 0, "longTasks.maxMs")
+            _ = try requireNonnegativeNumber(tasks["maxMs"], "longTasks.maxMs")
         }
     }
 
     /// Throws unless samples and numeric p50/p95 exist for a total or phase report.
     private static func requireFrameMetrics(_ frames: [String: Any]) throws {
-        let samples = try requireValue(frames["samples"] as? Int, "samples")
+        let samples = try requireInteger(frames["samples"], "samples")
         try requireCondition(samples > 0, "samples")
-        let p50 = try requireValue(frames["p50Ms"] as? Double, "p50Ms")
-        try requireCondition(p50 >= 0, "p50Ms")
-        let p95 = try requireValue(frames["p95Ms"] as? Double, "p95Ms")
-        try requireCondition(p95 >= 0, "p95Ms")
-        let maxMs = try requireValue(frames["maxMs"] as? Double, "maxMs")
-        try requireCondition(maxMs >= 0, "maxMs")
-        let over16 = try requireValue(frames["over16Ms"] as? Int, "over16Ms")
+        _ = try requireNonnegativeNumber(frames["p50Ms"], "p50Ms")
+        _ = try requireNonnegativeNumber(frames["p95Ms"], "p95Ms")
+        _ = try requireNonnegativeNumber(frames["maxMs"], "maxMs")
+        let over16 = try requireInteger(frames["over16Ms"], "over16Ms")
         try requireCondition(over16 >= 0, "over16Ms")
-        let over33 = try requireValue(frames["over33Ms"] as? Int, "over33Ms")
+        let over33 = try requireInteger(frames["over33Ms"], "over33Ms")
         try requireCondition(over33 >= 0, "over33Ms")
     }
 
@@ -391,6 +410,37 @@ struct WebCanvasPerformanceTests {
     private static func requireValue<T>(_ value: T?, _ detail: String) throws -> T {
         guard let value else { throw CanvasReportFailure(detail: detail) }
         return value
+    }
+
+    /// Accepts NSNumber while explicitly excluding JSON's CFBoolean bridge.
+    private static func requireNumber(_ value: Any?, _ detail: String) throws -> NSNumber {
+        let number = try requireValue(value as? NSNumber, detail)
+        guard CFGetTypeID(number) != CFBooleanGetTypeID() else {
+            throw CanvasReportFailure(detail: detail)
+        }
+        return number
+    }
+
+    /// Requires an exact, non-fractional integer rather than a numeric coercion.
+    private static func requireInteger(_ value: Any?, _ detail: String) throws -> Int {
+        let number = try requireNumber(value, detail)
+        let integer = number.intValue
+        try requireCondition(number.doubleValue == Double(integer), detail)
+        return integer
+    }
+
+    /// Requires a finite nonnegative report duration.
+    private static func requireNonnegativeNumber(_ value: Any?, _ detail: String) throws -> Double {
+        let number = try requireNumber(value, detail).doubleValue
+        try requireCondition(number.isFinite && number >= 0, detail)
+        return number
+    }
+
+    /// Requires a finite positive report number.
+    private static func requirePositiveNumber(_ value: Any?, _ detail: String) throws -> Double {
+        let number = try requireNumber(value, detail).doubleValue
+        try requireCondition(number.isFinite && number > 0, detail)
+        return number
     }
 
     /// Enforces a report predicate without relying on non-throwing test expectations.
