@@ -69,7 +69,7 @@ struct CanvasAppearanceComboTests {
         let coordinator = WebCanvasCoordinator(state: state, appearance: appearance, entryURL: fixture)
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(coordinator, name: WebCanvasCoordinator.bridgeName)
-        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration)
+        let webView = try IsolatedWebViewFixture.makeWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration)
         webView.navigationDelegate = coordinator
         let window = NSWindow(contentRect: webView.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

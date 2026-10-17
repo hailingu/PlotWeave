@@ -16,7 +16,7 @@ struct NativeMediaSchemeTests {
         let file = try NativeMediaFile(descriptor: dir.openFile("image"), mime: "image/png")
         let handler = NativeMediaScheme(loader: { _ in (file, 20) })
         let task = SchemeTask(url: try #require(URL(string: "pwmedia://localhost/library/a")))
-        handler.webView(WKWebView(), start: task)
+        handler.webView(try IsolatedWebViewFixture.makeWebView(), start: task)
         for _ in 0..<100 where task.terminals == 0 { try await Task.sleep(for: .milliseconds(5)) }
         #expect(task.status == 200)
         #expect(task.bytes == Data([1, 2, 3]))
@@ -28,7 +28,7 @@ struct NativeMediaSchemeTests {
     @Test func unavailableMediaReturnsConstant404() async throws {
         let handler = NativeMediaScheme(loader: { _ in throw HostFailure(code: "PRIVATE_PATH", message: "/tmp/private-user-data") })
         let task = SchemeTask(url: try #require(URL(string: "pwmedia://localhost/library/a")))
-        handler.webView(WKWebView(), start: task)
+        handler.webView(try IsolatedWebViewFixture.makeWebView(), start: task)
         for _ in 0..<100 where task.terminals == 0 { try await Task.sleep(for: .milliseconds(5)) }
         #expect(task.status == 404)
         #expect(String(data: task.bytes, encoding: .utf8) == "媒体不可用")
@@ -47,7 +47,7 @@ struct NativeMediaSchemeTests {
         let gate = NativeMediaReadGate(limit: 1)
         let handler = NativeMediaScheme(loader: { _ in await barrier.wait(); return (file, 20) }, gate: gate)
         let task = SchemeTask(url: try #require(URL(string: "pwmedia://localhost/library/a")))
-        let webView = WKWebView()
+        let webView = try IsolatedWebViewFixture.makeWebView()
         handler.webView(webView, start: task)
         for _ in 0..<100 where await !barrier.started { try await Task.sleep(for: .milliseconds(5)) }
         #expect(await gate.occupancy() == 1)

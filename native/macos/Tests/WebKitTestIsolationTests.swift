@@ -1,6 +1,7 @@
 import Testing
 
-/// Regression coverage for the cross-suite ownership window in PR #574 review 17.
+/// Regression coverage for the cross-suite ownership window in PR #574 review 17
+/// and for the construction-side guard that closes issue #575's regression path.
 struct WebKitTestIsolationTests {
     /// Removing the shared permit must expose overlapping owners across an await.
     @Test func concurrentSuiteScopesNeverOverlap() async throws {
@@ -55,6 +56,25 @@ struct WebKitTestIsolationTests {
     @Test func attributionRequiresExclusiveSuiteScope() {
         #expect(throws: WebProcessMemorySampler.AttributionFailure.exclusiveSuiteScopeRequired) {
             _ = try WebProcessMemorySampler.pageWebContentPids(since: [])
+        }
+    }
+
+    /// A web view fixture constructed outside the shared scope must fail loudly
+    /// instead of silently reopening cross-suite WebContent pollution (#575).
+    @Test @MainActor func webViewFixtureConstructionRequiresSuiteScope() {
+        #expect(throws: IsolatedWebViewFixture.Failure.exclusiveSuiteScopeRequired) {
+            _ = try IsolatedWebViewFixture.makeWebView()
+        }
+    }
+
+    /// Fixture scope admission follows the shared suite scope exactly, in both directions.
+    @Test func webViewFixtureScopeAssertionTracksSharedScope() async throws {
+        let test = try #require(Test.current)
+        try await WebKitTestIsolation().provideScope(for: test, testCase: nil) {
+            try IsolatedWebViewFixture.assertSuiteScopeHeld()
+        }
+        #expect(throws: IsolatedWebViewFixture.Failure.exclusiveSuiteScopeRequired) {
+            try IsolatedWebViewFixture.assertSuiteScopeHeld()
         }
     }
 
