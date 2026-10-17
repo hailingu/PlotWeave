@@ -40,7 +40,10 @@ pub fn validate_report(report: &Value, scale: u32) -> Result<(), String> {
     validate_viewport(&report["viewport"])?;
     validate_phases(&report["phases"])?;
     validate_frames(&report["total"])?;
-    validate_long_tasks(&report["longTasks"])?;
+    let long_tasks = report
+        .get("longTasks")
+        .ok_or_else(|| "PW_PERF_LONG_TASKS_INVALID".to_string())?;
+    validate_long_tasks(long_tasks)?;
     for effect in ["draggedNodeMovedPx", "panTranslatePx", "zoomTravel"] {
         if report["effects"][effect].as_f64().unwrap_or(0.0) <= 0.0 {
             return Err(format!("PW_PERF_EFFECT_MISSING:{effect}"));

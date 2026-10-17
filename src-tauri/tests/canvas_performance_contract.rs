@@ -97,6 +97,14 @@ fn report_validation_rejects_wrong_fixture_and_incomplete_interaction() {
 
 #[test]
 fn report_validation_rejects_malformed_counters_and_long_tasks() {
+    let mut missing_long_tasks = valid_report(100);
+    missing_long_tasks
+        .as_object_mut()
+        .unwrap()
+        .remove("longTasks");
+    assert!(report::validate_report(&missing_long_tasks, 100).is_err());
+    assert!(report::evidence_line(100, 12.5, &missing_long_tasks, "app=1MB", "app=2MB").is_err());
+
     let mut missing_long_task_fields = valid_report(100);
     missing_long_task_fields["longTasks"] = json!({"samples": 1});
     assert!(report::validate_report(&missing_long_task_fields, 100).is_err());
