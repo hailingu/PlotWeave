@@ -66,16 +66,43 @@ struct WebCanvasPerformanceTests {
 
     /// Invalid frame metrics must throw before any machine-readable evidence is printed.
     @Test func frameMetricsRejectMissingSamplesAndPercentiles() throws {
-        let valid: [String: Any] = ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0]
+        let valid: [String: Any] = [
+            "samples": 1, "p50Ms": 17.0, "p95Ms": 18.0,
+            "maxMs": 20.0, "over16Ms": 1, "over33Ms": 0,
+        ]
         try Self.requireFrameMetrics(valid)
         let invalid: [[String: Any]] = [
-            ["samples": 0, "p50Ms": 17.0, "p95Ms": 18.0],
-            ["samples": 1, "p50Ms": NSNull(), "p95Ms": 18.0],
-            ["samples": 1, "p50Ms": 17.0, "p95Ms": NSNull()],
+            ["samples": 0, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": 1, "over33Ms": 0],
+            ["samples": 1, "p50Ms": NSNull(), "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": 1, "over33Ms": 0],
+            ["samples": 1, "p50Ms": 17.0, "p95Ms": NSNull(), "maxMs": 20.0, "over16Ms": 1, "over33Ms": 0],
+            ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "over16Ms": 1, "over33Ms": 0],
+            ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": NSNull(), "over33Ms": 0],
+            ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": 1, "over33Ms": NSNull()],
         ]
         for frames in invalid {
             #expect(throws: (any Error).self) {
                 try Self.requireFrameMetrics(frames)
+            }
+        }
+    }
+
+    /// Version, viewport, and optional long-task evidence must fail closed too.
+    @Test func reportMetadataRejectsInvalidVersionViewportAndLongTasks() throws {
+        let valid: [String: Any] = [
+            "version": 1,
+            "viewport": ["width": 1280, "height": 860, "devicePixelRatio": 2],
+            "longTasks": NSNull(),
+        ]
+        try Self.requireReportMetadata(valid)
+        var invalidVersion = valid
+        invalidVersion["version"] = 2
+        var invalidViewport = valid
+        invalidViewport["viewport"] = ["width": 0, "height": 860, "devicePixelRatio": 2]
+        var invalidLongTasks = valid
+        invalidLongTasks["longTasks"] = ["samples": 1]
+        for report in [invalidVersion, invalidViewport, invalidLongTasks] {
+            #expect(throws: (any Error).self) {
+                try Self.requireReportMetadata(report)
             }
         }
     }
@@ -139,6 +166,7 @@ struct WebCanvasPerformanceTests {
         let jsonString = try await scriptTask.value
         let payload = try Self.requireValue(jsonString, "payload")
         let report = try Self.parse(payload)
+        try Self.requireReportMetadata(report)
         let after = WebProcessMemorySampler.sample(tracking: trackedPages)
         try Self.requireComparisonMemory(after, trackedPages: trackedPages)
 
@@ -321,12 +349,31 @@ struct WebCanvasPerformanceTests {
         }
     }
 
+    /// Validates the report version, positive viewport, and optional long-task shape.
+    private static func requireReportMetadata(_ report: [String: Any]) throws {
+        try requireCondition(report["version"] as? Int == 1, "version")
+        let viewport = try requireValue(report["viewport"] as? [String: Any], "viewport")
+        for field in ["width", "height", "devicePixelRatio"] {
+            let value = try requireValue(viewport[field], field)
+            let number = try requireValue(value as? NSNumber, field)
+            try requireCondition(number.doubleValue > 0, field)
+        }
+        if !(report["longTasks"] is NSNull) {
+            let tasks = try requireValue(report["longTasks"] as? [String: Any], "longTasks")
+            _ = try requireValue(tasks["samples"] as? Int, "longTasks.samples")
+            _ = try requireValue(tasks["maxMs"] as? Double, "longTasks.maxMs")
+        }
+    }
+
     /// Throws unless samples and numeric p50/p95 exist for a total or phase report.
     private static func requireFrameMetrics(_ frames: [String: Any]) throws {
         let samples = try requireValue(frames["samples"] as? Int, "samples")
         try requireCondition(samples > 0, "samples")
         _ = try requireValue(frames["p50Ms"] as? Double, "p50Ms")
         _ = try requireValue(frames["p95Ms"] as? Double, "p95Ms")
+        _ = try requireValue(frames["maxMs"] as? Double, "maxMs")
+        _ = try requireValue(frames["over16Ms"] as? Int, "over16Ms")
+        _ = try requireValue(frames["over33Ms"] as? Int, "over33Ms")
     }
 
     /// Returns a required report value or throws before evidence formatting.
