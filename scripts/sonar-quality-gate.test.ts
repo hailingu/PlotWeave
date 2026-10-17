@@ -82,6 +82,12 @@ type GateOptions = {
   scannerExit?: number
   strictIndexExit?: number
   qualityGateStatus?: string
+  /** 推送范围（owner 指示 2026-10-18）；缺省 full 保持既有完整门禁用例。 */
+  scope?: 'frontend' | 'rust' | 'native' | 'full'
+  /** 未变更栈的复用 LCOV 内容；缺省不预置，用于缺报告失败用例。 */
+  reusedFrontendCoverage?: string
+  reusedRustCoverage?: string
+  xcodebuildExit?: number
   sonarHostUrl?: string | null
   sonarToken?: string
   unresolvedIssues?: number
@@ -134,6 +140,9 @@ interface GateStubPaths {
   readonly scannerPath: string
   readonly curlPath: string
   readonly llvmCovPath: string
+  readonly xcodebuildPath: string
+  readonly reusedFrontendPath: string
+  readonly reusedRustPath: string
 }
 
 /** npm 替身（writeCommandStubs 拆分，PR #415 评审 5339054039）：记录
@@ -287,11 +296,20 @@ esac`,
 
 /** 外部命令替身总装（runGate 拆分，issue #99）：npm / cargo-llvm-cov /
  * sonar-scanner / curl 的记录-并-受控返回替身，按选项预置锁形态。 */
+function writeXcodebuildStub(paths: GateStubPaths): void {
+  writeExecutable(
+    paths.xcodebuildPath,
+    String.raw`printf 'xcodebuild %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+exit "$PLOTWEAVE_TEST_XCODEBUILD_EXIT"`,
+  )
+}
+
 function writeCommandStubs(paths: GateStubPaths, options: GateOptions): void {
   writeNpmStub(paths)
   writeRustCoverageStub(paths)
   writeScannerStub(paths)
   writeCurlStub(paths)
+  writeXcodebuildStub(paths)
 
   if (options.lockOccupied) {
     mkdirSync(paths.lockPath)
@@ -331,7 +349,14 @@ function gateEnvironment(
     PLOTWEAVE_TEST_SCANNER_EXIT: String(options.scannerExit ?? 0),
     PLOTWEAVE_TEST_STRICT_INDEX_EXIT: String(options.strictIndexExit ?? 0),
     PLOTWEAVE_TEST_UNRESOLVED_ISSUES: String(options.unresolvedIssues ?? 0),
+    PLOTWEAVE_TEST_XCODEBUILD_EXIT: String(options.xcodebuildExit ?? 0),
+    PLOTWEAVE_XCODEBUILD_BIN: paths.xcodebuildPath,
+    PLOTWEAVE_REUSED_FRONTEND_LCOV: paths.reusedFrontendPath,
+    PLOTWEAVE_REUSED_RUST_LCOV: paths.reusedRustPath,
     SONAR_HOST_URL: options.sonarHostUrl ?? 'http://sonar.test',
+  }
+  if (options.scope !== undefined) {
+    environment.PLOTWEAVE_GATE_SCOPE = options.scope
   }
   if (options.cpuBudget !== undefined) {
     environment.PLOTWEAVE_GATE_CPU_BUDGET = String(options.cpuBudget)
@@ -372,10 +397,20 @@ function prepareGatePaths(options: GateOptions = {}): GateStubPaths {
     scannerPath: resolve(sandbox, 'bin', 'sonar-scanner'),
     curlPath: resolve(sandbox, 'bin', 'curl'),
     llvmCovPath: resolve(sandbox, 'bin', 'cargo-llvm-cov'),
+    xcodebuildPath: resolve(sandbox, 'bin', 'xcodebuild'),
+    reusedFrontendPath: resolve(sandbox, 'reused', 'frontend.info'),
+    reusedRustPath: resolve(sandbox, 'reused', 'rust.info'),
   }
 
   mkdirSync(dirname(paths.coveragePath))
   mkdirSync(dirname(paths.reportPath))
+  mkdirSync(dirname(paths.reusedFrontendPath))
+  if (options.reusedFrontendCoverage !== undefined) {
+    writeFileSync(paths.reusedFrontendPath, options.reusedFrontendCoverage)
+  }
+  if (options.reusedRustCoverage !== undefined) {
+    writeFileSync(paths.reusedRustPath, options.reusedRustCoverage)
+  }
   // 合并后的树包含两个 workspace；旧树的单 workspace 回归见 rust-coverage.test.ts。
   mkdirSync(resolve(sandbox, 'crates'))
   writeFileSync(resolve(sandbox, 'crates/Cargo.toml'), '')
@@ -549,6 +584,95 @@ describe('SonarQube 完整提交流水线', { timeout: 30_000 }, () => {
     expect(result.log).toContain('sinceLeakPeriod=true')
   })
 })
+
+const VALID_FRONTEND_LCOV = 'TN:\nSF:src/example.ts\nDA:1,1\nend_of_record\n'
+const VALID_RUST_LCOV =
+  'TN:\nSF:src-tauri/src/example.rs\nDA:1,1\nend_of_record\n'
+
+describe(
+  '推送范围分流（owner 指示 2026-10-18：单栈只跑该栈全量覆盖率）',
+  { timeout: 30_000 },
+  () => {
+    it('frontend：跑前端覆盖率、复用 Rust LCOV，不调用 cargo-llvm-cov', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'frontend',
+        reusedRustCoverage: VALID_RUST_LCOV,
+      })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain('npm run test:coverage')
+      expect(result.log).not.toContain('cargo-llvm-cov')
+      expect(result.log).toContain('/reused/rust.info')
+      expect(JSON.parse(result.pending.trim())).toMatchObject({
+        scope: 'frontend',
+        qualityGate: 'OK',
+        newCodeUnresolvedIssues: 0,
+      })
+    })
+
+    it('rust：跑 Rust 覆盖率、复用前端 LCOV，不跑前端 test:coverage', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'rust',
+        reusedFrontendCoverage: VALID_FRONTEND_LCOV,
+      })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain('cargo-llvm-cov llvm-cov')
+      expect(result.log).not.toContain('npm run test:coverage')
+      expect(result.log).toContain('/reused/frontend.info')
+      expect(JSON.parse(result.pending.trim())).toMatchObject({ scope: 'rust' })
+    })
+
+    it('native：跑原生测试，复用两侧 LCOV，不跑前端/ Rust 覆盖率', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'native',
+        reusedFrontendCoverage: VALID_FRONTEND_LCOV,
+        reusedRustCoverage: VALID_RUST_LCOV,
+      })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain('npm run build:native-canvas')
+      expect(result.log).toContain('xcodebuild -project native/macos/')
+      expect(result.log).not.toContain('npm run test:coverage')
+      expect(result.log).not.toContain('cargo-llvm-cov')
+      expect(JSON.parse(result.pending.trim())).toMatchObject({
+        scope: 'native',
+      })
+    })
+
+    it('单栈缺另一侧复用 LCOV 时 fail-closed，不启动扫描', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'frontend',
+      })
+
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain('Rust（复用）覆盖率报告缺失或为空')
+      expect(result.log).not.toContain('sonar-scanner')
+    })
+
+    it('native 测试失败阻断门禁，不写记录', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'native',
+        reusedFrontendCoverage: VALID_FRONTEND_LCOV,
+        reusedRustCoverage: VALID_RUST_LCOV,
+        xcodebuildExit: 65,
+      })
+
+      expect(result.status).not.toBe(0)
+      expect(result.pending).toBe('')
+    })
+
+    it('docs 范围由 pre-push 分流，脚本 fail-closed', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'docs',
+      })
+
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain('[GATE_SCOPE_DOCS]')
+      expect(result.log).toBe('')
+    })
+  },
+)
 
 describe(
   '门禁 CPU 预算（未设置时默认 4，评审 5545658713 owner 指示）',

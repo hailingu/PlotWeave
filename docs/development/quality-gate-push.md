@@ -7,6 +7,45 @@
 
 **整理日期**：2026-10-01
 
+## Scoped Push Routing (2026-10-18)
+
+所有者指示（2026-10-18）在 `pre-push` 引入按变更范围分派；commit-creating
+钩子（`pre-commit` / `pre-merge-commit` / `prepare-commit-msg`）仍是完整
+统一门禁，不在本次放宽范围。
+
+| 变更范围 | 判定 | 推送门禁行为 |
+| --- | --- | --- |
+| docs-only | 所有变更路径为 `docs/**`、根 Markdown 或 `LICENSE` | 只运行 `scripts/check-docs.sh`（`git diff --check`）；跳过静态检查、覆盖率、Sonar 与推送台账记录。commit 钩子的完整门禁记录仍是证据。 |
+| frontend | 非文档路径只落在 `src/**` 与前端专属根配置 | 全量前端测试 + 前端覆盖率；Rust 复用主工作树最近 LCOV；Sonar 导入两侧报告。 |
+| rust | 非文档路径只落在 `src-tauri/**`、`crates/**`、`rust-toolchain.toml` | 全量 Rust 测试 + `rust-coverage.sh`；前端复用最近 LCOV；Sonar 导入两侧报告。 |
+| native | 非文档路径只落在 `native/**` | `npm run build:native-canvas` + 串行 `xcodebuild test`；前端/Rust 复用最近 LCOV；Sonar 导入两侧报告。原生代码不在 Sonar 源码范围，记录 `scope: native`。 |
+| full | 跨栈、工具（`scripts/**`、`.githooks/**`、`.github/**`、根 linter/配置）、未知路径、空差异或无法确定基线 | 完整门禁：静态检查 + 前端/Rust 全量覆盖率 + Sonar。 |
+
+实现与边界：
+
+- `scripts/gate-scope.ts` 从 `git diff --no-renames --name-only <base> <commit>`
+  分类；基线依次取远端旧 tip、本地 `dev` merge-base、`origin/dev`、
+  提交父提交。无法确定时按 `full`，不因“没有差异”跳过。
+- `pre-push` 把范围经 `PLOTWEAVE_GATE_SCOPE` 传给
+  `scripts/sonar-quality-gate.sh`；未变更栈的 LCOV 经
+  `PLOTWEAVE_REUSED_FRONTEND_LCOV` / `PLOTWEAVE_REUSED_RUST_LCOV` 指向
+  主工作树最近产物。缺文件、报告为空/无源文件/无覆盖行时 fail-closed，
+  禁止 Sonar 在缺少一侧报告时静默降级。
+- 单栈只跑该栈的全量回归与覆盖率；“代码覆盖率全量更新”指变更栈的完整
+  栈内覆盖率，不是只测变更文件；未变更栈复用最近 LCOV，不重跑其测试。
+- 原生范围没有原生 LCOV 门禁，前端/Rust 报告按上述复用；原生测试失败
+  仍阻断推送。Sonar 对原生源码不建模，台账的 `scope: native` 明示该边界。
+- docs-only 不写推送台账；普通 commit 钩子已产生的全量记录继续作为
+  gate-evidence 证据。若 docs-only 提交绕过 commit 钩子创建，则没有该
+  记录——这与既有 hook 覆盖边界一致，不是新豁免。
+- 单栈慢路径在临时 worktree 中运行，复用的 LCOV 来自主工作树最近门禁；
+  若未变更栈代码已相对该报告变化，复用值可能陈旧。此时应运行完整门禁；
+  该边界不改变“变更栈覆盖率必须刷新”的要求。
+
+回归：`scripts/gate-scope.test.ts` 覆盖分类与 CLI；`scripts/pre-push-refs.test.ts`
+覆盖 docs-only 跳过、单栈分派与复用路径；`scripts/sonar-quality-gate.test.ts`
+覆盖 frontend/rust/native 分流、缺 LCOV fail-closed 与 native 失败阻断。
+
 ## Push-Path Per-Ref Gating (issue #405)
 
 Before issue #405, `.githooks/pre-push` read no input and always scanned the
@@ -34,7 +73,7 @@ The issue #405 fix, wired 2026-09-30, closes it:
   input equality (PR #442 review 5361127076). Untracked documentation also
   triggers isolation; ignored generated artifacts retain the existing fast
   path behavior.
-  The complete gate then runs exactly as before, at the same cost.
+  For a `full`-scope push the complete gate then runs exactly as before; the scoped routes above are the owner-approved exception.
 - **Slow path — temporary worktree.** Every other commit — a non-checked-out
   ref, a dirty worktree, or an additional distinct commit in a multi-ref
   push — is checked out with
@@ -124,7 +163,7 @@ worktree and are invalid inside a temporary worktree — without the strip,
 a gate run nested inside a commit hook (which is exactly how this
 repository's own script tests execute under `npm run test:coverage`) would
 break the slow path. Both paths analyze with the gate
-definition of the current working tree (uniform-gate rule), so a pushed tree
+definition of the current working tree (scope-routing rule; `full` remains the complete gate), so a pushed tree
 older than the tooling itself fails closed if it lacks `package-lock.json`
 (`npm ci`) or the files the gate needs; pushing such an ancient tree requires
 checking it out first. Using `--no-verify` on the push remains prohibited and

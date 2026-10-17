@@ -7,7 +7,7 @@ dedup marker helper `scripts/gate-tree-marker.sh` (issue #404). Like the root
 `AGENTS.md` and the other standards under `docs/development/`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-10-16
+**Last reviewed**: 2026-10-18
 
 **Status**: Active — accepted decision. Recorded 2026-09-27, resolving
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
@@ -51,6 +51,13 @@ check set, sequence, thresholds, and failure semantics are unchanged (see
 [Gate CPU Budget](#gate-cpu-budget-2026-10-16-owner-direction) and the
 re-measured [CPU-Budget Baseline](#cpu-budget-baseline-2026-10-16)).
 
+extended 2026-10-18 by the **scoped push gate** (owner direction): commit-creating
+hooks remain the complete uniform gate; `pre-push` now routes docs-only,
+single-frontend, single-Rust, single-native, and cross-stack/tooling ranges
+to the minimum sufficient check set (see
+[Scoped Push Cost](#scoped-push-cost-2026-10-18-owner-direction) and
+[Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18)).
+
 ## Required Reading
 
 - [AGENTS.md](../../AGENTS.md) — the Non-Negotiable Gates and
@@ -85,9 +92,7 @@ re-measured [CPU-Budget Baseline](#cpu-budget-baseline-2026-10-16)).
 
 ## Decision
 
-**The gate stays a single, uniform cost. There is no fast lane.**
-
-Every gated command runs the same complete sequence:
+**Commit-creating hooks stay a single, uniform cost.** `pre-push` is scope-routed by owner decision 2026-10-18 (see [Scoped Push Cost](#scoped-push-cost-2026-10-18-owner-direction)). Every commit-gated command and every full-scope push runs the same complete sequence:
 
 1. `scripts/check-static.sh` — Prettier format check, ESLint with zero
    warnings, `check:size` file caps (issue #432), `typecheck:strict`.
@@ -116,6 +121,44 @@ Every gated command runs the same complete sequence:
    `gate-evidence` job reading that ledger) is verification of the recorded
    evidence, not a gate variant, and does not change this sequence or its
    cost.
+
+
+## Scoped Push Cost (2026-10-18 Owner Direction)
+
+The owner directed that `pre-push` may skip work that cannot be affected by the
+pushed diff, while commit-creating hooks keep the complete uniform gate. This
+is a deliberate gate-strength change, not an optimization hidden in a script.
+
+| Push range | Checks | Coverage | Expected cost relative to full |
+| --- | --- | --- | --- |
+| docs-only (`docs/**`, root Markdown, `LICENSE`) | `scripts/check-docs.sh` (`git diff --check`) only | none | near-zero; no npm install, tests, Rust, or Sonar |
+| single frontend (`src/**`, frontend-only root configs) | static checks + full frontend suite | frontend full; Rust reuses the most recent LCOV | one stack's coverage + Sonar |
+| single Rust (`src-tauri/**`, `crates/**`, `rust-toolchain.toml`) | static checks + full Rust suite | Rust full; frontend reuses the most recent LCOV | one stack's coverage + Sonar |
+| single native (`native/**`) | static checks + native canvas build + serial `xcodebuild test` | no native LCOV; frontend/Rust reuse the most recent LCOV | native test time + Sonar |
+| cross-stack / tooling / unknown / empty / no baseline | complete gate | frontend + Rust full | existing full baseline |
+
+Boundaries:
+
+- "Coverage is fully updated" means **the changed stack's full stack coverage**,
+  not changed-line-only coverage. The unchanged frontend/Rust stack reuses the
+  most recent main-worktree LCOV; a missing/empty/report without covered lines
+  fails closed instead of silently omitting a report.
+- A reused LCOV can be stale if the unchanged stack moved since that report.
+  The range classifier uses the remote old tip, local `dev` merge-base,
+  `origin/dev`, or the commit parent, in that order; an undeterminable base
+  runs `full`. If the unchanged stack is not actually unchanged, use a full
+  push.
+- Native code is not part of the Sonar sources; the `native` scope records that
+  boundary and still requires the native test suite to pass.
+- Docs-only pushes do not write a push ledger record. The ordinary commit-gate
+  record remains the evidence; a docs-only commit created without the commit
+  hook has no record, which is the same hook-coverage boundary as before.
+- The scoped paths were introduced on 2026-10-18. A measured cost baseline for
+  each path is a follow-up measurement; until then, the existing full-gate
+  baseline remains the only recorded cost figure and no cheaper-path claim is
+  made. Revisit this decision if the scoped paths approach the full-gate cost,
+  if stale-LCOV reuse causes an escaped regression, or if commit hooks are
+  proposed to share the routing.
 
 提交创建路径及同次操作去重见[标记归属与复用](quality-gate-lifecycle.md#commit-marker-ownership-and-reuse)。
 未覆盖路径与逐命令差异以[门禁覆盖清单](quality-gate-enforcement.md#what-the-gate-actually-enforces)为唯一事实源。
