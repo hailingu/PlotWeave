@@ -40,6 +40,7 @@ pub fn validate_report(report: &Value, scale: u32) -> Result<(), String> {
     validate_viewport(&report["viewport"])?;
     validate_phases(&report["phases"])?;
     validate_frames(&report["total"])?;
+    validate_long_tasks(&report["longTasks"])?;
     for effect in ["draggedNodeMovedPx", "panTranslatePx", "zoomTravel"] {
         if report["effects"][effect].as_f64().unwrap_or(0.0) <= 0.0 {
             return Err(format!("PW_PERF_EFFECT_MISSING:{effect}"));
@@ -123,15 +124,35 @@ fn validate_frames(frames: &Value) -> Result<(), String> {
     if samples.is_none() || samples == Some(0) {
         return Err("PW_PERF_FRAMES_MISSING".to_string());
     }
-    for field in ["p50Ms", "p95Ms"] {
-        if frames[field].as_f64().is_none() {
+    for field in ["p50Ms", "p95Ms", "maxMs"] {
+        if frames[field].as_f64().is_none_or(|number| number < 0.0) {
             return Err(format!("PW_PERF_FRAME_STAT_INVALID:{field}"));
         }
     }
-    for field in ["maxMs", "over16Ms", "over33Ms"] {
-        if frames[field].as_f64().is_none() {
+    for field in ["over16Ms", "over33Ms"] {
+        if frames[field].as_u64().is_none() {
             return Err(format!("PW_PERF_FRAME_STAT_INVALID:{field}"));
         }
+    }
+    Ok(())
+}
+
+fn validate_long_tasks(value: &Value) -> Result<(), String> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let tasks = value
+        .as_object()
+        .ok_or_else(|| "PW_PERF_LONG_TASKS_INVALID".to_string())?;
+    if tasks.get("samples").and_then(Value::as_u64).is_none() {
+        return Err("PW_PERF_LONG_TASKS_INVALID:samples".to_string());
+    }
+    if tasks
+        .get("maxMs")
+        .and_then(Value::as_f64)
+        .is_none_or(|number| number < 0.0)
+    {
+        return Err("PW_PERF_LONG_TASKS_INVALID:maxMs".to_string());
     }
     Ok(())
 }

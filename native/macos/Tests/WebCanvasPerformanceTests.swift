@@ -78,6 +78,8 @@ struct WebCanvasPerformanceTests {
             ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "over16Ms": 1, "over33Ms": 0],
             ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": NSNull(), "over33Ms": 0],
             ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": 1, "over33Ms": NSNull()],
+            ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": -1.0, "over16Ms": 1, "over33Ms": 0],
+            ["samples": 1, "p50Ms": 17.0, "p95Ms": 18.0, "maxMs": 20.0, "over16Ms": -1, "over33Ms": 0],
         ]
         for frames in invalid {
             #expect(throws: (any Error).self) {
@@ -100,7 +102,9 @@ struct WebCanvasPerformanceTests {
         invalidViewport["viewport"] = ["width": 0, "height": 860, "devicePixelRatio": 2]
         var invalidLongTasks = valid
         invalidLongTasks["longTasks"] = ["samples": 1]
-        for report in [invalidVersion, invalidViewport, invalidLongTasks] {
+        var negativeLongTasks = valid
+        negativeLongTasks["longTasks"] = ["samples": -1, "maxMs": 0.0]
+        for report in [invalidVersion, invalidViewport, invalidLongTasks, negativeLongTasks] {
             #expect(throws: (any Error).self) {
                 try Self.requireReportMetadata(report)
             }
@@ -360,8 +364,10 @@ struct WebCanvasPerformanceTests {
         }
         if !(report["longTasks"] is NSNull) {
             let tasks = try requireValue(report["longTasks"] as? [String: Any], "longTasks")
-            _ = try requireValue(tasks["samples"] as? Int, "longTasks.samples")
-            _ = try requireValue(tasks["maxMs"] as? Double, "longTasks.maxMs")
+            let samples = try requireValue(tasks["samples"] as? Int, "longTasks.samples")
+            try requireCondition(samples >= 0, "longTasks.samples")
+            let maxMs = try requireValue(tasks["maxMs"] as? Double, "longTasks.maxMs")
+            try requireCondition(maxMs >= 0, "longTasks.maxMs")
         }
     }
 
@@ -369,11 +375,16 @@ struct WebCanvasPerformanceTests {
     private static func requireFrameMetrics(_ frames: [String: Any]) throws {
         let samples = try requireValue(frames["samples"] as? Int, "samples")
         try requireCondition(samples > 0, "samples")
-        _ = try requireValue(frames["p50Ms"] as? Double, "p50Ms")
-        _ = try requireValue(frames["p95Ms"] as? Double, "p95Ms")
-        _ = try requireValue(frames["maxMs"] as? Double, "maxMs")
-        _ = try requireValue(frames["over16Ms"] as? Int, "over16Ms")
-        _ = try requireValue(frames["over33Ms"] as? Int, "over33Ms")
+        let p50 = try requireValue(frames["p50Ms"] as? Double, "p50Ms")
+        try requireCondition(p50 >= 0, "p50Ms")
+        let p95 = try requireValue(frames["p95Ms"] as? Double, "p95Ms")
+        try requireCondition(p95 >= 0, "p95Ms")
+        let maxMs = try requireValue(frames["maxMs"] as? Double, "maxMs")
+        try requireCondition(maxMs >= 0, "maxMs")
+        let over16 = try requireValue(frames["over16Ms"] as? Int, "over16Ms")
+        try requireCondition(over16 >= 0, "over16Ms")
+        let over33 = try requireValue(frames["over33Ms"] as? Int, "over33Ms")
+        try requireCondition(over33 >= 0, "over33Ms")
     }
 
     /// Returns a required report value or throws before evidence formatting.

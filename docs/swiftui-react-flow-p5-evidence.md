@@ -92,8 +92,8 @@
 | 本地生产画布资源已由 HTTP 伺服，规模为 100/500/1000 | 每规模启动独立 Tauri 子进程 → document-start 计时 → 节点与边全部就绪 → 300ms 沉降 → 同一脚本选项 | 返回版本化脱敏报告，输出 mount、viewport、四阶段帧统计与脚本前后 RSS | 夹具规模、脚本选项和报告口径只能有一个来源；页面 runner 与宿主校验 | URL / 报告合同测试 + 三规模真实 Wry 测量 |
 | Swift 与 Tauri 做共同模式对比 | 两宿主顺序执行同一生产 bundle；Swift 收起原生面板且不中途切换，Tauri 不增加宿主操作 | 两边都有 `common-web` 记录；既有 Swift 原生面板压力轮单列 | A/B 不把 Swift 独有面板操作算入 Web 宿主差异；两性能套件 | 两宿主同轮实测；viewport 以页面报告为准，不预设完全相等 |
 | URL、规模、页面报告或 JS 执行无效 | 解析配置 / 等待就绪 / 回收 evaluation | 明确错误并以非零状态结束；空载荷、错误载荷不得进入证据 | 配置与报告边界 fail closed；Tauri harness | 合同测试覆盖非法配置、错误结构、空载荷；真实加载失败以宿主导超时兜底 |
-| 任一 drag/pan/zoom/panel 阶段或 total 没有 rAF 样本，或 p50/p95/max/over16/over33 缺失 / 为 null | 校验 frames，即使效果有效 | 整份报告被拒绝，不输出缺少核心指标的宿主对比 | 总体与四阶段必须有独立帧样本及证据行消费的全部数值字段；报告校验器 | Rust 空阶段/null 合同 + Swift 六类合成无效帧与打印前抛出回归 |
-| version、viewport 或非空 longTasks 结构无效 | 在证据打印前校验元数据 | 拒绝版本漂移、非正 viewport 或缺字段的 longTasks | 两宿主报告元数据采用同一正值与结构约束；Swift 校验器 | 合成无效 version/viewport/longTasks 回归 + 真实报告 |
+| 任一 drag/pan/zoom/panel 阶段或 total 没有 rAF 样本，或 p50/p95/max/over16/over33 缺失、为 null 或为非法负数 / 小数 | 校验 frames，即使效果有效 | 整份报告被拒绝，不输出缺少或无法表示核心指标的宿主对比 | 总体与四阶段必须有独立帧样本、非负时长与无符号计数；报告校验器 | Rust 空阶段/null/负值/小数合同 + Swift 合成无效帧与打印前抛出回归 |
+| version、viewport 或非空 longTasks 结构无效 | 在证据打印前校验元数据 | 拒绝版本漂移、非正 viewport、缺字段或负值的 longTasks | 两宿主报告元数据采用同一正值与结构约束；两宿主校验器 | 合成无效 version/viewport/longTasks 回归 + 真实报告 |
 | 脚本轮数、步数或节奏需要调整 | 两宿主不携带参数调用 `__pwRunCanvasPerf()` | 页面 runner 的默认值同时驱动 Tauri 与 Swift | 脚本选项只能由 Web runner 拥有；宿主不得各存一份字面量 | 前端默认值行为回归 + 两宿主真实测量 |
 | 已归属 WebContent PID 在脚本前或后不可读 / 已退出 | 读取该 PID 或宿主 RSS | 当前规模失败，不写 `webProcesses=0` 的有效证据 | RSS 采样只能成功或显式失败，不能用 0 冒充可读；两宿主对比采样器 | Rust 不可读 PID 合同 + Swift 合成丢失样本回归 + 真实前后采样 |
 | 装载前后的 WebContent PID 差集为空或多于一个 | 在脚本运行前尝试归属内存进程 | 中止该规模，不输出可误用的内存对比 | 内存证据只接受单元素差集；采样器与独立子进程边界 | 差集纯逻辑测试 + 真实采样；外部应用不受控制，仍要求安静机器 |
@@ -160,5 +160,6 @@ xcodebuild -project native/macos/PlotWeaveNative.xcodeproj \
 - PR #585 后续评审（comment 4298097186）：Swift 共同/原生面板对比在脚本前后均要求宿主 RSS 可读且归属进程数不下降，失败不打印证据；销毁/重建趋势仍允许 0 进程观测。合成丢失样本先因守卫缺失编译失败，随后 `comparisonMemoryRejectsLostTrackedProcess` 实际执行通过；完整 native 281 tests / 62 suites（176.108s）全绿。权威表内每次采样均为 1 个归属进程，不需要替换。
 - PR #585 后续评审（comment 4300770844）：Swift 证据打印前的节点/边、阶段、帧指标与交互效果统一改为显式 guard + throw，非抛出的 `#expect` 不再允许无效报告落日志。中途 `#require` 方案实测仍记录 3 issues，未冒充通过；改显式抛出后 `frameMetricsRejectMissingSamplesAndPercentiles` 与内存守卫均实际通过，完整 native 282 tests / 62 suites（175.165s）全绿。
 - PR #585 后续评审（comment 4300883388）：`maxMs/over16Ms/over33Ms` 纳入抛出校验，并同轮对齐 `version`、正数 viewport 与非空 longTasks 结构；六类无效帧及三类无效元数据均先红后绿。最终 `frameMetricsRejectMissingSamplesAndPercentiles`、`reportMetadataRejectsInvalidVersionViewportAndLongTasks` 实际通过，完整 native 283 tests / 62 suites（176.222s）全绿。
+- PR #585 后续评审（review 5555620878）：Rust 非空 longTasks 校验 samples/maxMs，over16/over33 改无符号整数并拒绝负时长；Swift 同步拒绝负帧统计与 longTasks。畸形计数/longTasks 合同先红后绿，Rust 库 385 项与合同 8 项全绿；native 最终 283 tests / 62 suites（176.725s）全绿。期间一次未触及的 `ShellHomeNavigationTests` 960×600 几何失败已保留记录，同套件重跑 8/8 与最终全量均通过。
 - 文档无配置的自动化语义检查；已按结构化审查核对 §3.2 逐项输出、§3.3 结论、迁移计划 M15/§7.2 与 Swift 测试规范，三个文档的 Prettier 检查通过。
 - 一次性产物（DerivedData、打包 Web 资源、/tmp 日志）验证后清理；未触碰用户数据根。

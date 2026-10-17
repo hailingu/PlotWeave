@@ -96,6 +96,33 @@ fn report_validation_rejects_wrong_fixture_and_incomplete_interaction() {
 }
 
 #[test]
+fn report_validation_rejects_malformed_counters_and_long_tasks() {
+    let mut missing_long_task_fields = valid_report(100);
+    missing_long_task_fields["longTasks"] = json!({"samples": 1});
+    assert!(report::validate_report(&missing_long_task_fields, 100).is_err());
+
+    let mut negative_counter = valid_report(100);
+    negative_counter["total"]["over16Ms"] = json!(-1);
+    assert!(report::validate_report(&negative_counter, 100).is_err());
+
+    let mut fractional_counter = valid_report(100);
+    fractional_counter["total"]["over33Ms"] = json!(1.5);
+    assert!(report::validate_report(&fractional_counter, 100).is_err());
+
+    let mut negative_duration = valid_report(100);
+    negative_duration["total"]["maxMs"] = json!(-1.0);
+    assert!(report::validate_report(&negative_duration, 100).is_err());
+
+    let mut negative_long_samples = valid_report(100);
+    negative_long_samples["longTasks"] = json!({"samples": -1, "maxMs": 0.0});
+    assert!(report::validate_report(&negative_long_samples, 100).is_err());
+
+    let mut negative_long_max = valid_report(100);
+    negative_long_max["longTasks"] = json!({"samples": 0, "maxMs": -1.0});
+    assert!(report::validate_report(&negative_long_max, 100).is_err());
+}
+
+#[test]
 fn evaluation_envelope_requires_nonempty_success_payload() {
     assert!(report::parse_envelope("").is_err());
     assert!(report::parse_envelope("null").is_err());
