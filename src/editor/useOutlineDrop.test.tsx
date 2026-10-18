@@ -71,7 +71,8 @@ const seq = (id: string, source: string, target: string): Edge => ({
 })
 
 /** 与 useEditorGraphActions 生产装配同构的集成 harness：真实文档状态、
- * 真实 applyDataPatch 写通道（纯状态写入），命令栈以 spy 记录。 */
+ * 真实 applyDataPatch 写通道（纯状态写入），命令栈与拒绝提示通道以 spy
+ * 记录。 */
 function setup(nodes: CanvasNode[], edges: Edge[]) {
   const project: EditorProjectContent = {
     id: 'p1',
@@ -84,6 +85,7 @@ function setup(nodes: CanvasNode[], edges: Edge[]) {
   // 计数供拒绝/单命令断言
   const stack = new CommandStack()
   const pushHistory = vi.fn((cmd: HistoryCommand) => stack.push(cmd))
+  const onError = vi.fn()
   const { result } = renderHook(() => {
     const doc = useEditorDocument(project)
     const patch = useNodePatch(doc, pushHistory)
@@ -94,10 +96,11 @@ function setup(nodes: CanvasNode[], edges: Edge[]) {
       applyDataPatch: patch.applyDataPatch,
       setEdges: doc.setEdges,
       pushHistory,
+      onError,
     })
     return { doc, outlineDrop }
   })
-  return { result, stack, pushHistory }
+  return { result, stack, pushHistory, onError }
 }
 
 type Harness = ReturnType<typeof setup>
@@ -192,6 +195,73 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
     expect(seqPairs(h)).toEqual(['s1->s2', 's2->s3'])
     expect(episodeNoOf(h, 's2')).toBe(1)
     expect(h.pushHistory).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['分叉成员（多出边）', ['a->x', 'x->b', 'x->c'], 'x', 'a'],
+    ['汇合成员（多入边）', ['p->x', 'q->x', 'x->r'], 'x', 'p'],
+  ] as const)(
+    '拒绝%s的大纲拖拽：零状态写入 + 可见提示一次（issue #589）',
+    (_name, pairs, dragged, anchor) => {
+      const nodes = [...new Set(pairs.flatMap((p) => p.split('->')))].map(
+        (id, i) => sceneNode(id, 1, i * 100),
+      )
+      const edges = pairs.map((p, i) => {
+        const [source, target] = p.split('->')
+        return seq(`e${i}`, source, target)
+      })
+      const h = setup(nodes, edges)
+      const nodesBefore = h.result.current.doc.nodes
+      act(() => dropRow(h, dragged, anchor, 'after'))
+      // 分叉/汇合重排无法安全补回全部关联边：拒绝而非静默删边——
+      // 画布边集与保存载荷不变、无历史命令、集归属不动
+      expect(seqPairs(h)).toEqual(pairs)
+      expect(h.result.current.doc.nodes).toBe(nodesBefore)
+      expect(h.pushHistory).not.toHaveBeenCalled()
+      expect(h.stack.canUndo).toBe(false)
+      expect(h.onError).toHaveBeenCalledTimes(1)
+      act(() => h.stack.undo())
+      expect(seqPairs(h)).toEqual(pairs)
+    },
+  )
+
+  it('拒绝同样覆盖组尾落点：分叉成员拖入组尾不删边、给提示', () => {
+    const h = setup(
+      [
+        sceneNode('a', 1, 0),
+        sceneNode('x', 1, 100),
+        sceneNode('b', 2, 200),
+        sceneNode('c', 2, 300),
+      ],
+      [seq('e1', 'a', 'x'), seq('e2', 'x', 'b'), seq('e3', 'x', 'c')],
+    )
+    // x 分叉（x→b、x→c）：组尾落点会向上找锚点，任何锚点都必须拒绝
+    act(() =>
+      h.result.current.outlineDrop('x', { kind: 'groupEnd', episode: 2 }),
+    )
+    expect(seqPairs(h)).toEqual(['a->x', 'x->b', 'x->c'])
+    expect(h.pushHistory).not.toHaveBeenCalled()
+    expect(h.onError).toHaveBeenCalledTimes(1)
+  })
+
+  it('分叉目标的下游行不受影响：线性成员仍可正常重排', () => {
+    const h = setup(
+      [
+        sceneNode('a', 1, 0),
+        sceneNode('x', 1, 100),
+        sceneNode('b', 1, 200),
+        sceneNode('c', 1, 300),
+      ],
+      [seq('e1', 'a', 'x'), seq('e2', 'x', 'b'), seq('e3', 'x', 'c')],
+    )
+    // b 一入一出（邻居 x 分叉与 b 无关）：正常重排，不触发拒绝提示
+    act(() => dropRow(h, 'b', 'c', 'after'))
+    expect(seqPairs(h)).toEqual(['a->x', 'x->c', 'c->b'])
+    expect(h.onError).not.toHaveBeenCalled()
+    expect(h.pushHistory).toHaveBeenCalledTimes(1)
+    act(() => h.stack.undo())
+    // undo 恢复按 kept+removed 拼接，数组序与原序不同——按边集断言
+    expect([...seqPairs(h)].sort()).toEqual(['a->x', 'x->b', 'x->c'])
   })
 })
 

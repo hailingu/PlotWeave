@@ -153,6 +153,7 @@ export function useEditorGraphActions(
     applyDataPatch: patch.applyDataPatch,
     setEdges: doc.setEdges,
     pushHistory,
+    onError,
   })
   const { drag, layout, alignment } = usePositionActions(deps)
   const drop = useCanvasDrop({

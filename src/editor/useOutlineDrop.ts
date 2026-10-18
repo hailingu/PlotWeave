@@ -7,7 +7,7 @@ import { useCallback, type RefObject } from 'react'
 import type { Edge } from '@xyflow/react'
 import { episodeOfNode, hostSceneMap, type OutlineDropTarget } from './outline'
 import { outlineSplicePlan, spliceEdgesWith } from './outlineDrop'
-import type { SplicePlan } from './spine'
+import { isForkOrMergeMember, type SplicePlan } from './spine'
 import { episodeNoPatch } from './nodes/patch'
 import type { HistoryCommand } from './history'
 import type { CanvasNode } from './nodes/types'
@@ -21,7 +21,13 @@ export interface OutlineDropDeps {
   applyDataPatch: (id: string, cmd: ReturnType<typeof episodeNoPatch>) => void
   setEdges: (fn: (eds: Edge[]) => Edge[]) => void
   pushHistory: (cmd: HistoryCommand) => void
+  /** 不可安全重排的拒绝提示上浮（actionError 横幅，issue #589）。 */
+  onError: (message: string) => void
 }
+
+/** 分叉/汇合成员的拒绝提示（issue #589）：重排无法安全补回多重关联边。 */
+const FORK_MERGE_REFUSAL =
+  '大纲拖拽未执行：该节点有多条剧情流连线（分叉/汇合），无法安全重排——请先在画布上调整连线'
 
 /** 大纲移动的接缝计划与集归属解析（useOutlineDrop 拆分，issue #99）：
  * 行落点随锚点所在组，组尾落点即目标组；返回 null = 无可执行变化。 */
@@ -73,6 +79,7 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
     applyDataPatch,
     setEdges,
     pushHistory,
+    onError,
   } = deps
 
   return useCallback(
@@ -88,6 +95,14 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
         dragged.type !== 'dialogue' &&
         dragged.type !== 'branch'
       ) {
+        return
+      }
+
+      // 分叉/汇合成员（多入/多出 sequence 边）拒绝重排（issue #589）：
+      // 拔出语义会删除全部关联边而只补回一条——零状态写入 + 可见提示，
+      // 与 planSpliceIntoSpine 的防御判定共用 isForkOrMergeMember
+      if (isForkOrMergeMember(edgesRef.current ?? [], draggedId)) {
+        onError(FORK_MERGE_REFUSAL)
         return
       }
 
@@ -140,6 +155,7 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
       applyDataPatch,
       pushHistory,
       setEdges,
+      onError,
     ],
   )
 }
