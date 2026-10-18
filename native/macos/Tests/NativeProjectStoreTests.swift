@@ -134,6 +134,68 @@ struct NativeProjectStoreTests {
         #expect(try await fixture.store.invoke(command: "load_project", args: ["id": .string("safe")]) == original)
     }
 
+    /// Oversized project files stay visible as diagnostic cards; load rejects with the dedicated limit code (issue #592).
+    @Test func oversizeProjectIsAnIsolatedDiagnosticCardAndLoadFails() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("good.json", Self.document("good", name: "正常"))
+        let big = fixture.projects.appendingPathComponent("big.json")
+        try Self.writeOversize(big)
+        let listed = try await fixture.store.invoke(command: "list_projects", args: [:])
+        let rows = try #require(listed.arrayValue)
+        #expect(rows.count == 2)
+        #expect(rows.first { $0["id"]?.string == "good" }?["name"]?.string == "正常")
+        let row = try #require(rows.first { $0["id"]?.string == "big" })
+        #expect(row["diagnostic"]?.string?.contains("64 MiB") == true)
+        do {
+            _ = try await fixture.store.invoke(command: "load_project", args: ["id": .string("big")])
+            Issue.record("超限项目加载应失败")
+        } catch let failure as HostFailure {
+            #expect(failure.code == NativeProjectStore.controlFileOversizeCode)
+            #expect(failure.message.contains("64 MiB"))
+        }
+        let size = (try FileManager.default.attributesOfItem(atPath: big.path)[.size] as? NSNumber)?.uint64Value
+        #expect(size == UInt64(NativeProjectStore.controlFileMaxBytes + 1), "超限拒绝不得改写原文件")
+    }
+
+    /// Write-side budget matches the read ceiling instead of persisting an unreadable document (issue #592).
+    @Test func controlFileWriteBudgetMatchesReadCeiling() throws {
+        try NativeProjectStore.ensureControlFileSize(NativeProjectStore.controlFileMaxBytes, context: "项目文件 p-1")
+        do {
+            try NativeProjectStore.ensureControlFileSize(NativeProjectStore.controlFileMaxBytes + 1, context: "项目文件 p-1")
+            Issue.record("超限写入预算应拒绝")
+        } catch let failure as HostFailure {
+            #expect(failure.code == NativeProjectStore.controlFileOversizeCode)
+            #expect(failure.message.contains("64 MiB"))
+        }
+    }
+
+    /// Oversized AI session files fail with the limit code instead of degrading to empty history (issue #592).
+    @Test func oversizeAiSessionIsRejectedWithLimitCode() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("p-ai.json", Self.document("p-ai"))
+        let directory = fixture.projects.appendingPathComponent("p-ai")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("ai-session.json")
+        try Self.writeOversize(file)
+        do {
+            _ = try await fixture.store.invoke(command: "load_ai_session", args: ["id": .string("p-ai")])
+            Issue.record("超限会话读取应失败")
+        } catch let failure as HostFailure {
+            #expect(failure.code == NativeProjectStore.controlFileOversizeCode)
+            #expect(failure.message.contains("64 MiB"))
+        }
+    }
+
+    /// Sparse control files exercise the byte ceiling without materializing 64 MiB in the test process.
+    private static func writeOversize(_ url: URL) throws {
+        _ = FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(NativeProjectStore.controlFileMaxBytes + 1))
+        try handle.close()
+    }
+
     /// Contract fixture uses complete authoritative v1 buckets without importing production builders.
     private static func document(_ id: String, name: String = "测试剧") -> HostJSON {
         .object([

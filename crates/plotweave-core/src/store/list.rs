@@ -88,7 +88,8 @@ fn broken_meta(id: &str, reason: String) -> ProjectMeta {
 }
 /// 读取失败能否作为损坏占位呈现（issue #123）：底层 I/O 失败（权限/
 /// 磁盘故障等，非 NotFound）是用户可定位的项目文件状态 → 占位并附
-/// 诊断；信任链保护性拒绝（符号链接/异型条目/读取前替换）与并发删除
+/// 诊断；字节超限（issue #592）同属可定位的单文件状态 → 占位，不得静默
+/// 跳过；信任链保护性拒绝（符号链接/异型条目/读取前替换）与并发删除
 /// （NotFound）不是——前者是外部/攻击形态（§10.2 维持不可见），后者
 /// 的文件已不存在。返回 None 即维持静默跳过。
 fn read_failure_diagnostic(e: &StoreError) -> Option<String> {
@@ -96,6 +97,7 @@ fn read_failure_diagnostic(e: &StoreError) -> Option<String> {
         StoreError::Io { source, .. } if source.kind() != std::io::ErrorKind::NotFound => {
             Some(format!("项目文件不可读：{e}"))
         }
+        StoreError::Limit { .. } => Some(format!("项目文件不可读：{e}")),
         _ => None,
     }
 }

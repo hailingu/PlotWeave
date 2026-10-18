@@ -13,6 +13,11 @@ actor NativeProjectStore {
     /// Repair aliases store only identity mappings; authoritative paths always come from the current document.
     var mediaAliases: [String: [String: String]] = [:]
 
+    /// Shared project control-file byte ceiling (issue #592), aligned with the Rust store's 64 MiB.
+    static let controlFileMaxBytes = 64 * 1024 * 1024
+    /// Distinct oversize code: listing keeps a diagnostic card instead of hiding the entry.
+    static let controlFileOversizeCode = "PW_STORAGE_LIMIT"
+
     /// Construction does no filesystem I/O, keeping App-hosted fixture startup independent of user data.
     init(root: URL) { self.root = root }
 
@@ -78,6 +83,37 @@ actor NativeProjectStore {
         return try projectsDirectory().directory(id, create: create)
     }
 
+    /// Reads a project control file under the shared ceiling; a static oversize file is rejected
+    /// from metadata before materialization, and the streaming read enforces the same budget if it grows.
+    private func readControlFile(_ directory: NativeDirectory, _ name: String) throws -> Data {
+        if let metadata = try directory.metadata(name), metadata.st_size > off_t(Self.controlFileMaxBytes) {
+            throw HostFailure(
+                code: Self.controlFileOversizeCode,
+                message: "控制文件 \(name) 超过 \(NativeDirectory.byteBudget(Self.controlFileMaxBytes)) 读取上限"
+            )
+        }
+        return try directory.read(name, maxBytes: Self.controlFileMaxBytes, oversizeCode: Self.controlFileOversizeCode)
+    }
+
+    /// Write-side closure of the read ceiling: a document the loader would reject is never persisted.
+    static func ensureControlFileSize(_ byteCount: Int, context: String) throws {
+        guard byteCount <= controlFileMaxBytes else {
+            throw HostFailure(
+                code: controlFileOversizeCode,
+                message: "\(context) 超过 \(NativeDirectory.byteBudget(controlFileMaxBytes)) 上限，拒绝保存"
+            )
+        }
+    }
+
+    /// Broken rows keep one diagnostic card per unreadable project; oversized files are locatable, not hidden.
+    private static func brokenMeta(id: String, reason: String) -> HostJSON {
+        .object([
+            "id": .string(id), "name": .string(""), "updated_at": .string(""),
+            "scene_count": .number(0), "ending_count": .number(0),
+            "diagnostic": .string(reason)
+        ])
+    }
+
     /// Dirty records are isolated into their own diagnostic card; symlinks and disappeared entries stay invisible.
     private func listProjects() throws -> HostJSON {
         let directory = try projectsDirectory()
@@ -90,15 +126,15 @@ actor NativeProjectStore {
             guard (try? NativeProjectEnvelope.validateID(id)) != nil else { continue }
             do {
                 guard let kind = try directory.metadata(name), NativeDirectory.isRegular(kind) else { continue }
-                let document = try decodeProject(directory.read(name), id: id)
+                let document = try decodeProject(readControlFile(directory, name), id: id)
                 metas.append(NativeProjectEnvelope.metadata(document, id: id))
             } catch let failure as HostFailure where failure.code == "PW_STORAGE_REFUSED" { continue }
-            catch {
-                metas.append(.object([
-                    "id": .string(id), "name": .string(""), "updated_at": .string(""),
-                    "scene_count": .number(0), "ending_count": .number(0),
-                    "diagnostic": .string("项目文件损坏或不可读：\(error.localizedDescription)")
-                ]))
+            catch let failure as HostFailure where failure.code == Self.controlFileOversizeCode {
+                metas.append(Self.brokenMeta(id: id, reason: "项目文件不可读：\(failure.message)"))
+            } catch let failure as HostFailure {
+                metas.append(Self.brokenMeta(id: id, reason: "项目文件损坏或不可读：\(failure.message)"))
+            } catch {
+                metas.append(Self.brokenMeta(id: id, reason: "项目文件损坏或不可读：\(error.localizedDescription)"))
             }
         }
         metas.sort {
@@ -126,7 +162,7 @@ actor NativeProjectStore {
         guard try directory.metadata(id + ".json") != nil else {
             throw HostFailure(code: "project_not_found", message: "[project_not_found] 项目不存在：\(id)")
         }
-        return try decodeProject(directory.read(id + ".json"), id: id)
+        return try decodeProject(readControlFile(directory, id + ".json"), id: id)
     }
 
     /// The existence check and atomic write share this actor with delete, so guarded late saves cannot resurrect it.
@@ -137,8 +173,10 @@ actor NativeProjectStore {
             throw HostFailure(code: "PW_PROJECT_NOT_FOUND", message: "项目不存在，拒绝写入副本：\(id)")
         }
         let document = try NativeProjectEnvelope.prepareSave(doc, id: id)
+        let encoded = try JSONEncoder().encode(document)
+        try Self.ensureControlFileSize(encoded.count, context: "项目文件 \(id)")
         try verifySaveAssets(id: id, assets: document["assets"] ?? .null)
-        try directory.write(JSONEncoder().encode(document), name: id + ".json")
+        try directory.write(encoded, name: id + ".json")
         try verifySaveAssets(id: id, assets: document["assets"] ?? .null)
         if let entries = document["assets"]?["byId"]?.object {
             for key in entries.keys { pendingMedia[id]?.removeValue(forKey: key) }
@@ -163,7 +201,7 @@ actor NativeProjectStore {
         guard try projects.metadata(id) != nil else { return sessionCopy(nil, corrupt: false) }
         let directory = try projects.directory(id)
         guard try directory.metadata("ai-session.json") != nil else { return sessionCopy(nil, corrupt: false) }
-        let data = try directory.read("ai-session.json")
+        let data = try readControlFile(directory, "ai-session.json")
         guard let session = try? JSONDecoder().decode(HostJSON.self, from: data), validSession(session) else {
             return sessionCopy(nil, corrupt: true)
         }
@@ -178,9 +216,11 @@ actor NativeProjectStore {
         guard try projects.metadata(id + ".json") != nil else {
             throw HostFailure(code: "PW_PROJECT_NOT_FOUND", message: "项目不存在，拒绝保存 AI 会话")
         }
-        _ = try projects.read(id + ".json")
+        _ = try readControlFile(projects, id + ".json")
         let directory = try projects.directory(id, create: true)
-        try directory.write(JSONEncoder().encode(session), name: "ai-session.json")
+        let encoded = try JSONEncoder().encode(session)
+        try Self.ensureControlFileSize(encoded.count, context: "AI 会话 \(id)")
+        try directory.write(encoded, name: "ai-session.json")
     }
 
     /// Verification reports only lexically valid references whose actual ordinary file cannot be opened safely.
@@ -213,7 +253,7 @@ actor NativeProjectStore {
         guard try projects.metadata(destination + ".json") != nil else {
             throw HostFailure(code: "PW_PROJECT_NOT_FOUND", message: "目标项目已被删除，拒绝复制")
         }
-        _ = try projects.read(destination + ".json")
+        _ = try readControlFile(projects, destination + ".json")
         guard try projects.metadata(source) != nil else { return }
         let sourceDirectory = try projects.directory(source)
         guard try sourceDirectory.metadata("assets") != nil else { return }

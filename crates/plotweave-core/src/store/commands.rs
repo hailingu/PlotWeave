@@ -11,7 +11,8 @@ use crate::store::list::{parse_file, read_meta};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
 use crate::store::persist::{
-    atomic_io, atomic_write, open_dir_bound, projects_op_lock, read_verified_file,
+    atomic_io, atomic_write, ensure_control_file_size, open_dir_bound, projects_op_lock,
+    read_verified_file, CONTROL_FILE_MAX_BYTES,
 };
 use crate::store::types::{
     new_id, new_project_file, sanitize_name, validate_id, ProjectFile, ProjectMeta,
@@ -173,6 +174,7 @@ pub fn save_ai_session_file(
     let dir = ai_session_dir(root, id)?;
     let text = serde_json::to_string_pretty(session)
         .map_err(|e| StoreError::serialize("序列化 AI 会话失败", e))?;
+    ensure_control_file_size(text.len(), CONTROL_FILE_MAX_BYTES, &format!("AI 会话 {id}"))?;
     atomic_write(&dir, "ai-session.json", &text).map_err(|e| e.prefixed("保存 AI 会话失败"))
 }
 /// load_project 的可测内核：id 是 IPC 调用方传入的不可信参数，词法校验
@@ -237,6 +239,11 @@ pub fn persist_project_expect_existing(
     let file = prepare_save(id, &doc)?;
     let text =
         serde_json::to_string_pretty(&file).map_err(|e| StoreError::serialize("序列化失败", e))?;
+    ensure_control_file_size(
+        text.len(),
+        CONTROL_FILE_MAX_BYTES,
+        &format!("项目文件 {id}"),
+    )?;
     atomic_write(root, &format!("{id}.json"), &text)?;
     if let Err(e) = verify_save_asset_files(root, id, &doc.assets) {
         eprintln!("[store] 保存后资产复验失败，路径可能在保存期间被替换：{e}");
@@ -351,5 +358,7 @@ pub fn delete_project_files(root: &CapDir, id: &str) -> Result<(), StoreError> {
     Ok(())
 }
 
+#[cfg(test)]
+mod limit_tests;
 #[cfg(test)]
 mod tests;

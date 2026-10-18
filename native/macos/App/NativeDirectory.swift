@@ -87,7 +87,9 @@ final class NativeDirectory: Sendable {
     }
 
     /// Reads the verified file with an optional byte budget used by media and settings callers.
-    func read(_ name: String, maxBytes: Int? = nil) throws -> Data {
+    /// A project caller supplies its own oversize code so the home list keeps a diagnostic card
+    /// instead of treating an oversized control file like an unsafe entry.
+    func read(_ name: String, maxBytes: Int? = nil, oversizeCode: String = "PW_STORAGE_REFUSED") throws -> Data {
         let file = try openFile(name)
         defer { Darwin.close(file) }
         var data = Data()
@@ -99,9 +101,18 @@ final class NativeDirectory: Sendable {
                 throw Self.ioError("读取文件失败")
             }
             if count == 0 { return data }
-            if let maxBytes, data.count > maxBytes - count { throw Self.refused("文件超过读取上限") }
+            if let maxBytes, data.count > maxBytes - count {
+                throw HostFailure(code: oversizeCode, message: "文件超过读取上限（\(Self.byteBudget(maxBytes))）")
+            }
             data.append(contentsOf: buffer.prefix(count))
         }
+    }
+
+    /// Byte-budget display shared by read limits and the project store's write-side check.
+    static func byteBudget(_ maxBytes: Int) -> String {
+        maxBytes >= 1_048_576 && maxBytes % 1_048_576 == 0
+            ? "\(maxBytes / 1_048_576) MiB"
+            : "\(maxBytes) 字节"
     }
 
     /// Atomic persistence synchronizes contents before rename and its parent before success; probes bracket rename and directory sync.
