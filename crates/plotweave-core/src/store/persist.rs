@@ -10,6 +10,12 @@ use crate::store::error::StoreError;
 use crate::store::file_permissions::FilePermissions;
 use crate::store::types::{new_id, validate_id};
 
+/// 单个项目控制文件的字节上限（64 MiB，issue #592）：项目文档与项目内
+/// AI 会话主文件共用。额度远高于正常短剧项目（含长篇设定文档）的规模，
+/// 只拦截异常膨胀/损坏的单个文件；读取侧 cap+1 限读，写入侧同限拒绝，
+/// 保证“可读即可写回”。项目媒体是独立文件，不套用本上限。
+pub const CONTROL_FILE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
 #[cfg(any(test, feature = "test-support"))]
 pub mod faults;
 
@@ -154,14 +160,28 @@ pub fn open_dir_bound<P: AsRef<std::path::Path>>(
     let _ = classified;
     Ok(opened)
 }
+/// 控制文件字节预算的展示口径：整 MiB 用 MiB（生产上限），测试用的小
+/// 额度用字节，避免把 8 字节预算写成“0 MiB”。
+fn byte_budget(max_bytes: usize) -> String {
+    if max_bytes >= 1024 * 1024 && max_bytes.is_multiple_of(1024 * 1024) {
+        format!("{} MiB", max_bytes / (1024 * 1024))
+    } else {
+        format!("{max_bytes} 字节")
+    }
+}
+
+/// 读取侧超限诊断：点明文件名与字节上限，供 load 错误与列表占位复用。
+fn control_file_limit_detail(name: &str, max_bytes: usize) -> String {
+    format!("控制文件 {name} 超过 {} 上限", byte_budget(max_bytes))
+}
+
 /// §10.2 控制文件信任链——读取前置校验（句柄相对，no-follow）：拒绝符号
 /// 链接（无论指向根内或根外）、要求普通文件。相对 projects_dir 的**受信
 /// 根锚定句柄**解析使包含关系由 cap-std 沙箱保证，无需 canonical 路径
 /// 比对——路径名比对在 projects/ 校验后被并发整体替换时会验到替换树、
-/// 相互包含照样通过。返回目录项身份（Unix 为 (dev, ino)）供调用方在打开
-/// 后绑定同一实体——校验与打开之间被替换（换成符号链接或另一文件）即
-/// 拒绝且不读取。
-fn verify_control_file(root: &CapDir, name: &str) -> Result<Option<(u64, u64)>, StoreError> {
+/// 相互包含照样通过。返回目录项身份（Unix 为 (dev, ino)）与元数据长度：
+/// 身份供调用方在打开后绑定同一实体，长度用于在读取前拒绝超限文件。
+fn verify_control_file(root: &CapDir, name: &str) -> Result<(Option<(u64, u64)>, u64), StoreError> {
     let md = root
         .symlink_metadata(name)
         .map_err(|e| StoreError::io("读取项目文件元数据失败", e))?;
@@ -172,22 +192,73 @@ fn verify_control_file(root: &CapDir, name: &str) -> Result<Option<(u64, u64)>, 
         return Err(StoreError::refused("项目文件不是普通文件"));
     }
     #[cfg(unix)]
-    {
-        Ok(Some(asset_identity(&md)))
-    }
+    let identity = Some(asset_identity(&md));
     #[cfg(not(unix))]
-    Ok(None)
+    let identity = None;
+    Ok((identity, md.len()))
 }
+
+/// 控制文件文本的 cap+1 流式限读（issue #592）：最多物化上限+1 字节，
+/// 超限在完整分配前以 Limit 拒绝（不先读入全文件再判断长度）；非法 UTF-8
+/// 仍按既有读取失败归类为 I/O InvalidData，列表侧继续呈现“不可读”占位。
+fn read_text_capped(
+    reader: impl std::io::Read,
+    max_bytes: usize,
+    name: &str,
+) -> Result<String, StoreError> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    reader
+        .take(max_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| StoreError::io("读取项目文件失败", e))?;
+    if bytes.len() > max_bytes {
+        return Err(StoreError::limit(control_file_limit_detail(
+            name, max_bytes,
+        )));
+    }
+    String::from_utf8(bytes).map_err(|e| {
+        StoreError::io(
+            "读取项目文件失败",
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+        )
+    })
+}
+
+/// 写入前控制文件字节上限校验（与读取同一上限，issue #592）：序列化结果
+/// 超限时拒绝落盘，避免生成下次启动无法读取的文件。`context` 为诊断类别
+///（如“项目文件 p-1”“AI 会话 p-1”）。
+pub fn ensure_control_file_size(
+    len: usize,
+    max_bytes: usize,
+    context: &str,
+) -> Result<(), StoreError> {
+    if len > max_bytes {
+        return Err(StoreError::limit(format!(
+            "{context} 超过 {} 上限",
+            byte_budget(max_bytes)
+        )));
+    }
+    Ok(())
+}
+
 /// 经已验证句柄读取项目文件文本（load/list 共用内核）：校验、打开与读取
 /// 全程相对 projects_dir 返回的**受信根锚定句柄**——归类（no-follow 元数据，
 /// 拒符号链接、要求普通文件）、打开与 (dev, ino) 身份比对均不按路径名重新
 /// 解析，projects/ 路径名在校验后被并发整体替换（rename 换目录树）也无法
 /// 把读取引到替换树；cap-std 沙箱保证解析不逃出锚定根，校验与打开之间的
 /// 目录项替换（换成符号链接或另一文件）由身份比对拒绝且不读取。
+/// 字节上限（issue #592）：元数据长度已超限时在打开前拒绝（列表持锁的
+/// 最坏工作因此与文件大小无关）；文件在校验后增长时由 cap+1 流式限读兜底。
 pub fn read_verified_file(root: &CapDir, name: &str) -> Result<String, StoreError> {
-    let verified_identity = verify_control_file(root, name)?;
-    use std::io::Read;
-    let mut file = root
+    let (verified_identity, file_len) = verify_control_file(root, name)?;
+    if file_len > CONTROL_FILE_MAX_BYTES as u64 {
+        return Err(StoreError::limit(control_file_limit_detail(
+            name,
+            CONTROL_FILE_MAX_BYTES,
+        )));
+    }
+    let file = root
         .open(name)
         .map_err(|e| StoreError::io("打开项目文件失败", e))?;
     #[cfg(unix)]
@@ -209,10 +280,7 @@ pub fn read_verified_file(root: &CapDir, name: &str) -> Result<String, StoreErro
             _ => return Err(StoreError::refused("项目文件在读取前被替换，拒绝读取")),
         }
     }
-    let mut text = String::new();
-    file.read_to_string(&mut text)
-        .map_err(|e| StoreError::io("读取项目文件失败", e))?;
-    Ok(text)
+    read_text_capped(file, CONTROL_FILE_MAX_BYTES, name)
 }
 /// 原子写控制文件（§10.2）：全程相对已验证父目录的打开句柄执行（cap-std
 /// openat 语义）——目标归类与 rename 前复核（现存目标为符号链接或非普通

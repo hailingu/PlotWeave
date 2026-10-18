@@ -9,6 +9,9 @@ use crate::store::types::new_project_file;
 use serde_json::json;
 use std::fs;
 
+/// issue #592 回归用的控制文件超限长度：越过 64 MiB 上限一字节。
+const OVERSIZE_BYTES: u64 = crate::store::persist::CONTROL_FILE_MAX_BYTES as u64 + 1;
+
 #[test]
 fn graph_stats_ignores_attach_edges_for_endings() {
     let nodes = json!([
@@ -549,6 +552,92 @@ fn list_returns_broken_placeholder_for_corrupt_project() {
     assert_eq!(
         serde_json::to_value(broken).unwrap()["diagnostic"],
         json!(broken.diagnostic)
+    );
+    cleanup_temp(&projects);
+}
+
+/// issue #592：单个异常膨胀的项目控制文件在列表读取边界被拒绝，呈现为
+/// 损坏占位而非被全量解析或静默跳过；正常项目不受影响，原文件字节保持。
+/// 合法 JSON + 尾随空白与损坏字节两种形态都必须被同一个字节上限拦截
+///（合法形态若被完整读取会作为正常项目出现，正是缺陷的可观察面）。
+#[test]
+fn list_returns_broken_placeholder_for_oversize_project_files() {
+    for damaged in [false, true] {
+        let projects = temp_projects_dir();
+        persist_project(
+            &cap(&projects),
+            "p-ok",
+            new_project_file("p-ok", "正常项目".into(), now_iso()),
+        )
+        .expect("预置正常项目");
+        let path = projects.join("p-big.json");
+        if damaged {
+            let file = fs::File::create(&path).expect("创建超限文件");
+            file.set_len(OVERSIZE_BYTES).expect("设置超限长度");
+        } else {
+            write_padded_oversize_project(&path);
+        }
+        let before = fs::metadata(&path).expect("读超限元数据").len();
+        let metas = list_project_metas(&cap(&projects)).expect("列出项目");
+        assert_eq!(metas.len(), 2, "超限项目不得静默消失（damaged={damaged}）");
+        assert_eq!(metas[0].id, "p-ok", "正常项目不受影响");
+        let broken = metas
+            .iter()
+            .find(|m| m.id == "p-big")
+            .expect("超限项目应返回占位");
+        assert!(
+            broken
+                .diagnostic
+                .as_deref()
+                .is_some_and(|d| d.contains("64 MiB") && d.contains("上限")),
+            "damaged={damaged}：占位诊断须点明字节上限：{:?}",
+            broken.diagnostic
+        );
+        assert_eq!(
+            fs::metadata(&path).expect("复核超限文件").len(),
+            before,
+            "超限拒绝不得改写原文件"
+        );
+        cleanup_temp(&projects);
+    }
+}
+
+/// 合法 JSON + 尾随空白：完整读取仍可解析，因此缺陷形态下会以正常项目
+/// 出现；该构造同时证明上限判定发生在解析之前。
+fn write_padded_oversize_project(path: &std::path::Path) {
+    use std::io::Write;
+    let mut file = fs::File::create(path).expect("创建超限合法 JSON");
+    file.write_all(
+        br#"{"schemaVersion":1,"project":{"id":"p-big","name":"oversize"},"graph":{"nodes":[],"edges":[]},"settings":{"characters":{},"locations":{},"props":{},"documents":{}},"episodeTitles":{},"assets":{"byId":{}}}"#,
+    )
+    .expect("写 JSON 前缀");
+    let mut remaining = OVERSIZE_BYTES - file.metadata().expect("读文件长度").len();
+    let padding = [b' '; 1024 * 1024];
+    while remaining > 0 {
+        let chunk = remaining.min(padding.len() as u64) as usize;
+        file.write_all(&padding[..chunk]).expect("写尾随空白");
+        remaining -= chunk as u64;
+    }
+}
+
+/// issue #592：load 对超限文件返回可定位的拒绝诊断而非完整物化/解析；
+/// 原文件保持不变。
+#[test]
+fn load_project_file_rejects_oversize_file_with_limit_diagnostic() {
+    let projects = temp_projects_dir();
+    let path = projects.join("p-big.json");
+    let file = fs::File::create(&path).expect("创建超限文件");
+    file.set_len(OVERSIZE_BYTES).expect("设置超限长度");
+    drop(file);
+    let err = load_project_file(&cap(&projects), "p-big").unwrap_err();
+    assert!(
+        err.to_string().contains("64 MiB") && err.to_string().contains("上限"),
+        "超限加载须给出可定位诊断：{err}"
+    );
+    assert_eq!(
+        fs::metadata(&path).expect("复核超限文件").len(),
+        OVERSIZE_BYTES,
+        "超限拒绝不得改写原文件"
     );
     cleanup_temp(&projects);
 }

@@ -284,6 +284,64 @@ fn verify_control_file_rejects_symlinked_project_file() {
     cleanup_temp(&projects);
 }
 
+/// issue #592：控制文件文本读取的字节边界——恰好上限可读，超限一字节以
+/// Limit 拒绝且不进入 UTF-8 解码；非法 UTF-8 仍归 I/O InvalidData 分类。
+#[test]
+fn capped_control_file_reader_enforces_exact_byte_limit() {
+    let exact = std::io::Cursor::new(vec![b'a'; 8]);
+    assert_eq!(
+        read_text_capped(exact, 8, "p-1.json").expect("恰好上限"),
+        "aaaaaaaa"
+    );
+    let over = std::io::Cursor::new(vec![b'a'; 9]);
+    let err = read_text_capped(over, 8, "p-1.json").unwrap_err();
+    assert!(
+        matches!(err, StoreError::Limit { ref detail } if detail.contains("8 字节") && detail.contains("p-1.json")),
+        "超限应以 Limit 指明字节预算：{err}"
+    );
+    let invalid = std::io::Cursor::new(vec![0xff, 0xfe]);
+    let err = read_text_capped(invalid, 8, "p-1.json").unwrap_err();
+    assert!(
+        matches!(err, StoreError::Io { ref source, .. } if source.kind() == std::io::ErrorKind::InvalidData),
+        "非法 UTF-8 应保留 I/O InvalidData 分类：{err:?}"
+    );
+}
+
+/// issue #592：静态超限项目文件在打开读取前按元数据长度拒绝（不物化），
+/// 原文件字节不变；诊断含文件名与 64 MiB 上限。
+#[test]
+fn read_verified_file_rejects_oversize_before_materializing() {
+    let projects = temp_projects_dir();
+    let path = projects.join("p-1.json");
+    let file = fs::File::create(&path).expect("创建超限文件");
+    file.set_len(CONTROL_FILE_MAX_BYTES as u64 + 1)
+        .expect("设置超限长度");
+    drop(file);
+    let err = read_verified_file(&cap(&projects), "p-1.json").unwrap_err();
+    assert!(
+        matches!(err.root(), StoreError::Limit { ref detail } if detail.contains("p-1.json") && detail.contains("64 MiB")),
+        "意外诊断：{err}"
+    );
+    assert_eq!(
+        fs::metadata(&path).expect("复核超限文件").len(),
+        CONTROL_FILE_MAX_BYTES as u64 + 1,
+        "超限拒绝不得改写原文件"
+    );
+    cleanup_temp(&projects);
+}
+
+/// issue #592：写入侧与读取上限闭环，超限序列化结果在落盘前按同一预算
+/// 拒绝；恰好上限允许。
+#[test]
+fn control_file_size_check_rejects_over_budget() {
+    ensure_control_file_size(8, 8, "项目文件 p-1").expect("恰好上限允许");
+    let err = ensure_control_file_size(9, 8, "项目文件 p-1").unwrap_err();
+    assert!(
+        matches!(err, StoreError::Limit { ref detail } if detail.contains("8 字节") && detail.contains("项目文件 p-1")),
+        "意外诊断：{err}"
+    );
+}
+
 #[test]
 fn atomic_write_rejects_path_like_file_name() {
     let projects = temp_projects_dir();

@@ -35,6 +35,10 @@ pub enum StoreError {
         context: String,
         source: serde_json::Error,
     },
+    /// 控制文件超过读取/写入字节上限（issue #592）：读取侧在完整物化前
+    /// cap+1 限读拒绝，写入侧在落盘前拒绝；原文件保持不动，列表路径将其
+    /// 呈现为损坏占位而非静默跳过。
+    Limit { detail: String },
     /// 控制文件损坏——JSON 解析失败：`source` 保留 `serde_json::Error`，
     /// 展示文案为 serde 原始诊断（与历史 `to_string` 透传逐字一致）。
     CorruptJson(serde_json::Error),
@@ -90,6 +94,12 @@ impl StoreError {
             source,
         }
     }
+    /// 控制文件超出字节预算：`detail` 为含类别、上限与文件名的诊断。
+    pub fn limit(detail: impl Into<String>) -> Self {
+        StoreError::Limit {
+            detail: detail.into(),
+        }
+    }
     /// 附加阶段前缀并保留原错误为来源（展示文案与历史 `format!` 前缀
     /// 拼接逐字一致）。
     pub fn prefixed(self, prefix: impl Into<String>) -> Self {
@@ -116,6 +126,7 @@ impl std::fmt::Display for StoreError {
             StoreError::AppDataDir { source } => write!(f, "无法定位应用数据目录：{source}"),
             StoreError::Io { context, source } => write!(f, "{context}：{source}"),
             StoreError::Serialize { context, source } => write!(f, "{context}：{source}"),
+            StoreError::Limit { detail } => write!(f, "{detail}"),
             StoreError::CorruptJson(source) => write!(f, "{source}"),
             StoreError::CorruptEnvelope(detail) => write!(f, "{detail}"),
             StoreError::Refused { detail } => write!(f, "{detail}"),
@@ -135,6 +146,7 @@ impl std::error::Error for StoreError {
             StoreError::CorruptJson(source) => Some(source),
             StoreError::Contextual { source, .. } => Some(source.as_ref()),
             StoreError::CorruptEnvelope(_)
+            | StoreError::Limit { .. }
             | StoreError::Refused { .. }
             | StoreError::InvalidInput { .. }
             | StoreError::NotFound { .. } => None,
@@ -258,13 +270,14 @@ mod tests {
         );
     }
 
-    /// 决策类失败（保护性拒绝/非法输入/缺失/信封判型损坏）无底层来源。
+    /// 决策类失败（保护性拒绝/非法输入/缺失/超限/信封判型损坏）无底层来源。
     #[test]
     fn decision_variants_have_no_source() {
         for e in [
             StoreError::refused("拒绝"),
             StoreError::invalid("非法"),
             StoreError::missing("缺失"),
+            StoreError::limit("超过上限"),
             StoreError::CorruptEnvelope("信封矛盾"),
         ] {
             assert!(
