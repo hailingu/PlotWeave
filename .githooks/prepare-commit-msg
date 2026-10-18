@@ -18,4 +18,5 @@ hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if "$hook_directory/../scripts/gate-tree-marker.sh" check "${PPID:-}"; then
   exit 0
 fi
-"$hook_directory/../scripts/sonar-quality-gate.sh"
+PLOTWEAVE_GATE_SCOPE=full PLOTWEAVE_GATE_FULL_NATIVE=0 \
+  "$hook_directory/../scripts/sonar-quality-gate.sh"

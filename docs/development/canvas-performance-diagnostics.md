@@ -1,5 +1,11 @@
 # React Flow 拖动性能诊断
 
+2026-10-18 自动测量入口更新（[PR #604](https://github.com/hailingu/PlotWeave/pull/604)）：
+首拖性能对照与持续交互、内存长循环不再随日常 native 功能回归运行。
+使用 `sh scripts/test-native.sh stress` 显式复测；复用本篇历史 Xcode 测量
+命令时先设置环境变量 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1`。测量规模与断言未改变，
+完整选择契约见 [Native Regression And Stress](quality-gate-push.md#native-regression-and-stress)。
+
 目标：在生产编辑器与原生演示画布中采集可比较的拖动证据，帮助区分事件处理、React 渲染与主线程调度问题。此变更属于前端／原生诊断源码与配套说明；复用现有 React Flow 回调、控制按钮、结构化 console 日志与公开 WebKit 检查 API，不增加依赖或改变文档／宿主协议。
 
 ## 使用与指标边界

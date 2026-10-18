@@ -131,11 +131,10 @@ jobs:
           xcodebuild -version
           test "$(xcodebuild -version | head -n 1)" = "Xcode 27.0"
           test "$(xcrun --sdk macosx --show-sdk-version)" = "27.0"
-      - name: build:native-canvas
-        run: npm run build:native-canvas
       - name: Swift 与 WKWebView 回归
         # App-hosted 的窗口、焦点及退出委托共享一个 NSApplication；各套件不能并发改写它。
-        run: xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test
+        # 默认保留功能回归，持续性能及长循环测量由 test-native.sh stress 按需运行。
+        run: sh scripts/test-native.sh
 
   # 门禁证据核验（issue #548 方案 1）：本地门禁（Sonar + 覆盖率）在托管
   # runner 上不可达，改为服务端复核其版本化自述证据 docs/development/

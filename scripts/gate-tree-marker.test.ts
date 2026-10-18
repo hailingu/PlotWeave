@@ -126,16 +126,20 @@ function copyScenarioFiles(sandbox: string): string {
   mkdirSync(resolve(sandbox, 'scripts'), { recursive: true })
   mkdirSync(resolve(sandbox, '.githooks'), { recursive: true })
   for (const script of [
+    'check-docs.sh',
     'check-file-size.ts',
     'check-static.sh',
     'file-size-baseline.json',
     'gate-history.sh',
+    'gate-scope-core.ts',
+    'gate-scope.ts',
     'gate-tree-marker.sh',
     'pre-push-install.mjs',
     'pre-push-install-launcher.mjs',
     'pre-push-install-watchdog.mjs',
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
+    'test-native.sh',
   ]) {
     copyFileSync(
       resolve(repositoryRoot, 'scripts', script),
@@ -159,6 +163,10 @@ function copyScenarioFiles(sandbox: string): string {
 /** 安装记录并受控返回的外部命令替身（npm / cargo-llvm-cov / 扫描器 /
  * curl）；完整流水线以 sonar-scanner 替身日志行计数。 */
 function writeScenarioStubs(bin: string): void {
+  writeExecutable(
+    resolve(bin, 'xcodebuild'),
+    String.raw`printf 'xcodebuild %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"`,
+  )
   writeExecutable(
     resolve(bin, 'npm'),
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
@@ -211,6 +219,7 @@ function scenarioEnvironment(
     ...gitFixtureEnvironment(),
     // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
     PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
+    PLOTWEAVE_XCODEBUILD_BIN: resolve(bin, 'xcodebuild'),
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),

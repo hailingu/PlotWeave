@@ -15,7 +15,7 @@ const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8'
 const tree = git('write-tree')
 const head = git('rev-parse', 'HEAD')
 const untracked = git('ls-files', '--others', '--exclude-standard', 'tests', 'fixtures', 'docs')
-appendFileSync(env.PLOTWEAVE_TEST_LOG, 'gate-probe\\nanalyzed-tree ' + tree + '\\nuntracked-input ' + untracked + '\\n')
+appendFileSync(env.PLOTWEAVE_TEST_LOG, 'gate-probe\\nanalyzed-tree ' + tree + '\\nuntracked-input ' + untracked + '\\ngate-scope ' + (env.PLOTWEAVE_GATE_SCOPE || 'full') + '\\nreused-frontend ' + (env.PLOTWEAVE_REUSED_FRONTEND_LCOV || '') + '\\nreused-rust ' + (env.PLOTWEAVE_REUSED_RUST_LCOV || '') + '\\n')
 if (env.PLOTWEAVE_TEST_QUALITY_GATE_STATUS !== 'OK') process.exit(1)
 appendFileSync(env.PLOTWEAVE_GATE_PENDING_PATH, JSON.stringify({
   tree, head, qualityGate: 'OK', newCodeUnresolvedIssues: 0,

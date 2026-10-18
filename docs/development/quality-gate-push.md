@@ -7,6 +7,128 @@
 
 **整理日期**：2026-10-01
 
+## Scoped Push Routing (2026-10-18)
+
+所有者指示（2026-10-18）在 `pre-push` 引入按变更范围分派；commit-creating
+钩子（`pre-commit` / `pre-merge-commit` / `prepare-commit-msg`）仍是完整
+统一门禁，不在本次放宽范围。
+
+| 变更范围 | 判定 | 推送门禁行为 |
+| --- | --- | --- |
+| docs-only | 所有变更路径为 `docs/**`、根 Markdown 或 `LICENSE` | 只运行 `scripts/check-docs.sh`（`git diff --check`）；跳过静态检查、覆盖率、Sonar 与推送台账记录。commit 钩子的完整门禁记录仍是证据。 |
+| frontend | 非文档路径只落在 `src/**` 与前端专属根配置 | 全量前端测试 + 前端覆盖率；Rust 复用主工作树最近 LCOV；Sonar 导入两侧报告。 |
+| rust | 非文档路径只落在 `src-tauri/**`、`crates/**`、`rust-toolchain.toml` | 全量 Rust 测试 + `rust-coverage.sh`；前端复用最近 LCOV；Sonar 导入两侧报告。 |
+| native | 非文档路径只落在 `native/**` | `sh scripts/test-native.sh` 构建画布并串行运行功能回归；压力测量按需运行（见下节）。前端/Rust 复用最近 LCOV；Sonar 导入两侧报告。原生代码不在 Sonar 源码范围，记录 `scope: native`。 |
+| full | 跨栈、工具（`scripts/**`、`.githooks/**`、`.github/**`、根 linter/配置）、未知路径、空差异或无法确定基线 | 完整推送门禁：静态检查 + 前端/Rust 全量覆盖率 + native 功能回归 + Sonar；压力测量仍按需运行。 |
+
+实现与边界：
+
+- `scripts/gate-scope.ts` 从 `git diff --no-renames --name-only <base> <commit>`
+  分类；已有 ref 只取远端旧 tip，若该对象在本地不可用则按 `full`。
+  只有远端 SHA 全零的新 ref 才依次取本地 `dev` merge-base、
+  `origin/dev`、提交父提交。无法确定时按 `full`，不因“没有差异”跳过。
+- 同一提交的所有 ref 范围先收集再合并，随后才去重执行：docs 为中性，
+  不同实现栈或任一 full 取 full；每个文档范围均执行差异检查。
+  交换 ref 顺序不改变最终范围。三个提交创建入口显式设置
+  `PLOTWEAVE_GATE_SCOPE=full PLOTWEAVE_GATE_FULL_NATIVE=0`，外部环境不能把提交门禁降为推送单栈路径，也不能继承推送专属成本。
+- `full` 推送显式设置 `PLOTWEAVE_GATE_FULL_NATIVE=1`，保守执行三栈检查，
+  包括合并范围、工具变更和无法确定基线；调用方的 `0` 不能降级。共享门禁
+  只接受 `0`/`1`，非法值以 `[GATE_FULL_NATIVE_INVALID]` 阻断。直接调用默认
+  `0`，保持既定提交门禁成本；手动验证完整推送须显式设为 `1`。
+- `pre-push` 把范围经 `PLOTWEAVE_GATE_SCOPE` 传给
+  `scripts/sonar-quality-gate.sh`；未变更栈的 LCOV 经
+  `PLOTWEAVE_REUSED_FRONTEND_LCOV` / `PLOTWEAVE_REUSED_RUST_LCOV` 指向
+  主工作树最近产物。缺文件、报告为空/无源文件/无覆盖行时 fail-closed，
+  禁止 Sonar 在缺少一侧报告时静默降级。
+- 单栈只跑该栈的全量回归与覆盖率；“代码覆盖率全量更新”指变更栈的完整
+  栈内覆盖率，不是只测变更文件；未变更栈复用最近 LCOV，不重跑其测试。
+- 原生范围没有原生 LCOV 门禁，前端/Rust 报告按上述复用；原生测试失败
+  仍阻断推送。Sonar 对原生源码不建模，台账的 `scope: native` 明示该边界。
+- docs-only 不写推送台账；普通 commit 钩子已产生的全量记录继续作为
+  gate-evidence 证据。若 docs-only 提交绕过 commit 钩子创建，则没有该
+  记录——这与既有 hook 覆盖边界一致，不是新豁免。
+- 单栈慢路径在临时 worktree 中运行，复用的 LCOV 来自主工作树最近门禁；
+  若未变更栈代码已相对该报告变化，复用值可能陈旧。此时应运行完整门禁；
+  该边界不改变“变更栈覆盖率必须刷新”的要求。
+
+回归：`scripts/gate-scope.test.ts` 覆盖分类与 CLI；`scripts/pre-push-refs.test.ts`
+覆盖 docs-only 跳过、单栈分派与复用路径；`scripts/sonar-quality-gate.test.ts`
+覆盖 frontend/rust/native 分流、缺 LCOV fail-closed 与 native 失败阻断。
+
+### PR #604 修复状态与不变量矩阵
+
+门禁入口拥有范围选择；提交钩子拥有完整覆盖率要求；原生测试入口和
+`NativeStressTestProfile` 共同拥有日常/压力选择，Xcode 在测试宿主启动前转发开关。
+这些命令顺序执行，不新增异步状态；信号清理沿用既有推送监督器。
+
+| 前置状态 | 操作/顺序 | 可观察结果 | 跨转换不变量 | 验证 |
+| --- | --- | --- | --- | --- |
+| 同一提交推往不同旧 tip 的多个 ref | 先收集全部范围，再按提交去重 | docs 与单栈合并为单栈；不同栈或 full 合并为 full | 交换 ref 顺序不削弱检查，每提交只运行一次代码门禁；每个 docs 差异仍须通过 | pre-push-refs 的共享提交范围与文档空白回归 |
+| 已有远端 tip 对象缺失 | 推送替换已有 ref | full | 只有全零远端 SHA 能采用新分支基线回退 | pre-push-refs 的 missing-tip 回归 |
+| 提交环境带有 scoped push 变量 | pre-commit / pre-merge-commit / prepare-commit-msg | full，刷新前端与 Rust 覆盖率 | 提交标记只能代表完整门禁 | sonar-quality-gate 的三个提交入口回归 |
+| 默认 native 门禁或未配置开关 | 日常功能、生命周期及轻量报告校验 | Swift Testing 跳过五个压力测量 | 功能回归保留，测试失败继续非零阻断 | test-native 的参数/退出码测试；NativeStressTestProfileTests；真实日常回归 |
+| 显式 native stress | Xcode 转发开关 `1`，选择测量套件 | 开启原有规模、轮数及断言 | 只有精确值 `1` 能开启；指标口径不改变 | test-native 的压力选择回归；NativeStressTestProfileTests；真实测试宿主的开关探针；本次不重复执行高负载测量 |
+
+评审 5560989008 补充矩阵：`full` 推送保守执行三栈检查，不再丢失 native
+参与；这样无需扩展分类器返回类型或维护第二份路径分类。提交入口显式关闭
+推送专属的 `PLOTWEAVE_GATE_FULL_NATIVE`，保持既定的统一提交成本。
+
+| 前置状态 | 操作/顺序 | 可观察结果 | 跨转换不变量 | 验证 |
+| --- | --- | --- | --- | --- |
+| native 与 frontend/tooling 混合范围，或多个 ref 合并为 full | 收集范围后选择快路径或临时 worktree | 前端/Rust 覆盖率及 native 功能回归均执行 | 增加其他栈变更不能移除 native 检查；每提交仅一次门禁 | 混合范围快/慢路径集成回归 |
+| 无法确定已有远端基线 | 保守 full 推送 | 三栈检查，外部开关 `0` 无法降级 | 不确定范围不能漏掉任何实现栈 | 缺失远端 tip 回归 |
+| full 推送中的 native 失败 | native 检查失败后停止扫描 | 推送失败，无成功台账记录 | 只有全部所需栈通过才可发布通过结论 | full native 失败集成及门禁回归 |
+| 外部设置 full native 开关，进入任一提交创建钩子 | 入口覆盖范围和开关 | 刷新前端/Rust，不额外执行 native | 推送上下文不能改变提交创建成本或复用标记语义 | 三个提交入口环境隔离回归 |
+| 非法 full native 开关直接调用共享门禁 | 验证配置后再执行检查 | 非零退出且无检查/记录 | 不把错误配置静默解释为跳过 | 稳定诊断码回归 |
+
+这些路径沿用现有串行门禁、共享锁及信号监督器，不新增并发或恢复状态；
+native 压力测量仍按需运行。上述范围合并、快慢路径、失败阻断和配置隔离
+均已通过定向回归及 `npm test -- scripts`；实际提交/推送的完整门禁和 native
+执行结果记录在 PR #604 的验证记录中。该文档及 AGENTS 的规则同步经过结构化
+检查，无另设自动化文档行为检查。
+
+本轮验证（2026-10-18，Node 24.18.0、Xcode 27.0 / SDK 27.0）：
+
+- `npm test -- scripts`：18 文件、418 测试通过，覆盖矩阵中的推送范围、提交入口、原生选择与失败透传。
+- `sh scripts/test-native.sh`：通过；Swift Testing 汇总为 288 tests / 63 suites，105.027 秒，上述五个压力方法明确跳过。
+- 环境开关的真实宿主探针先复现旧传递方式无效，再以 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1` 通过；一次性探针验证后删除。永久 Swift 测试覆盖缺省、非法值和精确值 `1`，入口测试验证显式模式覆盖外部相反值。
+- `sh scripts/check-static.sh`、`npx prettier --check .github`、受影响 shell 文件的 `sh -n` 与 `git diff --check` 通过。
+- 文档按范围、命令及交叉引用进行结构化审查，无专用文档自动化检查。构建输出在验证后删除。
+- 本轮未重复运行高负载测量；未执行真实前端/Rust 全量覆盖率、Sonar 或托管 CI。脚本测试在真实隔离 Git 仓库执行，覆盖率工具与 Sonar 网络边界使用受控替身，不能据此宣称真实 Quality Gate 或托管 CI 已通过。
+
+### Native Regression And Stress
+
+所有者在 [PR #604](https://github.com/hailingu/PlotWeave/pull/604)（2026-10-18）
+明确选择降低默认 native 测试负载：日常回归保留，压力测试按需运行。
+CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建画布，
+再串行运行功能回归；原有测试失败退出码原样透传，不截断或过滤日志。
+
+入口的选择契约为：默认向 Xcode 显式传入环境变量
+`TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=0`；Xcode 去掉 `TEST_RUNNER_`
+前缀后把该值转发给测试宿主（[Apple 环境变量说明](https://developer.apple.com/documentation/xcode/environment-variable-reference)），
+以下五个方法通过 Swift Testing 的 `.enabled` 条件跳过。
+开关未设置或不是精确值 `1` 时同样跳过：
+
+- `WebCanvasPerformanceTests/sustainedScriptedOperationsMatchFixtureScale(scale:)`
+- `WebCanvasPerformanceTests/commonModeSupportsTauriBaselineComparison(scale:)`
+- `WebCanvasPerformanceTests/repeatedHostedCanvasCyclesKeepTotalMemoryBounded()`
+- `WebCanvasPerformanceTests/repeatedReloadsRecordLongMemoryTrend()`
+- `WebCanvasFirstDragLatencyTests/sameNodeFirstAndSecondDragRecordStartupEvidence()`
+
+`sh scripts/test-native.sh stress` 传入环境变量 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1`，
+通过 `-only-testing` 选择整个 `WebCanvasPerformanceTests` 套件与首拖测量；
+套件内三个轻量报告校验也保留。采用套件选择是因为实测 Xcode 27 的方法级
+筛选未匹配两个参数化测量；启用条件由 Swift Testing 自身执行，避免默认
+门禁因筛选标识未匹配而意外跑压力测试。
+
+这将六组 100/500/1000 节点持续交互、五次窗口重建、100 次 reload 和首拖
+对照测量移出默认门禁，原来的规模、等待、断言与证据口径保留。
+报告格式/缺失采样校验、延迟投影下的节点级联，以及其余功能、生命周期、
+存储与恢复测试继续默认运行。直接执行 `xcodebuild test` 同样默认跳过
+压力测量；需要整个目标加压力测试时，在完整 Xcode 命令前显式设置
+`TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1`。
+降低负载不代表 IOSurface 报错根因已经修复，也不以日志行数承诺耗时降幅。
+
 ## Push-Path Per-Ref Gating (issue #405)
 
 Before issue #405, `.githooks/pre-push` read no input and always scanned the
@@ -34,7 +156,7 @@ The issue #405 fix, wired 2026-09-30, closes it:
   input equality (PR #442 review 5361127076). Untracked documentation also
   triggers isolation; ignored generated artifacts retain the existing fast
   path behavior.
-  The complete gate then runs exactly as before, at the same cost.
+  For a `full`-scope push the gate runs fresh frontend/Rust coverage and native functional regression before Sonar; the scoped routes above select a single stack.
 - **Slow path — temporary worktree.** Every other commit — a non-checked-out
   ref, a dirty worktree, or an additional distinct commit in a multi-ref
   push — is checked out with
@@ -124,7 +246,7 @@ worktree and are invalid inside a temporary worktree — without the strip,
 a gate run nested inside a commit hook (which is exactly how this
 repository's own script tests execute under `npm run test:coverage`) would
 break the slow path. Both paths analyze with the gate
-definition of the current working tree (uniform-gate rule), so a pushed tree
+definition of the current working tree (scope-routing rule; `full` remains the complete gate), so a pushed tree
 older than the tooling itself fails closed if it lacks `package-lock.json`
 (`npm ci`) or the files the gate needs; pushing such an ancient tree requires
 checking it out first. Using `--no-verify` on the push remains prohibited and
