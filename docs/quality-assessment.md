@@ -86,7 +86,7 @@
 扣分：
 
 - **P2** required `gate-evidence` 运行 PR 检出内容中的核验器：`ci.yml` 在 PR 事件检出 PR/merge 后直接执行 `scripts/verify-gate-evidence.ts`；该脚本与测试可被 PR 修改，单提交 PR 又受 tip-lag 容忍，分支保护 required approving review 为 0。作者可把核验器改为 `exit 0` 并同步测试，服务端 backstop 被其保护的 PR 中和（[#593](https://github.com/hailingu/PlotWeave/issues/593)）。
-- **P3** `npm test` 已包含 scripts 测试，CI 又跑 `npm test -- scripts`，重复整套套件；Actions 仅用可变 major tag，`cargo-audit@latest` 未钉版（记为成本/可复现性债务，未单开 issue）。
+- **P3** Actions 仅用可变 major tag，`cargo-audit@latest` 未钉版（记为成本/可复现性债务，未单开 issue）；同条原记录的「CI 重复执行 scripts 套件」已建档并修复（[#617](https://github.com/hailingu/PlotWeave/issues/617)）。
 
 ### 3.6 文档与治理 — 8.8 / A-
 
