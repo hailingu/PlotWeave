@@ -3,8 +3,8 @@
 //! 守卫以 RAII 接管**本次新建**的目录，Drop 时清理并另行报告清理失败，
 //! 不吞掉也不掩盖主失败诊断。只删除本次创建的目录：目录已存在时不
 //! 接管，显式清理成功后守卫退化为空操作（后续同名目录不得误删）。
-//! 本文件被 harness=false 的 invoke_responsiveness 二进制与其单测载体
-//! invoke_cleanup_guard.rs（#[path] 复用）共同编译。
+//! 本文件被 harness=false 的 invoke_responsiveness 二进制、其单测载体
+//! invoke_cleanup_guard.rs 与 frontend_bundle_chain（#[path] 复用）共同编译。
 
 use std::fs;
 use std::path::PathBuf;

@@ -45,6 +45,12 @@ harness = false
 name = "canvas_performance"
 harness = false
 
+# issue #551：前端 bundle → IPC → Rust 命令 → 真实落盘 的全链路回归；
+# dist/ 缺失时（本地未构建前端）用例自跳过，不强制本地先 npm run build。
+[[test]]
+name = "frontend_bundle_chain"
+harness = false
+
 [dev-dependencies]
 # 共享内核夹具与故障注入；生产依赖不启用测试接口。
 plotweave-core = { path = "../crates/plotweave-core", features = ["test-support"] }
