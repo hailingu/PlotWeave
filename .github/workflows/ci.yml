@@ -46,10 +46,13 @@ jobs:
         run: npm run check:size
       - name: build（src 行）
         run: npm run build
-      - name: test（src 行）
+      # test 同时覆盖 Scope Routing 的 src 行与 .githooks/scripts/sonar
+      # 行的测试部分：默认 vitest 发现已含 scripts/**/*.test.ts（issue
+      # #617 核实：238 个测试文件中 18 个为 scripts，.githooks 无独立
+      # 测试文件）；原独立的 `npm test -- scripts` 步骤是同批用例的重复
+      # 执行，已删除——scripts 用例失败同样使本步骤非零退出阻断 PR。
+      - name: test（src 行 + scripts/.githooks 行；issue #617）
         run: npm test
-      - name: scripts/.githooks 行
-        run: npm test -- scripts
 
   # Scope Routing「src-tauri/**」行（工作目录 src-tauri）
   rust:
