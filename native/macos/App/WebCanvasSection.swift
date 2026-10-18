@@ -30,7 +30,7 @@ struct WebCanvasSection: View {
                 state: state, appearance: appearance, entryURL: fixtureURL, services: services,
                 onProjection: { body in
                     do { try application?.receiveProjection(body) }
-                    catch { application?.invalidate(error.localizedDescription) }
+                    catch { state.fail(error.localizedDescription) }
                 },
                 onConnection: { application?.connect($0) },
                 isPresented: canvasPresented
@@ -45,7 +45,10 @@ struct WebCanvasSection: View {
                 default: EmptyView()
                 }
             }
-            CanvasLoadOverlay(state: state, demoMode: demoMode)
+            CanvasLoadOverlay(
+                state: state, demoMode: demoMode,
+                recoveryPending: !demoMode && application?.canvasUnavailable == true
+            )
         }
         .overlay(alignment: .bottom) {
             if !demoMode, application?.route == "editor", state.phase == .ready, let application {
@@ -65,17 +68,33 @@ struct WebCanvasSection: View {
 }
 
 /// Loading and recovery remain visible even when a native business screen normally covers the canvas.
-private struct CanvasLoadOverlay: View {
+/// `recoveryPending` stays true from the observed failure until an accepted projection clears it, so a retried
+/// page that reports ready before its projection cannot leave a blank window without a retry control.
+struct CanvasLoadOverlay: View {
     let state: WebCanvasState
     let demoMode: Bool
+    /// The shell saw a canvas failure that no usable projection has cleared yet.
+    let recoveryPending: Bool
 
     var body: some View {
         switch state.phase {
+        case .ready where recoveryPending:
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("画布已重新加载，正在等待项目数据…").multilineTextAlignment(.center)
+                Button("重试加载") { state.retry() }
+            }
+            .padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
         case .ready: EmptyView()
         case .loading:
-            VStack(spacing: 12) { ProgressView(); Text(demoMode ? "正在加载画布演示…" : "正在加载项目…") }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
+            VStack(spacing: 12) {
+                ProgressView()
+                Text(demoMode ? "正在加载画布演示…" : "正在加载项目…")
+                if recoveryPending { Button("重试加载") { state.retry() } }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
         case .failed(let message):
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle").font(.largeTitle)

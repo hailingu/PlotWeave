@@ -68,6 +68,8 @@ final class NativeApplicationState {
     private(set) var projectName = "PlotWeave"
     /// Navigation geometry does not subscribe to editor selection, history or background-job updates.
     private(set) var route = "loading"
+    /// A failed canvas keeps the retained editor window interactive; welcome geometry must not mask its retry overlay.
+    private(set) var canvasUnavailable = false
 
     /// Starts one page generation before observing its projection stream.
     func beginSession(_ sessionId: String) {
@@ -109,6 +111,11 @@ final class NativeApplicationState {
             throw HostFailure(code: "PW_INVALID_PROJECTION", message: "原生界面收到无效的导航状态")
         }
         replaceProjection(decoded)
+        // A valid projection proves the canvas is live again; the retry overlay can leave the failure presentation.
+        if canvasUnavailable {
+            canvasUnavailable = false
+            error = nil
+        }
         lastSequence = sequence
     }
 
@@ -138,11 +145,13 @@ final class NativeApplicationState {
     }
 
     /// A failed page cannot retain active edit controls or present an empty replacement document.
+    /// The failure flag suppresses welcome geometry and keeps the retained writer available for the retry overlay.
     func invalidate(_ message: String) {
         activeSession = nil
         nativeIntents.values.forEach { $0.cancel() }
         nativeIntents.removeAll()
         coordinator = nil
+        canvasUnavailable = true
         replaceProjection(.object([:]))
         pending = 0
         busy = false

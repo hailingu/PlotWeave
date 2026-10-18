@@ -9,6 +9,36 @@ import WebKit
 @Suite(.serialized, WebKitTestIsolation())
 struct WebCanvasLoadingTests {
 
+    /// Missing canvas resources fail visibly, retain the pending quit for the degraded decision, and keep retry reachable.
+    @Test func missingCanvasEntryFailsVisiblyAndKeepsRetry() async throws {
+        let state = WebCanvasState()
+        let quit = HostQuitController()
+        let services = NativeHostServices(dataRoot: nil, quit: quit)
+        let coordinator = WebCanvasCoordinator(
+            state: state,
+            appearance: CanvasAppearanceState(),
+            entryURL: FileManager.default.temporaryDirectory.appendingPathComponent("missing-native-canvas.html"),
+            services: services
+        )
+        let webView = try IsolatedWebViewFixture.makeWebView(
+            frame: NSRect(x: 0, y: 0, width: 640, height: 480), configuration: WKWebViewConfiguration()
+        )
+        webView.navigationDelegate = coordinator
+        coordinator.loadCanvas(into: webView)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while state.phase == .loading && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        if case .failed(let message) = state.phase {
+            #expect(message.contains("画布导航失败") || message.contains("未找到画布资源"))
+        } else {
+            Issue.record("缺失画布入口必须进入可见失败态")
+        }
+        #expect(quit.canvasUnavailable)
+        state.retry()
+        #expect(state.phase == .loading && state.reloadToken == 1)
+    }
+
     /// M01 regression: a packaged canvas must both report ready and render nodes.
     @Test func bundledCanvasRendersAndReportsReady() async throws {
         let state = WebCanvasState()

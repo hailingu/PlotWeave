@@ -74,10 +74,16 @@ final class NativeHostServices {
     }
 
     /// A failed or removed current page cannot leave AppKit waiting; late failures from replaced pages are inert.
-    func invalidateQuitListener(for coordinator: WebCanvasCoordinator) {
+    /// A canvas failure preserves a pending user intent for the visible degraded close/quit confirmation;
+    /// ordinary teardown cancels and resets the listener as before.
+    func invalidateQuitListener(for coordinator: WebCanvasCoordinator, canvasFailed: Bool = false) {
         guard quitPage === coordinator else { return }
-        quit.cancel()
-        quit.resetListener()
+        if canvasFailed {
+            quit.canvasFailed()
+        } else {
+            quit.cancel()
+            quit.resetListener()
+        }
         quit.sendEvent = nil
         quitPage = nil
     }

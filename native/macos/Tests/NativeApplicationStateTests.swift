@@ -30,4 +30,23 @@ struct NativeApplicationStateTests {
         #expect(state.projectId == nil)
         #expect(state.route == "loading")
     }
+
+    /// Canvas failure is a visible, retryable state: it suppresses welcome geometry and clears only on a valid projection.
+    @Test func canvasFailureSuppressesWelcomeUntilAValidProjection() throws {
+        let state = NativeApplicationState()
+        state.beginSession("page")
+        state.invalidate("画布失败")
+        #expect(state.canvasUnavailable)
+        #expect(state.error == "画布失败")
+        #expect(state.route == "loading")
+        state.beginSession("retry-page")
+        #expect(state.canvasUnavailable, "重试页面接入时失败呈现必须保留到有效投影")
+        try state.receiveProjection([
+            "protocolVersion": 1, "sessionId": "retry-page", "sequence": 1,
+            "projection": ["app": ["route": "editor", "project": ["id": "new", "name": "新剧"]]]
+        ])
+        #expect(!state.canvasUnavailable)
+        #expect(state.error == nil)
+        #expect(state.projectId == "new")
+    }
 }
