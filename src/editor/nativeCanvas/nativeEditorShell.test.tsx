@@ -202,6 +202,49 @@ it('native entity actions share history and export preserves the current unsaved
   expect(rejected).toMatchObject({ error: { code: 'PW_INTENT_FAILED' } })
 })
 
+it('native export preview outline argument selects the appendix: default-off sheets export plain Markdown, JSON ignores it', async () => {
+  nativeEditorFixture()
+  let plain: unknown
+  await act(async () => {
+    plain = await intent('editor.exportPreview', {
+      format: 'md',
+      outline: false,
+    })
+  })
+  const plainText = (plain as { ok: { text: string; fileName: string } }).ok
+    .text
+  expect((plain as { ok: { fileName: string } }).ok.fileName).toBe(
+    '原生往返-剧本.md',
+  )
+  expect(plainText).toContain('天台')
+  expect(plainText).not.toContain('附录 · 创作大纲')
+  let withOutline: unknown
+  await act(async () => {
+    withOutline = await intent('editor.exportPreview', {
+      format: 'md',
+      outline: true,
+    })
+  })
+  expect((withOutline as { ok: { text: string } }).ok.text).toContain(
+    '附录 · 创作大纲',
+  )
+  let jsonWithoutOutline: unknown
+  let jsonWithOutline: unknown
+  await act(async () => {
+    jsonWithoutOutline = await intent('editor.exportPreview', {
+      format: 'json',
+      outline: false,
+    })
+    jsonWithOutline = await intent('editor.exportPreview', {
+      format: 'json',
+      outline: true,
+    })
+  })
+  const jsonText = (jsonWithoutOutline as { ok: { text: string } }).ok.text
+  expect(JSON.parse(jsonText).graph).toBeDefined()
+  expect((jsonWithOutline as { ok: { text: string } }).ok.text).toBe(jsonText)
+})
+
 /** Creates only the explicit host transport; production document and history remain real. */
 function nativeEditorFixture(project = PROJECT) {
   const projections: unknown[] = []

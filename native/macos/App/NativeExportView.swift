@@ -7,7 +7,8 @@ struct NativeExportView: View {
     let projectId: String
     @Environment(\.dismiss) private var dismiss
     @State private var format = "md"
-    @State private var outline = true
+    /// The outline appendix stays opt-in like the Web ExportDialog (docs/ui-design.md §5, issue #598).
+    @State private var outline = false
     @State private var ticket = NativeExportTicket()
     private var preview: HostJSON { ticket.available(for: key) ?? .null }
     @State private var error: String?
