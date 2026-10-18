@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import PlotWeaveNative
 
@@ -49,5 +50,29 @@ struct NativeCanvasFailureRecoveryTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(presentation.welcomeWindow == nil)
         #expect(window.alphaValue == 1 && !window.ignoresMouseEvents)
+    }
+
+    /// A retried page can reach ready before its usable projection; the overlay must keep a retry control visible.
+    @Test func readyWithoutProjectionKeepsRetryControlVisible() async throws {
+        let state = WebCanvasState()
+        state.markReady()
+        let window = NSWindow(
+            contentRect: NSRect(x: 120, y: 120, width: 720, height: 520),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(
+            rootView: CanvasLoadOverlay(state: state, demoMode: false, recoveryPending: true)
+        )
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.close()
+            window.contentView = nil
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        let button = try await NativeCreationControlFixture.button(in: window, named: "重试加载")
+        try NativeCreationControlFixture.press(button)
+        #expect(state.phase == .loading)
+        #expect(state.reloadToken == 1)
     }
 }
