@@ -79,7 +79,7 @@ async function composerInput(): Promise<HTMLInputElement> {
   return input
 }
 
-describe('AiThread 输入行发送按钮（issue #599）', () => {
+describe('AiThread 输入行发送按钮的禁用条件（issue #599）', () => {
   it('空草稿禁用；输入后启用；点击与 Enter 同效（用户消息入列并发出 llm_chat，草稿清空）', async () => {
     render(<AiThread projectId="p-composer" />)
     const input = await composerInput()
@@ -99,20 +99,6 @@ describe('AiThread 输入行发送按钮（issue #599）', () => {
         (screen.getByLabelText('AI 对话输入') as HTMLInputElement).value,
       ).toBe('')
       expect(sendButton().disabled).toBe(true)
-    })
-  })
-
-  it('Enter 发送保留：与按钮共用同一回合路径', async () => {
-    render(<AiThread projectId="p-composer" />)
-    const input = await composerInput()
-    fireEvent.change(input, { target: { value: '按 Enter 发送' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => {
-      screen.getByText('按 Enter 发送')
-    })
-    expect(invokeMock).toHaveBeenCalled()
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
     })
   })
 
@@ -137,6 +123,22 @@ describe('AiThread 输入行发送按钮（issue #599）', () => {
     fireEvent.change(input, { target: { value: '   ' } })
     expect(sendButton().disabled).toBe(true)
     expect(invokeMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('AiThread 输入行发送按钮的发送路径与 busy 切换（issue #599）', () => {
+  it('Enter 发送保留：与按钮共用同一回合路径', async () => {
+    render(<AiThread projectId="p-composer" />)
+    const input = await composerInput()
+    fireEvent.change(input, { target: { value: '按 Enter 发送' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => {
+      screen.getByText('按 Enter 发送')
+    })
+    expect(invokeMock).toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
+    })
   })
 
   it('busy 态输入行切换为「取消」且无发送按钮；落定后恢复', async () => {
