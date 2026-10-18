@@ -49,17 +49,20 @@ final class HostQuitController {
     }
 
     /// Startup buffering survives first connection; replacement of a ready page cancels its outstanding decision.
+    /// An active degraded decision keeps its pending intent: the visible warning owns it until the user answers.
     func resetListener() {
-        if listenerReady { cancel() }
+        if listenerReady && !unavailablePromptActive { cancel() }
         listenerReady = false
         eventTask?.cancel()
     }
 
     /// The acknowledgement releases one buffered request after listener registration.
+    /// It must not clear or replay an active degraded decision: the warning's modal loop can deliver this
+    /// acknowledgement before the user answers, and replaying would let the recovered page terminate early.
     func acknowledgeListener() {
         listenerReady = true
+        guard !unavailablePromptActive else { return }
         canvasUnavailable = false
-        unavailablePromptActive = false
         if pendingIntent != nil { emitRequested() }
     }
 
@@ -75,13 +78,19 @@ final class HostQuitController {
     }
 
     /// Resolves the visible degraded decision; only an explicit user approval releases close/terminate.
+    /// A listener recovered while the warning was open is cleared only after the user answers, never by
+    /// replaying the request behind the modal.
     func resolveUnavailable(approved: Bool) {
         unavailablePromptActive = false
-        guard let intent = pendingIntent else { return }
+        guard let intent = pendingIntent else {
+            if listenerReady { canvasUnavailable = false }
+            return
+        }
         if approved {
             consume(intent)
         } else {
             cancel()
+            if listenerReady { canvasUnavailable = false }
         }
     }
 

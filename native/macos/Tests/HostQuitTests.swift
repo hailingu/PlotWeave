@@ -142,4 +142,66 @@ struct HostQuitTests {
         #expect(!quit.canvasUnavailable)
         #expect(approved.isEmpty)
     }
+
+    /// A listener acknowledgement delivered inside the warning's modal loop must not replay the quit request
+    /// or clear the degraded decision before the user answers.
+    @Test func acknowledgementCannotBypassActiveDegradedDecision() async throws {
+        let quit = HostQuitController()
+        var prompts: [HostQuitController.Intent] = []
+        var names: [String] = []
+        var approved: [HostQuitController.Intent] = []
+        quit.onUnavailable = { prompts.append($0) }
+        quit.onApproved = { approved.append($0) }
+        quit.canvasFailed()
+        quit.request(.terminate)
+        #expect(prompts == [.terminate])
+        quit.sendEvent = { name, _ in names.append(name) }
+        quit.acknowledgeListener()
+        await Task.yield()
+        #expect(names.isEmpty, "警告未回答前不得重放退出请求")
+        #expect(quit.pendingIntent == .terminate)
+        #expect(quit.canvasUnavailable)
+        #expect(quit.listenerReady)
+        quit.resolveUnavailable(approved: false)
+        #expect(quit.pendingIntent == nil)
+        #expect(!quit.canvasUnavailable, "listener 已恢复时取消警告应清除降级态")
+        #expect(approved.isEmpty)
+        quit.request(.close)
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(names == ["app-quit-requested"], "用户取消后下一次退出应走正常 listener 路径")
+    }
+
+    /// An approved degraded decision consumes the intent without starting a normal flush behind the warning.
+    @Test func approvedDegradedDecisionAfterRecoveryDoesNotReplayFlush() async {
+        let quit = HostQuitController()
+        var prompts: [HostQuitController.Intent] = []
+        var names: [String] = []
+        var approved: [HostQuitController.Intent] = []
+        quit.onUnavailable = { prompts.append($0) }
+        quit.onApproved = { approved.append($0) }
+        quit.canvasFailed()
+        quit.request(.close)
+        #expect(prompts == [.close])
+        quit.sendEvent = { name, _ in names.append(name) }
+        quit.acknowledgeListener()
+        await Task.yield()
+        #expect(names.isEmpty)
+        quit.resolveUnavailable(approved: true)
+        #expect(approved == [.close])
+        #expect(names.isEmpty, "用户已确认降级，不得再启动正常冲刷")
+    }
+
+    /// A page replacement while the warning is open preserves its pending decision for the user to answer.
+    @Test func resetListenerPreservesActiveDegradedDecision() {
+        let quit = HostQuitController()
+        var prompts: [HostQuitController.Intent] = []
+        quit.onUnavailable = { prompts.append($0) }
+        quit.canvasFailed()
+        quit.request(.close)
+        #expect(prompts == [.close])
+        quit.resetListener()
+        #expect(quit.pendingIntent == .close)
+        quit.resolveUnavailable(approved: false)
+        #expect(quit.pendingIntent == nil)
+    }
 }
