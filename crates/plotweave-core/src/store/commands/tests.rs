@@ -3,6 +3,7 @@
 use super::*;
 use crate::isotime::now_iso;
 use crate::store::error::StoreError;
+use crate::store::persist::faults::{Injection, Stage};
 use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir, valid_save_doc};
 use std::fs;
 
@@ -200,11 +201,18 @@ fn delete_project_files_keeps_record_when_asset_tree_removal_fails() {
     let mut perms = fs::metadata(&assets).unwrap().permissions();
     perms.set_mode(0o555);
     fs::set_permissions(&assets, perms).expect("只读化");
+    let inj = Injection::new(None, None);
     let result = delete_project_files(&cap(&projects), "p-1");
+    let stages = inj.stages();
+    drop(inj);
     let mut perms = fs::metadata(&assets).unwrap().permissions();
     perms.set_mode(0o755);
     let _ = fs::set_permissions(&assets, perms);
     let err = result.expect_err("资产目录删除失败应显式报错");
+    assert!(
+        !stages.contains(&Stage::DirectorySync),
+        "成对移除未完成时不得抵达目录持久性屏障：{stages:?}"
+    );
     assert!(
         matches!(err.root(), StoreError::Io { .. }),
         "删除失败应为底层 I/O 类别：{err:?}"
@@ -220,6 +228,104 @@ fn delete_project_files_keeps_record_when_asset_tree_removal_fails() {
         projects.join("p-1.json").exists(),
         "项目记录先于资产目录被删，失败后媒体成不可发现孤儿"
     );
+    cleanup_temp(&projects);
+}
+
+/// issue #591：删除成功前必须抵达 `projects/` 目录的持久性屏障，且屏障
+/// 位于资产目录与项目 JSON 两次移除之后——成功返回即表示两个目录项都
+/// 已到达持久介质。探针在 fsync 之前观察命名空间，屏障若被提前或漏掉
+/// 都会让断言失败。
+#[cfg(unix)]
+#[test]
+fn delete_project_files_reaches_projects_dir_sync_after_removals() {
+    use std::sync::{Arc, Mutex};
+
+    let projects = temp_projects_dir();
+    let assets = projects.join("p-1").join("assets");
+    fs::create_dir_all(&assets).expect("建资产目录");
+    fs::write(assets.join("a.png"), b"A").expect("写资产");
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    let observed = Arc::new(Mutex::new((false, false)));
+    let probe_state = Arc::clone(&observed);
+    let probe_root = projects.clone();
+    let inj = Injection::with_probe(Stage::DirectorySync, move || {
+        *probe_state.lock().expect("观察位锁") = (
+            fs::symlink_metadata(probe_root.join("p-1")).is_err(),
+            fs::symlink_metadata(probe_root.join("p-1.json")).is_err(),
+        );
+    });
+    delete_project_files(&cap(&projects), "p-1").expect("删除项目");
+    let stages = inj.stages();
+    drop(inj);
+    assert!(
+        stages.contains(&Stage::DirectorySync),
+        "删除成功路径未抵达目录持久性屏障：{stages:?}"
+    );
+    assert_eq!(
+        *observed.lock().expect("观察位锁"),
+        (true, true),
+        "目录屏障必须位于资产目录与项目 JSON 两次移除之后"
+    );
+    cleanup_temp(&projects);
+}
+
+/// issue #591：目录持久性屏障失败必须上浮，不得报告删除成功。两次移除
+/// 此时已在命名空间落定（与保存路径「已提交但屏障失败」同类），错误不
+/// 等于删除未发生；重试容忍缺失目标、重新执行屏障并幂等收敛。
+#[cfg(unix)]
+#[test]
+fn delete_project_files_surfaces_directory_sync_failure_and_retry_converges() {
+    let projects = temp_projects_dir();
+    let assets = projects.join("p-1").join("assets");
+    fs::create_dir_all(&assets).expect("建资产目录");
+    fs::write(assets.join("a.png"), b"A").expect("写资产");
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    let root = cap(&projects);
+    let inj = Injection::new(Some(Stage::DirectorySync), None);
+    let err = delete_project_files(&root, "p-1").expect_err("屏障失败不得报告删除成功");
+    let stages = inj.stages();
+    drop(inj);
+    assert!(
+        stages.contains(&Stage::DirectorySync),
+        "目录持久性屏障阶段未抵达（守卫失效）：{stages:?}"
+    );
+    assert!(
+        matches!(err.root(), StoreError::Io { ref context, .. } if context.contains("同步项目目录")),
+        "目录屏障失败应如实报错：{err}"
+    );
+    // 移除已落定：失败点是耐久性未确认，不是命名空间未变更
+    assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
+    assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
+    // 幂等重试：目标缺失被容忍，屏障重新执行并成功
+    let retry = Injection::new(None, None);
+    delete_project_files(&root, "p-1").expect("屏障失败后的重试应收敛");
+    let retry_stages = retry.stages();
+    drop(retry);
+    assert!(
+        retry_stages.contains(&Stage::DirectorySync),
+        "重试未重新执行目录持久性屏障：{retry_stages:?}"
+    );
+    assert!(fs::symlink_metadata(projects.join("p-1")).is_err());
+    assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
+    cleanup_temp(&projects);
+}
+
+/// issue #591 回归：只有项目 JSON、资产目录缺失时删除仍成功，且持久性
+/// 屏障照常抵达——部分状态缺失不跳过耐久契约。
+#[cfg(unix)]
+#[test]
+fn delete_project_files_removes_record_when_asset_tree_missing() {
+    let projects = temp_projects_dir();
+    fs::write(projects.join("p-1.json"), b"{}").expect("写项目文件");
+    let inj = Injection::new(None, None);
+    delete_project_files(&cap(&projects), "p-1").expect("资产目录缺失仍可删除项目记录");
+    let stages = inj.stages();
+    drop(inj);
+    assert!(
+        stages.contains(&Stage::DirectorySync),
+        "资产目录缺失时仍须抵达目录持久性屏障：{stages:?}"
+    );
+    assert!(fs::symlink_metadata(projects.join("p-1.json")).is_err());
     cleanup_temp(&projects);
 }
 
@@ -497,8 +603,6 @@ fn persist_project_expect_existing_saves_when_target_present() {
 // 的调用记录。写后资产复验失败路径需保存期间并发替换资产文件；主入口
 // 全程持 projects 操作锁，真实系统行为下同线程之外无法替换（本地并发
 // 攻击者替换树不在威胁模型），按 issue 口径不纳入并以本注释披露。
-
-use crate::store::persist::faults::{Injection, Stage};
 
 /// 主保存失败后的临时文件清扫断言：projects 根不得遗留 .tmp 条目
 ///（失败清理只在取得临时文件所有权后生效，排他创建失败无可清理）。
