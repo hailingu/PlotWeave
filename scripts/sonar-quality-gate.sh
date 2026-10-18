@@ -286,13 +286,7 @@ run_scanner() {
 # 串行原生测试；不生成前端/Rust 覆盖率，二者由调用方复用最近 LCOV。测试
 # 失败即门禁失败；输出留在临时 worktree 或主工作树的忽略目录。
 run_native_tests() {
-  "$npm_bin" run build:native-canvas
-  "$xcodebuild_bin" \
-    -project native/macos/PlotWeaveNative.xcodeproj \
-    -scheme PlotWeaveNative \
-    -destination 'platform=macOS' \
-    -derivedDataPath native/macos/build/DerivedData \
-    -parallel-testing-enabled NO test
+  sh "$script_directory/test-native.sh"
 }
 
 printf '[SonarQube] 变更范围：%s（frontend/rust 单栈只跑该栈全量覆盖率，另一栈复用最近 LCOV；native 跑原生测试）\n' "$gate_scope"
@@ -335,7 +329,7 @@ case $gate_scope in
     enforce_line_coverage_floor '前端（复用）' "$frontend_coverage_report"
     enforce_line_coverage_floor 'Rust（复用）' "$rust_coverage_report"
     require_command "$xcodebuild_bin"
-    printf '%s\n' '[SonarQube] 运行原生 Swift/WKWebView 回归（全量）……'
+    printf '%s\n' '[SonarQube] 运行原生 Swift/WKWebView 功能回归（压力测量按需运行）……'
     run_step run_native_tests
     ;;
   full)

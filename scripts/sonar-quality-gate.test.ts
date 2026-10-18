@@ -480,6 +480,7 @@ function copyFixtureGateScripts(root: string): string {
     'file-size-baseline.json',
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
+    'test-native.sh',
   ]) {
     copyFileSync(
       resolve(repositoryRoot, 'scripts', file),
@@ -1205,6 +1206,26 @@ while :; do sleep 1; done`,
 // #405：钩子读取 stdin，空 stdin 不再触发门禁）；此处只覆盖 pre-commit
 // 的接线与失败透传。
 describe('.githooks/pre-commit', () => {
+  it.each(['pre-commit', 'pre-merge-commit', 'prepare-commit-msg'])(
+    '%s 覆盖外部范围，始终刷新两侧覆盖率',
+    (hook) => {
+      for (const scope of ['frontend', 'rust', 'native'] as const) {
+        const result = runGate(`.githooks/${hook}`, {
+          scope,
+          reusedFrontendCoverage: VALID_FRONTEND_LCOV,
+          reusedRustCoverage: VALID_RUST_LCOV,
+        })
+
+        expect(result.status, result.stderr).toBe(0)
+        expect(result.log).toContain('npm run test:coverage')
+        expect(result.log).toContain('cargo-llvm-cov llvm-cov')
+        expect(JSON.parse(result.pending.trim())).toMatchObject({
+          scope: 'full',
+        })
+      }
+    },
+  )
+
   it('执行同一个增量清零门禁并透传失败状态', () => {
     const result = runGate('.githooks/pre-commit', { unresolvedIssues: 1 })
 

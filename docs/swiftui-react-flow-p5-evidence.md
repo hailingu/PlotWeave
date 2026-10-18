@@ -7,6 +7,13 @@
 
 ## 0. 执行环境
 
+2026-10-18 复测入口更新（[PR #604](https://github.com/hailingu/PlotWeave/pull/604)）：
+默认 `sh scripts/test-native.sh` 保留功能回归并跳过五个压力测量；使用
+`sh scripts/test-native.sh stress` 按原规模复测性能、内存及首拖。
+本篇历史命令与数值保留；若直接复用下方 Xcode 测量命令，须在命令前设置环境变量
+`TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1`，否则 Swift Testing 会显式跳过压力测量。
+选择与验证边界见 [Native Regression And Stress](development/quality-gate-push.md#native-regression-and-stress)。
+
 - 系统 / 硬件：macOS 27.0.1，Apple M4 Max（Mac16,5），内建 Retina 3456×2234（devicePixelRatio 2），观察帧间隔 p50≈17ms（≈60Hz；高刷模式未测）。
 - 工具链：Xcode 27.0（27A266a）/ macOS SDK 27.0 / Swift 6 语言模式（钉版见[工具链记录](swiftui-react-flow-toolchain.md)）；Node 24.18.0（`.nvmrc`），vitest 4.1.11。
 - 启动命令 / 数据根策略：原生侧 `npm run build:native-canvas` 后 `xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData -parallel-testing-enabled NO test`；测量页为打包资源 `native-canvas.html#perf:N`（内存演示数据，不落盘、不触碰用户数据根）；Web 侧 `npx vitest run src/editor/nativeCanvas/`。

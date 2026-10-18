@@ -18,14 +18,19 @@
 | docs-only | 所有变更路径为 `docs/**`、根 Markdown 或 `LICENSE` | 只运行 `scripts/check-docs.sh`（`git diff --check`）；跳过静态检查、覆盖率、Sonar 与推送台账记录。commit 钩子的完整门禁记录仍是证据。 |
 | frontend | 非文档路径只落在 `src/**` 与前端专属根配置 | 全量前端测试 + 前端覆盖率；Rust 复用主工作树最近 LCOV；Sonar 导入两侧报告。 |
 | rust | 非文档路径只落在 `src-tauri/**`、`crates/**`、`rust-toolchain.toml` | 全量 Rust 测试 + `rust-coverage.sh`；前端复用最近 LCOV；Sonar 导入两侧报告。 |
-| native | 非文档路径只落在 `native/**` | `npm run build:native-canvas` + 串行 `xcodebuild test`；前端/Rust 复用最近 LCOV；Sonar 导入两侧报告。原生代码不在 Sonar 源码范围，记录 `scope: native`。 |
+| native | 非文档路径只落在 `native/**` | `sh scripts/test-native.sh` 构建画布并串行运行功能回归；压力测量按需运行（见下节）。前端/Rust 复用最近 LCOV；Sonar 导入两侧报告。原生代码不在 Sonar 源码范围，记录 `scope: native`。 |
 | full | 跨栈、工具（`scripts/**`、`.githooks/**`、`.github/**`、根 linter/配置）、未知路径、空差异或无法确定基线 | 完整门禁：静态检查 + 前端/Rust 全量覆盖率 + Sonar。 |
 
 实现与边界：
 
 - `scripts/gate-scope.ts` 从 `git diff --no-renames --name-only <base> <commit>`
-  分类；基线依次取远端旧 tip、本地 `dev` merge-base、`origin/dev`、
-  提交父提交。无法确定时按 `full`，不因“没有差异”跳过。
+  分类；已有 ref 只取远端旧 tip，若该对象在本地不可用则按 `full`。
+  只有远端 SHA 全零的新 ref 才依次取本地 `dev` merge-base、
+  `origin/dev`、提交父提交。无法确定时按 `full`，不因“没有差异”跳过。
+- 同一提交的所有 ref 范围先收集再合并，随后才去重执行：docs 为中性，
+  不同实现栈或任一 full 取 full；每个文档范围均执行差异检查。
+  交换 ref 顺序不改变最终范围。三个提交创建入口显式设置
+  `PLOTWEAVE_GATE_SCOPE=full`，外部环境不能把提交门禁降为推送单栈路径。
 - `pre-push` 把范围经 `PLOTWEAVE_GATE_SCOPE` 传给
   `scripts/sonar-quality-gate.sh`；未变更栈的 LCOV 经
   `PLOTWEAVE_REUSED_FRONTEND_LCOV` / `PLOTWEAVE_REUSED_RUST_LCOV` 指向
@@ -45,6 +50,62 @@
 回归：`scripts/gate-scope.test.ts` 覆盖分类与 CLI；`scripts/pre-push-refs.test.ts`
 覆盖 docs-only 跳过、单栈分派与复用路径；`scripts/sonar-quality-gate.test.ts`
 覆盖 frontend/rust/native 分流、缺 LCOV fail-closed 与 native 失败阻断。
+
+### PR #604 修复状态与不变量矩阵
+
+门禁入口拥有范围选择；提交钩子拥有完整覆盖率要求；原生测试入口和
+`NativeStressTestProfile` 共同拥有日常/压力选择，Xcode 在测试宿主启动前转发开关。
+这些命令顺序执行，不新增异步状态；信号清理沿用既有推送监督器。
+
+| 前置状态 | 操作/顺序 | 可观察结果 | 跨转换不变量 | 验证 |
+| --- | --- | --- | --- | --- |
+| 同一提交推往不同旧 tip 的多个 ref | 先收集全部范围，再按提交去重 | docs 与单栈合并为单栈；不同栈或 full 合并为 full | 交换 ref 顺序不削弱检查，每提交只运行一次代码门禁；每个 docs 差异仍须通过 | pre-push-refs 的共享提交范围与文档空白回归 |
+| 已有远端 tip 对象缺失 | 推送替换已有 ref | full | 只有全零远端 SHA 能采用新分支基线回退 | pre-push-refs 的 missing-tip 回归 |
+| 提交环境带有 scoped push 变量 | pre-commit / pre-merge-commit / prepare-commit-msg | full，刷新前端与 Rust 覆盖率 | 提交标记只能代表完整门禁 | sonar-quality-gate 的三个提交入口回归 |
+| 默认 native 门禁或未配置开关 | 日常功能、生命周期及轻量报告校验 | Swift Testing 跳过五个压力测量 | 功能回归保留，测试失败继续非零阻断 | test-native 的参数/退出码测试；NativeStressTestProfileTests；真实日常回归 |
+| 显式 native stress | Xcode 转发开关 `1`，选择测量套件 | 开启原有规模、轮数及断言 | 只有精确值 `1` 能开启；指标口径不改变 | test-native 的压力选择回归；NativeStressTestProfileTests；真实测试宿主的开关探针；本次不重复执行高负载测量 |
+
+本轮验证（2026-10-18，Node 24.18.0、Xcode 27.0 / SDK 27.0）：
+
+- `npm test -- scripts`：18 文件、418 测试通过，覆盖矩阵中的推送范围、提交入口、原生选择与失败透传。
+- `sh scripts/test-native.sh`：通过；Swift Testing 汇总为 288 tests / 63 suites，105.027 秒，上述五个压力方法明确跳过。
+- 环境开关的真实宿主探针先复现旧传递方式无效，再以 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1` 通过；一次性探针验证后删除。永久 Swift 测试覆盖缺省、非法值和精确值 `1`，入口测试验证显式模式覆盖外部相反值。
+- `sh scripts/check-static.sh`、`npx prettier --check .github`、受影响 shell 文件的 `sh -n` 与 `git diff --check` 通过。
+- 文档按范围、命令及交叉引用进行结构化审查，无专用文档自动化检查。构建输出在验证后删除。
+- 本轮未重复运行高负载测量；未执行真实前端/Rust 全量覆盖率、Sonar 或托管 CI。脚本测试在真实隔离 Git 仓库执行，覆盖率工具与 Sonar 网络边界使用受控替身，不能据此宣称真实 Quality Gate 或托管 CI 已通过。
+
+### Native Regression And Stress
+
+所有者在 [PR #604](https://github.com/hailingu/PlotWeave/pull/604)（2026-10-18）
+明确选择降低默认 native 测试负载：日常回归保留，压力测试按需运行。
+CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建画布，
+再串行运行功能回归；原有测试失败退出码原样透传，不截断或过滤日志。
+
+入口的选择契约为：默认向 Xcode 显式传入环境变量
+`TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=0`；Xcode 去掉 `TEST_RUNNER_`
+前缀后把该值转发给测试宿主（[Apple 环境变量说明](https://developer.apple.com/documentation/xcode/environment-variable-reference)），
+以下五个方法通过 Swift Testing 的 `.enabled` 条件跳过。
+开关未设置或不是精确值 `1` 时同样跳过：
+
+- `WebCanvasPerformanceTests/sustainedScriptedOperationsMatchFixtureScale(scale:)`
+- `WebCanvasPerformanceTests/commonModeSupportsTauriBaselineComparison(scale:)`
+- `WebCanvasPerformanceTests/repeatedHostedCanvasCyclesKeepTotalMemoryBounded()`
+- `WebCanvasPerformanceTests/repeatedReloadsRecordLongMemoryTrend()`
+- `WebCanvasFirstDragLatencyTests/sameNodeFirstAndSecondDragRecordStartupEvidence()`
+
+`sh scripts/test-native.sh stress` 传入环境变量 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1`，
+通过 `-only-testing` 选择整个 `WebCanvasPerformanceTests` 套件与首拖测量；
+套件内三个轻量报告校验也保留。采用套件选择是因为实测 Xcode 27 的方法级
+筛选未匹配两个参数化测量；启用条件由 Swift Testing 自身执行，避免默认
+门禁因筛选标识未匹配而意外跑压力测试。
+
+这将六组 100/500/1000 节点持续交互、五次窗口重建、100 次 reload 和首拖
+对照测量移出默认门禁，原来的规模、等待、断言与证据口径保留。
+报告格式/缺失采样校验、延迟投影下的节点级联，以及其余功能、生命周期、
+存储与恢复测试继续默认运行。直接执行 `xcodebuild test` 同样默认跳过
+压力测量；需要整个目标加压力测试时，在完整 Xcode 命令前显式设置
+`TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1`。
+降低负载不代表 IOSurface 报错根因已经修复，也不以日志行数承诺耗时降幅。
 
 ## Push-Path Per-Ref Gating (issue #405)
 

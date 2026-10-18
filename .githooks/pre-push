@@ -68,6 +68,7 @@ lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$main_root/.sonar-gate.lock}
 temp_root=
 temp_worktree=
 manifest_path=
+scope_manifest_path=
 # 受监督子进程组（issue #465）：非空表示有分钟级子进程（安装或门禁）
 # 正以后台作业运行，其进程组号即本值，供信号路径整组终止。
 supervised_group_pid=
@@ -105,6 +106,10 @@ remove_temporary_worktree() {
 }
 cleanup_temporary_artifacts() {
   remove_temporary_worktree
+  if [ -n "$scope_manifest_path" ]; then
+    rm -f "$scope_manifest_path" 2>/dev/null || :
+    scope_manifest_path=
+  fi
   if [ -n "$manifest_path" ]; then
     rm -f "$manifest_path" 2>/dev/null || :
     manifest_path=
@@ -218,16 +223,12 @@ resolve_pushed_commit() {
 
 # 变更范围基线（owner 指示 2026-10-18）：已有远端分支用远端旧 tip 的
 # 范围，新建分支优先用本地 dev 的 merge-base，其次 origin/dev，最后退回
-# 被推提交的父提交。无法确定基线时返回非零，调用方按 full 处理。
+# 被推提交的父提交。已有 tip 缺对象或无法确定基线时返回非零，调用方按 full 处理。
 scope_base_for_commit() {
   commit=$1
   remote_sha=$2
-  if [ -n "${PLOTWEAVE_GATE_SCOPE_BASE:-}" ]; then
-    printf '%s\n' "$PLOTWEAVE_GATE_SCOPE_BASE"
-    return 0
-  fi
-  if [ "$remote_sha" != "$zero_sha" ] &&
-    git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+  if [ "$remote_sha" != "$zero_sha" ]; then
+    git cat-file -e "$remote_sha^{commit}" 2>/dev/null || return 1
     printf '%s\n' "$remote_sha"
     return 0
   fi
@@ -286,12 +287,46 @@ run_gate_for_current_tree() {
   exec "$main_root/scripts/sonar-quality-gate.sh"
 }
 
+# 收集每个 ref 的独立范围；文档差异逐个检查，不能只检查共享提交的首个基线。
+collect_ref_scope() {
+  scope_base=$(scope_base_for_commit "$commit" "$remote_sha" 2>/dev/null || true)
+  if [ -n "$scope_base" ]; then
+    gate_scope=$("$node_bin" "$main_root/scripts/gate-scope.ts" \
+      --base "$scope_base" --head "$commit") ||
+      fail "无法分类待推送提交 $commit 的变更范围：$local_ref"
+  else
+    gate_scope=full
+  fi
+  case $gate_scope in
+    docs)
+      "$main_root/scripts/check-docs.sh" "$scope_base" "$commit" ||
+        fail "文档差异检查失败：$local_ref"
+      ;;
+    frontend | rust | native | full) ;;
+    *) fail "未知的门禁范围（${gate_scope}）：$local_ref" ;;
+  esac
+  printf '%s %s %s\n' "$commit" "$gate_scope" "$local_ref" >> "$scope_manifest_path"
+}
+
+# 合并同一提交的所有 ref 范围：docs 为中性；不同实现栈或任一 full 都取 full。
+# 范围收集全部完成后才调用，因此结果与 stdin 中的 ref 顺序无关。
+aggregate_commit_scope() {
+  awk -v commit="$1" '
+    BEGIN { scope = "docs" }
+    $1 == commit && $2 != "docs" {
+      if (scope == "docs") scope = $2
+      else if (scope != $2) scope = "full"
+    }
+    END { print scope }
+  ' "$scope_manifest_path"
+}
+
 # 一次读尽 stdin（git 每行给出 <本地ref> <本地sha> <远端ref> <远端sha>），
 # 落到临时清单后逐行分派：循环体内的长命令一律改读 /dev/null，不再消费
 # 钩子的输入；清单经文件传递，规避子壳变量与引号展开两类陷阱。
 manifest_path=$(mktemp "${TMPDIR:-/tmp}/plotweave-pre-push-refs.XXXXXX")
 cat > "$manifest_path"
-analyzed_commits=
+scope_manifest_path=$(mktemp "${TMPDIR:-/tmp}/plotweave-pre-push-scopes.XXXXXX")
 while read -r local_ref local_sha remote_ref remote_sha extra; do
   if [ -z "$local_ref" ]; then
     continue
@@ -305,6 +340,15 @@ while read -r local_ref local_sha remote_ref remote_sha extra; do
   fi
   commit=$(resolve_pushed_commit "$local_sha") ||
     fail "无法把待推送对象 $local_sha 解析为提交：$local_ref"
+  collect_ref_scope
+done < "$manifest_path"
+# read 遇到缺尾随换行的末行不会执行循环体，但保留字段；必须 fail-closed（#464）。
+if [ -n "${local_ref:-}" ]; then
+  fail "待推送 ref 清单末行缺少尾随换行，该行未被分析：$local_ref $local_sha $remote_ref $remote_sha${extra:+ $extra}"
+fi
+
+analyzed_commits=
+while read -r commit ref_scope local_ref; do
   # 同一提交被多个 ref 引用只分析一次
   case ",$analyzed_commits," in
     *",$commit,"*) continue ;;
@@ -316,23 +360,10 @@ while read -r local_ref local_sha remote_ref remote_sha extra; do
   # 该栈全量覆盖率，另一栈复用最近 LCOV）。
   unset PLOTWEAVE_GATE_SCOPE PLOTWEAVE_REUSED_FRONTEND_LCOV \
     PLOTWEAVE_REUSED_RUST_LCOV 2>/dev/null || :
-  scope_base=$(scope_base_for_commit "$commit" "$remote_sha" 2>/dev/null || true)
-  if [ -n "$scope_base" ]; then
-    gate_scope=$("$node_bin" "$main_root/scripts/gate-scope.ts" \
-      --base "$scope_base" --head "$commit") ||
-      fail "无法分类待推送提交 $short 的变更范围：$local_ref"
-  else
-    gate_scope=full
-  fi
-  case $gate_scope in
-    docs | frontend | rust | native | full) ;;
-    *) fail "未知的门禁范围（${gate_scope}）：$local_ref" ;;
-  esac
+  gate_scope=$(aggregate_commit_scope "$commit")
   printf '[pre-push] 变更范围：%s（%s）\n' "$gate_scope" "$short"
   if [ "$gate_scope" = 'docs' ]; then
     printf '[pre-push] 仅文档变更：跳过代码回归、覆盖率与 Sonar；commit 钩子的门禁记录保持不变。\n'
-    "$main_root/scripts/check-docs.sh" "$scope_base" "$commit" ||
-      fail "文档差异检查失败：$local_ref"
     continue
   fi
   if [ "$gate_scope" != 'full' ]; then
@@ -361,16 +392,7 @@ while read -r local_ref local_sha remote_ref remote_sha extra; do
     printf '[pre-push] 门禁对象：%s（%s，临时 worktree）\n' "$local_ref" "$short"
     gate_commit_in_temp_worktree "$commit"
   fi
-done < "$manifest_path"
-# 循环末次 read 在「EOF 且末行无尾随换行」时返回非零、循环体不为该行
-# 执行，但字段变量已持有该行内容（EOF 无内容时则被清空）：据此发现被
-# 静默跳过的待推 ref 行（sh / bash / dash 实测一致）。残留仅空白、解析
-# 不出字段时与已终止空白行同口径跳过——无字段的行不携带 ref 记录。
-# 与字段数异常同样 fail-closed（issue #464），兑现「每行要么被分析、
-# 要么被拒绝」的门禁承诺（docs/development/quality-gate-push.md）。
-if [ -n "${local_ref:-}" ]; then
-  fail "待推送 ref 清单末行缺少尾随换行，该行未被分析：$local_ref $local_sha $remote_ref $remote_sha${extra:+ $extra}"
-fi
+done < "$scope_manifest_path"
 rm -f "$manifest_path"
 manifest_path=
 

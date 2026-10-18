@@ -139,6 +139,7 @@ function copyScenarioFiles(sandbox: string): string {
     'pre-push-install-watchdog.mjs',
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
+    'test-native.sh',
   ]) {
     copyFileSync(
       resolve(repositoryRoot, 'scripts', script),

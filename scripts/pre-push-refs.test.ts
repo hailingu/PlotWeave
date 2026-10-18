@@ -241,6 +241,7 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
     'pre-push-install-watchdog.mjs',
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
+    'test-native.sh',
   ]) {
     copyFileSync(
       resolve(repositoryRoot, 'scripts', script),
@@ -1530,33 +1531,30 @@ describe('pre-push 清理警告的真实性（issue #465）', { timeout: 30_000 
   })
 })
 
-describe('推送范围分流（owner 指示 2026-10-18）', { timeout: 30_000 }, () => {
-  /** 在场景沙箱提交一个仅含指定文件的变更分支（跳过 commit 钩子，
-   * 只验证 push 路由本身）。 */
-  function commitScopeBranch(
-    scenario: PushScenario,
-    file: string,
-    branch: string,
-  ): void {
-    const base = scenario.headSha()
-    expect(scenario.git(['checkout', '-q', '-b', branch]).status).toBe(0)
-    mkdirSync(resolve(scenario.root, file, '..'), { recursive: true })
-    writeFileSync(resolve(scenario.root, file), 'scope probe\n')
-    expect(scenario.git(['add', file]).status).toBe(0)
-    expect(
-      scenario.git([
-        '-c',
-        'core.hooksPath=/dev/null',
-        'commit',
-        '-q',
-        '-m',
-        `scope ${file}`,
-      ]).status,
-    ).toBe(0)
-    // 新分支无远端旧 tip；固定基线与 main 的差异，避免依赖宿主 refs。
-    scenario.env.PLOTWEAVE_GATE_SCOPE_BASE = base
-  }
+/** 在场景沙箱提交一个仅含指定文件的变更分支（跳过 commit 钩子，
+ * 只验证 push 路由本身）。 */
+function commitScopeBranch(
+  scenario: PushScenario,
+  file: string,
+  branch: string,
+): void {
+  expect(scenario.git(['checkout', '-q', '-b', branch]).status).toBe(0)
+  mkdirSync(resolve(scenario.root, file, '..'), { recursive: true })
+  writeFileSync(resolve(scenario.root, file), 'scope probe\n')
+  expect(scenario.git(['add', file]).status).toBe(0)
+  expect(
+    scenario.git([
+      '-c',
+      'core.hooksPath=/dev/null',
+      'commit',
+      '-q',
+      '-m',
+      `scope ${file}`,
+    ]).status,
+  ).toBe(0)
+}
 
+describe('推送范围分流（owner 指示 2026-10-18）', { timeout: 30_000 }, () => {
   it('仅文档推送跳过依赖安装、代码回归、覆盖率与 Sonar', () => {
     const scenario = preparePushScenario()
     commitScopeBranch(scenario, 'docs/scope.md', 'docs-only')
@@ -1593,4 +1591,102 @@ describe('推送范围分流（owner 指示 2026-10-18）', { timeout: 30_000 },
     expect(log).toContain('reused-frontend ')
     expect(log).toContain('reused-rust ')
   })
+})
+
+it.each([
+  ['src/scope.ts', 'frontend'],
+  ['src-tauri/src/scope.rs', 'rust'],
+  ['native/macos/Scope.swift', 'native'],
+  ['scripts/scope.sh', 'full'],
+])('共享提交合并所有远端范围：%s → %s，与 ref 顺序无关', (file, scope) => {
+  for (const reverse of [false, true]) {
+    const scenario = preparePushScenario()
+    const beforeCode = scenario.headSha()
+    commitScopeBranch(scenario, file, 'code')
+    const beforeDocs = scenario.headSha()
+    commitScopeBranch(scenario, 'docs/shared.md', 'shared')
+    const head = scenario.headSha()
+    const rows = [
+      `refs/heads/docs ${head} refs/heads/docs ${beforeDocs}\n`,
+      `refs/heads/code ${head} refs/heads/code ${beforeCode}\n`,
+    ]
+
+    const result = scenario.runHookWithStdin(
+      (reverse ? rows.reverse() : rows).join(''),
+    )
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(scenario.gateRuns()).toBe(1)
+    expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
+      `gate-scope ${scope}\n`,
+    )
+  }
+})
+
+it('已有远端 tip 不在本地时走 full，不能回退到仅文档父提交', () => {
+  const scenario = preparePushScenario()
+  commitScopeBranch(scenario, 'docs/missing-tip.md', 'missing-tip')
+  expect(scenario.git(['branch', 'dev', 'HEAD~1']).status).toBe(0)
+  const absent = '1234567890123456789012345678901234567890'
+  const head = scenario.headSha()
+
+  const result = scenario.runHookWithStdin(
+    `refs/heads/a ${head} refs/heads/a ${absent}\n`,
+  )
+
+  expect(result.status, result.stderr).toBe(0)
+  expect(scenario.gateRuns()).toBe(1)
+  expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
+    'gate-scope full\n',
+  )
+})
+
+it('共享提交的 frontend 与 rust 独立范围合并为 full', () => {
+  const scenario = preparePushScenario()
+  const seed = scenario.headSha()
+  commitScopeBranch(scenario, 'src/scope.ts', 'frontend-only')
+  const frontend = scenario.headSha()
+  expect(scenario.git(['checkout', '-q', '--detach', seed]).status).toBe(0)
+  commitScopeBranch(scenario, 'src-tauri/src/scope.rs', 'rust-only')
+  const rust = scenario.headSha()
+  expect(scenario.git(['checkout', '-q', 'frontend-only']).status).toBe(0)
+  commitScopeBranch(scenario, 'src-tauri/src/scope.rs', 'both-stacks')
+  const head = scenario.headSha()
+
+  const result = scenario.runHookWithStdin(
+    `refs/heads/a ${head} refs/heads/a ${frontend}\nrefs/heads/b ${head} refs/heads/b ${rust}\n`,
+  )
+
+  expect(result.status, result.stderr).toBe(0)
+  expect(scenario.gateRuns()).toBe(1)
+  expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
+    'gate-scope full\n',
+  )
+})
+
+it('共享 docs 提交检查每个基线，后续范围的空白错误仍阻断', () => {
+  const scenario = preparePushScenario()
+  const seed = scenario.headSha()
+  commitScopeBranch(scenario, 'docs/bad.md', 'bad-docs')
+  writeFileSync(resolve(scenario.root, 'docs/bad.md'), 'bad whitespace  \n')
+  expect(scenario.git(['add', 'docs/bad.md']).status).toBe(0)
+  expect(
+    scenario.git([
+      '-c',
+      'core.hooksPath=/dev/null',
+      'commit',
+      '-qm',
+      'bad whitespace',
+    ]).status,
+  ).toBe(0)
+  const bad = scenario.headSha()
+  commitScopeBranch(scenario, 'docs/good.md', 'good-docs')
+  const head = scenario.headSha()
+
+  const result = scenario.runHookWithStdin(
+    `refs/heads/a ${head} refs/heads/a ${bad}\nrefs/heads/b ${head} refs/heads/b ${seed}\n`,
+  )
+
+  expect(result.status).not.toBe(0)
+  expect(scenario.gateRuns()).toBe(0)
 })

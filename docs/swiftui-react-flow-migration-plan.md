@@ -250,6 +250,11 @@ Figma 参考与基线准备（2026-09-15，第 4–5 项推进）：控件映射
 
 ### 7.2 性能记录
 
+2026-10-18 测试负载决策（[PR #604](https://github.com/hailingu/PlotWeave/pull/604)）：
+日常 CI 与 native 推送门禁保留功能回归，持续操作、长循环内存和首拖测量改为
+`sh scripts/test-native.sh stress` 显式运行；原有规模、轮数、断言及历史证据不变。
+方法清单、启用条件与覆盖边界见 [Native Regression And Stress](development/quality-gate-push.md#native-regression-and-stress)。
+
 - 固定 100、500 个混合节点的常用夹具及 1000 个节点的压力夹具，记录边数、节点家族比例、图片分辨率、可见节点数与视口；使用合成或脱敏内容。（已实现：`src/editor/nativeCanvas/canvasPerfFixture.ts`，规格与校验见测试。）
 - Swift 进程内存测量在 `WebKitTestIsolation` 共享套件许可内完成基线→装载→归属→销毁/重建与采样，所有 WebKit 资源套件接入同一门并保持内部串行；未持门或差集不是一个 PID 时抛错停止；直接构造类测试夹具统一经 `IsolatedWebViewFixture.makeWebView` 构造，门外构造即抛错（#575 修复收尾）。Tauri 基线使用每规模独立子进程并顺序执行，不要求该 Swift 测试门，但同样只接受单元素 WebContent PID 差集。单元素差集不等于逐页身份，两种宿主都要求机器上其它应用不并发启动 WebContent（PR #574 第 17 条，#575）；WebKit 进程回收只观测，不作为应用释放的硬断言。
 - 同机同数据记录迁移前基线与新宿主：首次可交互时间、拖拽/平移帧耗时 p50/p95、长帧、JS 和原生主线程工作、消息频率/体积、内存峰值及反复开关后的趋势。（2026-10-15 共享门修复后完整路由测量：60Hz/M4 Max 下 100 规模总体/拖拽 p95 均 18ms，500 规模总体 p95 26ms、拖拽 p95 27ms，1000 规模总体 p95 46ms、拖拽 p95 62ms，为明确退化位置（多轮拖拽 p95 约 60–70ms，波动 62–70ms）；5 次完整销毁/重建宿主画布的 WebContent 累计聚合为 117.2–119.8MB / 1 进程，宿主为 637.4–639.1MB，逐样本双有界均通过；沉降末读 0 进程为观测结果，详见 [P5 证据记录 §3](swiftui-react-flow-p5-evidence.md#3-m15--固定规模图的持续操作与内存首轮测量)。2026-10-17 #573 的初始增长已通过页面／端口生命周期清理修复，原 100 次守卫与完整原生路由通过，后 50 次 +0.7MiB，见 [P5 证据 §3.5](swiftui-react-flow-p5-evidence.md#35-同视图重导航长循环issue-573)；2026-10-17 已补 Tauri 共同模式基线（#572），三规模双宿主数值与命令见 [P5 证据 §3.4](swiftui-react-flow-p5-evidence.md#34-tauri-同夹具基线issue-572)。）

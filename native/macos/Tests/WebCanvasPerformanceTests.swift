@@ -32,14 +32,14 @@ struct WebCanvasPerformanceTests {
     }
 
     /// Registered measurement scales mirror src/editor/nativeCanvas/canvasPerfFixture.ts.
-    @Test(arguments: [100, 500, 1000])
+    @Test(.enabled(if: NativeStressTestProfile.enabled, "按需运行：sh scripts/test-native.sh stress"), arguments: [100, 500, 1000])
     func sustainedScriptedOperationsMatchFixtureScale(scale: Int) async throws {
         try await measureScriptedOperations(scale: scale, nativePanelMode: true)
     }
 
     /// Common-mode A/B for issue #572: native panels stay collapsed and no
     /// Swift-only panel operation is mixed into the shared Web script.
-    @Test(arguments: [100, 500, 1000])
+    @Test(.enabled(if: NativeStressTestProfile.enabled, "按需运行：sh scripts/test-native.sh stress"), arguments: [100, 500, 1000])
     func commonModeSupportsTauriBaselineComparison(scale: Int) async throws {
         try await measureScriptedOperations(scale: scale, nativePanelMode: false)
     }
@@ -230,7 +230,8 @@ struct WebCanvasPerformanceTests {
     /// ones WebKit's process cache keeps alive — plus the host app's own
     /// resident memory, so retained processes or retained Swift objects both
     /// fail it (PR #574 reviews).
-    @Test func repeatedHostedCanvasCyclesKeepTotalMemoryBounded() async throws {
+    @Test(.enabled(if: NativeStressTestProfile.enabled, "按需运行：sh scripts/test-native.sh stress"))
+    func repeatedHostedCanvasCyclesKeepTotalMemoryBounded() async throws {
         let preLoop = WebProcessMemorySampler.sample(tracking: [])
         var aggregateSamples: [WebProcessMemorySample] = []
         var cycleOwnedPids: Set<Int32> = []
@@ -295,7 +296,8 @@ struct WebCanvasPerformanceTests {
     /// the original readable process before its RSS can enter the trend. The
     /// broad M15 bound is a regression guard; plateau acceptance uses the
     /// recorded late-window deltas, not a machine-specific CI timing threshold.
-    @Test func repeatedReloadsRecordLongMemoryTrend() async throws {
+    @Test(.enabled(if: NativeStressTestProfile.enabled, "按需运行：sh scripts/test-native.sh stress"))
+    func repeatedReloadsRecordLongMemoryTrend() async throws {
         let webBaseline = WebProcessMemorySampler.webContentPids()
         let window = try await mountPerfShell(scale: 100)
         defer {

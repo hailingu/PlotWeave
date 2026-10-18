@@ -134,7 +134,7 @@ is a deliberate gate-strength change, not an optimization hidden in a script.
 | docs-only (`docs/**`, root Markdown, `LICENSE`) | `scripts/check-docs.sh` (`git diff --check`) only | none | near-zero; no npm install, tests, Rust, or Sonar |
 | single frontend (`src/**`, frontend-only root configs) | static checks + full frontend suite | frontend full; Rust reuses the most recent LCOV | one stack's coverage + Sonar |
 | single Rust (`src-tauri/**`, `crates/**`, `rust-toolchain.toml`) | static checks + full Rust suite | Rust full; frontend reuses the most recent LCOV | one stack's coverage + Sonar |
-| single native (`native/**`) | static checks + native canvas build + serial `xcodebuild test` | no native LCOV; frontend/Rust reuse the most recent LCOV | native test time + Sonar |
+| single native (`native/**`) | static checks + `sh scripts/test-native.sh` (canvas build + serial functional regression; stress measurements opt in) | no native LCOV; frontend/Rust reuse the most recent LCOV | functional regression time + Sonar |
 | cross-stack / tooling / unknown / empty / no baseline | complete gate | frontend + Rust full | existing full baseline |
 
 Boundaries:
@@ -144,12 +144,16 @@ Boundaries:
   most recent main-worktree LCOV; a missing/empty/report without covered lines
   fails closed instead of silently omitting a report.
 - A reused LCOV can be stale if the unchanged stack moved since that report.
-  The range classifier uses the remote old tip, local `dev` merge-base,
-  `origin/dev`, or the commit parent, in that order; an undeterminable base
-  runs `full`. If the unchanged stack is not actually unchanged, use a full
-  push.
+  Existing refs require their remote old tip locally; a missing tip runs `full`.
+  Only new refs fall back to local `dev` merge-base, `origin/dev`, or the commit
+  parent. All ranges for a shared commit are combined before deduplication;
+  different implementation stacks require `full`. If the unchanged stack is
+  not actually unchanged, use a full push.
 - Native code is not part of the Sonar sources; the `native` scope records that
-  boundary and still requires the native test suite to pass.
+  boundary and still requires functional regression to pass. 所有者在 PR #604
+  （2026-10-18）选择将持续性能、长循环内存及首拖测量改为
+  `sh scripts/test-native.sh stress` 按需运行；测试方法与保留边界见
+  [Native Regression And Stress](quality-gate-push.md#native-regression-and-stress)。
 - Docs-only pushes do not write a push ledger record. The ordinary commit-gate
   record remains the evidence; a docs-only commit created without the commit
   hook has no record, which is the same hook-coverage boundary as before.

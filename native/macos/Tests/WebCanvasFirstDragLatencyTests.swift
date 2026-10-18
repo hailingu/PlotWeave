@@ -41,7 +41,8 @@ struct WebCanvasFirstDragLatencyTests {
     }
 
     /// Same node, two drags, real shell: the comparison the issue's acceptance asks for.
-    @Test func sameNodeFirstAndSecondDragRecordStartupEvidence() async throws {
+    @Test(.enabled(if: NativeStressTestProfile.enabled, "按需运行：sh scripts/test-native.sh stress"))
+    func sameNodeFirstAndSecondDragRecordStartupEvidence() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
         let mounted = try await seedProjectWithCascade(fixture, nodes: 15)
