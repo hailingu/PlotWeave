@@ -171,4 +171,58 @@ struct NativeQuitRecoveryTests {
         #expect(!window.isVisible)
         #expect(quit.pendingIntent == nil)
     }
+
+    /// A fresh system terminate request behind a visible warning must be cancelled, not suspended without a reply.
+    @Test func activeWarningCancelsNewTerminateRequestWithoutSuspendingAppKit() {
+        let quit = HostQuitController()
+        var prompts: [HostQuitController.Intent] = []
+        var replies: [Bool] = []
+        var terminations = 0
+        let delegate = NativeApplicationDelegate(
+            quit: quit,
+            terminateApplication: { terminations += 1 },
+            replyToTermination: { replies.append($0) }
+        )
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        // Keep the injected warning unanswered so the modal-open window is deterministic.
+        quit.onUnavailable = { prompts.append($0) }
+        quit.canvasFailed()
+        quit.request(.close)
+        #expect(prompts == [.close])
+        quit.acknowledgeListener()
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateCancel)
+        #expect(quit.pendingIntent == .close)
+        #expect(replies.isEmpty, "未返回 terminateLater 的请求不得调用 reply")
+        quit.resolveUnavailable(approved: true)
+        #expect(quit.pendingIntent == nil)
+        #expect(replies.isEmpty)
+        #expect(terminations == 0)
+    }
+
+    /// An existing deferred terminate stays paired with the warning's decision while a new request is cancelled.
+    @Test func activeWarningRetainsExistingDeferredTermination() {
+        let quit = HostQuitController()
+        var prompts: [HostQuitController.Intent] = []
+        var replies: [Bool] = []
+        var terminations = 0
+        let delegate = NativeApplicationDelegate(
+            quit: quit,
+            terminateApplication: { terminations += 1 },
+            replyToTermination: { replies.append($0) }
+        )
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        quit.sendEvent = { _, _ in }
+        quit.acknowledgeListener()
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
+        // The canvas fails while the terminate is deferred; keep the warning unanswered.
+        quit.onUnavailable = { prompts.append($0) }
+        quit.canvasFailed()
+        #expect(prompts == [.terminate])
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateCancel)
+        #expect(replies.isEmpty)
+        quit.resolveUnavailable(approved: true)
+        #expect(replies == [true], "已有 terminateLater 的回复必须与警告决定配对")
+        #expect(quit.pendingIntent == nil)
+        #expect(terminations == 0)
+    }
 }

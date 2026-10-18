@@ -27,6 +27,8 @@ final class HostQuitController {
     private(set) var canvasUnavailable = false
     /// At most one visible degraded confirmation is active; later requests do not stack alerts.
     private var unavailablePromptActive = false
+    /// A visible degraded confirmation owns the exit decision; AppKit must not suspend a fresh request behind it.
+    var unavailableDecisionActive: Bool { unavailablePromptActive }
 
     /// Records user intent before any asynchronous bridge work; retries are explicit user actions.
     /// A known canvas failure cannot silently buffer: the delegate shows a visible continue/cancel decision.
@@ -249,8 +251,12 @@ final class NativeApplicationDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
     /// Ready pages defer the original system sequence; startup cannot enter a modal wait before a listener exists.
+    /// A visible degraded warning already owns the exit decision: cancel this new request instead of returning
+    /// `.terminateLater` with no queued terminate intent, which would suspend AppKit without a paired reply.
+    /// An already-deferred terminate keeps its own reply and is resolved by the warning's decision.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if permitTerminate || closedAfterFlush && window == nil { return .terminateNow }
+        if quit.unavailableDecisionActive { return .terminateCancel }
         awaitingTermination = quit.listenerReady
         quit.request(.terminate)
         return awaitingTermination ? .terminateLater : .terminateCancel
