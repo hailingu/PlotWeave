@@ -385,7 +385,10 @@ function AiGuide({
 }
 
 /** 输入行（issue #154）：busy 时切换为取消按钮——在途回合可停止（协作式：
- * agentLoop 停止后续循环，在途 llm_chat 不被中止）；画布感知开关常驻。 */
+ * agentLoop 停止后续循环，在途 llm_chat 不被中止）；画布感知开关常驻。
+ * 非 busy 态输入框右侧常驻「发送」按钮（issue #599）：鼠标/触控板与读屏
+ * 可发现的发送入口，与原生壳对齐；禁用条件与 Enter 路径的 send() 守卫
+ * 同口径（未配置或空白草稿不发），Enter 发送保留，两入口共用 onSend。 */
 function AiComposer({
   draft,
   setDraft,
@@ -417,17 +420,27 @@ function AiComposer({
           取消
         </button>
       ) : (
-        <input
-          type="text"
-          value={draft}
-          placeholder={ready ? '输入消息，Enter 发送…' : '配置后可输入…'}
-          aria-label="AI 对话输入"
-          disabled={!ready}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') onSend()
-          }}
-        />
+        <div className="pw-ai-input-row">
+          <input
+            type="text"
+            value={draft}
+            placeholder={ready ? '输入消息，Enter 发送…' : '配置后可输入…'}
+            aria-label="AI 对话输入"
+            disabled={!ready}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onSend()
+            }}
+          />
+          <button
+            type="button"
+            className="pw-ai-send"
+            disabled={!ready || draft.trim() === ''}
+            onClick={onSend}
+          >
+            发送
+          </button>
+        </div>
       )}
       <button
         type="button"
