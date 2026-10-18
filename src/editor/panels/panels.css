@@ -497,6 +497,37 @@
   opacity: 0.5;
 }
 
+/* 输入行内联排布（issue #599）：输入框吸收宽度、发送按钮不收缩——窄栏
+ * 下按钮不被挤出视野。 */
+.pw-ai-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.pw-ai-input-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 发送按钮（issue #599）：Enter 之外的可见发送入口；关键操作配对令牌
+ * （--control-primary-fg/bg 的对比度契约见 sheetTokens.test.ts）。 */
+.pw-ai-send {
+  border: none;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.pw-ai-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* 在途回合取消按钮（issue #154）：busy 时替代输入框；danger 语义 */
 .pw-ai-cancel {
   border: none;

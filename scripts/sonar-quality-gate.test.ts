@@ -358,6 +358,10 @@ function gateEnvironment(
     PLOTWEAVE_REUSED_RUST_LCOV: paths.reusedRustPath,
     SONAR_HOST_URL: options.sonarHostUrl ?? 'http://sonar.test',
   }
+  // 范围变量与令牌同口径不继承宿主环境：pre-push 单栈分流导出的
+  // PLOTWEAVE_GATE_SCOPE 会随 ...process.env 泄入夹具门禁，使未指定范围的
+  // 用例走单栈分流而非被测的完整流程；默认删除，按用例显式注入。
+  delete environment.PLOTWEAVE_GATE_SCOPE
   if (options.scope !== undefined) {
     environment.PLOTWEAVE_GATE_SCOPE = options.scope
   }
@@ -1093,6 +1097,18 @@ it.each(['primary', 'fallback'] as const)(
     expect(result.curlStdin).toContain(`Authorization: Bearer ${expectedToken}`)
   },
 )
+
+it('宿主 pre-push 导出的范围变量不泄入夹具：未指定 scope 的用例仍走完整门禁（PR #599 推送阻断）', () => {
+  // 复现：pre-push 单栈分流导出 PLOTWEAVE_GATE_SCOPE，随 ...process.env
+  // 进入 npm test 的本套件；未显式指定 scope 的用例若继承它，夹具门禁
+  // 走单栈分流（跳过 Rust 覆盖率真实生成）而非被测的完整流程。
+  vi.stubEnv('PLOTWEAVE_GATE_SCOPE', 'frontend')
+  const result = runGate('scripts/sonar-quality-gate.sh')
+
+  expect(result.status).toBe(0)
+  expect(result.log).toContain('npm run test:coverage')
+  expect(result.log).toContain('cargo-llvm-cov')
+})
 
 describe('门禁锁恢复命令（issue #430）', { timeout: 30_000 }, () => {
   it.each(['sonar-gate.lock', "sonar lock's $(touch injected).lock"])(
