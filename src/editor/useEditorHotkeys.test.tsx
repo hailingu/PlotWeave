@@ -52,6 +52,23 @@ describe('useEditorHotkeys（全局快捷键 + 失焦收起）', () => {
     input.remove()
   })
 
+  it('组合中的 Escape 归输入法（issue #570）：isComposing 与 WebKit 晚到的 keyCode 229 均不收起浮层', () => {
+    const a = mkActions()
+    renderHook(() => useEditorHotkeys(a))
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    fireEvent.keyDown(input, {
+      key: 'Escape',
+      isComposing: true,
+      keyCode: 229,
+    })
+    fireEvent.keyDown(input, { key: 'Escape', keyCode: 229 })
+    expect(a.onEscape).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Escape', keyCode: 27 })
+    expect(a.onEscape).toHaveBeenCalledTimes(1)
+    input.remove()
+  })
+
   it('模态编辑会话打开（issue #126）：非输入焦点挂起撤销/重做/删除，仅 Escape 放行', () => {
     const a = mkActions({ modalEditingOpen: true })
     renderHook(() => useEditorHotkeys(a))

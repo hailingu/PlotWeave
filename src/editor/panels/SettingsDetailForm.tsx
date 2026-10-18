@@ -4,13 +4,15 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
+import { isCompositionKey } from '../../platform/compositionKey'
 
 /**
  * 设定条目侧栏详情表单（issue 95）：名称单行输入 + 小传/备注多行输入，
  * 显式「保存」= 一次命令入栈可撤销，「取消」/Esc 放弃草稿不改已提交内容。
  * 名称去空白后为空禁用保存（与 createCharacter/EditableName 的非空契约
  * 一致）。草稿只落本地 state，组合输入天然安全（同 EditableName，
- * issue #42）；组合中的 Esc 不误关表单，Esc 在表单全部焦点控件（含操作
+ * issue #42）；组合中的 Esc 不误关表单（含 WebKit 晚于 compositionend 到达
+ * 的 keyCode 229，issue #570），Esc 在表单全部焦点控件（含操作
  * 按钮）可用。未触碰字段持续跟随最新已提交值——行内改名等并发提交不被
  * 旧草稿静默回退；已触碰字段保留用户草稿（快照基线边界，PR #97 评审）。
  * 字段基线为展开时的实体值；描述直接映射 bio/note，不建平行存储。
@@ -97,10 +99,11 @@ export function SettingsDetailForm({
   const idPrefix = useId()
   const name = useFieldDraft(baselineName)
   const desc = useFieldDraft(description)
-  // 组合中的 Esc 只取消输入法合成，不收起表单（isComposing 守卫）；
+  // 组合中的 Esc 只取消输入法合成，不收起表单；isComposing 覆盖规范
+  // 顺序，keyCode 229 覆盖 WebKit 晚于 compositionend 的乱序（issue #570）；
   // 处理器挂在原生交互控件上（S6848：非交互元素不承接键盘事件）
   const escClose = (e: ReactKeyboardEvent<HTMLElement>) => {
-    if (e.key === 'Escape' && !e.nativeEvent.isComposing) onClose()
+    if (e.key === 'Escape' && !isCompositionKey(e.nativeEvent)) onClose()
   }
   return (
     <div className="pw-settings-detail">

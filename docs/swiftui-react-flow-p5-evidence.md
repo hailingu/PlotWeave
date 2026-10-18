@@ -3,6 +3,7 @@
 > 任务：[issue #523](https://github.com/hailingu/PlotWeave/issues/523)（P5 视觉、输入法、VoiceOver 与性能验收尚无执行证据）。
 > 分支：`fix/523-p5-acceptance-evidence`（基线 `dev` @ `10765e2`）；执行日期：2026-10-14（首轮）、2026-10-15（PR #574 评审修正轮，§3 数值以本轮为准）。
 > 2026-10-17：[issue #572](https://github.com/hailingu/PlotWeave/issues/572) 在 `fix/572-tauri-perf-baseline`（基线 `67b0e03`）补齐 Tauri 共同模式基线；§3.4 数值以 PR #585 评审修正轮为准，不改写 §3.2 的历史原生面板轮。
+> 2026-10-18：[issue #570](https://github.com/hailingu/PlotWeave/issues/570) 在 `fix/570-ime-composition-keys`（基线 `dev` @ `3017ea6`）补齐组合键守卫与真实 WKWebView 组合链路回归（§1.1）；真实 IME 候选窗、标记文本与窗口失活仍为人工项，归 #570 跟踪。
 > 本记录遵循[迁移计划 §7.3 模板](swiftui-react-flow-migration-plan.md#73-每阶段证据模板)；矩阵行引用见 §6。
 
 ## 0. 执行环境
@@ -30,8 +31,37 @@
 - 后续补强（2026-10-16，[#568](https://github.com/hailingu/PlotWeave/issues/568) 修复）：reduce-motion 此前无属性驱动的令牌消费路径（RT/IC 有、RM 无），现已接线——动效退化规则补 `:root[data-host-reduce-motion='true']` 属性分支（五个样式表），`useAutoLayout` 的 JS 动画与媒体查询/宿主属性取或；RM 组合增加节点卡计算 `transition-duration` 等价断言（降级 ⇔ 宿主属性或媒体查询任一为真），属性驱动路径修复前该断言在真实 WebKit 上失败（3 组合），修复后 9/9 通过。
 - 信息性观察：本机媒体查询 `prefers-reduced-motion` 为 false，与真实系统设置一致；宿主快照与媒体查询的真实系统切换分叉场景仍未实测（断言经强制快照构造，机器无关）。
 - 未通过 / 未执行（各自独立 issue，#568 已由上述后续补强解决、不在本清单）：
-  - 中文输入法真机组合输入——[#570](https://github.com/hailingu/PlotWeave/issues/570)。
+  - 中文输入法——CompositionEvent 链路的自动化切片已于 2026-10-18 补齐（§1.1，#570），真实 IME 候选窗、标记文本渲染与窗口失活仍待真机人工，归 [#570](https://github.com/hailingu/PlotWeave/issues/570) 跟踪。
   - 视觉目验/截图/录屏（屏幕录制授权缺失）——[#571](https://github.com/hailingu/PlotWeave/issues/571)。
+
+### 1.1 中文输入法组合链路自动化（issue #570，2026-10-18）
+
+背景：#523 首轮把中文输入法整体列为「只能真机验证」，但其中的 CompositionEvent 链路可以自动化——把真实 WebKit 中可达的事件序列（compositionstart / input(isComposing) / keydown(Enter|Esc) / compositionend 及两种顺序）直接派发给发货页，验证应用处理不截断、不丢组合态。真实输入法候选窗的窗口层级、标记文本绘制与系统失焦行为仍只能真机人工（#570 保持打开）。
+
+#### 关键状态与不变量矩阵
+
+不变量（跨全部入口）：**应用层以 keydown 承接的 Enter/Escape 动作，凡属输入法组合链路（组合中，或 WebKit 晚于 compositionend 的 keyCode 229 乱序键）一律让位——不提交、不发送、不取消、不收起浮层；真实按键（非组合且非 229）语义不变。** 判定单一来源 `src/platform/compositionKey.ts`（isComposing ∥ keyCode 229，覆盖 WebKit bug 165004 的乱序），各入口只消费、不自建判定。
+
+| 前置/状态 | 动作与事件顺序 | 可观察结果 | 不变量 / 责任方与入口 | 验证 / 缺口 |
+| --- | --- | --- | --- | --- |
+| 画布内联改名编辑态，组合在途（标记文本「qing」） | keydown Enter（isComposing=true） | 仍在编辑、草稿保留、不提交；后续真实 Enter 才提交上屏文本一次 | 组合中的确认键归输入法 / EditableName（Swift 宿主画布与 Tauri 同源） | vitest `EditableName.composition.test.tsx` + 真实 WKWebView `CanvasCompositionInputTests`（spec 顺序） |
+| 同上，compositionend 已派发 | keydown Enter（isComposing=false、keyCode=229，WebKit 乱序晚到） | 仍在编辑、上屏文本保留、不提交 | WebKit 晚到的确认键仍归输入法 / EditableName | 同上（webkit 顺序）；真实 IME 的实际乱序仍待真机 |
+| 同上，第二次组合在途（「ming」） | keydown Escape（isComposing）→ compositionend(取消) → keydown Escape（keyCode 229） | 全程仍在编辑、已确认草稿「清」保留 | 组合中的 Esc 只取消合成、不放弃编辑 / EditableName | 同上（escape 段） |
+| 编辑器内任意文本输入组合中（含设定面板字段） | keydown（isComposing 或 229）冒泡至 document | 不触发热键：不收起设置面板/＋菜单/检查器请求，撤销/重做/删除同样让位 | 文档级热键统一让位（组合键早返回）/ useEditorHotkeys | vitest `useEditorHotkeys.test.tsx`；Swift 宿主检查器联动未单列（Esc 在原生侧不进入 WKWebView） |
+| 首页重命名对话框输入组合中 | keydown Enter / Escape（isComposing 或 229） | 不提交、不取消；真实 Enter 提交 | 同一不变量 / RenameDialog（Tauri Web 路径） | vitest `HomePage.test.tsx` |
+| AI 输入行组合中 | keydown Enter（isComposing 或 229） | 不发送、草稿保留；真实 Enter 发送 | 同一不变量 / AiThread 输入行（Tauri Web 路径；Swift 为原生 AI 面板） | vitest `AiThread.composer.test.tsx` |
+| 设定文档弹窗正文组合中 | keydown Escape（isComposing 或 229，document 级） | 弹窗不关闭 | 同一不变量 / DocumentEditorDialog | vitest `LeftPanel.documents.test.tsx` |
+| 设定条目详情表单组合中 | keydown Escape（isComposing 或 229） | 表单不收起（既有守卫升级为共享判定） | 同一不变量 / SettingsDetailForm | vitest `SettingsList.detail.test.tsx` |
+| 非组合态任意入口 | 真实 Enter/Esc（keyCode 13/27） | 提交/取消语义与修复前一致 | 守卫不收窄既有键盘路径 / 全部入口 | 各文件非组合态既有用例 |
+
+#### 执行与结果（2026-10-18）
+
+- 环境：同 §0（macOS 27.0.1 / Xcode 27.0 / WKWebView；Node 24.18.0 / vitest）。
+- 命令：`PLOTWEAVE_CANVAS_PROFILE=0 npm run build:native-canvas` 后 `xcodebuild … -only-testing:PlotWeaveNativeTests/CanvasCompositionInputTests test`（真实 WKWebView 加载发货页 `#fixture`）；Web 侧 `npx vitest run`（9 个受影响文件）。
+- 真实 WebKit 断言（`CanvasCompositionInputTests`，新增）：发货页上双击节点名进入内联改名，逐段派发组合事件链（原型 value setter 绕过 React 值跟踪器，等同真实键入），spec 顺序 Enter、WebKit 乱序 229 Enter、两段 Esc 取消全部不退出编辑；最终真实 Enter（keyCode 13）blur 提交，卡片名变为上屏文本「清」。结果：**1 项通过（0.54s）**。
+- 先红后绿：移除守卫重建 bundle 后同一测试 7 项断言失败（spec 顺序 Enter 即提交、Esc 即退出，后续链路连锁失败）；恢复守卫后通过。Web 侧各新用例先红（组合中 Enter/Esc 触发提交/取消/发送/关闭）后绿；受影响 9 文件 88 项全绿。
+- 修复范围（同一不变量的全部入口）：`src/platform/compositionKey.ts`（新增，判定单一来源）+ EditableName、useEditorHotkeys、RenameDialog、AiThread 输入行、DocumentEditorDialog、SettingsDetailForm（既有 isComposing 守卫升级）。原生检查器/设置文本域无代码变更：`NativeTextField` 的外部值回灌以 `focused` 为门（聚焦中不回写 draft），投影回显不会打断标记文本——该设计判断仍待真机 IME 验证。
+- 边界与未执行：真实输入法候选窗层级、标记文本下划线渲染、组合中的窗口失活/面板切换（OS 层提交或丢弃标记文本）与「对白行编辑」真实键入仍属真机人工项，#570 保持打开；`SettingsView` API key 输入为 password 域（macOS 强制 ASCII 安全输入，无组合态），不加守卫；测试派发的合成事件链验证应用处理，不等同于 IME 本身的事件时序实测。
 
 ## 2. M14 — Swift 请求在途与进程异常（Swift 侧执行取证）
 

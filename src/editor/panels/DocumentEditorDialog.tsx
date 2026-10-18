@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { DocumentEntity, ProjectSettings } from '../settings'
+import { isCompositionKey } from '../../platform/compositionKey'
 
 /**
  * 设定文档查看/编辑弹窗（issue 56，docs/ui-design.md §5）：长篇自由文本
  * （人物小传/世界观/术语表）的阅读与人工编辑入口。标题/正文整体保存，
  * 关联角色/地点经 chips 切换（relatedIds：kind + id 显式成对，§6）。
  * 「保存」一次派发一条 updateDocument 命令入栈可撤销；Esc / 遮罩 /
- * 关闭按钮放弃编辑（编辑即命令的批量变体：单次确认生成单条命令）。
+ * 关闭按钮放弃编辑（编辑即命令的批量变体：单次确认生成单条命令）；
+ * 组合在途的 Esc 归输入法（取消合成，不关闭弹窗，issue #570）。
  * 弹窗是一次模态编辑会话（issue #126）：打开期间全局撤销/重做/删除快捷键
  * 挂起（useEditorHotkeys，输入框内保持原生文本撤销）；底层文档若仍经残余
  * 路径变化，未编辑草稿跟随刷新、已编辑草稿保留（useDocumentDraft），文档
@@ -201,7 +203,7 @@ export function DocumentEditorDialog({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape' && !isCompositionKey(e)) onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)

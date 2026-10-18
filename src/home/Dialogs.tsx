@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { isCompositionKey } from '../platform/compositionKey'
 
 /**
  * 首页对话框组（docs/ui-design.md §3.2 右键/悬停菜单的承载）：
@@ -8,6 +9,7 @@ import { useEffect, useRef, useState } from 'react'
  * ConfirmDeleteDialog 泛化为 title/message 承载：首页删项目与资产库
  * 删资产共用——原生 window.confirm 在 Tauri WKWebView 无 UI 代理实现、
  * 静默返回 false，不可逆确认一律走应用内对话框。
+ * 组合在途的 Enter/Esc 归输入法（不提交/不取消，issue #570）。
  */
 
 interface RenameDialogProps {
@@ -58,6 +60,7 @@ export function RenameDialog({
             aria-label="项目名"
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
+              if (isCompositionKey(e.nativeEvent)) return
               if (e.key === 'Enter') submit()
               if (e.key === 'Escape') onCancel()
             }}

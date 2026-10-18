@@ -13,6 +13,7 @@
  * | 已配置，空草稿 | 渲染输入行 | 「发送」可见但禁用，输入框可用 | 发送入口禁用条件与 Enter 路径 send() 守卫一致（空白文本不发） | 本文件 |
  * | 已配置，输入文本 | 点击「发送」 | 用户消息入列、llm_chat 发出、草稿清空 | 按钮与 Enter 走同一 onSend/turn.send，无双轨发送语义 | 本文件 |
  * | 已配置，输入文本 | 按 Enter | 同上 | Enter 发送保留（#599 修复不收窄键盘路径） | 本文件 |
+ * | 已配置，输入法组合在途 | keydown Enter（isComposing 或 WebKit 晚到的 keyCode 229） | 不发送，草稿保留；上屏后真实 Enter 才发送 | 组合中的 Enter 归输入法（issue #570） | 本文件 |
  * | 未配置 provider | 渲染输入行 | 输入框与「发送」均禁用 | 未配置时无任何发送入口可触发请求 | 本文件 |
  * | busy（在途回合） | 输入行切换 | 仅「取消」，无「发送」；落定后恢复输入行与禁用态「发送」 | busy 语义由 useAiTurn 独占持有，按钮不引入并发发送 | 本文件 |
  *
@@ -139,6 +140,25 @@ describe('AiThread 输入行发送按钮的发送路径与 busy 切换（issue #
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
     })
+  })
+
+  it('组合输入中的 Enter 归输入法（issue #570）：不发送；上屏后的真实 Enter 才发送', async () => {
+    render(<AiThread projectId="p-composer" />)
+    const input = await composerInput()
+    fireEvent.compositionStart(input)
+    fireEvent.input(input, { target: { value: 'ni' }, isComposing: true })
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true, keyCode: 229 })
+    // WebKit 乱序：compositionend 之后晚到的确认键仅 keyCode 229
+    fireEvent.input(input, { target: { value: '你好' } })
+    fireEvent.compositionEnd(input, { data: '你好' })
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 })
+    expect(invokeMock).not.toHaveBeenCalled()
+    expect(input.value).toBe('你好')
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 })
+    await waitFor(() => {
+      screen.getByText('你好')
+    })
+    expect(invokeMock).toHaveBeenCalled()
   })
 
   it('busy 态输入行切换为「取消」且无发送按钮；落定后恢复', async () => {
