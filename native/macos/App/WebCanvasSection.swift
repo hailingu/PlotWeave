@@ -30,7 +30,7 @@ struct WebCanvasSection: View {
                 state: state, appearance: appearance, entryURL: fixtureURL, services: services,
                 onProjection: { body in
                     do { try application?.receiveProjection(body) }
-                    catch { application?.invalidate(error.localizedDescription) }
+                    catch { state.fail(error.localizedDescription) }
                 },
                 onConnection: { application?.connect($0) },
                 isPresented: canvasPresented

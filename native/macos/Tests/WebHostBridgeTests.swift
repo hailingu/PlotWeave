@@ -138,14 +138,21 @@ struct WebHostBridgeTests {
         _ = try await application.request("fixture.after")
     }
 
-    /// Delivered quit events lose authority on every page failure, and recovery needs a new explicit user intent.
+    /// Delivered quit events surface a visible degraded decision on page failure; cancelling keeps the app interactive
+    /// and recovery requires a new explicit user intent.
     @Test(arguments: ["process", "load", "provisional", "detach"], [true, false])
     func pageFailureSettlesPendingQuit(failure: String, listenerReady: Bool) async throws {
         let fixture = try WebFixture()
         defer { fixture.close() }
         try await fixture.waitUntilReady()
         var replies: [Bool] = []
-        let delegate = NativeApplicationDelegate(quit: fixture.quit, terminateApplication: {}, replyToTermination: { replies.append($0) })
+        var prompts: [HostQuitController.Intent] = []
+        let delegate = NativeApplicationDelegate(
+            quit: fixture.quit,
+            terminateApplication: {},
+            replyToTermination: { replies.append($0) },
+            presentUnavailablePrompt: { intent in prompts.append(intent); return false }
+        )
         delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
         if listenerReady { fixture.quit.acknowledgeListener() }
         #expect(delegate.applicationShouldTerminate(NSApplication.shared) == (listenerReady ? .terminateLater : .terminateCancel))
@@ -154,11 +161,14 @@ struct WebHostBridgeTests {
         case "process": fixture.coordinator.webViewWebContentProcessDidTerminate(fixture.webView)
         case "load": fixture.coordinator.webView(fixture.webView, didFail: nil, withError: URLError(.networkConnectionLost))
         case "provisional": fixture.coordinator.webView(fixture.webView, didFailProvisionalNavigation: nil, withError: URLError(.cannotFindHost))
-        default: fixture.coordinator.invalidateSession()
+        default: fixture.coordinator.invalidateSession(canvasFailed: true)
         }
+        // The visible degraded prompt refuses the exit; an already-deferred system decision receives its false reply.
+        #expect(prompts == [.terminate])
+        try await fixture.wait { fixture.quit.pendingIntent == nil }
         #expect(replies == (listenerReady ? [false] : []))
-        #expect(fixture.quit.pendingIntent == nil)
         #expect(!fixture.quit.listenerReady)
+        #expect(fixture.quit.canvasUnavailable)
         #expect(throws: HostFailure.self) { try fixture.quit.approve() }
         fixture.coordinator.invalidateSession()
         #expect(replies == (listenerReady ? [false] : []))
@@ -167,6 +177,7 @@ struct WebHostBridgeTests {
         try await fixture.waitUntilReady()
         fixture.quit.acknowledgeListener()
         #expect(fixture.quit.pendingIntent == nil)
+        #expect(!fixture.quit.canvasUnavailable)
         #expect(replies == (listenerReady ? [false] : []))
         #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
         try fixture.quit.approve()

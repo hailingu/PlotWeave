@@ -47,25 +47,35 @@ struct NativeQuitRecoveryTests {
         #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
     }
 
-    /// Native delivery failure completes the deferred decision even when Web cannot issue its failure command.
+    /// Native delivery failure cancels this attempt with a visible diagnostic and keeps listener authority for a retry.
     @Test func bridgeDeliveryFailureRetainsAnInteractiveRetry() async throws {
         let quit = HostQuitController()
         var replies: [Bool] = []
+        var failures: [String] = []
         var delivered: CheckedContinuation<Void, Never>?
         quit.sendEvent = { _, _ in
             delivered?.resume()
             delivered = nil
             throw HostFailure(code: "PW_PAGE_UNAVAILABLE", message: "fixture delivery failure")
         }
-        let delegate = NativeApplicationDelegate(quit: quit, terminateApplication: {}, replyToTermination: { replies.append($0) })
+        let delegate = NativeApplicationDelegate(
+            quit: quit,
+            terminateApplication: {},
+            replyToTermination: { replies.append($0) },
+            presentDeliveryFailure: { failures.append($0.localizedDescription) }
+        )
         delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
         quit.acknowledgeListener()
         await withCheckedContinuation { continuation in
             delivered = continuation
             #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
         }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(failures == ["fixture delivery failure"])
         #expect(replies == [false])
         #expect(quit.pendingIntent == nil)
+        #expect(quit.listenerReady)
+        #expect(!quit.canvasUnavailable)
         quit.sendEvent = { _, _ in }
         #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateLater)
         try quit.approve()
@@ -97,5 +107,68 @@ struct NativeQuitRecoveryTests {
             Issue.record("non-boolean cancellation was accepted")
         } catch let failure as HostFailure { #expect(failure.code == "PW_INVALID_REQUEST") }
         #expect(quit.pendingIntent == .terminate)
+    }
+
+    /// A failed canvas turns an AppKit terminate request into a visible confirmation; approval degrades explicitly.
+    @Test func canvasFailureTerminatePromptApprovesDegradedTermination() async throws {
+        let quit = HostQuitController()
+        var terminations = 0
+        var prompts: [HostQuitController.Intent] = []
+        let delegate = NativeApplicationDelegate(
+            quit: quit,
+            terminateApplication: { terminations += 1 },
+            presentUnavailablePrompt: { intent in prompts.append(intent); return true }
+        )
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        quit.canvasFailed()
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateCancel)
+        #expect(prompts == [.terminate])
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(terminations == 1)
+        #expect(quit.pendingIntent == nil)
+    }
+
+    /// Cancelling the visible degraded confirmation keeps the application running with no pending un-flushed intent.
+    @Test func canvasFailureTerminatePromptCancellationKeepsRunning() async throws {
+        let quit = HostQuitController()
+        var terminations = 0
+        var prompts: [HostQuitController.Intent] = []
+        let delegate = NativeApplicationDelegate(
+            quit: quit,
+            terminateApplication: { terminations += 1 },
+            presentUnavailablePrompt: { intent in prompts.append(intent); return false }
+        )
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        quit.canvasFailed()
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateCancel)
+        #expect(prompts == [.terminate])
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(terminations == 0)
+        #expect(quit.pendingIntent == nil)
+        #expect(quit.canvasUnavailable)
+    }
+
+    /// Window close follows the same visible degraded decision and only closes after explicit approval.
+    @Test func canvasFailureClosePromptApprovesWriterClose() async throws {
+        let quit = HostQuitController()
+        var prompts: [HostQuitController.Intent] = []
+        let delegate = NativeApplicationDelegate(
+            quit: quit,
+            presentUnavailablePrompt: { intent in prompts.append(intent); return true }
+        )
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        let window = NSWindow(
+            contentRect: NSRect(x: 60, y: 60, width: 900, height: 650),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.delegate = delegate
+        window.makeKeyAndOrderFront(nil)
+        quit.canvasFailed()
+        #expect(!delegate.windowShouldClose(window))
+        #expect(prompts == [.close])
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!window.isVisible)
+        #expect(quit.pendingIntent == nil)
     }
 }

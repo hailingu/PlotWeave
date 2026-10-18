@@ -89,8 +89,18 @@ struct NativeShellRoot: View {
         demoMode || (application.route == "editor" && application.projectId != nil)
     }
 
-    /// Initial loading uses the same welcome geometry; isolated editor fixtures keep their existing window contract.
-    private var welcomeAvailable: Bool { !demoMode && ["loading", "home"].contains(application.route) }
+    /// Initial loading uses the same welcome geometry; a failed canvas keeps the retained writer visible instead
+    /// so the in-window retry overlay stays reachable. Isolated editor fixtures keep their existing contract.
+    static func welcomeAvailable(route: String, canvasUnavailable: Bool, demoMode: Bool) -> Bool {
+        !demoMode && !canvasUnavailable && ["loading", "home"].contains(route)
+    }
+
+    /// The shell reads the observed application state into the pure presentation rule above.
+    private var welcomeAvailable: Bool {
+        Self.welcomeAvailable(
+            route: application.route, canvasUnavailable: application.canvasUnavailable, demoMode: demoMode
+        )
+    }
 
 }
 

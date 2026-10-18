@@ -204,7 +204,7 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
                 allowingReadAccessTo: entry.deletingLastPathComponent()
             )
         } else {
-            invalidateSession()
+            invalidateSession(canvasFailed: true)
             state.fail(
                 "未找到画布资源：请先在仓库根目录执行 npm run build:native-canvas，"
                     + "再重新构建应用。"
@@ -239,7 +239,7 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         readyTimeoutTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.readyTimeout))
             guard !Task.isCancelled, let self else { return }
-            self.invalidateSession()
+            self.invalidateSession(canvasFailed: true)
             self.state.fail("画布在 \(Int(Self.readyTimeout)) 秒内未报告就绪。")
         }
     }
@@ -310,16 +310,18 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
     }
 
     /// Invalidates writes and projections when the Web owner is removed or its content process dies.
-    func invalidateSession() {
+    /// Failure entry points keep a pending native close/quit for the visible degraded decision instead of
+    /// discarding it with the listener; ordinary teardown retains the existing cancel/reset behavior.
+    func invalidateSession(canvasFailed: Bool = false) {
         mediaScheme?.cancelAll()
         router.invalidate()
-        services.invalidateQuitListener(for: self)
+        services.invalidateQuitListener(for: self, canvasFailed: canvasFailed)
         readyTimeoutTask?.cancel()
     }
 
     /// Content-process termination is a visible failure and never an empty project to save.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        invalidateSession()
+        invalidateSession(canvasFailed: true)
         state.fail("画布进程已终止，请重新加载已保存项目；未落盘编辑无法确认恢复。")
     }
 
@@ -360,7 +362,7 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         didFail navigation: WKNavigation!,
         withError error: Error
     ) {
-        invalidateSession()
+        invalidateSession(canvasFailed: true)
         state.fail("画布加载失败：\(error.localizedDescription)")
     }
 
@@ -369,7 +371,7 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
-        invalidateSession()
+        invalidateSession(canvasFailed: true)
         state.fail("画布导航失败：\(error.localizedDescription)")
     }
 

@@ -19,11 +19,33 @@ final class HostQuitController {
     var onApproved: ((Intent) -> Void)?
     /// Failure cancels only the pending user's intent; native termination replies remain owned by the delegate.
     var onCancelled: ((Intent) -> Void)?
+    /// Visible degraded decision when no listener can confirm the save state; the delegate presents the warning.
+    var onUnavailable: ((Intent) -> Void)?
+    /// A quit event could not be delivered while the page may still be alive; cancel this attempt and surface the error.
+    var onDeliveryFailure: ((Intent, Error) -> Void)?
+    /// A failed canvas keeps the normal listener/flush path unavailable until a page acknowledges its listener again.
+    private(set) var canvasUnavailable = false
+    /// At most one visible degraded confirmation is active; later requests do not stack alerts.
+    private var unavailablePromptActive = false
 
     /// Records user intent before any asynchronous bridge work; retries are explicit user actions.
+    /// A known canvas failure cannot silently buffer: the delegate shows a visible continue/cancel decision.
     func request(_ intent: Intent) {
+        guard !unavailablePromptActive else { return }
         if pendingIntent != .terminate { pendingIntent = intent }
-        if listenerReady { emitRequested() }
+        if canvasUnavailable {
+            presentUnavailablePrompt()
+        } else if listenerReady {
+            emitRequested()
+        }
+    }
+
+    /// A failed canvas cannot provide a save listener: keep the pending user intent and surface it visibly.
+    func canvasFailed() {
+        canvasUnavailable = true
+        listenerReady = false
+        eventTask?.cancel()
+        presentUnavailablePrompt()
     }
 
     /// Startup buffering survives first connection; replacement of a ready page cancels its outstanding decision.
@@ -36,6 +58,8 @@ final class HostQuitController {
     /// The acknowledgement releases one buffered request after listener registration.
     func acknowledgeListener() {
         listenerReady = true
+        canvasUnavailable = false
+        unavailablePromptActive = false
         if pendingIntent != nil { emitRequested() }
     }
 
@@ -47,20 +71,46 @@ final class HostQuitController {
         guard listenerReady else {
             throw HostFailure(code: "PW_QUIT_LISTENER_NOT_READY", message: "画布尚未注册退出保存监听")
         }
-        pendingIntent = nil
-        eventTask?.cancel()
-        onApproved?(intent)
+        consume(intent)
+    }
+
+    /// Resolves the visible degraded decision; only an explicit user approval releases close/terminate.
+    func resolveUnavailable(approved: Bool) {
+        unavailablePromptActive = false
+        guard let intent = pendingIntent else { return }
+        if approved {
+            consume(intent)
+        } else {
+            cancel()
+        }
     }
 
     /// Failure is idempotent, preserves the window and never requires a working flush listener.
     func cancel() {
         guard let intent = pendingIntent else { return }
         pendingIntent = nil
+        unavailablePromptActive = false
         eventTask?.cancel()
         onCancelled?(intent)
     }
 
+    /// One approval consumes the pending intent and releases the original AppKit action.
+    private func consume(_ intent: Intent) {
+        pendingIntent = nil
+        unavailablePromptActive = false
+        eventTask?.cancel()
+        onApproved?(intent)
+    }
+
+    /// Presents the degraded confirmation once; a pending request owns the visible decision.
+    private func presentUnavailablePrompt() {
+        guard !unavailablePromptActive, let intent = pendingIntent else { return }
+        unavailablePromptActive = true
+        onUnavailable?(intent)
+    }
+
     /// Delivery failures settle the native decision; cancelled old deliveries cannot reject a newer intent.
+    /// The page may still be alive, so this is a visible retryable failure rather than a canvas-failure degrade.
     private func emitRequested() {
         let deliver = sendEvent
         eventTask?.cancel()
@@ -69,9 +119,10 @@ final class HostQuitController {
                 guard let deliver else { throw HostFailure(code: "PW_PAGE_UNAVAILABLE", message: "退出事件传输不可用") }
                 try await deliver("app-quit-requested", .object([:]))
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, let intent = pendingIntent else { return }
                 NSLog("PlotWeave quit bridge delivery failed: %@", error.localizedDescription)
                 cancel()
+                onDeliveryFailure?(intent, error)
             }
         }
     }
@@ -98,14 +149,34 @@ final class NativeApplicationDelegate: NSObject, NSApplicationDelegate, NSWindow
     private var terminateApplication: () -> Void = { NSApp.terminate(nil) }
     /// Tests observe AppKit's deferred decision without actually terminating their process.
     private var replyToTermination: (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
+    /// Visible warning before a degraded close/quit when the canvas cannot provide its flush listener.
+    private let presentUnavailablePrompt: (HostQuitController.Intent) -> Bool
+    /// Visible retryable diagnostic after a quit event could not be delivered; the page may still be usable.
+    private let presentDeliveryFailure: (Error) -> Void
 
     /// SwiftUI's delegate adaptor constructs NSObject through its actual zero-argument initializer.
-    override init() { quit = .shared; attachExistingMainWindow = true; super.init() }
+    override init() {
+        quit = .shared
+        attachExistingMainWindow = true
+        presentUnavailablePrompt = Self.presentUnavailableAlert
+        presentDeliveryFailure = Self.presentDeliveryFailureAlert
+        super.init()
+    }
 
     /// Real-window tests use an isolated controller without changing the running app's exit lifecycle.
-    init(quit: HostQuitController, terminateApplication: (() -> Void)? = nil, replyToTermination: ((Bool) -> Void)? = nil) {
+    /// The test initializer defaults to no modal for either degraded decision; lifecycle tests inject their
+    /// own presenters when they verify the visible feedback. Production always uses the real alerts.
+    init(
+        quit: HostQuitController,
+        terminateApplication: (() -> Void)? = nil,
+        replyToTermination: ((Bool) -> Void)? = nil,
+        presentUnavailablePrompt: ((HostQuitController.Intent) -> Bool)? = nil,
+        presentDeliveryFailure: ((Error) -> Void)? = nil
+    ) {
         self.quit = quit
         attachExistingMainWindow = false
+        self.presentUnavailablePrompt = presentUnavailablePrompt ?? { _ in false }
+        self.presentDeliveryFailure = presentDeliveryFailure ?? { _ in }
         super.init()
         if let terminateApplication { self.terminateApplication = terminateApplication }
         if let replyToTermination { self.replyToTermination = replyToTermination }
@@ -115,6 +186,13 @@ final class NativeApplicationDelegate: NSObject, NSApplicationDelegate, NSWindow
     func applicationDidFinishLaunching(_ notification: Notification) {
         quit.onApproved = { [weak self] intent in self?.finish(intent) }
         quit.onCancelled = { [weak self] intent in self?.cancel(intent) }
+        quit.onUnavailable = { [weak self] intent in
+            guard let self else { return }
+            let approved = self.presentUnavailablePrompt(intent)
+            // The alert runs inside AppKit's close/terminate decision; resolve after that decision returns.
+            DispatchQueue.main.async { [weak self] in self?.quit.resolveUnavailable(approved: approved) }
+        }
+        quit.onDeliveryFailure = { [weak self] _, error in self?.presentDeliveryFailure(error) }
         NotificationCenter.default.addObserver(
             self, selector: #selector(attachMainWindow(_:)),
             name: NSWindow.didBecomeMainNotification, object: nil
@@ -167,6 +245,32 @@ final class NativeApplicationDelegate: NSObject, NSApplicationDelegate, NSWindow
         awaitingTermination = quit.listenerReady
         quit.request(.terminate)
         return awaitingTermination ? .terminateLater : .terminateCancel
+    }
+
+    /// Visible degraded decision used in production; tests inject a closure instead of running a modal alert.
+    /// Continuing explicitly accepts losing edits that the unavailable page cannot confirm as flushed.
+    private static func presentUnavailableAlert(_ intent: HostQuitController.Intent) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = intent == .close ? "画布不可用，仍要关闭窗口吗？" : "画布不可用，仍要退出 PlotWeave 吗？"
+        alert.informativeText =
+            "画布未加载完成，应用无法确认未保存的编辑是否已落盘。继续将放弃本次会话中未保存的内容；"
+            + "取消后保留窗口并可重试加载画布。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: intent == .close ? "关闭窗口" : "退出")
+        alert.addButton(withTitle: "取消")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Visible retryable failure for a quit event that never reached the live page; the window stays open.
+    private static func presentDeliveryFailureAlert(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "退出请求未能送达画布"
+        alert.informativeText =
+            "应用已取消本次关闭／退出，窗口保持打开。请重试；若问题持续，请重新加载画布。\n\n"
+            + error.localizedDescription
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "好")
+        alert.runModal()
     }
 
     /// Successful flush approves the original system sequence; only an already-cancelled startup quit is restarted.
