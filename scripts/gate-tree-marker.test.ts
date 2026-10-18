@@ -164,6 +164,10 @@ function copyScenarioFiles(sandbox: string): string {
  * curl）；完整流水线以 sonar-scanner 替身日志行计数。 */
 function writeScenarioStubs(bin: string): void {
   writeExecutable(
+    resolve(bin, 'xcodebuild'),
+    String.raw`printf 'xcodebuild %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"`,
+  )
+  writeExecutable(
     resolve(bin, 'npm'),
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 case "$*" in
@@ -215,6 +219,7 @@ function scenarioEnvironment(
     ...gitFixtureEnvironment(),
     // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
     PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
+    PLOTWEAVE_XCODEBUILD_BIN: resolve(bin, 'xcodebuild'),
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),

@@ -11,5 +11,6 @@ set -eu
 
 hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 "$hook_directory/../scripts/gate-history.sh" materialize --stage-for-commit
-PLOTWEAVE_GATE_SCOPE=full "$hook_directory/../scripts/sonar-quality-gate.sh"
+PLOTWEAVE_GATE_SCOPE=full PLOTWEAVE_GATE_FULL_NATIVE=0 \
+  "$hook_directory/../scripts/sonar-quality-gate.sh"
 "$hook_directory/../scripts/gate-tree-marker.sh" write "${PPID:-}"

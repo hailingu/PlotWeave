@@ -110,14 +110,15 @@ The versioned commit-creating hooks (`pre-commit`, `pre-merge-commit`, `prepare-
 
 - **docs-only** (`docs/**`, root Markdown, `LICENSE`): only `scripts/check-docs.sh`; no static checks, coverage, Sonar, or push ledger record. The commit-gate record remains the evidence.
 - **single implementation stack** (`frontend` = `src/**` and frontend-only root configs; `rust` = `src-tauri/**` + `crates/**` + `rust-toolchain.toml`; `native` = `native/**`): run that stack's full regression and full coverage; reuse the other frontend/Rust stack's most recent LCOV for Sonar. Native runs `sh scripts/test-native.sh` for serial functional regression, keeps stress measurements opt-in, and records that native code is outside Sonar.
-- **cross-stack, tooling (`.githooks/**`, `scripts/**`, `.github/**`, root linters), unknown paths, empty ranges, or an undeterminable base**: the complete gate.
+- **cross-stack, tooling (`.githooks/**`, `scripts/**`, `.github/**`, root linters), unknown paths, empty ranges, or an undeterminable base**: fresh frontend/Rust coverage plus native functional regression before Sonar.
 
 The complete gate at a high level:
 
 1. Runs formatting, lint, maintained-file size, and strict type checks.
 2. Generates frontend and Rust coverage and enforces the versioned 80% overall line-coverage floor for each report.
-3. Runs SonarQube, waits for an `OK` Quality Gate, and requires zero unresolved issues on new code.
-4. Records the passing run through the repository's gate-evidence workflow.
+3. For every `full` push, also runs native functional regression. The three commit-creating entry points retain the frontend/Rust sequence.
+4. Runs SonarQube, waits for an `OK` Quality Gate, and requires zero unresolved issues on new code.
+5. Records the passing run through the repository's gate-evidence workflow.
 
 The scoped push is fail-closed: a missing reused LCOV, unsupported scope, or classification error blocks the push. It is not an exemption from the commit gates. Details and boundaries are in [Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18) and [Scoped Push Cost](quality-gate-cost.md#scoped-push-cost-2026-10-18-owner-direction).
 

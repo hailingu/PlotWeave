@@ -33,7 +33,8 @@ anchor or new enforcement mechanism is introduced.
 
 **What is recorded.** After a scoped run passes its required sequence — static
 checks, the changed stack's full coverage (or the reused unchanged-stack
-reports), the scanner, Quality Gate `OK`, and zero new-code unresolved issues —
+reports), native functional regression for `native` and every `full` push,
+the scanner, Quality Gate `OK`, and zero new-code unresolved issues —
 `scripts/sonar-quality-gate.sh` appends exactly one JSON line to a pending
 file inside `.git`
 (`plotweave-gate-history.pending`), never to the tracked file mid-gate
@@ -55,8 +56,8 @@ line:
 | `timestamp` | UTC ISO-8601 time of the record append, second precision. |
 | `tree` | The gated **index tree** (`git write-tree`) — the same key the dedup marker uses, and the value a reader compares against `git rev-parse <commit>^{tree}` to find a success claim for that content. Matching does not authenticate the claim. |
 | `head` | The commit `HEAD` pointed at during the run — the parent of the commit being created on pre-commit-style paths, the tip being pushed on `pre-push`. Provenance context, not the content-matching key; it does not authenticate execution. |
-| `scope` | The push scope recorded by owner decision 2026-10-18: `full`, `frontend`, `rust`, or `native`. A commit-gate run records `full` (the default). |
-| `qualityGate` | The Quality Gate status for this run's analysis (`OK`; only fully passing runs are recorded). Native scope records the Sonar result for the reused frontend/Rust reports; native source itself is not a Sonar source. |
+| `scope` | The push scope recorded by owner decision 2026-10-18: `full`, `frontend`, `rust`, or `native`. A commit-gate run records `full` (the default); full pushes additionally require native functional regression. Native failure prevents a success record. |
+| `qualityGate` | The Quality Gate status for this run's analysis (`OK`; only fully passing runs are recorded). Native scope records the Sonar result for the reused frontend/Rust reports; native source itself is not a Sonar source in either `native` or `full` pushes. |
 | `newCodeUnresolvedIssues` | Unresolved issue count on new code for this run (`0`; only fully passing runs are recorded). |
 | `frontendLineCoveragePercent` / `rustLineCoveragePercent` | Line coverage computed from the same LCOV reports this run submitted (`DA` records with execution count > 0 count as covered). |
 

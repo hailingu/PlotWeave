@@ -84,6 +84,8 @@ type GateOptions = {
   qualityGateStatus?: string
   /** 推送范围（owner 指示 2026-10-18）；缺省 full 保持既有完整门禁用例。 */
   scope?: 'frontend' | 'rust' | 'native' | 'full'
+  /** full 推送附加原生回归；提交入口必须覆盖继承的推送上下文。 */
+  fullNative?: string
   /** 未变更栈的复用 LCOV 内容；缺省不预置，用于缺报告失败用例。 */
   reusedFrontendCoverage?: string
   reusedRustCoverage?: string
@@ -325,6 +327,7 @@ function gateEnvironment(
   const environment: NodeJS.ProcessEnv = {
     ...gitFixtureEnvironment(),
     PLOTWEAVE_GATE_REPOSITORY_ROOT: paths.root,
+    PLOTWEAVE_GATE_FULL_NATIVE: options.fullNative ?? '0',
     PLOTWEAVE_CARGO_LLVM_COV_BIN: paths.llvmCovPath,
     PLOTWEAVE_CURL_BIN: paths.curlPath,
     PLOTWEAVE_COVERAGE_REPORT_PATH: paths.coveragePath,
@@ -660,6 +663,42 @@ describe(
       })
 
       expect(result.status).not.toBe(0)
+      expect(result.pending).toBe('')
+    })
+
+    it('full 推送刷新两侧覆盖率并执行 native 功能回归', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        fullNative: '1',
+      })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain('npm run test:coverage')
+      expect(result.log).toContain('cargo-llvm-cov llvm-cov')
+      expect(result.log).toContain('xcodebuild -project native/macos/')
+      expect(JSON.parse(result.pending.trim())).toMatchObject({ scope: 'full' })
+    })
+
+    it('full 推送 native 失败不扫描、不写成功记录', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        fullNative: '1',
+        xcodebuildExit: 65,
+      })
+
+      expect(result.status).not.toBe(0)
+      expect(result.log).toContain('xcodebuild -project native/macos/')
+      expect(result.log).not.toContain('sonar-scanner')
+      expect(result.pending).toBe('')
+    })
+
+    it('非法 full native 开关在检查前 fail-closed', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        fullNative: 'invalid',
+      })
+
+      // GATE_FULL_NATIVE_INVALID 是推送上下文配置的稳定诊断契约。
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain('[GATE_FULL_NATIVE_INVALID]')
+      expect(result.log).toBe('')
       expect(result.pending).toBe('')
     })
 
@@ -1212,6 +1251,7 @@ describe('.githooks/pre-commit', () => {
       for (const scope of ['frontend', 'rust', 'native'] as const) {
         const result = runGate(`.githooks/${hook}`, {
           scope,
+          fullNative: '1',
           reusedFrontendCoverage: VALID_FRONTEND_LCOV,
           reusedRustCoverage: VALID_RUST_LCOV,
         })
@@ -1219,6 +1259,7 @@ describe('.githooks/pre-commit', () => {
         expect(result.status, result.stderr).toBe(0)
         expect(result.log).toContain('npm run test:coverage')
         expect(result.log).toContain('cargo-llvm-cov llvm-cov')
+        expect(result.log).not.toContain('xcodebuild')
         expect(JSON.parse(result.pending.trim())).toMatchObject({
           scope: 'full',
         })

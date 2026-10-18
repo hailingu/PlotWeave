@@ -361,6 +361,12 @@ while read -r commit ref_scope local_ref; do
   unset PLOTWEAVE_GATE_SCOPE PLOTWEAVE_REUSED_FRONTEND_LCOV \
     PLOTWEAVE_REUSED_RUST_LCOV 2>/dev/null || :
   gate_scope=$(aggregate_commit_scope "$commit")
+  # full 范围可能含原生变更或无法确定的路径，保守跑三栈；覆盖调用方环境。
+  PLOTWEAVE_GATE_FULL_NATIVE=0
+  if [ "$gate_scope" = 'full' ]; then
+    PLOTWEAVE_GATE_FULL_NATIVE=1
+  fi
+  export PLOTWEAVE_GATE_FULL_NATIVE
   printf '[pre-push] 变更范围：%s（%s）\n' "$gate_scope" "$short"
   if [ "$gate_scope" = 'docs' ]; then
     printf '[pre-push] 仅文档变更：跳过代码回归、覆盖率与 Sonar；commit 钩子的门禁记录保持不变。\n'

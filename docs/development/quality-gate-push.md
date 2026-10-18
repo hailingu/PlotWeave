@@ -19,7 +19,7 @@
 | frontend | 非文档路径只落在 `src/**` 与前端专属根配置 | 全量前端测试 + 前端覆盖率；Rust 复用主工作树最近 LCOV；Sonar 导入两侧报告。 |
 | rust | 非文档路径只落在 `src-tauri/**`、`crates/**`、`rust-toolchain.toml` | 全量 Rust 测试 + `rust-coverage.sh`；前端复用最近 LCOV；Sonar 导入两侧报告。 |
 | native | 非文档路径只落在 `native/**` | `sh scripts/test-native.sh` 构建画布并串行运行功能回归；压力测量按需运行（见下节）。前端/Rust 复用最近 LCOV；Sonar 导入两侧报告。原生代码不在 Sonar 源码范围，记录 `scope: native`。 |
-| full | 跨栈、工具（`scripts/**`、`.githooks/**`、`.github/**`、根 linter/配置）、未知路径、空差异或无法确定基线 | 完整门禁：静态检查 + 前端/Rust 全量覆盖率 + Sonar。 |
+| full | 跨栈、工具（`scripts/**`、`.githooks/**`、`.github/**`、根 linter/配置）、未知路径、空差异或无法确定基线 | 完整推送门禁：静态检查 + 前端/Rust 全量覆盖率 + native 功能回归 + Sonar；压力测量仍按需运行。 |
 
 实现与边界：
 
@@ -30,7 +30,11 @@
 - 同一提交的所有 ref 范围先收集再合并，随后才去重执行：docs 为中性，
   不同实现栈或任一 full 取 full；每个文档范围均执行差异检查。
   交换 ref 顺序不改变最终范围。三个提交创建入口显式设置
-  `PLOTWEAVE_GATE_SCOPE=full`，外部环境不能把提交门禁降为推送单栈路径。
+  `PLOTWEAVE_GATE_SCOPE=full PLOTWEAVE_GATE_FULL_NATIVE=0`，外部环境不能把提交门禁降为推送单栈路径，也不能继承推送专属成本。
+- `full` 推送显式设置 `PLOTWEAVE_GATE_FULL_NATIVE=1`，保守执行三栈检查，
+  包括合并范围、工具变更和无法确定基线；调用方的 `0` 不能降级。共享门禁
+  只接受 `0`/`1`，非法值以 `[GATE_FULL_NATIVE_INVALID]` 阻断。直接调用默认
+  `0`，保持既定提交门禁成本；手动验证完整推送须显式设为 `1`。
 - `pre-push` 把范围经 `PLOTWEAVE_GATE_SCOPE` 传给
   `scripts/sonar-quality-gate.sh`；未变更栈的 LCOV 经
   `PLOTWEAVE_REUSED_FRONTEND_LCOV` / `PLOTWEAVE_REUSED_RUST_LCOV` 指向
@@ -64,6 +68,24 @@
 | 提交环境带有 scoped push 变量 | pre-commit / pre-merge-commit / prepare-commit-msg | full，刷新前端与 Rust 覆盖率 | 提交标记只能代表完整门禁 | sonar-quality-gate 的三个提交入口回归 |
 | 默认 native 门禁或未配置开关 | 日常功能、生命周期及轻量报告校验 | Swift Testing 跳过五个压力测量 | 功能回归保留，测试失败继续非零阻断 | test-native 的参数/退出码测试；NativeStressTestProfileTests；真实日常回归 |
 | 显式 native stress | Xcode 转发开关 `1`，选择测量套件 | 开启原有规模、轮数及断言 | 只有精确值 `1` 能开启；指标口径不改变 | test-native 的压力选择回归；NativeStressTestProfileTests；真实测试宿主的开关探针；本次不重复执行高负载测量 |
+
+评审 5560989008 补充矩阵：`full` 推送保守执行三栈检查，不再丢失 native
+参与；这样无需扩展分类器返回类型或维护第二份路径分类。提交入口显式关闭
+推送专属的 `PLOTWEAVE_GATE_FULL_NATIVE`，保持既定的统一提交成本。
+
+| 前置状态 | 操作/顺序 | 可观察结果 | 跨转换不变量 | 验证 |
+| --- | --- | --- | --- | --- |
+| native 与 frontend/tooling 混合范围，或多个 ref 合并为 full | 收集范围后选择快路径或临时 worktree | 前端/Rust 覆盖率及 native 功能回归均执行 | 增加其他栈变更不能移除 native 检查；每提交仅一次门禁 | 混合范围快/慢路径集成回归 |
+| 无法确定已有远端基线 | 保守 full 推送 | 三栈检查，外部开关 `0` 无法降级 | 不确定范围不能漏掉任何实现栈 | 缺失远端 tip 回归 |
+| full 推送中的 native 失败 | native 检查失败后停止扫描 | 推送失败，无成功台账记录 | 只有全部所需栈通过才可发布通过结论 | full native 失败集成及门禁回归 |
+| 外部设置 full native 开关，进入任一提交创建钩子 | 入口覆盖范围和开关 | 刷新前端/Rust，不额外执行 native | 推送上下文不能改变提交创建成本或复用标记语义 | 三个提交入口环境隔离回归 |
+| 非法 full native 开关直接调用共享门禁 | 验证配置后再执行检查 | 非零退出且无检查/记录 | 不把错误配置静默解释为跳过 | 稳定诊断码回归 |
+
+这些路径沿用现有串行门禁、共享锁及信号监督器，不新增并发或恢复状态；
+native 压力测量仍按需运行。上述范围合并、快慢路径、失败阻断和配置隔离
+均已通过定向回归及 `npm test -- scripts`；实际提交/推送的完整门禁和 native
+执行结果记录在 PR #604 的验证记录中。该文档及 AGENTS 的规则同步经过结构化
+检查，无另设自动化文档行为检查。
 
 本轮验证（2026-10-18，Node 24.18.0、Xcode 27.0 / SDK 27.0）：
 
@@ -134,7 +156,7 @@ The issue #405 fix, wired 2026-09-30, closes it:
   input equality (PR #442 review 5361127076). Untracked documentation also
   triggers isolation; ignored generated artifacts retain the existing fast
   path behavior.
-  For a `full`-scope push the complete gate then runs exactly as before; the scoped routes above are the owner-approved exception.
+  For a `full`-scope push the gate runs fresh frontend/Rust coverage and native functional regression before Sonar; the scoped routes above select a single stack.
 - **Slow path — temporary worktree.** Every other commit — a non-checked-out
   ref, a dirty worktree, or an additional distinct commit in a multi-ref
   push — is checked out with

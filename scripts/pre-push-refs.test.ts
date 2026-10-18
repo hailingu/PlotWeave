@@ -299,6 +299,11 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
  * curl），门禁次数以 sonar-scanner 日志行计、依赖安装以 npm ci 计。 */
 function writeScenarioStubs(bin: string): void {
   writeExecutable(
+    resolve(bin, 'xcodebuild'),
+    String.raw`printf 'xcodebuild %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+exit "$PLOTWEAVE_TEST_XCODEBUILD_EXIT"`,
+  )
+  writeExecutable(
     resolve(bin, 'npm'),
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
 case "$*" in
@@ -352,6 +357,7 @@ function scenarioEnvironment(
     ...gitFixtureEnvironment(),
     // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
     PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
+    PLOTWEAVE_XCODEBUILD_BIN: resolve(bin, 'xcodebuild'),
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),
@@ -375,6 +381,7 @@ function scenarioEnvironment(
     PLOTWEAVE_TEST_LOG: logPath,
     PLOTWEAVE_TEST_QUALITY_GATE_STATUS: qualityGateStatus,
     PLOTWEAVE_TEST_UNRESOLVED_ISSUES: '0',
+    PLOTWEAVE_TEST_XCODEBUILD_EXIT: '0',
     SONAR_HOST_URL: 'http://sonar.test',
   }
   delete env.SONAR_TOKEN
@@ -1624,7 +1631,8 @@ it.each([
 })
 
 it('已有远端 tip 不在本地时走 full，不能回退到仅文档父提交', () => {
-  const scenario = preparePushScenario()
+  const scenario = preparePushScenario({ fullGate: true })
+  scenario.env.PLOTWEAVE_GATE_FULL_NATIVE = '0'
   commitScopeBranch(scenario, 'docs/missing-tip.md', 'missing-tip')
   expect(scenario.git(['branch', 'dev', 'HEAD~1']).status).toBe(0)
   const absent = '1234567890123456789012345678901234567890'
@@ -1637,31 +1645,89 @@ it('已有远端 tip 不在本地时走 full，不能回退到仅文档父提交
   expect(result.status, result.stderr).toBe(0)
   expect(scenario.gateRuns()).toBe(1)
   expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
-    'gate-scope full\n',
+    'xcodebuild -project native/macos/',
+  )
+  expect(JSON.parse(readFileSync(scenario.pendingPath, 'utf8')).scope).toBe(
+    'full',
   )
 })
 
-it('共享提交的 frontend 与 rust 独立范围合并为 full', () => {
-  const scenario = preparePushScenario()
-  const seed = scenario.headSha()
-  commitScopeBranch(scenario, 'src/scope.ts', 'frontend-only')
-  const frontend = scenario.headSha()
-  expect(scenario.git(['checkout', '-q', '--detach', seed]).status).toBe(0)
-  commitScopeBranch(scenario, 'src-tauri/src/scope.rs', 'rust-only')
-  const rust = scenario.headSha()
-  expect(scenario.git(['checkout', '-q', 'frontend-only']).status).toBe(0)
-  commitScopeBranch(scenario, 'src-tauri/src/scope.rs', 'both-stacks')
-  const head = scenario.headSha()
+it.each([
+  ['src-tauri/src/scope.rs', 'rust-only'],
+  ['native/macos/Scope.swift', 'native-only'],
+])(
+  '共享提交的 frontend 与 %s 独立范围合并为 full，仍跑原生回归',
+  (file, branch) => {
+    const scenario = preparePushScenario({ fullGate: true })
+    const seed = scenario.headSha()
+    commitScopeBranch(scenario, 'src/scope.ts', 'frontend-only')
+    const frontend = scenario.headSha()
+    expect(scenario.git(['checkout', '-q', '--detach', seed]).status).toBe(0)
+    commitScopeBranch(scenario, file, branch)
+    const other = scenario.headSha()
+    expect(scenario.git(['checkout', '-q', 'frontend-only']).status).toBe(0)
+    commitScopeBranch(scenario, file, 'both-stacks')
+    const head = scenario.headSha()
+
+    const result = scenario.runHookWithStdin(
+      `refs/heads/a ${head} refs/heads/a ${frontend}\nrefs/heads/b ${head} refs/heads/b ${other}\n`,
+    )
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(scenario.gateRuns()).toBe(1)
+    expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
+      'xcodebuild -project native/macos/',
+    )
+  },
+)
+
+it.each(['src/mixed.ts', 'scripts/mixed.sh'])(
+  'native 与 %s 混合：快慢路径均刷新两侧覆盖率并跑原生回归',
+  (file) => {
+    for (const slow of [false, true]) {
+      const scenario = preparePushScenario({ fullGate: true })
+      const base = scenario.headSha()
+      commitScopeBranch(scenario, 'native/macos/Mixed.swift', 'native-mixed')
+      commitScopeBranch(scenario, file, 'mixed')
+      const head = scenario.headSha()
+      scenario.env.PLOTWEAVE_GATE_FULL_NATIVE = '0'
+      if (slow) expect(scenario.git(['checkout', '-q', 'main']).status).toBe(0)
+
+      const result = scenario.runHookWithStdin(
+        `refs/heads/mixed ${head} refs/heads/mixed ${base}\n`,
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(scenario.gateRuns()).toBe(1)
+      expect(scenario.installRuns()).toBe(slow ? 1 : 0)
+      const log = readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')
+      expect(log).toContain('npm run test:coverage')
+      expect(log).toContain('cargo-llvm-cov llvm-cov')
+      expect(log).toContain('xcodebuild -project native/macos/')
+      expect(
+        JSON.parse(readFileSync(scenario.pendingPath, 'utf8')),
+      ).toMatchObject({
+        scope: 'full',
+        head,
+      })
+    }
+  },
+)
+
+it('混合范围的 native 失败阻断推送且不记录成功', () => {
+  const scenario = preparePushScenario({ fullGate: true })
+  const base = scenario.headSha()
+  commitScopeBranch(scenario, 'native/macos/Fail.swift', 'native-fail')
+  commitScopeBranch(scenario, 'scripts/fail.sh', 'mixed-fail')
+  scenario.env.PLOTWEAVE_TEST_XCODEBUILD_EXIT = '65'
 
   const result = scenario.runHookWithStdin(
-    `refs/heads/a ${head} refs/heads/a ${frontend}\nrefs/heads/b ${head} refs/heads/b ${rust}\n`,
+    `refs/heads/fail ${scenario.headSha()} refs/heads/fail ${base}\n`,
   )
 
-  expect(result.status, result.stderr).toBe(0)
-  expect(scenario.gateRuns()).toBe(1)
-  expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
-    'gate-scope full\n',
-  )
+  expect(result.status).not.toBe(0)
+  expect(scenario.gateRuns()).toBe(0)
+  expect(existsSync(scenario.pendingPath)).toBe(false)
 })
 
 it('共享 docs 提交检查每个基线，后续范围的空白错误仍阻断', () => {

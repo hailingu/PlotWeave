@@ -4,7 +4,7 @@
 # 历史问题另行治理，不阻塞提交）。
 #
 # 推送范围（owner 指示 2026-10-18）：PLOTWEAVE_GATE_SCOPE=full 时执行完整前端+
-# Rust 覆盖率；frontend/rust 只跑该栈全量覆盖率、另一栈复用
+# Rust 覆盖率；full 推送额外执行 native 功能回归；frontend/rust 只跑该栈全量覆盖率、另一栈复用
 # PLOTWEAVE_REUSED_*_LCOV；native 跑原生测试并复用两侧 LCOV；docs 由 pre-push
 # 直接分流，不得进入本脚本。缺复用报告或未知范围 fail-closed。
 
@@ -65,6 +65,14 @@ case $gate_scope in
   *)
     fail "[GATE_SCOPE_INVALID] 未知的推送门禁范围：$gate_scope"
     ;;
+esac
+
+# full 推送保守覆盖全部实现栈（PR #604 评审 5560989008）；pre-push 强制为 1，
+# 三个提交入口强制为 0，保留既定提交成本。非法值不能静默跳过检查。
+full_native=${PLOTWEAVE_GATE_FULL_NATIVE:-0}
+case $full_native in
+  0 | 1) ;;
+  *) fail "[GATE_FULL_NATIVE_INVALID] full native 开关只能为 0 或 1：$full_native" ;;
 esac
 
 # 未变更栈的最近 LCOV：由 pre-push 指向主工作树产物；缺文件时 fail-closed，
@@ -283,7 +291,7 @@ run_scanner() {
 }
 
 # 原生范围回归入口（owner 指示 2026-10-18）：构建当前 Web 画布资源后跑
-# 串行原生测试；不生成前端/Rust 覆盖率，二者由调用方复用最近 LCOV。测试
+# 串行原生测试；native 范围复用两侧 LCOV，full 推送刷新两侧覆盖率。测试
 # 失败即门禁失败；输出留在临时 worktree 或主工作树的忽略目录。
 run_native_tests() {
   sh "$script_directory/test-native.sh"
@@ -328,9 +336,6 @@ case $gate_scope in
     require_coverage_report 'Rust（复用）' "$rust_coverage_report"
     enforce_line_coverage_floor '前端（复用）' "$frontend_coverage_report"
     enforce_line_coverage_floor 'Rust（复用）' "$rust_coverage_report"
-    require_command "$xcodebuild_bin"
-    printf '%s\n' '[SonarQube] 运行原生 Swift/WKWebView 功能回归（压力测量按需运行）……'
-    run_step run_native_tests
     ;;
   full)
     printf '%s\n' '[SonarQube] 生成最新前端覆盖率……'
@@ -345,6 +350,12 @@ case $gate_scope in
     enforce_line_coverage_floor 'Rust' "$rust_coverage_report"
     ;;
 esac
+
+if [ "$gate_scope" = 'native' ] || { [ "$gate_scope" = 'full' ] && [ "$full_native" = '1' ]; }; then
+  require_command "$xcodebuild_bin"
+  printf '%s\n' '[SonarQube] 运行原生 Swift/WKWebView 功能回归（压力测量按需运行）……'
+  run_step run_native_tests
+fi
 
 printf '%s\n' '[SonarQube] 扫描并等待 Quality Gate……'
 run_step run_scanner

@@ -92,7 +92,7 @@ to the minimum sufficient check set (see
 
 ## Decision
 
-**Commit-creating hooks stay a single, uniform cost.** `pre-push` is scope-routed by owner decision 2026-10-18 (see [Scoped Push Cost](#scoped-push-cost-2026-10-18-owner-direction)). Every commit-gated command and every full-scope push runs the same complete sequence:
+**Commit-creating hooks stay a single, uniform cost.** `pre-push` is scope-routed by owner decision 2026-10-18 (see [Scoped Push Cost](#scoped-push-cost-2026-10-18-owner-direction)). Every commit-gated command runs the following complete sequence. Full-scope pushes additionally run native functional regression after coverage and before Sonar (PR #604 review 5560989008); the commit cost stays unchanged:
 
 1. `scripts/check-static.sh` — Prettier format check, ESLint with zero
    warnings, `check:size` file caps (issue #432), `typecheck:strict`.
@@ -135,7 +135,7 @@ is a deliberate gate-strength change, not an optimization hidden in a script.
 | single frontend (`src/**`, frontend-only root configs) | static checks + full frontend suite | frontend full; Rust reuses the most recent LCOV | one stack's coverage + Sonar |
 | single Rust (`src-tauri/**`, `crates/**`, `rust-toolchain.toml`) | static checks + full Rust suite | Rust full; frontend reuses the most recent LCOV | one stack's coverage + Sonar |
 | single native (`native/**`) | static checks + `sh scripts/test-native.sh` (canvas build + serial functional regression; stress measurements opt in) | no native LCOV; frontend/Rust reuse the most recent LCOV | functional regression time + Sonar |
-| cross-stack / tooling / unknown / empty / no baseline | complete gate | frontend + Rust full | existing full baseline |
+| cross-stack / tooling / unknown / empty / no baseline | static checks + frontend/Rust suites + native functional regression + Sonar | frontend + Rust full | existing baseline plus native functional regression |
 
 Boundaries:
 
@@ -149,6 +149,11 @@ Boundaries:
   parent. All ranges for a shared commit are combined before deduplication;
   different implementation stacks require `full`. If the unchanged stack is
   not actually unchanged, use a full push.
+- Every `full` push conservatively runs native functional regression, so adding
+  another stack or losing the baseline cannot remove native checks. `pre-push`
+  forces `PLOTWEAVE_GATE_FULL_NATIVE=1`; all three commit-creating entry points
+  force `0` to retain their uniform cost. Direct calls default to `0`; a manual
+  full-push check must set `1`. Invalid values fail before checks.
 - Native code is not part of the Sonar sources; the `native` scope records that
   boundary and still requires functional regression to pass. 所有者在 PR #604
   （2026-10-18）选择将持续性能、长循环内存及首拖测量改为
@@ -158,8 +163,9 @@ Boundaries:
   record remains the evidence; a docs-only commit created without the commit
   hook has no record, which is the same hook-coverage boundary as before.
 - The scoped paths were introduced on 2026-10-18. A measured cost baseline for
-  each path is a follow-up measurement; until then, the existing full-gate
-  baseline remains the only recorded cost figure and no cheaper-path claim is
+  each path, including native participation in `full` pushes, is a follow-up
+  measurement; historical baseline figures below measure the frontend/Rust
+  sequence and do not include this added native work. No cheaper-path claim is
   made. Revisit this decision if the scoped paths approach the full-gate cost,
   if stale-LCOV reuse causes an escaped regression, or if commit hooks are
   proposed to share the routing.
