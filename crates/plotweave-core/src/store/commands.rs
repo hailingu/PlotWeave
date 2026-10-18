@@ -1,6 +1,7 @@
 //! 项目生命周期 Tauri 命令（数据模型 §10）：create/load/save/delete
 //! 与各自的可测内核——不可信 id 词法校验先于任何路径拼接；保存走
-//! 保存边界校验 + 原子落盘 + 落盘后复验；删除按句柄相对递归且幂等。
+//! 保存边界校验 + 原子落盘 + 落盘后复验；删除按句柄相对递归、成对
+//! 移除后设目录持久性屏障，且幂等。
 
 use cap_std::fs::Dir as CapDir;
 
@@ -9,7 +10,9 @@ use crate::store::error::StoreError;
 use crate::store::list::{parse_file, read_meta};
 #[cfg(unix)]
 use crate::store::persist::asset_identity;
-use crate::store::persist::{atomic_write, open_dir_bound, projects_op_lock, read_verified_file};
+use crate::store::persist::{
+    atomic_io, atomic_write, open_dir_bound, projects_op_lock, read_verified_file,
+};
 use crate::store::types::{
     new_id, new_project_file, sanitize_name, validate_id, ProjectFile, ProjectMeta,
 };
@@ -241,13 +244,27 @@ pub fn persist_project_expect_existing(
     }
     Ok(read_meta(id, &file))
 }
-/// delete_project 的可测内核：资产目录与项目 JSON 的成对移除，幂等。
-/// 顺序契约：先删资产树再删权威项目文件——树删除失败时项目仍在列表中
-/// 可发现、可重试删除；反过来先删 JSON 会让失败留下不可发现的孤儿媒体。
-/// 元数据读取、树删除与 unlink 均相对已打开的 projects 根目录句柄进行
-/// （cap-std remove_dir_all 内部同样是逐组件 no-follow 的句柄相对实现），
-/// 归类后 `projects/{id}` 被并发换成符号链接也无法把删除引到根外——链接
-/// 自身按 remove_file 移除，不进入其指向的外部树。
+/// 删除落定后的目录持久性屏障（§10.2，Unix）：对锚定的 `projects/` 句柄
+/// 自身 fsync，使资产目录与项目 JSON 两个目录项的移除在返回成功前到达
+/// 持久介质；同步经 `open_dir(".")` 重新绑定句柄本身，不按路径名重开
+/// （与原子写的父目录屏障同款）。同步失败上浮，删除不得报告成功；两次
+/// 移除此时已在命名空间落定，缺失目标可容忍，重试会重新执行屏障并幂等
+/// 收敛。非 Unix 目录句柄无法 fsync，沿用写路径的平台现状不设屏障。
+#[cfg(unix)]
+fn sync_deleted_entries(root: &CapDir) -> Result<(), StoreError> {
+    atomic_io!(
+        DirectorySync,
+        root.open_dir(".")
+            .and_then(|d| d.into_std_file().sync_all())
+    )
+    .map_err(|e| StoreError::io("同步项目目录失败（持久性屏障缺失）", e))
+}
+
+#[cfg(not(unix))]
+fn sync_deleted_entries(_root: &CapDir) -> Result<(), StoreError> {
+    Ok(())
+}
+
 /// 句柄相对递归删除（§10.2）：目录条目先 open_dir_bound 绑定身份再删
 /// 内容——remove_dir_all 按名字重解析，归类后被换名的子目录会被误删；
 /// 符号链接与非目录条目只移除目录项自身（remove_file 不跟随），目录清空
@@ -275,6 +292,18 @@ fn remove_dir_contents_bound(dir: &CapDir) -> Result<(), StoreError> {
     }
     Ok(())
 }
+/// delete_project 的可测内核：资产目录与项目 JSON 的成对移除，幂等。
+/// 顺序契约：先删资产树再删权威项目文件——树删除失败时项目仍在列表中
+/// 可发现、可重试删除；反过来先删 JSON 会让失败留下不可发现的孤儿媒体。
+/// 元数据读取、树删除与 unlink 均相对已打开的 projects 根目录句柄进行
+/// （cap-std remove_dir_all 内部同样是逐组件 no-follow 的句柄相对实现），
+/// 归类后 `projects/{id}` 被并发换成符号链接也无法把删除引到根外——链接
+/// 自身按 remove_file 移除，不进入其指向的外部树。
+/// 持久性契约（issue #591）：两次移除都完成后、返回成功前对 `projects/`
+/// 目录执行 fsync——成功回执即表示两个目录项都已到达持久介质，断电/崩溃
+/// 不会在成功返回后复活“JSON 已删、资产树已落盘”的孤儿目录，也不会让
+/// “资产已删、JSON 保留”的媒体全丢项目重新出现在首页。屏障失败如实上浮；
+/// 屏障在 projects 操作锁内执行，排队的保存不会越过它重写已删记录。
 pub fn delete_project_files(root: &CapDir, id: &str) -> Result<(), StoreError> {
     validate_id(id).map_err(StoreError::invalid)?;
     // 删除与导入/生成/复制/会话创建/列表清扫共享 projects 操作锁
@@ -318,6 +347,7 @@ pub fn delete_project_files(root: &CapDir, id: &str) -> Result<(), StoreError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(StoreError::io("删除项目失败", e)),
     }
+    sync_deleted_entries(root)?;
     Ok(())
 }
 
