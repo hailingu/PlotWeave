@@ -106,9 +106,12 @@ source, weakening policy, or removing any complete-gate stage.
 
 ## Native-Shell Merge State And Invariant Matrix
 
-The `dev` integration into `codex/swiftui-react-flow` retains the same caps
-when Rust source moves to `crates/` and adds the native tree's existing
-Swift caps to the checker. The checker owns the following invariants at
+Historical merge note (2026-10-04): the `dev` integration into
+`codex/swiftui-react-flow` — a work branch whose content merged back into
+`dev` via PR #526 on 2026-10-13 and which no longer exists on the remote —
+retained the same caps when Rust source moved to `crates/` and added the
+native tree's existing Swift caps to the checker; those caps apply on `dev`
+today. The checker owns the following invariants at
 both `npm run check:size` and `scripts/check-static.sh` entry points.
 
 | State / precondition | Action / ordering | Observable outcome | Invariant | Verification |

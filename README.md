@@ -29,7 +29,7 @@
 
 当前支持平台为 **macOS**；**不支持 Windows**，不提供 Windows 构建、测试或发行支持。非 Unix 平台仅提供源代码：仓库源码在非 Unix 目标上保持可编译（[issue #546](https://github.com/hailingu/PlotWeave/issues/546)），需要 Windows 版本的使用者须自行构建并自担风险——平台能力差异（如库资产删除/恢复协议依赖的 Unix 文件身份与目录持久性屏障原语）会在运行时按能力缺失拒绝，不做官方验证。
 
-当前 `codex/swiftui-react-flow` 原生分支已实现 SwiftUI 首页、编辑工具栏、大纲、检查器、设定、图库、AI、导出与设置界面，存储、素材、密钥和模型服务均由 Swift 承接。React Flow 保留画布与单一编辑会话。此处描述的是当前源码实现，已发布的 v0.2.0 仍以其[发布说明](docs/releases/v0.2.0.md)为准。
+当前 `dev` 分支已实现 SwiftUI 首页、编辑工具栏、大纲、检查器、设定、图库、AI、导出与设置界面，存储、素材、密钥和模型服务均由 Swift 承接。React Flow 保留画布与单一编辑会话。该原生实现最初在历史分支 `codex/swiftui-react-flow` 上开发，2026-10-13 经 [PR #526](https://github.com/hailingu/PlotWeave/pull/526) 合入 `dev`，该分支现已被删除。此处描述的是当前源码实现，已发布的 v0.2.0 仍以其[发布说明](docs/releases/v0.2.0.md)为准。
 
 原生构建需要 macOS 26.0+、[Node.js 24.18.0](.nvmrc) 与 Xcode 27.0／macOS SDK 27.0：
 
