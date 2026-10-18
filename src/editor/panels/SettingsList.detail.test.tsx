@@ -122,6 +122,9 @@ describe('角色详情表单（issue 95）', () => {
     const reopened = screen.getByLabelText('角色小传') as HTMLTextAreaElement
     fireEvent.keyDown(reopened, { key: 'Escape', isComposing: true })
     expect(screen.getByLabelText('角色名称')).toBeTruthy()
+    // WebKit 乱序（issue #570）：compositionend 之后晚到的 Esc 仅 keyCode 229
+    fireEvent.keyDown(reopened, { key: 'Escape', keyCode: 229 })
+    expect(screen.getByLabelText('角色名称')).toBeTruthy()
   })
 })
 

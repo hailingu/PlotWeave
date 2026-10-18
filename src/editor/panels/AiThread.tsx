@@ -27,6 +27,7 @@ import { revalidatePendingCard, useAiTurn } from './aiThreadTurn'
 import { AiTopbar } from './AiThreadTopbar'
 import { useNativeAiShell } from '../nativeCanvas/useNativeAiShell'
 import { isSwiftHost } from '../../platform/hostEnvironment'
+import { isCompositionKey } from '../../platform/compositionKey'
 import { useExitGuardedCallback } from '../../useExitGuardedCallback'
 
 export { AiSettingsButton } from './AiThreadTopbar'
@@ -429,7 +430,9 @@ function AiComposer({
             disabled={!ready}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') onSend()
+              // 组合在途的 Enter 归输入法（确认候选），不发送（issue #570）
+              if (e.key === 'Enter' && !isCompositionKey(e.nativeEvent))
+                onSend()
             }}
           />
           <button

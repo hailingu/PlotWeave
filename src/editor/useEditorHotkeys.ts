@@ -6,9 +6,12 @@
  * 文档弹窗（issue #126）与剧本导出弹窗（issue #263 评审）——打开时
  * 同样仅放行 Escape：非输入焦点的全局撤销/重做/删除挂起，命令栈与
  * 选中不在遮罩底下被改写；画布外 pointerdown 收起设置面板/＋菜单/
- * 右键菜单。
+ * 右键菜单。输入法组合在途的 keydown 一律让位（确认/取消组合的键由
+ * 输入法消费，含 WebKit 晚于 compositionend 到达的 keyCode 229，
+ * issue #570），不触发热键动作。
  */
 import { useEffect, useRef } from 'react'
+import { isCompositionKey } from '../platform/compositionKey'
 
 /** 快捷键动作集：删除选中前由调用方给出当前选中 id 列表（读画布镜像 ref）。 */
 export interface EditorHotkeyActions {
@@ -31,8 +34,37 @@ export interface EditorHotkeyActions {
   onDeleteEdges: (ids: string[]) => void
 }
 
+/** 撤销/重做/删除选择的按键分发（keydown 的非组合、非输入、非模态分支）。 */
+function runHistoryKeys(e: KeyboardEvent, actions: EditorHotkeyActions): void {
+  const mod = e.metaKey || e.ctrlKey
+  if (mod && e.key.toLowerCase() === 'z') {
+    e.preventDefault()
+    if (e.shiftKey) actions.onRedo()
+    else actions.onUndo()
+    return
+  }
+  if (mod && e.key.toLowerCase() === 'y') {
+    e.preventDefault()
+    actions.onRedo()
+    return
+  }
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    const nodeIds = actions.selectedNodeIds()
+    if (nodeIds.length > 0) {
+      e.preventDefault()
+      actions.onDeleteNodes(nodeIds)
+      return
+    }
+    const edgeIds = actions.selectedEdgeIds()
+    if (edgeIds.length > 0) {
+      e.preventDefault()
+      actions.onDeleteEdges(edgeIds)
+    }
+  }
+}
+
 /** 编辑器全局快捷键 hook（撤销/重做/删除等）：监听只挂一次，动作经
- * ref 读取最新实现；输入焦点与弹窗态的抑制规则在实现内。 */
+ * ref 读取最新实现；输入焦点、输入法组合与弹窗态的抑制规则在实现内。 */
 export function useEditorHotkeys(actions: EditorHotkeyActions): void {
   // 动作经 ref 读取：监听只挂一次，动作实现随渲染更新（等价于原 deps 重挂）。
   const ref = useRef(actions)
@@ -50,6 +82,7 @@ export function useEditorHotkeys(actions: EditorHotkeyActions): void {
       }
     }
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isCompositionKey(e)) return
       const target = e.target as HTMLElement
       const typing = target.closest(
         'input,textarea,select,[contenteditable="true"]',
@@ -62,31 +95,7 @@ export function useEditorHotkeys(actions: EditorHotkeyActions): void {
       // 模态会话打开（设定文档弹窗 issue #126 / 剧本导出弹窗 issue #263 评审）：
       // 非输入焦点的全局快捷键挂起
       if (ref.current.modalEditingOpen || ref.current.exportDialogOpen) return
-      const mod = e.metaKey || e.ctrlKey
-      if (mod && e.key.toLowerCase() === 'z') {
-        e.preventDefault()
-        if (e.shiftKey) ref.current.onRedo()
-        else ref.current.onUndo()
-        return
-      }
-      if (mod && e.key.toLowerCase() === 'y') {
-        e.preventDefault()
-        ref.current.onRedo()
-        return
-      }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        const nodeIds = ref.current.selectedNodeIds()
-        if (nodeIds.length > 0) {
-          e.preventDefault()
-          ref.current.onDeleteNodes(nodeIds)
-          return
-        }
-        const edgeIds = ref.current.selectedEdgeIds()
-        if (edgeIds.length > 0) {
-          e.preventDefault()
-          ref.current.onDeleteEdges(edgeIds)
-        }
-      }
+      runHistoryKeys(e, ref.current)
     }
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown)
