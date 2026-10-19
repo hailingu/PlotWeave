@@ -103,7 +103,7 @@
 扣分：
 
 - **已修复（原 P2）** [#593](https://github.com/hailingu/PlotWeave/issues/593)：[PR #624](https://github.com/hailingu/PlotWeave/pull/624) 固定检出事件 base SHA，从 base 读取 `.nvmrc` 与 `scripts/verify-gate-evidence.ts`，只获取 head 对象并按精确 SHA 核验 head 台账；替换 PR 中的核验器不再改变判定。原 tip-lag 语义未变。**保留边界**：工作流定义仍由 PR merge 提供，作者若同时改写 workflow 仍能改变检查；没有新增 approving review 要求、保护规则或独立执行器，台账仍不是本地门禁真实执行的独立证明。
-- **P3** Actions 仅用可变 major tag，`cargo-audit@latest` 未钉版（记为成本/可复现性债务，未单开 issue）；同条原记录的「CI 重复执行 scripts 套件」已建档并修复（[#617](https://github.com/hailingu/PlotWeave/issues/617)）。
+- **已修复（原 P3）** [#618](https://github.com/hailingu/PlotWeave/issues/618)：npm high/critical 与执行错误现在阻断 frontend；cargo-audit 固定版本，CI Actions 固定已验证的完整上游 SHA。隔离 high lockfile 实际退出 1，当前真实 npm 与双 Cargo 审计均无漏洞；informational 仍沿用既有策略，未新增 ignore 或改项目锁文件。Runner/advisory 数据仍动态更新，不声称整套 CI 位元级复现。原「CI 重复执行 scripts 套件」由 [#617](https://github.com/hailingu/PlotWeave/issues/617) 修复。
 
 ### 3.6 文档与治理 — 8.8 / A-
 

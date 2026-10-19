@@ -24,17 +24,14 @@ jobs:
     name: frontend（src/** 与 scripts 行）
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
           cache: npm
-      # 依赖审计（issue #552 方案 2）：--audit-level=high 仅在 high/critical
-      # 漏洞时非零退出；先以 continue-on-error 告警起步（issue 口径：避免
-      # 误伤，稳定后删除该行转 error 阻断）。
-      - name: npm audit --audit-level=high（issue #552；warning 起步）
+      # #618：high/critical 漏洞或审计执行失败均阻断；保留全量锁文件口径。
+      - name: npm audit --audit-level=high（issue #618；阻断）
         run: npm audit --audit-level=high
-        continue-on-error: true
       - run: npm ci
       - name: format:check（src 行）
         run: npm run format:check
@@ -59,10 +56,10 @@ jobs:
     name: rust（src-tauri/**）
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # 元守卫使用 Node 校验版本化 JSON 基线，复用仓库钉版工具链；
       # npm 缓存服务于 issue #551 链路用例输入的 npm ci。
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -71,7 +68,7 @@ jobs:
       # 不在此重复（macos-15 runner 预装 rustup）
       - name: 安装钉版 Rust 工具链（rust-toolchain.toml）
         run: rustup show
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: |
             src-tauri
@@ -80,13 +77,13 @@ jobs:
       # （taiki-e/install-action），只读两个 workspace 的 Cargo.lock，
       # 不参与编译。漏洞级 advisory 使步骤失败（阻断合入）；
       # unmaintained / unsound / yanked 等 informational warning 不失败
-      # ——当前 src-tauri 锁文件存在 8 条，处置记录见
-      # docs/development/workflow.md。工具跟随 latest：advisory DB 运行
-      # 时拉取，扫描器版本陈旧不构成漏报。
+      # ——现有 informational 的明细与处置记录见
+      # docs/development/workflow.md。#618 固定扫描器版本；advisory DB 仍
+      # 在运行时刷新，工具升级经独立评审。
       - name: 安装 cargo-audit（issue #552）
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
-          tool: cargo-audit@latest
+          tool: cargo-audit@0.22.2
       - name: cargo audit src-tauri/Cargo.lock（issue #552）
         run: cargo audit --color never --file src-tauri/Cargo.lock
       - name: cargo audit crates/Cargo.lock（issue #552）
@@ -133,8 +130,8 @@ jobs:
       # 使用镜像公开的版本别名，避免默认 Xcode 更新后静默切换工具链。
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -150,7 +147,7 @@ jobs:
         run: sh scripts/test-native.sh
       - name: Upload native Swift coverage
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: native-coverage-${{ github.run_attempt }}
           path: |
@@ -178,13 +175,13 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # #593：执行代码及 .nvmrc 取自事件 base 的不可变提交；PR 只提供 Git 对象。
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
       - name: 校验 PR 提交的门禁证据（issue #548）
