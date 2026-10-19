@@ -9,6 +9,7 @@ import type { Viewport } from '@xyflow/react'
 import { errorBannerMessage } from './errorBannerMessage'
 import { sessionDoc } from './sessionDoc'
 import { useDebouncedSave } from './useDebouncedSave'
+import type { SaveStatus } from './saveStatus'
 import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
 import type { ProjectContent } from '../model/content'
 
@@ -17,6 +18,8 @@ const SAVE_DEBOUNCE_MS = 600
 
 /** 落盘诊断、标脏入口与画布持久化确认。 */
 export interface EditorPersistence {
+  /** 仅在最新画布实际保存后为 saved；初始载入不冒充保存完成。 */
+  saveStatus: SaveStatus
   /** 保存失败的用户可见诊断；null = 无失败（成功后清除）。 */
   saveError: string | null
   /** 显式标脏：供无重渲染的 transient 变更换入最新文档。 */
@@ -119,7 +122,7 @@ export function useEditorPersistence(
     handleSaveResult(null)
   }, [markExternallyPersisted, handleSaveResult])
 
-  const markDirty = useDebouncedSave(
+  const { markDirty, saveStatus } = useDebouncedSave(
     buildSessionDoc(project, doc, doc.viewportRef.current),
     wrappedOnSave,
     SAVE_DEBOUNCE_MS,
@@ -135,5 +138,5 @@ export function useEditorPersistence(
     [doc, markDirty, project],
   )
 
-  return { saveError, markDirty, onMoveEnd, whenCanvasCommitted }
+  return { saveStatus, saveError, markDirty, onMoveEnd, whenCanvasCommitted }
 }

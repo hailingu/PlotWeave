@@ -58,7 +58,7 @@ function renderDebouncedSave(
   )
   return {
     onSave,
-    markDirty: result.current,
+    markDirty: result.current.markDirty,
     rerenderDoc: (doc: ProjectContent) => {
       act(() => {
         rerender({ doc })
