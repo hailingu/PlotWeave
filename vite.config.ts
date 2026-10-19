@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url'
+import { nativeCanvasCoverageThresholds } from './scripts/native-canvas-coverage'
 import { configDefaults, defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
@@ -28,7 +30,14 @@ export default defineConfig({
       // 在扫描前按同一口径复核两份报告；分支等其余口径不设下限（Rust 侧
       // 无分支口径，见 rust-standard.md「测试覆盖率」）。恰等于下限通过。
       // 数值契约由 scripts/sonar-test-scope.test.ts 守卫。
-      thresholds: { lines: 80 },
+      // #616: Vitest4's perFile flag is global. One exact-path group per native
+      // canvas source enforces 80% independently without weakening the aggregate.
+      thresholds: {
+        lines: 80,
+        ...nativeCanvasCoverageThresholds(
+          fileURLToPath(new URL('.', import.meta.url)),
+        ),
+      },
       include: ['src/**'],
       // 测试设施不计入产品覆盖率（issue #311，issue #343 补录
       // sheetRuleQuery、issue #534 补录 nodes 测试脚手架、issue #538 补录

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 /** Entry-level regressions: removing page-owned cleanup must leave the rendered fixture behind. */
+import { screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -43,6 +44,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => hide())
+  delete (window as Window & { __pwRunCanvasPerf?: unknown }).__pwRunCanvasPerf
   document.body.replaceChildren()
   window.location.hash = ''
   vi.restoreAllMocks()
@@ -195,3 +197,29 @@ function diagnosticSubscription() {
     },
   }
 }
+
+it('production entry mounts the actual application and completes its host lifecycle', async () => {
+  window.location.hash = ''
+  const ready = vi.fn()
+  vi.stubGlobal('webkit', {
+    messageHandlers: { canvasHost: { postMessage: ready } },
+  })
+  await boot()
+  expect(await screen.findByRole('button', { name: /新建项目/ })).toBeTruthy()
+  expect(document.getElementsByClassName('react-flow__node')).toHaveLength(0)
+  await waitFor(() => expect(ready).toHaveBeenCalledWith({ event: 'ready' }))
+  await act(async () => hide())
+  expect(document.getElementById('root')?.childElementCount).toBe(0)
+  expect('__pwApplyHostAppearance' in window).toBe(false)
+})
+
+it('explicit performance entry installs the runner and mounts the requested fixture only', async () => {
+  window.location.hash = '#perf:100'
+  await boot()
+  expect(
+    (window as Window & { __pwRunCanvasPerf?: unknown }).__pwRunCanvasPerf,
+  ).toBeTypeOf('function')
+  expect(document.getElementsByClassName('react-flow__node')).toHaveLength(100)
+  await act(async () => hide())
+  expect(document.getElementById('root')?.childElementCount).toBe(0)
+})

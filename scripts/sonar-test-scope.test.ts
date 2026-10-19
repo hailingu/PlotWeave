@@ -322,3 +322,31 @@ describe('vite 覆盖率下限契约（issue #393）', () => {
     expect(config.test?.coverage?.thresholds?.lines).toBe(80)
   })
 })
+
+// Each exact-path glob is one coverage group on the pinned Vitest4 provider.
+describe('native canvas per-file line floor (#616)', () => {
+  it('keeps aggregate80 and assigns80 to every maintained native canvas source', () => {
+    const thresholds = config.test?.coverage?.thresholds as
+      Record<string, unknown> | undefined
+    const files = [
+      ...buildSrcModuleGraph(resolve(repositoryRoot, 'src')).keys(),
+    ]
+      .filter(
+        (path) =>
+          path.startsWith('editor/nativeCanvas/') &&
+          !/\.test(?:-d)?\.tsx?$/.test(path),
+      )
+      .map((path) => 'src/' + path)
+      .sort()
+    expect(files).toContain('src/editor/nativeCanvas/useNativeEditorShell.ts')
+    expect(thresholds?.lines).toBe(80)
+    expect(thresholds?.perFile).not.toBe(true)
+    expect(
+      Object.keys(thresholds ?? {})
+        .filter((key) => key.startsWith('src/editor/nativeCanvas/'))
+        .sort(),
+    ).toEqual(files)
+    for (const path of files)
+      expect(thresholds?.[path], path).toEqual({ lines: 80 })
+  })
+})
