@@ -50,7 +50,7 @@ struct NativeLibraryImportRecoveryTests {
             #expect(try await restarted.source(id: fixture.id).1.read(maxBytes: 10) == Data([1]))
         }
         for _ in 0..<3 {
-            let list = try await NativeLibrary(root: fixture.root).invoke("list_library_assets", args: [:])
+            let list = try await NativeLibrary(root: fixture.root).invoke(command: "list_library_assets", args: [:])
             #expect(list["assets"]?["byId"]?.object?.count == 1)
             #expect(list["cleanupPending"]?.array.first?["count"] == .number(1))
             #expect(list["cleanupPending"]?.array.first?["bytes"] == .number(2))
@@ -73,7 +73,7 @@ struct NativeLibraryImportRecoveryTests {
         let newID = try #require(index["assets"]?["byId"]?.object?.keys.first { $0 != fixture.id })
         let restarted = NativeLibrary(root: fixture.root)
         #expect(try await restarted.openMedia(id: newID).read(maxBytes: 10) == Data([2, 3]))
-        let list = try await restarted.invoke("list_library_assets", args: [:])
+        let list = try await restarted.invoke(command: "list_library_assets", args: [:])
         #expect(list["assets"]?["byId"]?.object?.count == 2)
         #expect(list["cleanupPending"]?.array.isEmpty == true)
         #expect(try fixture.journal()["entries"]?.array.isEmpty == true)
@@ -94,7 +94,7 @@ struct NativeLibraryImportRecoveryTests {
         let before = try fixture.mediaNames()
         let evidence = try Data(contentsOf: fixture.journalURL)
         for _ in 0..<2 {
-            let list = try await library.invoke("list_library_assets", args: [:])
+            let list = try await library.invoke(command: "list_library_assets", args: [:])
             #expect(list["cleanupPending"]?.array.first?["kind"] == .string("evidence"))
             await #expect(throws: (any Error).self) { try await fixture.importNew(library) }
         }
@@ -102,7 +102,7 @@ struct NativeLibraryImportRecoveryTests {
         #expect(try Data(contentsOf: fixture.journalURL) == evidence)
         #expect(try fixture.mediaNames() == before)
         try original.write(to: fixture.indexURL)
-        let list = try await library.invoke("list_library_assets", args: [:])
+        let list = try await library.invoke(command: "list_library_assets", args: [:])
         #expect(list["cleanupPending"]?.array.first?["count"] == .number(1))
     }
 
@@ -119,7 +119,7 @@ struct NativeLibraryImportRecoveryTests {
         else { try Data([9]).write(to: media) }
         let before = try Data(contentsOf: fixture.journalURL)
         let library = NativeLibrary(root: fixture.root)
-        let list = try await library.invoke("list_library_assets", args: [:])
+        let list = try await library.invoke(command: "list_library_assets", args: [:])
         #expect(list["cleanupPending"]?.array.first?["kind"] == .string("evidence"))
         await #expect(throws: (any Error).self) { try await fixture.importNew(library) }
         #expect(try Data(contentsOf: retainedOriginal) == Data([2, 3]))
@@ -183,7 +183,7 @@ struct NativeLibraryImportRecoveryTests {
         defer { fixture.remove() }
         #expect(chmod(fixture.controls.path, 0o500) == 0)
         defer { chmod(fixture.controls.path, 0o700) }
-        await #expect(throws: (any Error).self) { try await NativeLibrary(root: fixture.root).invoke("list_library_assets", args: [:]) }
+        await #expect(throws: (any Error).self) { try await NativeLibrary(root: fixture.root).invoke(command: "list_library_assets", args: [:]) }
         #expect(chmod(fixture.controls.path, 0o700) == 0)
         let entry = try #require(fixture.journal()["entries"]?.array.first)
         let retained = fixture.controls.appendingPathComponent(try #require(entry["trashName"]?.string))
@@ -200,7 +200,7 @@ struct NativeLibraryImportRecoveryTests {
         for _ in 0..<3 {
             let library = NativeLibrary(root: fixture.root)
             #expect(try await library.openMedia(id: "shared").read(maxBytes: 10) == Data([2, 3]))
-            let list = try await library.invoke("list_library_assets", args: [:])
+            let list = try await library.invoke(command: "list_library_assets", args: [:])
             #expect(list["cleanupPending"]?.array.first?["count"] == .number(1))
             #expect(list["cleanupPending"]?.array.first?["bytes"] == .number(2))
         }
@@ -216,13 +216,13 @@ struct NativeLibraryImportRecoveryTests {
         #expect(chmod(fixture.controls.path, 0o500) == 0)
         defer { chmod(fixture.controls.path, 0o700) }
         let library = NativeLibrary(root: fixture.root)
-        await #expect(throws: (any Error).self) { try await library.invoke("list_library_assets", args: [:]) }
+        await #expect(throws: (any Error).self) { try await library.invoke(command: "list_library_assets", args: [:]) }
         #expect(try fixture.mediaNames().count == 1)
         #expect(try fixture.retainedBytes() == [Data([2, 3])])
         #expect(try Data(contentsOf: fixture.journalURL) == before)
         #expect(chmod(fixture.controls.path, 0o700) == 0)
         for _ in 0..<3 {
-            let list = try await NativeLibrary(root: fixture.root).invoke("list_library_assets", args: [:])
+            let list = try await NativeLibrary(root: fixture.root).invoke(command: "list_library_assets", args: [:])
             #expect(list["cleanupPending"]?.array.first?["count"] == .number(1))
             #expect(list["cleanupPending"]?.array.first?["bytes"] == .number(2))
         }
@@ -239,7 +239,7 @@ struct NativeLibraryImportRecoveryTests {
                 throw HostFailure(code: "PW_STORAGE_ERROR", message: "合成落位前故障")
             })
         }
-        let list = try await NativeLibrary(root: fixture.root).invoke("list_library_assets", args: [:])
+        let list = try await NativeLibrary(root: fixture.root).invoke(command: "list_library_assets", args: [:])
         #expect(list["assets"]?["byId"]?.object?.count == 1)
         #expect(list["cleanupPending"]?.array.isEmpty == true)
         #expect(try fixture.mediaNames().count == 1)

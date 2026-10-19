@@ -1,6 +1,7 @@
 import Foundation
 
 /// Native asset orchestration composes the library and the single project actor without duplicating storage rules.
+/// invoke remains async for cross-actor library/project work and background descriptor reads.
 actor NativeAssets {
     /// Single wire-name registry; exhaustive dispatch makes a missing command handler a compile error.
     enum Command: String, CaseIterable, Sendable {
@@ -17,7 +18,7 @@ actor NativeAssets {
     init(library: NativeLibrary, projects: NativeProjectStore) { self.library = library; self.projects = projects }
 
     /// Existing business entry points retain their command names and camelCase arguments.
-    func invoke(_ command: String, args: [String: HostJSON]) async throws -> HostJSON {
+    func invoke(command: String, args: [String: HostJSON]) async throws -> HostJSON {
         guard let command = Command(rawValue: command) else { throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "未知项目素材命令") }
         switch command {
         case .importProjectAssetFromLibrary:

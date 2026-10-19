@@ -32,7 +32,7 @@ struct NativeLibraryModelTests {
         }
         #expect(!blocked, "所选特殊文件不得等待 writer 才拒绝")
         #expect(model.error != nil && model.writable)
-        let authoritative = try await fixture.library.invoke("list_library_assets", args: [:])
+        let authoritative = try await fixture.library.invoke(command: "list_library_assets", args: [:])
         #expect(model.value["assets"] == authoritative["assets"])
         let entries = try #require(authoritative["assets"]?["byId"]?.object)
         #expect(entries.count == (includePrior ? 1 : 0))
@@ -51,7 +51,7 @@ struct NativeLibraryModelTests {
         try await load(model)
         model.pickFiles(kind: "other")
         try await settle(model)
-        let authoritative = try await fixture.library.invoke("list_library_assets", args: [:])
+        let authoritative = try await fixture.library.invoke(command: "list_library_assets", args: [:])
         #expect(model.value["assets"] == authoritative["assets"])
         let assets = try #require(model.value["assets"]?["byId"]?.object)
         #expect(assets.count == 1 && model.error != nil && model.writable)
@@ -70,7 +70,7 @@ struct NativeLibraryModelTests {
         try await settle(model)
         #expect(model.value["assets"]?["byId"]?.object?.count == (supplied ? 2 : 0))
         #expect(model.error == nil && model.writable)
-        let persisted = try await NativeLibrary(root: fixture.root).invoke("list_library_assets", args: [:])
+        let persisted = try await NativeLibrary(root: fixture.root).invoke(command: "list_library_assets", args: [:])
         #expect(model.value["assets"] == persisted["assets"])
     }
 
@@ -101,7 +101,7 @@ struct NativeLibraryModelTests {
         _ = try await fixture.library.importAsset(name: "external.png", mime: "image/png", kind: "other", bytes: Data([4]))
         model.mutate("update_library_asset", args: ["id": .string("missing"), "patch": .object(["name": .string("changed")])])
         try await settle(model)
-        let authoritative = try await fixture.library.invoke("list_library_assets", args: [:])
+        let authoritative = try await fixture.library.invoke(command: "list_library_assets", args: [:])
         #expect(model.value["assets"] == authoritative["assets"])
         #expect(model.value["assets"]?["byId"]?.object?.count == 1 && model.error != nil)
     }
@@ -124,7 +124,7 @@ struct NativeLibraryModelTests {
         model.close()
         resume?.resume(returning: [fixture.first])
         try await wait { returned }
-        let persisted = try await fixture.library.invoke("list_library_assets", args: [:])
+        let persisted = try await fixture.library.invoke(command: "list_library_assets", args: [:])
         #expect(persisted["assets"]?["byId"]?.object?.isEmpty == true)
         #expect(model.value == before && model.error == nil)
     }

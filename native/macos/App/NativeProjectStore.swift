@@ -1,6 +1,7 @@
 import Foundation
 
 /// Swift-owned persistence actor serializes project mutations, media commits and deletion at one boundary.
+/// invoke stays synchronous for actor-serialized filesystem transactions; external callers still await the actor hop.
 actor NativeProjectStore {
     /// Single wire-name registry; exhaustive dispatch makes a missing command handler a compile error.
     enum Command: String, CaseIterable, Sendable {

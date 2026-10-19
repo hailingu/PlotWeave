@@ -16,8 +16,8 @@ struct NativeLibraryJournalBoundaryTests {
                 let name = legacy ? "asset-delete-archive.json" : "asset-delete-journal.json"
                 try JSONEncoder().encode(HostJSON.object(fields)).write(to: fixture.root.appendingPathComponent("library/" + name))
                 let library = NativeLibrary(root: fixture.root)
-                _ = try await library.invoke("delete_library_asset", args: ["id": .string(fixture.id)])
-                let result = try await library.invoke("list_library_assets", args: [:])
+                _ = try await library.invoke(command: "delete_library_asset", args: ["id": .string(fixture.id)])
+                let result = try await library.invoke(command: "list_library_assets", args: [:])
                 let summary = try #require(result["cleanupPending"]?.array.first)
                 #expect(summary["count"] == .number(1))
                 #expect(summary["bytes"] == .number(3))
@@ -39,7 +39,7 @@ struct NativeLibraryJournalBoundaryTests {
         try raw.write(to: journalURL)
         let library = NativeLibrary(root: fixture.root)
         do {
-            _ = try await library.invoke("delete_library_asset", args: ["id": .string(fixture.id)])
+            _ = try await library.invoke(command: "delete_library_asset", args: ["id": .string(fixture.id)])
             Issue.record("Delete must refuse the half-budget journal before recovery")
         } catch let failure as HostFailure { #expect(failure.code == "PW_STORAGE_REFUSED") }
         #expect(try Data(contentsOf: journalURL) == raw)
