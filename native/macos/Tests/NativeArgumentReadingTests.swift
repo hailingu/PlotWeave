@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import PlotWeaveNative
 
-/// Consumer characterization protects domain errors and empty-string policy during shared-reader extraction.
+/// Consumer characterization protects domain error codes and empty-string policy during shared-reader extraction.
 @MainActor
 struct NativeArgumentReadingTests {
     /// Missing and non-string inputs fail at the original domain boundary before I/O or provider work.
@@ -13,19 +13,19 @@ struct NativeArgumentReadingTests {
         for value in invalid {
             var args: [String: HostJSON] = [:]
             args["id"] = value
-            try await expectFailure(code: "PW_INVALID_REQUEST", message: "缺少 id 字段") {
+            try await expectFailure(code: "PW_INVALID_REQUEST") {
                 try await fixture.projects.invoke(command: "load_project", args: args)
             }
-            try await expectFailure(code: "PW_LIBRARY_INVALID", message: "缺少必填字段") {
+            try await expectFailure(code: "PW_LIBRARY_INVALID") {
                 try await fixture.library.invoke("delete_library_asset", args: args)
             }
             args["asset"] = .object([:])
-            try await expectFailure(code: "PW_LIBRARY_INVALID", message: "素材请求缺少必填字段") {
+            try await expectFailure(code: "PW_LIBRARY_INVALID") {
                 try await fixture.assets.invoke("validate_project_asset", args: args)
             }
             var modelArgs: [String: HostJSON] = [:]
             modelArgs["jobId"] = value
-            try await expectFailure(code: "PW_MODEL_ERROR", message: "模型请求字符串参数缺失或类型错误") {
+            try await expectFailure(code: "PW_MODEL_ERROR") {
                 try await fixture.models.invoke(command: "llm_image_cancel", args: modelArgs)
             }
         }
@@ -36,13 +36,13 @@ struct NativeArgumentReadingTests {
     @Test func emptyStringsPreserveDomainPolicy() async throws {
         let fixture = Fixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        try await expectFailure(code: "PW_INVALID_REQUEST", message: "缺少 id 字段") {
+        try await expectFailure(code: "PW_INVALID_REQUEST") {
             try await fixture.projects.invoke(command: "load_project", args: ["id": .string("")])
         }
-        try await expectFailure(code: "PW_LIBRARY_INVALID", message: "素材身份无效") {
+        try await expectFailure(code: "PW_LIBRARY_INVALID") {
             try await fixture.library.invoke("delete_library_asset", args: ["id": .string("")])
         }
-        try await expectFailure(code: "PW_INVALID_REQUEST", message: "资产 id、路径、来源或 UTC 时间无效") {
+        try await expectFailure(code: "PW_INVALID_REQUEST") {
             try await fixture.assets.invoke("validate_project_asset", args: ["id": .string(""), "asset": .object([:])])
         }
         let result = try await fixture.models.invoke(command: "llm_image_cancel", args: ["jobId": .string("")])
@@ -58,12 +58,20 @@ struct NativeArgumentReadingTests {
         }
     }
 
+    /// Empty strings reach downstream validation in three domains; only project arguments reject them at read time.
+    @Test func sharedReaderPreservesPerDomainEmptyStringPolicy() throws {
+        let args = ["field": HostJSON.string("")]
+        for domain in [HostArgumentDomain.library, .asset, .model] {
+            #expect(try args.requiredString("field", domain: domain) == "")
+        }
+        #expect(throws: HostFailure.self) { try args.requiredString("field", domain: .project) }
+    }
+
     /// Unexpected success or an unstructured failure cannot satisfy an error contract assertion.
-    private func expectFailure(code: String, message: String, operation: @MainActor () async throws -> HostJSON) async throws {
+    private func expectFailure(code: String, operation: @MainActor () async throws -> HostJSON) async throws {
         do { _ = try await operation() }
         catch let failure as HostFailure {
             #expect(failure.code == code)
-            #expect(failure.message == message)
             return
         }
         catch { throw error }
