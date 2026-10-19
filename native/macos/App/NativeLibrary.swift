@@ -2,6 +2,16 @@ import Foundation
 
 /// Pure Swift library service serializes business operations and retains the existing cross-process flock boundary.
 actor NativeLibrary {
+    /// Single wire-name registry; exhaustive dispatch makes a missing command handler a compile error.
+    enum Command: String, CaseIterable, Sendable {
+        case listLibraryAssets = "list_library_assets"
+        case importLibraryAsset = "import_library_asset"
+        case updateLibraryAsset = "update_library_asset"
+        case deleteLibraryAsset = "delete_library_asset"
+        case upsertLibraryGroup = "upsert_library_group"
+        case deleteLibraryGroup = "delete_library_group"
+    }
+
     /// Only the host selects this trusted app-data root.
     let root: URL
     private var revision: UInt64 = 0
@@ -23,11 +33,12 @@ actor NativeLibrary {
 
     /// Existing IPC names route through one native domain implementation also used by SwiftUI forms.
     func invoke(_ command: String, args: [String: HostJSON]) async throws -> HostJSON {
+        guard let command = Command(rawValue: command) else { throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "未知素材库命令") }
         switch command {
-        case "list_library_assets": return try await execute { state, number in state.response(state.listing, revision: number) }
-        case "import_library_asset":
+        case .listLibraryAssets: return try await execute { state, number in state.response(state.listing, revision: number) }
+        case .importLibraryAsset:
             return try await importAsset(name: string(args, "name"), mime: string(args, "mime"), kind: string(args, "kind"), bytes: byteData(args["bytes"]))
-        case "update_library_asset":
+        case .updateLibraryAsset:
             let id = try identity(args)
             guard let patch = args["patch"] else { throw NativeLibraryIndex.invalid("缺少修改对象") }
             return try await execute { state, number in
@@ -36,8 +47,8 @@ actor NativeLibrary {
                 try state.write()
                 return state.response(asset, revision: number)
             }
-        case "delete_library_asset": return try await deleteAsset(id: identity(args))
-        case "upsert_library_group":
+        case .deleteLibraryAsset: return try await deleteAsset(id: identity(args))
+        case .upsertLibraryGroup:
             guard let group = args["group"] else { throw NativeLibraryIndex.invalid("缺少编组对象") }
             let validated = try NativeLibraryIndex.group(group)
             return try await execute { state, number in
@@ -46,7 +57,7 @@ actor NativeLibrary {
                 try state.write()
                 return state.response(group, revision: number)
             }
-        case "delete_library_group":
+        case .deleteLibraryGroup:
             let id = try identity(args)
             return try await execute { state, number in
                 try state.requireWritable()
@@ -54,7 +65,6 @@ actor NativeLibrary {
                 try state.write()
                 return state.response(.object(["id": .string(id)]), revision: number)
             }
-        default: throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "未知素材库命令")
         }
     }
 

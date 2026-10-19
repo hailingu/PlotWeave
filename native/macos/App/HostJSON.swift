@@ -81,6 +81,11 @@ struct HostFailure: Error, Sendable {
     let code: String
     let message: String
 
+    /// Router and project dispatch share the existing unknown-host failure without duplicating its text.
+    static func commandUnavailable(_ command: String) -> HostFailure {
+        HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "宿主命令尚未接通：\(command)")
+    }
+
     /// JSON wire reply required by protocol version 1.
     var reply: HostJSON {
         .object(["error": .object(["code": .string(code), "message": .string(message)])])

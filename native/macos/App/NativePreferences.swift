@@ -4,6 +4,13 @@ import Foundation
 
 /// Opaque settings and cipher migration share one actor, preventing stale read-modify-write replacements.
 actor NativePreferences {
+    /// Single wire-name registry; exhaustive dispatch makes a missing command handler a compile error.
+    enum Command: String, CaseIterable, Sendable {
+        case loadPrefs = "load_prefs"
+        case savePrefs = "save_prefs"
+        case setProviderKey = "set_provider_key"
+    }
+
     /// The trusted root comes only from the native host, never a Web payload.
     let root: URL
     /// Synthetic material is injected by tests; production preserves the frozen machine binding.
@@ -25,19 +32,19 @@ actor NativePreferences {
 
     /// Existing IPC returns a business value, leaving the router as the sole envelope owner.
     func invoke(command: String, args: [String: HostJSON]) throws -> HostJSON {
+        guard let command = Command(rawValue: command) else { throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "未支持的设置命令") }
         switch command {
-        case "load_prefs": return try load()
-        case "save_prefs":
+        case .loadPrefs: return try load()
+        case .savePrefs:
             guard let value = args["prefs"] else { throw invalid() }
             try save(value)
             return .null
-        case "set_provider_key":
+        case .setProviderKey:
             guard let provider = args["providerId"]?.string, let raw = args["key"]?.string else { throw invalid() }
             try NativeSeal.validateProvider(provider)
             let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { throw HostFailure(code: "PW_KEY_ERROR", message: "API key 不能为空") }
             return .string(try NativeSeal.seal(provider: provider, plaintext: key, material: machine()))
-        default: throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "未支持的设置命令")
         }
     }
 

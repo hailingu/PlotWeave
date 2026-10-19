@@ -2,6 +2,14 @@ import Foundation
 
 /// Native asset orchestration composes the library and the single project actor without duplicating storage rules.
 actor NativeAssets {
+    /// Single wire-name registry; exhaustive dispatch makes a missing command handler a compile error.
+    enum Command: String, CaseIterable, Sendable {
+        case importProjectAssetFromLibrary = "import_project_asset_from_library"
+        case validateProjectAsset = "validate_project_asset"
+        case registerProjectAssetAlias = "register_project_asset_alias"
+        case getAssetMediaUrl = "get_asset_media_url"
+    }
+
     let library: NativeLibrary
     let projects: NativeProjectStore
 
@@ -10,8 +18,9 @@ actor NativeAssets {
 
     /// Existing business entry points retain their command names and camelCase arguments.
     func invoke(_ command: String, args: [String: HostJSON]) async throws -> HostJSON {
+        guard let command = Command(rawValue: command) else { throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "未知项目素材命令") }
         switch command {
-        case "import_project_asset_from_library":
+        case .importProjectAssetFromLibrary:
             let project = try string(args, "id")
             try NativeProjectEnvelope.validateID(project)
             let (entry, file) = try await library.source(id: string(args, "libraryAssetId"))
@@ -20,18 +29,17 @@ actor NativeAssets {
             guard let mime = entry["mime"]?.string, let path = entry["relPath"]?.string else { throw NativeLibraryIndex.invalid("源素材字段无效") }
             return try await projects.importMedia(id: project, bytes: bytes, mime: mime, source: "upload",
                 extension: NativeAssetContract.fileExtension(name: path, mime: mime))
-        case "validate_project_asset":
+        case .validateProjectAsset:
             guard let asset = args["asset"] else { throw NativeLibraryIndex.invalid("缺少资产对象") }
             return try await projects.validateAsset(id: string(args, "id"), asset: asset)
-        case "register_project_asset_alias":
+        case .registerProjectAssetAlias:
             try await projects.registerAlias(id: string(args, "id"), blankKey: string(args, "blankKey"), freshId: string(args, "freshId"))
             return .null
-        case "get_asset_media_url":
+        case .getAssetMediaUrl:
             guard let scope = args["scope"] else { throw NativeLibraryIndex.invalid("缺少媒体作用域") }
             let address = try NativeMediaAddress(scope: scope, assetId: string(args, "assetId"))
             _ = try await open(address)
             return .string(address.url)
-        default: throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "未知项目素材命令")
         }
     }
 

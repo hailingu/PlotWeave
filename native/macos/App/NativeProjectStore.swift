@@ -2,6 +2,19 @@ import Foundation
 
 /// Swift-owned persistence actor serializes project mutations, media commits and deletion at one boundary.
 actor NativeProjectStore {
+    /// Single wire-name registry; exhaustive dispatch makes a missing command handler a compile error.
+    enum Command: String, CaseIterable, Sendable {
+        case listProjects = "list_projects"
+        case createProject = "create_project"
+        case loadProject = "load_project"
+        case saveProject = "save_project"
+        case deleteProject = "delete_project"
+        case loadAiSession = "load_ai_session"
+        case saveAiSession = "save_ai_session"
+        case verifyProjectAssets = "verify_project_assets"
+        case copyProjectAssets = "copy_project_assets"
+    }
+
     /// The independent host-selected root never comes from a Web request.
     let root: URL
     /// A cached capability keeps later operations anchored if the ambient projects path is renamed.
@@ -24,11 +37,12 @@ actor NativeProjectStore {
     /// Existing nine project IPC operations retain their wire values while execution moves into native Swift.
     func invoke(command: String, args: [String: HostJSON]) throws -> HostJSON {
         do {
+            guard let command = Command(rawValue: command) else { throw HostFailure.commandUnavailable(command) }
             switch command {
-            case "list_projects": return try listProjects()
-            case "create_project": return try createProject(name: string(args, "name"))
-            case "load_project": return try loadProject(id: string(args, "id"))
-            case "save_project":
+            case .listProjects: return try listProjects()
+            case .createProject: return try createProject(name: string(args, "name"))
+            case .loadProject: return try loadProject(id: string(args, "id"))
+            case .saveProject:
                 guard let doc = args["doc"] else { throw invalid("缺少 doc 字段") }
                 let existing: Bool
                 switch args["expectExisting"] {
@@ -37,16 +51,15 @@ actor NativeProjectStore {
                 default: throw invalid("expectExisting 必须是布尔值")
                 }
                 return try saveProject(id: string(args, "id"), doc: doc, expectExisting: existing)
-            case "delete_project": try deleteProject(id: string(args, "id")); return .null
-            case "load_ai_session": return try loadAiSession(id: string(args, "id"))
-            case "save_ai_session":
+            case .deleteProject: try deleteProject(id: string(args, "id")); return .null
+            case .loadAiSession: return try loadAiSession(id: string(args, "id"))
+            case .saveAiSession:
                 guard let session = args["session"] else { throw invalid("缺少 session 字段") }
                 try saveAiSession(id: string(args, "id"), session: session); return .null
-            case "verify_project_assets":
+            case .verifyProjectAssets:
                 guard let assets = args["assets"] else { throw invalid("缺少 assets 字段") }
                 return try verifyAssets(id: string(args, "id"), assets: assets)
-            case "copy_project_assets": try copyAssets(from: string(args, "fromId"), to: string(args, "toId")); return .null
-            default: throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "宿主命令尚未接通：\(command)")
+            case .copyProjectAssets: try copyAssets(from: string(args, "fromId"), to: string(args, "toId")); return .null
             }
         } catch let failure as HostFailure { throw failure }
         catch { throw HostFailure(code: "PW_STORAGE_ERROR", message: "原生存储操作失败：\(error.localizedDescription)") }

@@ -97,25 +97,25 @@ final class NativeHostServices {
         case "system.saveText": return try await saveText(request.args)
         default:
             let arguments = request.args ?? [:]
-            if Self.storeCommands.contains(request.command) {
+            if NativeProjectStore.Command(rawValue: request.command) != nil {
                 guard let projectStore else { throw unavailableRoot() }
                 return try await projectStore.invoke(command: request.command, args: arguments)
             }
-            if Self.libraryCommands.contains(request.command) {
+            if NativeLibrary.Command(rawValue: request.command) != nil {
                 return try await libraryService().invoke(request.command, args: arguments)
             }
-            if Self.assetCommands.contains(request.command) {
+            if NativeAssets.Command(rawValue: request.command) != nil {
                 return try await assetsService().invoke(request.command, args: arguments)
             }
-            if Self.preferenceCommands.contains(request.command) {
+            if NativePreferences.Command(rawValue: request.command) != nil {
                 guard let preferences else { throw unavailableRoot() }
                 return try await preferences.invoke(command: request.command, args: arguments)
             }
-            if Self.modelCommands.contains(request.command) {
+            if NativeModels.Command(rawValue: request.command) != nil {
                 guard let models else { throw unavailableRoot() }
                 return try await models.invoke(command: request.command, args: arguments)
             }
-            throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "宿主命令尚未接通：\(request.command)")
+            throw HostFailure.commandUnavailable(request.command)
         }
     }
 
@@ -208,22 +208,4 @@ final class NativeHostServices {
         return support.appendingPathComponent(identity + ".development", isDirectory: true)
     }
 
-    /// Project IPC remains unchanged even though its implementation is now Swift-owned.
-    private static let storeCommands: Set<String> = [
-        "list_projects", "create_project", "load_project", "save_project", "delete_project",
-        "load_ai_session", "save_ai_session", "verify_project_assets", "copy_project_assets"
-    ]
-    /// Library commands share their service with native SwiftUI instead of creating a second store.
-    private static let libraryCommands: Set<String> = [
-        "list_library_assets", "import_library_asset", "update_library_asset", "delete_library_asset",
-        "upsert_library_group", "delete_library_group"
-    ]
-    /// Asset URLs are opaque identities resolved by the native media owner.
-    private static let assetCommands: Set<String> = [
-        "import_project_asset_from_library", "validate_project_asset", "register_project_asset_alias", "get_asset_media_url"
-    ]
-    /// Provider secrets are encrypted by native preferences and never emitted in native projections.
-    private static let preferenceCommands: Set<String> = ["load_prefs", "save_prefs", "set_provider_key"]
-    /// Each generation/cancel command uses the same asynchronous native model owner.
-    private static let modelCommands: Set<String> = ["llm_chat", "llm_image_generate", "llm_image_cancel"]
 }
