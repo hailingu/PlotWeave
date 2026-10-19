@@ -17,11 +17,11 @@ struct NativeArgumentReadingTests {
                 try await fixture.projects.invoke(command: "load_project", args: args)
             }
             try await expectFailure(code: "PW_LIBRARY_INVALID") {
-                try await fixture.library.invoke("delete_library_asset", args: args)
+                try await fixture.library.invoke(command: "delete_library_asset", args: args)
             }
             args["asset"] = .object([:])
             try await expectFailure(code: "PW_LIBRARY_INVALID") {
-                try await fixture.assets.invoke("validate_project_asset", args: args)
+                try await fixture.assets.invoke(command: "validate_project_asset", args: args)
             }
             var modelArgs: [String: HostJSON] = [:]
             modelArgs["jobId"] = value
@@ -40,10 +40,10 @@ struct NativeArgumentReadingTests {
             try await fixture.projects.invoke(command: "load_project", args: ["id": .string("")])
         }
         try await expectFailure(code: "PW_LIBRARY_INVALID") {
-            try await fixture.library.invoke("delete_library_asset", args: ["id": .string("")])
+            try await fixture.library.invoke(command: "delete_library_asset", args: ["id": .string("")])
         }
         try await expectFailure(code: "PW_INVALID_REQUEST") {
-            try await fixture.assets.invoke("validate_project_asset", args: ["id": .string(""), "asset": .object([:])])
+            try await fixture.assets.invoke(command: "validate_project_asset", args: ["id": .string(""), "asset": .object([:])])
         }
         let result = try await fixture.models.invoke(command: "llm_image_cancel", args: ["jobId": .string("")])
         #expect(result == .object(["cancelled": .bool(false)]))

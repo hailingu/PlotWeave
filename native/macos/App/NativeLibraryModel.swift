@@ -34,15 +34,15 @@ final class NativeLibraryModel {
     /// Refresh keeps the last good list on failure and never clears it into a fake empty replacement.
     func refresh() {
         guard !busy else { return }
-        run { [library] in try await library.invoke("list_library_assets", args: [:]) }
+        run { [library] in try await library.invoke(command: "list_library_assets", args: [:]) }
     }
 
     /// A confirmed mutation completes once, then reloads the authoritative list; failures keep form drafts open.
     func mutate(_ command: String, args: [String: HostJSON], completion: @escaping @MainActor (Bool) -> Void = { _ in }) {
         guard writable else { return }
         run(refreshOnFailure: true, settlesQuit: true, completion: completion) { [library] in
-            _ = try await library.invoke(command, args: args)
-            return try await library.invoke("list_library_assets", args: [:])
+            _ = try await library.invoke(command: command, args: args)
+            return try await library.invoke(command: "list_library_assets", args: [:])
         }
     }
 
@@ -56,7 +56,7 @@ final class NativeLibraryModel {
                 let bytes = try await Self.selectedBytes(url, mime: mime)
                 _ = try await library.importAsset(name: url.lastPathComponent, mime: mime, kind: kind, bytes: bytes)
             }
-            return try await library.invoke("list_library_assets", args: [:])
+            return try await library.invoke(command: "list_library_assets", args: [:])
         }
     }
 
@@ -105,7 +105,7 @@ final class NativeLibraryModel {
         var message = cause.localizedDescription
         var snapshot: HostJSON?
         if refreshList {
-            do { snapshot = try await library.invoke("list_library_assets", args: [:]) }
+            do { snapshot = try await library.invoke(command: "list_library_assets", args: [:]) }
             catch { message += "\n刷新素材列表失败：" + error.localizedDescription }
         }
         guard generation == current, !Task.isCancelled else { return }

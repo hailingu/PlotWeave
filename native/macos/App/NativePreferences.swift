@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 
 /// Opaque settings and cipher migration share one actor, preventing stale read-modify-write replacements.
+/// invoke stays synchronous for actor-serialized preference I/O; no additional suspension point is introduced.
 actor NativePreferences {
     /// Single wire-name registry; exhaustive dispatch makes a missing command handler a compile error.
     enum Command: String, CaseIterable, Sendable {

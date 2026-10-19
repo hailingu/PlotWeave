@@ -44,8 +44,8 @@ struct NativeCommandRoutingTests {
         #expect(routed.code == "PW_HOST_COMMAND_UNAVAILABLE")
         let operations: [CommandCall] = [
             { try await projects.invoke(command: unknown, args: [:]) },
-            { try await library.invoke(unknown, args: [:]) },
-            { try await assets.invoke(unknown, args: [:]) },
+            { try await library.invoke(command: unknown, args: [:]) },
+            { try await assets.invoke(command: unknown, args: [:]) },
             { try await preferences.invoke(command: unknown, args: [:]) },
             { try await models.invoke(command: unknown, args: [:]) },
         ]

@@ -1,6 +1,7 @@
 import Foundation
 
 /// Pure Swift library service serializes business operations and retains the existing cross-process flock boundary.
+/// invoke remains async because operations publish observations after releasing their filesystem lock.
 actor NativeLibrary {
     /// Single wire-name registry; exhaustive dispatch makes a missing command handler a compile error.
     enum Command: String, CaseIterable, Sendable {
@@ -32,7 +33,7 @@ actor NativeLibrary {
     func connectDiagnostics(_ sink: @escaping @Sendable (HostJSON) async -> Void) { eventSink = sink }
 
     /// Existing IPC names route through one native domain implementation also used by SwiftUI forms.
-    func invoke(_ command: String, args: [String: HostJSON]) async throws -> HostJSON {
+    func invoke(command: String, args: [String: HostJSON]) async throws -> HostJSON {
         guard let command = Command(rawValue: command) else { throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "未知素材库命令") }
         switch command {
         case .listLibraryAssets: return try await execute { state, number in state.response(state.listing, revision: number) }

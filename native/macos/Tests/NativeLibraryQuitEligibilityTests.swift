@@ -186,7 +186,7 @@ struct NativeLibraryQuitEligibilityTests {
         try await fixture.waitUntil { !fixture.services.libraryQuitWork.hasPendingBatches && !model.busy }
         _ = try await fixture.attemptExit(requestId: "mutated")
         #expect(fixture.approvals == [.terminate])
-        let list = try await library.invoke("list_library_assets", args: [:])
+        let list = try await library.invoke(command: "list_library_assets", args: [:])
         #expect(list["assets"]?["byId"]?[id]?["name"] == .string("changed"))
         let media = try await library.openMedia(id: id)
         #expect(try media.read(maxBytes: 10) == Data([3]))
@@ -217,7 +217,7 @@ struct NativeLibraryQuitEligibilityTests {
         gate.release()
         _ = try await holder.value
         try await fixture.waitUntil { !model.busy }
-        let list = try await library.invoke("list_library_assets", args: [:])
+        let list = try await library.invoke(command: "list_library_assets", args: [:])
         #expect(list["assets"]?["byId"]?.object?.count == 1)
     }
 
@@ -401,7 +401,7 @@ struct NativeLibraryQuitEligibilityTests {
         /// The authoritative index and media bytes must agree with the settled batch result.
         func expectImportedAssets(names: [String], bytes: [Data], library: NativeLibrary? = nil) async throws {
             let owner = library ?? NativeLibrary(root: root)
-            let list = try await owner.invoke("list_library_assets", args: [:])
+            let list = try await owner.invoke(command: "list_library_assets", args: [:])
             let assets = try #require(list["assets"]?["byId"]?.object)
             #expect(assets.count == names.count)
             for (name, expected) in zip(names, bytes) {

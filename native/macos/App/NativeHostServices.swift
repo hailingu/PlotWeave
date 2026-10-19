@@ -102,10 +102,10 @@ final class NativeHostServices {
                 return try await projectStore.invoke(command: request.command, args: arguments)
             }
             if NativeLibrary.Command(rawValue: request.command) != nil {
-                return try await libraryService().invoke(request.command, args: arguments)
+                return try await libraryService().invoke(command: request.command, args: arguments)
             }
             if NativeAssets.Command(rawValue: request.command) != nil {
-                return try await assetsService().invoke(request.command, args: arguments)
+                return try await assetsService().invoke(command: request.command, args: arguments)
             }
             if NativePreferences.Command(rawValue: request.command) != nil {
                 guard let preferences else { throw unavailableRoot() }
