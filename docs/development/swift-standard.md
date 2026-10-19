@@ -140,7 +140,7 @@ Run `sh scripts/test-native.sh` for serial functional regression and fresh App S
 
 ## Before Writing Code
 
-Read this file, then inspect the existing native sources for stage records,
+Read this file, then inspect the existing native application state,
 host adapters, and test fixtures to reuse. Keep the layering of migration
 plan §2.1: SwiftUI views and AppKit adapters do not own editing-document
 state; they communicate through the seams the plan defines, and new behavior

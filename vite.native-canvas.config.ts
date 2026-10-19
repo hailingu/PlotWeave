@@ -21,8 +21,8 @@ function fileCanvasEntry(): Plugin {
 }
 
 /**
- * 原生外壳画布演示的独立构建（P1 视觉首片，docs/swiftui-react-flow-migration-plan.md
- * §5 第 2 项后半）：单入口 native-canvas.html、相对 base（WKWebView 经
+ * 原生 Web 画布入口的独立构建：生产页面装配 App，显式 hash 选择隔离
+ * 演示/性能夹具。单入口 native-canvas.html、相对 base（WKWebView 经
  * file:// 加载，绝对路径资源不可达）、扁平产物名（Xcode 文件夹同步成员
  * 打平进 app bundle，无 assets/ 子目录）。输出目录
  * native/macos/App/WebCanvas 为一次性构建产物（gitignore），构建命令见
