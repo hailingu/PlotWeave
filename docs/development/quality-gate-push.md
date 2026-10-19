@@ -42,8 +42,7 @@
   禁止 Sonar 在缺少一侧报告时静默降级。
 - 单栈只跑该栈的全量回归与覆盖率；“代码覆盖率全量更新”指变更栈的完整
   栈内覆盖率，不是只测变更文件；未变更栈复用最近 LCOV，不重跑其测试。
-- 原生范围没有原生 LCOV 门禁，前端/Rust 报告按上述复用；原生测试失败
-  仍阻断推送。Sonar 对原生源码不建模，台账的 `scope: native` 明示该边界。
+- 原生功能回归采集独立的 Swift App 行覆盖率报告（[#601](https://github.com/hailingu/PlotWeave/issues/601)，[报告与阈值规则](native-coverage.md)），默认先报告、不设百分比下限；显式下限低于要求或源文件清单不完整时失败。采集无效与原生测试失败同样阻断推送。前端/Rust LCOV 按上述复用；Sonar 对原生源码不建模，台账的 `scope: native` 明示该边界。
 - docs-only 不写推送台账；普通 commit 钩子已产生的全量记录继续作为
   gate-evidence 证据。若 docs-only 提交绕过 commit 钩子创建，则没有该
   记录——这与既有 hook 覆盖边界一致，不是新豁免。
@@ -128,6 +127,8 @@ CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建�
 压力测量；需要整个目标加压力测试时，在完整 Xcode 命令前显式设置
 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1`。
 降低负载不代表 IOSurface 报错根因已经修复，也不以日志行数承诺耗时降幅。
+
+正常回归现在通过 `-enableCodeCoverage YES` 采集覆盖率，成功生成 JSON、Markdown 和原始 xccov 报告；显式 stress 使用 `-enableCodeCoverage NO`，避免 instrumentation 改变性能测量。构建并行预算沿用 `PLOTWEAVE_GATE_CPU_BUDGET`，缺省固定为 4；测试仍串行。详见 [Native Coverage](native-coverage.md)。
 
 ## Push-Path Per-Ref Gating (issue #405)
 

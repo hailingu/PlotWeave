@@ -1,4 +1,8 @@
 import {
+  writeNativeCoverageSource,
+  writeXccovStub,
+} from './native-coverage-fixture'
+import {
   chmodSync,
   copyFileSync,
   existsSync,
@@ -21,8 +25,10 @@ import {
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
 const repositories = gitScenarioFixture((root) => {
+  writeNativeCoverageSource(root)
   const commands = [
     ['init', '-q', '-b', 'main'],
+    ['add', 'native'],
     [
       '-c',
       'core.hooksPath=/dev/null',
@@ -312,6 +318,7 @@ function writeCommandStubs(paths: GateStubPaths, options: GateOptions): void {
   writeScannerStub(paths)
   writeCurlStub(paths)
   writeXcodebuildStub(paths)
+  writeXccovStub(resolve(paths.root, 'bin/xcrun'))
 
   if (options.lockOccupied) {
     mkdirSync(paths.lockPath)
@@ -354,6 +361,12 @@ function gateEnvironment(
     PLOTWEAVE_TEST_UNRESOLVED_ISSUES: String(options.unresolvedIssues ?? 0),
     PLOTWEAVE_TEST_XCODEBUILD_EXIT: String(options.xcodebuildExit ?? 0),
     PLOTWEAVE_XCODEBUILD_BIN: paths.xcodebuildPath,
+    PLOTWEAVE_XCRUN_BIN: resolve(paths.root, 'bin/xcrun'),
+    PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE: '',
+    GITHUB_STEP_SUMMARY: resolve(
+      paths.root,
+      'native/macos/build/coverage/step-summary.md',
+    ),
     PLOTWEAVE_REUSED_FRONTEND_LCOV: paths.reusedFrontendPath,
     PLOTWEAVE_REUSED_RUST_LCOV: paths.reusedRustPath,
     SONAR_HOST_URL: options.sonarHostUrl ?? 'http://sonar.test',
@@ -488,6 +501,7 @@ function copyFixtureGateScripts(root: string): string {
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
     'test-native.sh',
+    'native-coverage.ts',
   ]) {
     copyFileSync(
       resolve(repositoryRoot, 'scripts', file),

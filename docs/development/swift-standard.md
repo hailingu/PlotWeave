@@ -35,7 +35,7 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   `/Applications/Xcode_27.0.app/Contents/Developer` through `DEVELOPER_DIR`
   and checks Xcode 27.0 plus SDK 27.0 before building.
   Build and test through the
-  `native/**` Scope Routing `xcodebuild` command from the repository root;
+  `native/**` Scope Routing public `scripts/test-native.sh` entry from the repository root;
   do not invent alternative invocations or build roots.
 - The Xcode project is hand-maintained: target membership comes from
   folder-synchronized groups (`App/` → app target, `Tests/` → test target)
@@ -133,6 +133,10 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   silently reopening cross-suite pollution (PR #574, issue #575). Shell-mounted
   fixtures construct their web view in production code and rely on the trait
   plus this guard's review, not on the factory.
+
+## App Line Coverage
+
+Run `sh scripts/test-native.sh` for serial functional regression and fresh App Swift line coverage. The initial policy reports counts and missing sources without a default percentage floor. An explicit `PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE` requires complete inventory and its unrounded minimum. Test-host execution can cover startup code; this metric does not establish branch, UI, visual, VoiceOver, or IME acceptance. Stress runs disable instrumentation. See [Native Coverage](native-coverage.md) for reports, baseline, and failure rules.
 
 ## Before Writing Code
 
