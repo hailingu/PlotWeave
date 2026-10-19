@@ -6,6 +6,13 @@
 - **评估性质**：只读审阅加 issue 建档。按前端/React、Rust/Tauri、Swift 原生、测试体系、工程门禁、文档治理、产品交互、安全八个方向并行审查，并直接复核关键扣分证据（剧情流接缝纯函数复现、Rust 删除/读取路径、原生失败生命周期、CI 门禁核验器、设置/模态/焦点路径、GitHub 分支保护 API）。本轮新建 issue [#589](https://github.com/hailingu/PlotWeave/issues/589)–[#603](https://github.com/hailingu/PlotWeave/issues/603) 共 15 个；关闭截图/UI 自动化类 [#550](https://github.com/hailingu/PlotWeave/issues/550)、[#571](https://github.com/hailingu/PlotWeave/issues/571)。
 - **证据强度**：文件行数、测试数量、依赖与 `gh` 状态由本次直接核对；覆盖率数值取自最近一次门禁产物（前端 96.91%、Rust 85.34%）。本轮运行了 `npm run check:size`、`npm run typecheck:strict`、`npm run lint -- --max-warnings=0` 与完整 `npm test`；**没有**重跑 `cargo test`、`xcodebuild` 或 SonarQube，Rust/Swift 结论是代码路径核实，不是本机运行验证（详见第六节）。
 
+**后续状态更新（2026-10-19，#593）**：[PR #624](https://github.com/hailingu/PlotWeave/pull/624)
+已在实现中将 gate-evidence 的核验器与 Node 版本固定到事件 base SHA，head 只作为 Git 对象读取，
+修复本评估记录的“仅替换 PR 核验器即可中和检查”路径；issue 在 PR 合并并验证后关闭。
+工作流定义本身仍由 PR merge 提供，台账仍为无签名自述，未实施独立执行器或 required review；
+详见[证据边界](development/quality-gate-evidence.md#server-side-evidence-verification-issue-548)。
+下列数值和八项 P2 计数保留为 `3cf7146` 的历史评估，不作为修复后当前评分；本次只更新 #593 状态，未重算综合评级。
+
 ## 一、评分口径
 
 9 个维度、10 分制、等权。评级带：A+ 9.5–10.0、A 9.0–9.4、A- 8.5–8.9、B+ 8.0–8.4、B 7.5–7.9、B- 7.0–7.4、C+ 6.5–6.9、C 6.0–6.4、C- 5.5–5.9、D 4.0–5.4、E < 4.0。
@@ -85,7 +92,7 @@
 
 扣分：
 
-- **P2** required `gate-evidence` 运行 PR 检出内容中的核验器：`ci.yml` 在 PR 事件检出 PR/merge 后直接执行 `scripts/verify-gate-evidence.ts`；该脚本与测试可被 PR 修改，单提交 PR 又受 tip-lag 容忍，分支保护 required approving review 为 0。作者可把核验器改为 `exit 0` 并同步测试，服务端 backstop 被其保护的 PR 中和（[#593](https://github.com/hailingu/PlotWeave/issues/593)）。
+- **已修复（原 P2）** [#593](https://github.com/hailingu/PlotWeave/issues/593)：[PR #624](https://github.com/hailingu/PlotWeave/pull/624) 固定检出事件 base SHA，从 base 读取 `.nvmrc` 与 `scripts/verify-gate-evidence.ts`，只获取 head 对象并按精确 SHA 核验 head 台账；替换 PR 中的核验器不再改变判定。原 tip-lag 语义未变。**保留边界**：工作流定义仍由 PR merge 提供，作者若同时改写 workflow 仍能改变检查；没有新增 approving review 要求、保护规则或独立执行器，台账仍不是本地门禁真实执行的独立证明。
 - **P3** Actions 仅用可变 major tag，`cargo-audit@latest` 未钉版（记为成本/可复现性债务，未单开 issue）；同条原记录的「CI 重复执行 scripts 套件」已建档并修复（[#617](https://github.com/hailingu/PlotWeave/issues/617)）。
 
 ### 3.6 文档与治理 — 8.8 / A-
@@ -135,7 +142,7 @@
 | [#590](https://github.com/hailingu/PlotWeave/issues/590) | 3.1 | P2 | 画布加载失败后重试、关闭与退出路径均不可达 |
 | [#591](https://github.com/hailingu/PlotWeave/issues/591) | 3.3 | P2 | 删除项目缺少 projects 目录持久性屏障 |
 | [#592](https://github.com/hailingu/PlotWeave/issues/592) | 3.3 | P2 | 项目控制文件读取无字节上限且列表在全局锁内全量解析 |
-| [#593](https://github.com/hailingu/PlotWeave/issues/593) | 3.5 | P2 | required gate-evidence 运行 PR 可修改的核验器 |
+| [#593](https://github.com/hailingu/PlotWeave/issues/593) | 3.5 | 原 P2，已修复 | PR #624 固定 base 核验器；workflow-definition 与自述证据边界保留，合并后关闭 |
 | [#594](https://github.com/hailingu/PlotWeave/issues/594) | 3.2 | P2 | 设置防抖保存失败没有用户可见诊断 |
 | [#595](https://github.com/hailingu/PlotWeave/issues/595) | 3.9 | P2 | 设定文档弹窗缺少模态契约，⌘, 可丢失未保存草稿 |
 | [#596](https://github.com/hailingu/PlotWeave/issues/596) | 3.9 | P2 | 画布节点与侧栏删除按钮缺少可见键盘焦点 |
@@ -151,14 +158,14 @@
 
 ## 五、结论与修复优先级
 
-**综合 8.9 / 10，A-**（A- 上沿）。A 档要求所有维度至少 9.0 且无正常路径 P2；本轮 8 个 P2 中，大纲丢边是可复现的数据丢失、原生画布失败是不可恢复的使用死路，因此不能进入 A。无 P1。
+**历史基线综合 8.9 / 10，A-**（A- 上沿；#593 后续修复状态见文首，未重新评分）。A 档要求所有维度至少 9.0 且无正常路径 P2；本轮 8 个 P2 中，大纲丢边是可复现的数据丢失、原生画布失败是不可恢复的使用死路，因此不能进入 A。无 P1。
 
 修复优先级：
 
 1. 剧情流接缝对 fan-out/merge 明确拒绝或保留多入/多出边；补真实大纲拖拽回归（#589）。
 2. 原生失败恢复：失败时保留 coordinator/route 或让欢迎卡暴露重试；无 listener 的关闭/退出走可见降级（#590）。
 3. Rust 删除目录 fsync；项目控制文件限读并避免在全局锁内全量解析（#591、#592）。
-4. gate-evidence 核验器从 base 读取或独立执行器；对核验器变更加保护（#593）。
+4. **已完成 #593 实现修复（PR #624）**：核验器与 Node 版本取事件 base SHA，PR head 仅为 Git 数据；不再作为待修复项。工作流定义的外部强制保护/required review 尚未实施，需单独的所有者治理决定，不包含在本次已修复承诺中。
 5. 设置错误可见、文档弹窗模态、画布/侧栏焦点（#594–#596）。
 6. P3：桥接缓存、原生导出默认、AI 发送、测试确定性、Swift 覆盖率、文档一致性、首页菜单键盘（#597–#603）。
 
