@@ -149,8 +149,10 @@ impl ImageJobRegistry {
 
     /// 登记取消：活动作业标记取消；未知/已结束 id 进有界墓碑（去重 +
     /// FIFO 淘汰，issue #143 验收：未知与迟到取消不无界增长）。
-    fn cancel(&self, job_id: &str) {
-        crate::lock::recover_guard(self.state.lock(), "生成作业注册表").cancel(job_id);
+    fn cancel(&self, job_id: &str) -> ImageCancelResult {
+        let cancelled =
+            crate::lock::recover_guard(self.state.lock(), "生成作业注册表").cancel(job_id);
+        ImageCancelResult { cancelled }
     }
 }
 
@@ -166,18 +168,20 @@ impl JobRegistryState {
         self.active.insert(job_id.to_string(), pre_cancelled);
     }
 
-    fn cancel(&mut self, job_id: &str) {
+    /// Mark a live flag before reporting a hit; absent IDs still update the bounded tombstones.
+    fn cancel(&mut self, job_id: &str) -> bool {
         if let Some(cancelled) = self.active.get_mut(job_id) {
             *cancelled = true;
-            return;
+            return true;
         }
         if self.tombstones.iter().any(|id| id == job_id) {
-            return;
+            return false;
         }
         if self.tombstones.len() >= CANCEL_TOMBSTONE_CAP {
             self.tombstones.pop_front();
         }
         self.tombstones.push_back(job_id.to_string());
+        false
     }
 }
 
@@ -763,13 +767,19 @@ pub async fn llm_image_generate(app: AppHandle, request: ImageGenRequest) -> Res
     Ok(asset)
 }
 
+/// #630 IPC response: a matched active flag, not proof that the remote HTTP request stopped.
+#[derive(Debug, serde::Serialize)]
+pub struct ImageCancelResult {
+    /// True only after an active job's cooperative cancellation flag has been marked.
+    pub cancelled: bool,
+}
+
 /// 协作式取消命令（issue #143）：活动作业标记取消；未知/已结束 id 进
 /// 有界墓碑（去重 + FIFO 淘汰——未知与迟到取消不无界增长，登记时消费
 /// 使预取消生效）。中毒恢复——登记真实生效才报成功（issue #145）。
 #[tauri::command]
-pub fn llm_image_cancel(app: AppHandle, job_id: String) -> Result<(), String> {
-    app.state::<ImageJobRegistry>().cancel(&job_id);
-    Ok(())
+pub fn llm_image_cancel(app: AppHandle, job_id: String) -> Result<ImageCancelResult, String> {
+    Ok(app.state::<ImageJobRegistry>().cancel(&job_id))
 }
 
 #[cfg(test)]

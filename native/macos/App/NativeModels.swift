@@ -63,7 +63,7 @@ actor NativeModels {
         case "llm_image_generate":
             guard let request = args["request"]?.object else { throw invalid("缺少生图 request") }
             return try await image(request)
-        case "llm_image_cancel": cancel(try string(args, "jobId")); return .null
+        case "llm_image_cancel": return .object(["cancelled": .bool(cancel(try string(args, "jobId")))])
         default: throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "未支持的模型命令")
         }
     }
@@ -142,12 +142,13 @@ actor NativeModels {
         return try await NativeDeadline.run(until: deadline) { try await self.download(value, deadline, { flag.isCancelled }) }
     }
 
-    /// Active cancellation marks the exact job; absent IDs retain only a bounded, one-use pre-cancel tombstone.
-    private func cancel(_ job: String) {
-        if let flag = active[job] { flag.cancel(); return }
-        if tombstones.contains(job) { return }
+    /// Report a matched active flag; absent IDs still retain bounded one-use pre-cancellation.
+    private func cancel(_ job: String) -> Bool {
+        if let flag = active[job] { flag.cancel(); return true }
+        if tombstones.contains(job) { return false }
         if tombstones.count >= 64 { tombstones.removeFirst() }
         tombstones.append(job)
+        return false
     }
 
     /// Endpoint concatenation remains the existing base URL plus path suffix and is checked before any POST.

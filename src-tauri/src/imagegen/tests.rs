@@ -5,6 +5,8 @@
 //! 目标静态校验。
 
 use super::*;
+
+mod cancellation;
 use serde_json::json;
 
 #[test]
