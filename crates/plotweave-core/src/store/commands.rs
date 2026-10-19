@@ -246,7 +246,7 @@ pub fn persist_project_expect_existing(
     )?;
     atomic_write(root, &format!("{id}.json"), &text)?;
     if let Err(e) = verify_save_asset_files(root, id, &doc.assets) {
-        eprintln!("[store] 保存后资产复验失败，路径可能在保存期间被替换：{e}");
+        log::error!(target: "plotweave::store", "保存后资产复验失败，路径可能在保存期间被替换：{e}");
         return Err(e.prefixed("保存后资产复验失败（路径可能在保存期间被替换）"));
     }
     Ok(read_meta(id, &file))

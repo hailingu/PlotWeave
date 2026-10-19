@@ -23,8 +23,8 @@ pub fn recover_guard<'a, T>(
     label: &str,
 ) -> MutexGuard<'a, T> {
     result.unwrap_or_else(|poisoned| {
-        eprintln!(
-            "[lock] {label}：此前有持锁 panic，按中毒恢复策略继续（panic 现场见 panic hook 输出）"
+        log::warn!(target: "plotweave::lock",
+            "{label}：此前有持锁 panic，按中毒恢复策略继续（panic 现场见 panic hook 输出）"
         );
         poisoned.into_inner()
     })

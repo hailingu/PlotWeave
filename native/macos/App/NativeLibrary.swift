@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Pure Swift library service serializes business operations and retains the existing cross-process flock boundary.
 /// invoke remains async because operations publish observations after releasing their filesystem lock.
@@ -177,7 +178,7 @@ actor NativeLibrary {
                 return NativeLibraryIndex.validID(stem) && !suffix.isEmpty && suffix.utf8.count <= 8
                     && suffix.utf8.allSatisfy { (48...57).contains($0) || (97...122).contains($0) }
             }
-        } catch { NSLog("PlotWeave library temporary cleanup refused: %@", error.localizedDescription) }
+        } catch { NativeLog.library.warning("PlotWeave library temporary cleanup refused: \(error.localizedDescription, privacy: .private)") }
     }
 
     /// Identity validation precedes filesystem recovery for malformed requests.

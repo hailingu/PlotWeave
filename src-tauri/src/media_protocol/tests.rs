@@ -395,18 +395,17 @@ fn media_read_consumes_identity_bound_handle_outside_locks() {
     cleanup(&root);
 }
 
-/// 404 折叠不得隐匿失败（评审修复）：后端诊断文本带 `[media]` 标签并
-/// 携带原始原因，脏数据与普通缺失可区分；webview 侧仍只收非敏感 404。
+/// Media failures retain their local cause; HTTP responses never expose the supplied private cause.
 #[test]
-fn media_failure_diagnostic_carries_cause_with_label() {
-    let text = media_failure_diagnostic("资产 la-1 的媒体文件不存在");
-    assert!(text.starts_with("[media]"), "诊断须带模块标签：{text}");
-    assert!(text.contains("la-1"), "诊断须携带原始原因：{text}");
-    // 响应映射保持非敏感：404 正文仍为固定文案
-    let miss = media_http_response(Err("资产 la-1 处于删除事务冲突期，媒体不可用".into()));
+fn media_failure_diagnostic_preserves_cause_without_exposing_it_to_web() {
+    let cause = "code=fixture-media-cause assetId=la-1";
+    let text = media_failure_diagnostic(cause);
+    assert!(text.contains(cause));
+    let miss = media_http_response(Err(cause.into()));
+    let other = media_http_response(Err("code=other-private-cause".into()));
     assert_eq!(miss.status(), tauri::http::StatusCode::NOT_FOUND);
-    let body = String::from_utf8(miss.into_body()).expect("404 正文是 UTF-8");
-    assert_eq!(body, "媒体不可用", "404 正文不得携带原因");
+    assert_eq!(miss.body(), other.body());
+    assert!(!String::from_utf8_lossy(miss.body()).contains(cause));
 }
 
 /// 响应映射：命中 → 200 + 索引 mime；任何失败 → 404（不向 webview 泄露

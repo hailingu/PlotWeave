@@ -2,7 +2,6 @@
 //! 回调和关联指针仅在主线程使用，guard 由 run 持有至事件循环结束；无全局应用状态。
 //! 回调 panic 遏制在 Rust 侧并保守拒绝退出（issue #547）。
 use std::ffi::{c_char, c_void};
-use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[link(name = "objc")]
@@ -106,13 +105,13 @@ extern "C" fn should_terminate(delegate: *mut c_void, _: *mut c_void, _: *mut c_
         // 其不变量或已受损；本层只承诺不再调用并拒绝退出，不负责恢复其状态。
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| (*pointer)())) {
             // 与 blocking.rs 同口径（issue #400）：不落 panic 载荷，仅稳定诊断码。
-            // 显式忽略写错误而非 eprintln!（PR #580 评审）：eprintln! 在写失败
-            // （如断管 EPIPE）时自身 panic，且此处已在 catch_unwind 之外，
-            // 会重新越过 extern "C" 边界使遏制失效；诊断尽力而为，静默放弃。
-            let _ = writeln!(
-                std::io::stderr(),
-                "[native-quit] code=quit-callback-panicked"
-            );
+            // Diagnostic sinks remain best-effort. Even an embedding logger that panics
+            // must not unwind across this C callback; forget its potentially panicking payload.
+            if let Err(logging_panic) = catch_unwind(|| {
+                log::error!(target: "plotweave::native_quit", "code=quit-callback-panicked");
+            }) {
+                std::mem::forget(logging_panic);
+            }
             // 载荷自身的 Drop 也可能 panic（panic_any 自定义载荷，PR #580 第二轮
             // 评审）：显式绑定并在边界内二次遏制其析构；若析构再次 panic，其
             // 嵌套载荷直接遗忘、不再递归展开——该失败路径至多泄漏一枚载荷。

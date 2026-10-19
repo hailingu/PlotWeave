@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import UniformTypeIdentifiers
+import OSLog
 
 /// Native non-document services; all editor mutations and write ordering stay in the Web session.
 @MainActor
@@ -67,7 +68,7 @@ final class NativeHostServices {
             Task { [weak coordinator] in
                 await library.connectDiagnostics { [weak coordinator] payload in
                     do { try await coordinator?.dispatchEvent("library-diagnostics", payload: payload) }
-                    catch { NSLog("PlotWeave library event delivery failed: %@", error.localizedDescription) }
+                    catch { NativeLog.library.error("PlotWeave library event delivery failed: \(error.localizedDescription, privacy: .private)") }
                 }
             }
         }

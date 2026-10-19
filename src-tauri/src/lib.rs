@@ -29,6 +29,8 @@ mod blocking;
 mod hex_codec;
 mod http_util;
 mod imagegen;
+/// Host-owned filtering and best-effort stderr sink for the shared logging facade.
+mod logging;
 use plotweave_core::isotime;
 mod library;
 mod library_fs;
@@ -175,13 +177,17 @@ fn acknowledge_quit_listener(app: tauri::AppHandle) {
     }
     use tauri::Emitter;
     if let Err(error) = app.emit("app-quit-requested", ()) {
-        eprintln!("重放退出请求事件失败：{error}");
+        log::warn!(target: "plotweave::native_quit", "重放退出请求事件失败：{error}");
     }
 }
 
 /// 组合桌面命令、托管状态和媒体协议；原生集成测试复用相同的命令注册边界。
 pub fn app_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
+        .setup(|_| {
+            logging::init();
+            Ok(())
+        })
         // 会话新增项目资产登记表（pwmedia 项目 scope 的防抖落盘窗口，
         // issue #31 评审修复）：应用显式拥有的状态，非进程级可变全局单例
         .manage(assets::project_media::PendingProjectAssets::new())
@@ -261,7 +267,7 @@ pub fn run() {
                 return;
             }
             if let Err(error) = handle.emit("app-quit-requested", ()) {
-                eprintln!("发出退出请求事件失败：{error}");
+                log::warn!(target: "plotweave::native_quit", "发出退出请求事件失败：{error}");
             }
         })
         .expect("安装原生退出保存屏障失败")

@@ -479,7 +479,7 @@ pub fn sweep_orphan_temp_files(
     let entries = match dir.entries() {
         Ok(entries) => entries,
         Err(e) => {
-            eprintln!("[store] {label}：扫描崩溃遗留临时文件失败（跳过清扫）：{e}");
+            log::warn!(target: "plotweave::store", "{label}：扫描崩溃遗留临时文件失败（跳过清扫）：{e}");
             return 0;
         }
     };
@@ -488,7 +488,7 @@ pub fn sweep_orphan_temp_files(
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
-                eprintln!("[store] {label}：遍历目录失败（跳过该条目）：{e}");
+                log::warn!(target: "plotweave::store", "{label}：遍历目录失败（跳过该条目）：{e}");
                 continue;
             }
         };
@@ -504,7 +504,7 @@ pub fn sweep_orphan_temp_files(
         let md = match entry.metadata() {
             Ok(md) => md,
             Err(e) => {
-                eprintln!("[store] {label}：读取临时条目元数据失败（跳过 {name}）：{e}");
+                log::warn!(target: "plotweave::store", "{label}：读取临时条目元数据失败（跳过 {name}）：{e}");
                 continue;
             }
         };
@@ -514,9 +514,11 @@ pub fn sweep_orphan_temp_files(
         match dir.remove_file(name) {
             Ok(()) => {
                 removed += 1;
-                eprintln!("[store] {label}：已清理崩溃遗留临时文件：{name}");
+                log::debug!(target: "plotweave::store", "{label}：已清理崩溃遗留临时文件：{name}");
             }
-            Err(e) => eprintln!("[store] {label}：清理崩溃遗留临时文件失败（{name}）：{e}"),
+            Err(e) => {
+                log::warn!(target: "plotweave::store", "{label}：清理崩溃遗留临时文件失败（{name}）：{e}")
+            }
         }
     }
     removed

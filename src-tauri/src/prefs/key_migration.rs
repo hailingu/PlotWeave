@@ -23,7 +23,7 @@ pub(crate) fn migrate_legacy_envelope(
     plaintext: &str,
 ) {
     if let Err(e) = try_migrate(root, provider_id, opened, plaintext) {
-        eprintln!("[prefs] keyEnc 旧版密文迁移失败（不影响本次请求）：{e}");
+        log::warn!(target: "plotweave::prefs", "keyEnc 旧版密文迁移失败（不影响本次请求）：{e}");
     }
 }
 
