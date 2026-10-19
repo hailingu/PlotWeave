@@ -1,10 +1,18 @@
 //! 用独立主线程进程调用 AppKit terminate:，验证 Dock Quit 使用的原生退出边界。
 #[cfg(target_os = "macos")]
+#[path = "../src/logging.rs"]
+mod logging;
+#[cfg(target_os = "macos")]
 #[path = "../src/native_quit.rs"]
 mod native_quit;
 
 #[cfg(target_os = "macos")]
 fn main() {
+    if std::env::args().any(|arg| arg == "--native-quit-logger-panic-child") {
+        panic_logger_child();
+        return;
+    }
+    logging::init();
     if std::env::args().any(|arg| arg == "--native-quit-child") {
         child();
         return;
@@ -52,8 +60,7 @@ fn main() {
         panicked
     );
     assert!(
-        String::from_utf8_lossy(&panicked.stderr)
-            .contains("[native-quit] code=quit-callback-panicked"),
+        has_quit_panic_record(&panicked.stderr),
         "回调 panic 未产生结构化诊断：{:?}",
         panicked
     );
@@ -84,6 +91,69 @@ fn main() {
         "载荷析构 panic 跨边界中断了进程：{:?}",
         payload
     );
+    assert_logger_panic_containment();
+}
+
+/// Issues #547/#633: inspect the stable diagnostic code and parsed level/target metadata, not output layout.
+#[cfg(target_os = "macos")]
+fn has_quit_panic_record(stderr: &[u8]) -> bool {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .any(|record| {
+            record["target"] == "plotweave::native_quit"
+                && record["level"] == "ERROR"
+                && record["message"] == "code=quit-callback-panicked"
+        })
+}
+
+/// Issue #633: a panicking installed logger cannot turn a caught quit failure into a C-boundary unwind.
+#[cfg(target_os = "macos")]
+fn assert_logger_panic_containment() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--native-quit-logger-panic-child")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("native-quit-logger-panic-contained"),
+        "{output:?}"
+    );
+}
+
+/// Both the installed logger and its panic payload's destructor fail; the original quit decision stays conservative.
+#[cfg(target_os = "macos")]
+fn panic_logger_child() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    struct PayloadDropPanics;
+    impl Drop for PayloadDropPanics {
+        fn drop(&mut self) {
+            panic!("fixture: logger payload drop");
+        }
+    }
+    struct PanickingLogger;
+    impl log::Log for PanickingLogger {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.target() == "plotweave::native_quit"
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            if self.enabled(record.metadata()) {
+                assert_eq!(record.level(), log::Level::Error);
+                CALLS.fetch_add(1, Ordering::SeqCst);
+                std::panic::panic_any(PayloadDropPanics);
+            }
+        }
+        fn flush(&self) {}
+    }
+    static LOGGER: PanickingLogger = PanickingLogger;
+    log::set_logger(&LOGGER).unwrap();
+    log::set_max_level(log::LevelFilter::Trace);
+    logging::init();
+    assert_eq!(log::max_level(), log::LevelFilter::Trace);
+    panic_child();
+    assert_eq!(CALLS.load(Ordering::SeqCst), 2);
+    println!("native-quit-logger-panic-contained");
 }
 
 /// 构建真实 Tauri 运行时以获得 AppKit delegate：generate_context! 内嵌的

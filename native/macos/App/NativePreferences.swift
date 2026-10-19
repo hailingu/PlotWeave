@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import OSLog
 
 /// Opaque settings and cipher migration share one actor, preventing stale read-modify-write replacements.
 /// invoke stays synchronous for actor-serialized preference I/O; no additional suspension point is introduced.
@@ -59,7 +60,7 @@ actor NativePreferences {
         let secret = try NativeSeal.open(provider: provider, envelope: envelope, material: machine())
         if envelope.hasPrefix("pw1:") {
             do { try migrate(provider: provider, opened: envelope, secret: secret) }
-            catch { NSLog("PlotWeave PW_KEY_MIGRATION_FAILED: legacy settings envelope remains unchanged") }
+            catch { NativeLog.preferences.warning("PlotWeave PW_KEY_MIGRATION_FAILED: legacy settings envelope remains unchanged") }
         }
         return secret
     }

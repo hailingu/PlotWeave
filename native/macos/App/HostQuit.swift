@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 
 /// One pending user intent covers close, Command-Q and Dock quit before or after listener registration.
 @MainActor
@@ -131,7 +132,7 @@ final class HostQuitController {
                 try await deliver("app-quit-requested", .object([:]))
             } catch {
                 guard !Task.isCancelled, let intent = pendingIntent else { return }
-                NSLog("PlotWeave quit bridge delivery failed: %@", error.localizedDescription)
+                NativeLog.quit.error("PlotWeave quit bridge delivery failed: \(error.localizedDescription, privacy: .private)")
                 cancel()
                 onDeliveryFailure?(intent, error)
             }

@@ -188,7 +188,9 @@ pub(crate) fn sweep_library_temp_files(library: &CapDir) {
         Ok(assets) => {
             sweep_orphan_temp_files(&assets, "资产目录", is_library_asset_temp_target);
         }
-        Err(e) => eprintln!("[library] 打开资产目录失败（跳过临时文件清扫）：{e}"),
+        Err(e) => {
+            log::warn!(target: "plotweave::library", "打开资产目录失败（跳过临时文件清扫）：{e}")
+        }
     }
 }
 
@@ -248,7 +250,7 @@ pub(crate) fn open_parent_dir(
 /// 优于丢失）。
 pub(crate) fn report_recovery_diagnostics(context: &str, warnings: &[String]) {
     for w in warnings {
-        eprintln!("[library] {context}伴随迁移/恢复诊断：{w}");
+        log::warn!(target: "plotweave::library", "{context}伴随迁移/恢复诊断：{w}");
     }
 }
 

@@ -10,6 +10,7 @@ cap-std = "4.0.3"
 sha2 = "0.10"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+log = "0.4"
 
 [features]
 # 仅宿主测试依赖启用：共享真实存储原语的线程隔离故障注入。

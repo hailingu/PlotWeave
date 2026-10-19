@@ -174,7 +174,7 @@ pub(crate) fn resolve_media_entry_with(
     // 丢弃，后续 list 读到的是已干净文件，诊断永久丢失——不落盘规则「失败
     // 不得隐匿」同样适用于修复可见性
     for w in &recovery.warnings {
-        eprintln!("[library] 库媒体请求伴随迁移/恢复诊断：{w}");
+        log::warn!(target: "plotweave::library", "库媒体请求伴随迁移/恢复诊断：{w}");
     }
     let entry = index["assets"]["byId"]
         .get(id)
@@ -341,12 +341,12 @@ pub(crate) fn read_project_media_capped(
     )
 }
 
-/// 404 的后端诊断文本（评审修复，复用 store 的 eprintln 结构化诊断约定，
+/// 404 的后端诊断文本（评审修复，使用统一分级诊断（issue #633），
 /// 见 store/commands.rs）：webview 只收非敏感 404 固定文案，原始原因带
-/// `[media]` 标签进本机诊断日志——脏数据/文件缺失与普通失败可区分，
+/// `plotweave::media` target 进本机诊断日志——脏数据/文件缺失与普通失败可区分，
 /// 失败不得隐匿（AGENTS.md 不得隐匿失败硬性规则）。
 fn media_failure_diagnostic(err: &str) -> String {
-    format!("[media] 媒体请求失败：{err}")
+    format!("媒体请求失败：{err}")
 }
 
 /// 响应映射（句柄域测试与协议处理器共用）：命中 → 200 + 索引 mime；
@@ -430,7 +430,7 @@ pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> M
         }
     });
     if let Err(e) = &result {
-        eprintln!("{}", media_failure_diagnostic(e));
+        log::warn!(target: "plotweave::media", "{}", media_failure_diagnostic(e));
     }
     match result {
         Ok((mime, bytes, permit)) => MediaDelivery {

@@ -46,7 +46,7 @@ fn find_library_entry(
     let read_only = recovery.read_only;
     // 恢复结果已报告给操作边界，随后经事件通知前端；本机日志继续保留明细
     for w in &recovery.warnings {
-        eprintln!("[library] 项目导入伴随迁移/恢复诊断：{w}");
+        log::warn!(target: "plotweave::library", "项目导入伴随迁移/恢复诊断：{w}");
     }
     let (index, _) = if read_only {
         let (idx, w) = crate::library_fs::read_index_normalized_readonly(library)?;

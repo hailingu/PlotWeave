@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OSLog
 
 /// Crash maintenance reuses the established atomic-write name protocol and never interprets temp bytes as data.
 extension NativeDirectory {
@@ -8,7 +9,7 @@ extension NativeDirectory {
     func sweepOldTemporaryFiles(target: @Sendable (String) -> Bool) -> Int {
         let names: [String]
         do { names = try entries() }
-        catch { NSLog("PlotWeave temporary cleanup scan failed: %@", error.localizedDescription); return 0 }
+        catch { NativeLog.storage.warning("PlotWeave temporary cleanup scan failed: \(error.localizedDescription, privacy: .private)"); return 0 }
         let now = Date().timeIntervalSince1970
         var removed = 0
         for name in names where Self.ownedTemporaryName(name, target: target) {
@@ -19,11 +20,11 @@ extension NativeDirectory {
                       let current = try metadata(name), Self.isRegular(current), Self.sameIdentity(original, current) else { continue }
                 guard name.withCString({ unlinkat(descriptor, $0, 0) }) == 0 else { throw Self.ioError("移除过期原子写临时项失败") }
                 removed += 1
-            } catch { NSLog("PlotWeave temporary cleanup entry refused: %@", error.localizedDescription) }
+            } catch { NativeLog.storage.warning("PlotWeave temporary cleanup entry refused: \(error.localizedDescription, privacy: .private)") }
         }
         if removed > 0 {
             do { try sync() }
-            catch { NSLog("PlotWeave temporary cleanup sync failed: %@", error.localizedDescription) }
+            catch { NativeLog.storage.error("PlotWeave temporary cleanup sync failed: \(error.localizedDescription, privacy: .private)") }
         }
         return removed
     }

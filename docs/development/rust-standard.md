@@ -248,3 +248,26 @@ patterns, command handlers, error types, and test fixtures. Reuse or extend
 what already exists before adding new abstractions, preserve the intended
 crate dependency direction, and apply the common size and complexity review
 triggers.
+
+## Diagnostics
+
+Production Rust diagnostics use the `log` facade, with qualified targets such as
+`plotweave::store`, `plotweave::library`, `plotweave::prefs`, `plotweave::media`,
+`plotweave::lock`, `plotweave::blocking`, and `plotweave::native_quit` (issue #633).
+The Tauri setup installs the stderr sink once and preserves a logger already
+installed by an embedding caller. The host-agnostic core and historical FFI only
+emit facade records; their embedding executable owns sink initialization, as
+specified by the [log library contract](https://docs.rs/log/0.4.33/log/#in-libraries).
+
+The sink writes one JSON object per line with `level`, `target`, and `message`
+fields. Keep diagnostic codes and message bodies stable while selecting an
+appropriate severity: failures at `warn` or `error`, routine cleanup at `debug`.
+`RUST_LOG` controls levels and targets; the default is `warn`, and
+`RUST_LOG=warn,plotweave::store=debug` enables store debugging. Logging arguments
+must have no business side effects because filtered records are not evaluated.
+Invalid filters fall back to `warn` and emit `code=invalid-log-filter` without
+printing the supplied filter text. Validate before invoking the compatibility
+parser so malformed configuration cannot panic on a broken stderr pipe.
+Sink write failures are best-effort and do not panic. The native quit C callback
+also contains a caller-installed logger's panic, including a panic payload whose
+Drop could panic, while retaining its conservative termination decision.

@@ -314,7 +314,7 @@ pub(crate) fn ensure_importable(
         )));
     }
     for w in &recovery.warnings {
-        eprintln!("[library] 项目导入伴随迁移/恢复诊断：{w}");
+        log::warn!(target: "plotweave::library", "项目导入伴随迁移/恢复诊断：{w}");
     }
     Ok(recovery)
 }

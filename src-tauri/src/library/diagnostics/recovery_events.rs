@@ -82,7 +82,7 @@ pub(super) fn with_observations<T, E: From<LibraryError>>(
 /// Tauri 事件适配器：发送失败留结构化日志，不把已落定操作伪报成失败。
 pub(crate) fn publish_recovery(app: &AppHandle, snapshot: RecoverySnapshot) {
     if let Err(error) = app.emit("library-diagnostics", snapshot) {
-        eprintln!("[library] LIBRARY_DIAGNOSTICS_EMIT_FAILED: {error}");
+        log::warn!(target: "plotweave::library", "LIBRARY_DIAGNOSTICS_EMIT_FAILED: {error}");
     }
 }
 

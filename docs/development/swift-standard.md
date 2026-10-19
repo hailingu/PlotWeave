@@ -145,3 +145,14 @@ host adapters, and test fixtures to reuse. Keep the layering of migration
 plan §2.1: SwiftUI views and AppKit adapters do not own editing-document
 state; they communicate through the seams the plan defines, and new behavior
 lands behind the smallest coherent target boundary.
+
+## Diagnostics
+
+Native diagnostics use the immutable `NativeLog` handles backed by `os.Logger`
+(issue #633). The subsystem is `dev.plotweave.PlotWeaveNative`; categories are
+`quit`, `library`, `storage`, and `preferences`. Console can filter by subsystem,
+category, and severity without relying on a message prefix. Keep static message
+bodies and diagnostic codes stable, select warning/error severity for the
+existing failure paths, and mark dynamic localized error descriptions private.
+Diagnostics must not alter recovery, throw new business errors, or include
+request payloads or credential material.
