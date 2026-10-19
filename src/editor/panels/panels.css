@@ -575,8 +575,17 @@
   transition: opacity 0.15s;
 }
 
-.pw-settings-item:hover .pw-settings-x {
+.pw-settings-item:hover .pw-settings-x,
+.pw-settings-item:focus-within .pw-settings-x {
   opacity: 1;
+}
+
+/* Tab 进入删除按钮时立即显示，不能等待淡入或只依赖指针悬停（#596）。 */
+.pw-settings-x:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  transition: none;
 }
 
 .pw-settings-x:hover {
