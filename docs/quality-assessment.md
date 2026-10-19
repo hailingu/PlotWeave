@@ -17,6 +17,8 @@
 
 **后续状态更新（2026-10-19，#597）**：完成响应已与在途 Task 分离，并加入 8 MiB 总计／1 MiB 单条编码字节预算；淘汰保留身份指纹和防重放，详情及测量边界见[桥合同](swiftui-react-flow-feature-parity.md#桥合同)。本次同步 #597 状态，历史评分未重算。
 
+**后续状态更新（2026-10-19，#603）**：Web 首页项目菜单的键盘激活改为按钮边界锚点并聚焦首项，Escape 归还触发器；指针定位及项目动作保留。DOM 行为测试覆盖定位、切换项目、取消与重命名焦点，未验收物理键盘／系统窗口；历史评分未重算。
+
 ## 一、评分口径
 
 9 个维度、10 分制、等权。评级带：A+ 9.5–10.0、A 9.0–9.4、A- 8.5–8.9、B+ 8.0–8.4、B 7.5–7.9、B- 7.0–7.4、C+ 6.5–6.9、C 6.0–6.4、C- 5.5–5.9、D 4.0–5.4、E < 4.0。
@@ -135,7 +137,7 @@
 - **已修复（原 P2）** [#596](https://github.com/hailingu/PlotWeave/issues/596)：节点包装层的 focus-visible 虚线外环与卡片选中框并存；设定集/资产行 focus-within 显示删除按钮，按钮 focus-visible 立即可见并有轮廓。原键盘命令与保存入口未变，测试边界见文首更新。
 - **P2** 设定文档弹窗缺少模态契约：只有 `<dialog open aria-label>`，没有 `aria-modal`/焦点移入/圈定；`useAppSettingsShortcut` 只按 `aria-modal` 挂起，编辑长文档时 ⌘, 打开设置会卸载编辑器并丢失草稿（[#595](https://github.com/hailingu/PlotWeave/issues/595)）。
 - **P3** Web/Tauri AI 输入行没有发送按钮，只能按 Enter；原生有显式发送（[#599](https://github.com/hailingu/PlotWeave/issues/599)）。
-- **P3** 首页首次加载空列表显示“没有匹配「」”，与“加载完前不显示空状态”的注释相反；项目菜单键盘激活因合成 click 无坐标落到窗口左上角且无焦点转移（[#603](https://github.com/hailingu/PlotWeave/issues/603)）。
+- **P3** 首页首次加载空列表显示“没有匹配「」”，与“加载完前不显示空状态”的注释相反。**已修复（原 P3）** [#603](https://github.com/hailingu/PlotWeave/issues/603)：键盘项目菜单以触发按钮定位并聚焦首项，Escape 返回；指针路径保留。
 - **P3** 原生导出默认 `outline = true`，Web/设计规格默认关闭，同一项目两壳默认输出不同（[#598](https://github.com/hailingu/PlotWeave/issues/598)）；编辑器没有“保存中/已保存”的正向状态，只有失败横幅。
 
 ## 四、本轮 issue
@@ -156,7 +158,7 @@
 | [#600](https://github.com/hailingu/PlotWeave/issues/600) | 3.4 | P3 | 保存/删除竞态测试依赖真实 sleep 且测试夹具隔离不足 |
 | [#601](https://github.com/hailingu/PlotWeave/issues/601) | 3.4 | P3 | Swift 原生测试没有覆盖率门禁 |
 | [#602](https://github.com/hailingu/PlotWeave/issues/602) | 3.6 | P3 | workflow/README 分支保护与原生分支描述不一致 |
-| [#603](https://github.com/hailingu/PlotWeave/issues/603) | 3.9 | P3 | 首页项目菜单键盘激活定位到左上角且无焦点转移 |
+| [#603](https://github.com/hailingu/PlotWeave/issues/603) | 3.9 | 已修复（原 P3） | 键盘菜单按钮锚点、首项聚焦与 Escape 归还 |
 
 已关闭：[#550](https://github.com/hailingu/PlotWeave/issues/550)（SwiftUI 视图层截图/UI 自动化回归）、[#571](https://github.com/hailingu/PlotWeave/issues/571)（视觉目验/截图录屏）按所有者决定标记 `known-boundary` + not planned；不表示相应验收已通过。保留 [#570](https://github.com/hailingu/PlotWeave/issues/570)（中文输入法真机组合输入，人工 IME 验证）与 [#551](https://github.com/hailingu/PlotWeave/issues/551)（Tauri 全链路 E2E，不依赖截图），因为它们不属于“需要截图才能进行”的 UI 自动化。
 
@@ -171,7 +173,7 @@
 3. Rust 删除目录 fsync；项目控制文件限读并避免在全局锁内全量解析（#591、#592）。
 4. **已完成 #593 实现修复（PR #624）**：核验器与 Node 版本取事件 base SHA，PR head 仅为 Git 数据；不再作为待修复项。工作流定义的外部强制保护/required review 尚未实施，需单独的所有者治理决定，不包含在本次已修复承诺中。
 5. 设置错误可见、文档弹窗模态（#594–#595）；**本变更已完成 #596** 的画布/侧栏焦点样式。
-6. P3：原生导出默认、AI 发送、测试确定性、Swift 覆盖率、文档一致性、首页菜单键盘（#598–#603）；**本变更已完成 #597** 的桥接完成响应预算。
+6. P3：原生导出默认、AI 发送、测试确定性、Swift 覆盖率、文档一致性（#598–#602）；**已完成 #597** 的桥接完成响应预算，以及 **#603** 的首页菜单键盘入口。
 
 预计修复上述 P2 后可回到 **9.2–9.3 / A**；若只按已知 issue 口径（不含本轮新发现），项目接近 9.1/A。
 

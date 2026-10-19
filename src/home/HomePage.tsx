@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useProjectMenu, type ProjectMenuState } from './useProjectMenu'
 import { ActionErrorBanner, type HomeActionFailure } from './ActionErrorBanner'
 import { ProjectCard } from './ProjectCard'
 import { OpenErrorBanner, type OpenProjectError } from './OpenErrorBanner'
@@ -37,32 +38,6 @@ interface HomePageProps {
   readonly onDeleteProject: (id: string) => void
 }
 
-/** 项目菜单的关闭语义（§3.2；自 HomePage 拆出以守祖父化组件行数）：
- * Esc 或点击菜单外任意处关闭；菜单内容元素（.editor-ctx 内）上的按下
- * 不关闭。 */
-function useMenuDismiss(
-  menu: { x: number; y: number; id: string } | null,
-  close: () => void,
-) {
-  useEffect(() => {
-    if (!menu) return
-    const onDown = (e: PointerEvent) => {
-      // e.target 可能是非 Element 的 EventTarget（如 document），安全判断避免抛错
-      const target = e.target
-      if (target instanceof Element && !target.closest('.editor-ctx')) close()
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close()
-    }
-    document.addEventListener('pointerdown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [menu, close])
-}
-
 /** 项目卡菜单/重命名/删除状态机（HomePage 拆分，issue #99）：右键菜单位
  * 置态、两步对话框态与「动作后收起菜单」收口。 */
 function useProjectMenus(
@@ -74,20 +49,9 @@ function useProjectMenus(
     readonly onDelete: (id: string) => void
   },
 ) {
-  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(
-    null,
-  )
+  const { menu, openMenu, closeMenu } = useProjectMenu()
   const [renaming, setRenaming] = useState<ProjectSummary | null>(null)
   const [deleting, setDeleting] = useState<ProjectSummary | null>(null)
-  const openMenu = (
-    e: { clientX: number; clientY: number; preventDefault: () => void },
-    project: ProjectSummary,
-  ) => {
-    e.preventDefault()
-    setMenu({ x: e.clientX, y: e.clientY, id: project.id })
-  }
-  const closeMenu = useCallback(() => setMenu(null), [])
-  useMenuDismiss(menu, closeMenu)
   const menuProject = menu ? projects.find((p) => p.id === menu.id) : undefined
   return {
     menu,
@@ -97,19 +61,19 @@ function useProjectMenus(
     openMenu,
     open: (id: string) => {
       actions.onOpen(id)
-      setMenu(null)
+      closeMenu()
     },
     rename: (project: ProjectSummary) => {
       setRenaming(project)
-      setMenu(null)
+      closeMenu()
     },
     duplicate: (id: string) => {
       actions.onDuplicate(id)
-      setMenu(null)
+      closeMenu()
     },
     requestDelete: (project: ProjectSummary) => {
       setDeleting(project)
-      setMenu(null)
+      closeMenu()
     },
     closeRename: () => setRenaming(null),
     confirmRename: (id: string, name: string) => {
@@ -227,7 +191,7 @@ function ProjectGrid({
   readonly onCreate: () => void
   readonly onOpen: (id: string) => void
   readonly onMenu: (
-    e: { clientX: number; clientY: number; preventDefault: () => void },
+    e: MouseEvent<HTMLButtonElement>,
     project: ProjectSummary,
   ) => void
 }) {
@@ -275,13 +239,17 @@ function ProjectMenu({
   onDuplicate,
   onDelete,
 }: {
-  readonly menu: { x: number; y: number; id: string }
+  readonly menu: ProjectMenuState
   readonly menuProject: ProjectSummary
   readonly onOpen: (id: string) => void
   readonly onRename: (project: ProjectSummary) => void
   readonly onDuplicate: (id: string) => void
   readonly onDelete: (project: ProjectSummary) => void
 }) {
+  const firstItem = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (menu.keyboard) firstItem.current?.focus()
+  }, [menu])
   return (
     <div
       className="editor-ctx"
@@ -293,6 +261,7 @@ function ProjectMenu({
       aria-label="项目菜单"
     >
       <button
+        ref={firstItem}
         type="button"
         className="editor-menu-item"
         role="menuitem"
