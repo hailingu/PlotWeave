@@ -13,6 +13,8 @@
 详见[证据边界](development/quality-gate-evidence.md#server-side-evidence-verification-issue-548)。
 下列数值和八项 P2 计数保留为 `3cf7146` 的历史评估，不作为修复后当前评分；本次只更新 #593 状态，未重算综合评级。
 
+**后续状态更新（2026-10-19，#596）**：节点已有独立键盘焦点虚线外环，设定集/资产删除按钮在键盘聚焦及行内焦点时显现；对应条目、issue 表和待办状态随本修复同步，历史评分未重算。焦点样式验证与物理键盘/系统窗口验收的区别见 [UI 设计](ui-design.md#26-无障碍变体)。
+
 ## 一、评分口径
 
 9 个维度、10 分制、等权。评级带：A+ 9.5–10.0、A 9.0–9.4、A- 8.5–8.9、B+ 8.0–8.4、B 7.5–7.9、B- 7.0–7.4、C+ 6.5–6.9、C 6.0–6.4、C- 5.5–5.9、D 4.0–5.4、E < 4.0。
@@ -128,7 +130,7 @@
 
 扣分：
 
-- **P2** 画布节点与侧栏删除按钮焦点不可见：React Flow 默认 `:focus-visible` outline 为 none，应用只有选中态蓝框；`.pw-settings-x` 默认 `opacity: 0` 只由 hover 揭开，键盘可 Tab 进不可见删除按钮（[#596](https://github.com/hailingu/PlotWeave/issues/596)）。
+- **已修复（原 P2）** [#596](https://github.com/hailingu/PlotWeave/issues/596)：节点包装层的 focus-visible 虚线外环与卡片选中框并存；设定集/资产行 focus-within 显示删除按钮，按钮 focus-visible 立即可见并有轮廓。原键盘命令与保存入口未变，测试边界见文首更新。
 - **P2** 设定文档弹窗缺少模态契约：只有 `<dialog open aria-label>`，没有 `aria-modal`/焦点移入/圈定；`useAppSettingsShortcut` 只按 `aria-modal` 挂起，编辑长文档时 ⌘, 打开设置会卸载编辑器并丢失草稿（[#595](https://github.com/hailingu/PlotWeave/issues/595)）。
 - **P3** Web/Tauri AI 输入行没有发送按钮，只能按 Enter；原生有显式发送（[#599](https://github.com/hailingu/PlotWeave/issues/599)）。
 - **P3** 首页首次加载空列表显示“没有匹配「」”，与“加载完前不显示空状态”的注释相反；项目菜单键盘激活因合成 click 无坐标落到窗口左上角且无焦点转移（[#603](https://github.com/hailingu/PlotWeave/issues/603)）。
@@ -145,7 +147,7 @@
 | [#593](https://github.com/hailingu/PlotWeave/issues/593) | 3.5 | 原 P2，已修复 | PR #624 固定 base 核验器；workflow-definition 与自述证据边界保留，合并后关闭 |
 | [#594](https://github.com/hailingu/PlotWeave/issues/594) | 3.2 | P2 | 设置防抖保存失败没有用户可见诊断 |
 | [#595](https://github.com/hailingu/PlotWeave/issues/595) | 3.9 | P2 | 设定文档弹窗缺少模态契约，⌘, 可丢失未保存草稿 |
-| [#596](https://github.com/hailingu/PlotWeave/issues/596) | 3.9 | P2 | 画布节点与侧栏删除按钮缺少可见键盘焦点 |
+| [#596](https://github.com/hailingu/PlotWeave/issues/596) | 3.9 | 原 P2，已修复 | 节点独立焦点环与侧栏删除按钮焦点显现，合并后关闭 |
 | [#597](https://github.com/hailingu/PlotWeave/issues/597) | 3.3 | P3 | 桥接结果缓存保留完整项目文档且无字节上限 |
 | [#598](https://github.com/hailingu/PlotWeave/issues/598) | 3.9 | P3 | 原生导出默认开启创作大纲，与 Web/设计规格不一致 |
 | [#599](https://github.com/hailingu/PlotWeave/issues/599) | 3.9 | P3 | Web/Tauri AI 输入行缺少发送按钮 |
@@ -166,7 +168,7 @@
 2. 原生失败恢复：失败时保留 coordinator/route 或让欢迎卡暴露重试；无 listener 的关闭/退出走可见降级（#590）。
 3. Rust 删除目录 fsync；项目控制文件限读并避免在全局锁内全量解析（#591、#592）。
 4. **已完成 #593 实现修复（PR #624）**：核验器与 Node 版本取事件 base SHA，PR head 仅为 Git 数据；不再作为待修复项。工作流定义的外部强制保护/required review 尚未实施，需单独的所有者治理决定，不包含在本次已修复承诺中。
-5. 设置错误可见、文档弹窗模态、画布/侧栏焦点（#594–#596）。
+5. 设置错误可见、文档弹窗模态（#594–#595）；**本变更已完成 #596** 的画布/侧栏焦点样式。
 6. P3：桥接缓存、原生导出默认、AI 发送、测试确定性、Swift 覆盖率、文档一致性、首页菜单键盘（#597–#603）。
 
 预计修复上述 P2 后可回到 **9.2–9.3 / A**；若只按已知 issue 口径（不含本轮新发现），项目接近 9.1/A。

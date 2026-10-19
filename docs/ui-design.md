@@ -104,6 +104,8 @@ gray-900 #131316  →  surface.canvas        →  canvas.background
 
 2026-10-18 所有者决策（[issue #569](https://github.com/hailingu/PlotWeave/issues/569)）：PlotWeave 不支持 VoiceOver，包括原生界面及 WKWebView 画布的朗读、光标导航、焦点顺序与 rotor 操作；取消相关人工巡检与 Web 辅助功能树验收，不再列为待完成项。现有键盘交互、语义标签、axe 审计及下述三种外观变体继续保留；这些能力不构成 VoiceOver 支持承诺。此前带日期的未验证记录保留为历史，不表示后续支持计划。
 
+键盘焦点（[issue #596](https://github.com/hailingu/PlotWeave/issues/596)）：画布节点在 React Flow 包装层显示 2px `accent` 虚线外环、4px 间距，与内层卡片的实线选中框并存，不改变节点或端口几何。设定集及资产行在 hover 或 focus-within 时显示删除按钮；按钮 focus-visible 立即显现并有 2px 实线轮廓，不等待淡入。焦点只提供反馈，不触发删除或改写选择/保存状态。WebKit 计算样式回归显式建模焦点伪类（测试宿主无活动 key window），不据此宣称物理 Tab 或系统焦点验收；真实组件的 Enter、方向键移动、删除与撤销继续回归。
+
 每个令牌与组件必须回答三个问题：`prefers-reduced-motion`（弹簧/滑动 → 交叉淡化）、`prefers-reduced-transparency`（材质 → 实色去模糊）、`prefers-contrast: more`（背景近实色 + 明确描边，文本对比度升一档）。
 
 「升一档」的达标范围以配对契约为准：primary 文本与错误横幅等确定性配对在双外观（含默认 no-preference）下 ≥ 4.5:1，secondary 与品牌底配对仅在 `prefers-contrast: more` 下 ≥ 4.5:1。低于 4.5:1 参考的登记基线视觉边界（issue #351）分两类：品牌渐变底白字在浅深默认外观均低于（§2.2）；次级文本在浅色默认外观与深色填充合成面低于，深色默认的窗口/画布基面实测 ≈ 5.7:1 达标（§2.3）——不得把 more 下的通过推广到默认主题；用户指定内容配色（`on.saturated`）与装饰图案不在对比度契约内的原有范围区别不变。

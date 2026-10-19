@@ -24,6 +24,13 @@
   outline: 1px solid var(--node-accent);
   outline-offset: 0;
 }
+/* 键盘焦点属于 React Flow 包装层；虚线外环与内层实线选中框并存，不改几何（#596）。 */
+.canvas-root .react-flow__node.selectable:focus-visible {
+  outline: 2px dashed var(--accent);
+  outline-offset: 4px;
+  border-radius: 14px;
+}
+
 .pw-node-kind {
   display: flex;
   align-items: center;
