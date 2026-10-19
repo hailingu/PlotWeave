@@ -25,6 +25,8 @@ use tauri::Manager;
 
 mod assets;
 mod blocking;
+/// Byte representation shared by seal and media, with unchanged per-domain input policies.
+mod hex_codec;
 mod http_util;
 mod imagegen;
 use plotweave_core::isotime;
