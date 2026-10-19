@@ -283,21 +283,26 @@ pub unsafe extern "C" fn pw_core_free(core: *mut PwCore) {
 /// 提交请求：返回非零请求 id，回执经 `completion` 在工作线程送达。
 /// core/请求/回调为 NULL 或请求非 UTF-8 时拒绝（返回 0，不产生回调）。
 ///
+/// Rust 调用方传 Some(callback)；Option<extern "C" fn> 保持 C 函数指针调用布局。
+///
 /// # Safety
 ///
-/// `core` 须为有效句柄；`request_json` 为 NULL 或 NUL 结尾的 UTF-8 C 字符串；
-/// `completion` 为有效函数指针；`context` 指针须保持有效直到该请求回执送达
+/// `core` 为 NULL 或有效句柄；`request_json` 为 NULL 或 NUL 结尾的 UTF-8 C 字符串；
+/// `completion` 为 None（C NULL）或有效函数指针；`context` 指针须保持有效直到该请求回执送达
 /// 或 core 释放。
 #[no_mangle]
 pub unsafe extern "C" fn pw_request_submit(
     core: *mut PwCore,
     request_json: *const c_char,
-    completion: PwCompletion,
+    completion: Option<PwCompletion>,
     context: *mut c_void,
 ) -> u32 {
     if core.is_null() || request_json.is_null() {
         return 0;
     }
+    let Some(completion) = completion else {
+        return 0;
+    };
     let core = &*core;
     let Ok(request) = CStr::from_ptr(request_json).to_str() else {
         return 0;
@@ -378,7 +383,14 @@ mod tests {
         assert!(state_guard(&core.pending).is_empty());
         let request = CString::new(r#"{"op":"listProjects"}"#).unwrap();
         assert_eq!(
-            unsafe { pw_request_submit(&mut core, request.as_ptr(), record, std::ptr::null_mut()) },
+            unsafe {
+                pw_request_submit(
+                    &mut core,
+                    request.as_ptr(),
+                    Some(record),
+                    std::ptr::null_mut(),
+                )
+            },
             0
         );
         assert!(state_guard(&core.pending).is_empty());

@@ -77,7 +77,7 @@ impl Fixture {
             plotweave_ffi::pw_request_submit(
                 self.core,
                 CString::new(request).unwrap().as_ptr(),
-                record_completion,
+                Some(record_completion),
                 &self.sender as *const _ as *mut c_void,
             )
         };
@@ -246,7 +246,7 @@ fn only_queued_requests_cancel_and_free_drains_each_receipt_once() {
         plotweave_ffi::pw_request_submit(
             fx.core,
             request.as_ptr(),
-            paused_completion,
+            Some(paused_completion),
             &paused as *const _ as *mut c_void,
         )
     };
@@ -293,7 +293,7 @@ fn allocation_boundaries_reject_bad_input() {
             plotweave_ffi::pw_request_submit(
                 std::ptr::null_mut(),
                 std::ptr::null(),
-                record_completion,
+                Some(record_completion),
                 std::ptr::null_mut(),
             )
         },
@@ -338,4 +338,53 @@ fn expect_existing_save_cannot_recreate_deleted_project() {
     save.as_object_mut().unwrap().remove("expectExisting");
     fx.call_ok(&save.to_string());
     assert!(fx.root.join("projects").join(format!("{id}.json")).exists());
+}
+
+/// Rejected inputs consume no request identity and cannot enqueue a side effect or completion.
+#[test]
+fn null_completion_and_invalid_pointers_reject_before_dispatch() {
+    let mut fx = Fixture::new("null-completion");
+    let create = CString::new(r#"{"op":"createProject","name":"must-not-create"}"#).unwrap();
+    let invalid_utf8 = CString::new(vec![0xff]).unwrap();
+    let context = &fx.sender as *const _ as *mut c_void;
+    for (core, request, completion) in [
+        (fx.core, create.as_ptr(), None),
+        (
+            fx.core,
+            std::ptr::null(),
+            Some(record_completion as plotweave_ffi::PwCompletion),
+        ),
+        (
+            std::ptr::null_mut(),
+            create.as_ptr(),
+            Some(record_completion as plotweave_ffi::PwCompletion),
+        ),
+        (
+            fx.core,
+            invalid_utf8.as_ptr(),
+            Some(record_completion as plotweave_ffi::PwCompletion),
+        ),
+    ] {
+        assert_eq!(
+            unsafe { plotweave_ffi::pw_request_submit(core, request, completion, context) },
+            0
+        );
+    }
+    let first = fx.submit(r#"{"op":"listProjects"}"#);
+    assert_eq!(first, 1, "rejection must precede request ID allocation");
+    // Join drains the queue: no sleep window can hide a late request or callback.
+    unsafe { plotweave_ffi::pw_core_free(fx.core) };
+    fx.core = std::ptr::null_mut();
+    let receipts: Vec<_> = fx.receiver.try_iter().collect();
+    assert_eq!(receipts.len(), 1, "only the valid request may complete");
+    assert_eq!(
+        (receipts[0].0, receipts[0].1),
+        (first, plotweave_ffi::PW_STATUS_OK)
+    );
+    let result: serde_json::Value = serde_json::from_str(receipts[0].2.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        result["ok"],
+        serde_json::json!([]),
+        "rejected create must not run"
+    );
 }
