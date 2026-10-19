@@ -175,7 +175,11 @@ the former `App.test.tsx`, added by issue
 [#525](https://github.com/hailingu/PlotWeave/issues/525), plus the shared
 `console.warn` lifecycle those files use — expected warnings are declared
 per case and undeclared warnings fail the test with the captured output,
-issue [#542](https://github.com/hailingu/PlotWeave/issues/542)). The same
+issue [#542](https://github.com/hailingu/PlotWeave/issues/542)).
+
+`src/projectStoreTestHarness.ts` adds the shared typed IPC interception, owned
+fake clock, and cleanup for projectStore Tauri tests (issue
+[#600](https://github.com/hailingu/PlotWeave/issues/600)). The same
 list is
 mirrored into `sonar.exclusions` — moving these files out of
 product-source statistics while they remain analyzed as test code, not a

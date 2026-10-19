@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { setupProjectStoreHarness } from './projectStoreTestHarness'
+import { describe, expect, it, vi } from 'vitest'
 import { parseProject } from './model/convert'
 
 /**
@@ -10,31 +11,11 @@ import { parseProject } from './model/convert'
  * 评审：源文件已达 1800 行测试上限）。
  */
 
-const handlers = new Map<string, (args: unknown) => unknown>()
-const calls: Array<{ cmd: string; args: unknown }> = []
-
-beforeEach(() => {
-  vi.resetModules()
-  vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
-  handlers.clear()
-  calls.length = 0
-  // tauriLoad 固定先做加载侧资产复验：默认无不可验证键，专项用例自行覆盖
-  handlers.set('verify_project_assets', () => [])
-  // duplicate 命名先查现存名（§7.3）：默认返回非空列表——空表会触发
-  // tauriList 的空库播种递归，mock 恒空即无限循环
-  handlers.set('list_projects', () => [meta('p1')])
-  vi.doMock('@tauri-apps/api/core', () => ({
-    invoke: async (cmd: string, args: unknown) => {
-      calls.push({ cmd, args })
-      const h = handlers.get(cmd)
-      if (!h) throw new Error(`未编排的命令：${cmd}`)
-      return h(args)
-    },
-  }))
-})
-
-const load = async (): Promise<typeof import('./projectStore')> =>
-  import('./projectStore')
+const { handlers, calls, load, checkpoint, waitForCommand } =
+  setupProjectStoreHarness(
+    () => [meta('p1')],
+    () => ({ __TAURI_INTERNALS__: {} }),
+  )
 
 const UPDATED_ISO = new Date(1_700_000_000_000).toISOString()
 
@@ -187,7 +168,8 @@ describe('tauriList 维护写：升级窗口与保存链交错（issue #134）',
     const saving = projectStore.save(SID, userDocOf(SID))
     await vi.waitFor(() => expect(releaseSave).not.toBeNull())
     const listing = projectStore.list()
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForCommand('list_projects')
+    await checkpoint()
     // 红（旧实现）：不等链静止即读盘——读到保存前的旧内容，随后的修复
     // 回写以旧内容参与排序竞争
     expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(0)
@@ -296,7 +278,8 @@ describe('tauriList 维护写：播种与在途保存定序（PR #198 评审）'
     await vi.waitFor(() => expect(savesOf(DSID).length).toBeGreaterThan(0))
     const listing = projectStore.list()
     // 留出旧实现「不等链」探测的时序窗（新实现阻塞在等链落定，不受影响）
-    await new Promise((r) => setTimeout(r, 20))
+    await waitForCommand('list_projects')
+    await checkpoint()
     releaseSave!()
     await Promise.all([saving, listing])
     // 红（旧实现）：不等链落定即探测 not-found，链身份未变守卫放行，

@@ -1,8 +1,36 @@
 // @vitest-environment happy-dom
-import { renderHook } from '@testing-library/react'
+import { cleanup, renderHook } from '@testing-library/react'
 import { fireEvent } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useEditorHotkeys, type EditorHotkeyActions } from './useEditorHotkeys'
+
+/** Each case must dispose every document listener it registered. */
+function captureListeners() {
+  return {
+    added: vi.spyOn(document, 'addEventListener'),
+    removed: vi.spyOn(document, 'removeEventListener'),
+  }
+}
+let listeners: ReturnType<typeof captureListeners>
+beforeEach(() => {
+  listeners = captureListeners()
+})
+afterEach(() => {
+  cleanup()
+  try {
+    for (const [type, listener] of listeners.added.mock.calls) {
+      if (type !== 'keydown' && type !== 'pointerdown') continue
+      expect(
+        listeners.removed.mock.calls.some(
+          ([removedType, removedListener]) =>
+            removedType === type && removedListener === listener,
+        ),
+      ).toBe(true)
+    }
+  } finally {
+    vi.restoreAllMocks()
+  }
+})
 
 function mkActions(
   overrides: Partial<EditorHotkeyActions> = {},

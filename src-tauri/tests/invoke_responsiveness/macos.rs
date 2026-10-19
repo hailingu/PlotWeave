@@ -15,8 +15,6 @@ mod cleanup;
 use cleanup::OwnedAppDataDir;
 
 const WAIT: Duration = Duration::from_secs(10);
-const HOLD: Duration = Duration::from_millis(400);
-const RESPONSIVE: Duration = Duration::from_millis(150);
 
 /// 在主线程建立真实运行时；测试线程只经主线程队列触发 invoke。
 pub fn run() {
@@ -122,39 +120,55 @@ fn hold_library(dir: &Path) -> File {
     lock
 }
 
-/// 受控锁竞争下记录主线程 invoke 占用与心跳延迟；先验证结果，再检查延迟。
-fn contended(app: &AppHandle, dir: &Path, command: &str, body: Value) -> (Value, bool) {
+/// Hold the real flock until the test releases it; a watchdog prevents an unbounded deadlock.
+fn controlled_library_hold(dir: &Path) -> (mpsc::Sender<()>, std::thread::JoinHandle<bool>) {
     let lock = hold_library(dir);
-    let release = std::thread::spawn(move || {
-        std::thread::sleep(HOLD);
+    let (release, gate) = mpsc::channel();
+    let held = std::thread::spawn(move || {
+        let controlled = gate.recv_timeout(WAIT).is_ok();
         drop(lock);
+        controlled
     });
-    let (timing, response) = dispatch(app, command, body);
-    std::thread::sleep(Duration::from_millis(30));
-    let early = response.try_recv().ok();
+    (release, held)
+}
+
+/// Complete an actual main-thread queue turn while the operation's flock remains held.
+fn main_thread_heartbeat(app: &AppHandle) -> Duration {
     let (beat, heartbeat) = mpsc::channel();
     let scheduled = Instant::now();
     app.run_on_main_thread(move || beat.send(scheduled.elapsed()).unwrap())
         .unwrap();
-    let latency = heartbeat.recv_timeout(WAIT).unwrap();
-    let result = early
-        .clone()
-        .unwrap_or_else(|| response.recv_timeout(WAIT).unwrap());
+    heartbeat.recv_timeout(WAIT).unwrap()
+}
+
+/// Invoke must return and service a main-thread heartbeat before the file lock is released.
+fn contended(app: &AppHandle, dir: &Path, command: &str, body: Value) -> Value {
+    let (release, held) = controlled_library_hold(dir);
+    let (timing, response) = dispatch(app, command, body);
     let dispatch_time = timing.recv_timeout(WAIT).unwrap();
-    release.join().unwrap();
-    assert!(early.is_none(), "等待文件锁的命令不得提前完成");
+    let latency = main_thread_heartbeat(app);
+    let pending = matches!(response.try_recv(), Err(mpsc::TryRecvError::Empty));
+    let released = release.send(()).is_ok();
+    assert!(
+        held.join().unwrap() && released,
+        "watchdog cannot establish responsiveness"
+    );
+    let result = response.recv_timeout(WAIT).unwrap();
+    assert!(
+        pending,
+        "command cannot complete before its file lock is released"
+    );
     assert!(result.get("error").is_none(), "{command}: {result}");
-    println!("{command}: invoke={dispatch_time:?}, heartbeat={latency:?}, lock={HOLD:?}");
-    (
-        result["ok"].clone(),
-        dispatch_time < RESPONSIVE && latency < RESPONSIVE,
-    )
+    println!(
+        "{command}: invoke observation={dispatch_time:?}, heartbeat={latency:?}, explicit release"
+    );
+    result["ok"].clone()
 }
 
 /// 库写入、媒体解析竞争同一文件锁；读回磁盘证明调度后事务仍完整完成。
 fn check_commands(app: &AppHandle, dir: &Path) {
     success(app, "list_library_assets", json!({}));
-    let (asset, imported) = contended(
+    let asset = contended(
         app,
         dir,
         "import_library_asset",
@@ -163,7 +177,7 @@ fn check_commands(app: &AppHandle, dir: &Path) {
         }),
     );
     let id = &asset["id"];
-    let (_, resolved) = contended(
+    contended(
         app,
         dir,
         "get_asset_media_url",
@@ -171,7 +185,7 @@ fn check_commands(app: &AppHandle, dir: &Path) {
             "scope": {"kind": "library"}, "assetId": id
         }),
     );
-    let (updated, saved) = contended(
+    let updated = contended(
         app,
         dir,
         "update_library_asset",
@@ -190,19 +204,11 @@ fn check_commands(app: &AppHandle, dir: &Path) {
     check_project_assets(app, id);
     check_library_overlap(app, dir, id);
     check_other_persistence(app, id);
-    assert!(
-        imported && resolved && saved,
-        "阻塞文件锁等待不得占用 invoke 主线程"
-    );
 }
 
 /// 两个并发补丁与媒体校验竞争库锁后，独立字段必须同时保留，诊断序号互异。
 fn check_library_overlap(app: &AppHandle, dir: &Path, id: &Value) {
-    let lock = hold_library(dir);
-    let release = std::thread::spawn(move || {
-        std::thread::sleep(HOLD);
-        drop(lock);
-    });
+    let (release, held) = controlled_library_hold(dir);
     let (first_time, first) = dispatch(
         app,
         "update_library_asset",
@@ -218,13 +224,27 @@ fn check_library_overlap(app: &AppHandle, dir: &Path, id: &Value) {
         "get_asset_media_url",
         json!({"scope": {"kind": "library"}, "assetId": id}),
     );
+    let observations: Vec<_> = [first_time, second_time, media_time]
+        .into_iter()
+        .map(|time| time.recv_timeout(WAIT).unwrap())
+        .collect();
+    let heartbeat = main_thread_heartbeat(app);
+    let pending = [&first, &second, &media]
+        .into_iter()
+        .all(|response| matches!(response.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    let released = release.send(()).is_ok();
+    assert!(
+        held.join().unwrap() && released,
+        "watchdog cannot establish overlap ordering"
+    );
+    assert!(
+        pending,
+        "all three commands must remain pending behind the held flock"
+    );
+    println!("overlap: invoke observations={observations:?}, heartbeat={heartbeat:?}");
     let first = first.recv_timeout(WAIT).unwrap();
     let second = second.recv_timeout(WAIT).unwrap();
     assert!(media.recv_timeout(WAIT).unwrap()["ok"].is_string());
-    for time in [first_time, second_time, media_time] {
-        assert!(time.recv_timeout(WAIT).unwrap() < RESPONSIVE);
-    }
-    release.join().unwrap();
     assert!(first["ok"]["diagnosticsRevision"].is_string());
     assert!(second["ok"]["diagnosticsRevision"].is_string());
     assert_ne!(

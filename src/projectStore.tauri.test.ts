@@ -1,39 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { setupProjectStoreHarness } from './projectStoreTestHarness'
+import { describe, expect, it, vi } from 'vitest'
 import type { ProjectContent } from './projectStore'
 
 /** projectStore 的 Tauri 路径：mock IPC，isTauri 判真后动态 import。
  * invoke 按命令名路由，行为由各用例编排。
  * load_project 返回的是 ProjectDocument 信封（旧扁平 v0 格式已退役，#519）。 */
 
-const handlers = new Map<string, (args: unknown) => unknown>()
-const calls: Array<{ cmd: string; args: unknown }> = []
-
-beforeEach(() => {
-  vi.resetModules()
-  vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
-  handlers.clear()
-  calls.length = 0
-  // tauriLoad 固定先做加载侧资产复验：默认无不可验证键，专项用例自行覆盖
-  handlers.set('verify_project_assets', () => [])
-  // duplicate 命名先查现存名（§7.3）：默认返回非空列表——空表会触发
-  // tauriList 的空库播种递归，mock 恒空即无限循环
-  handlers.set('list_projects', () => [meta('p1')])
-  // 拦截点在类型化入口（issue #394 评审 5339899090）：本文件编排的保存
-  // 重试级联下，vitest 4 对 invoke.ts 集中式动态导入的 core mock 会失稳
-  // （部分调用落到真实模块）；在 ipcInvoke 入口拦截后行为与迁移前逐调用
-  // 点动态导入时完全一致，包装转发语义另由 src/ipc/invoke.test.ts 覆盖
-  vi.doMock('./ipc/invoke', () => ({
-    ipcInvoke: async (cmd: string, args?: unknown) => {
-      calls.push({ cmd, args })
-      const h = handlers.get(cmd)
-      if (!h) throw new Error(`未编排的命令：${cmd}`)
-      return h(args)
-    },
-  }))
-})
-
-const load = async (): Promise<typeof import('./projectStore')> =>
-  import('./projectStore')
+const { handlers, calls, load, checkpoint, waitForCommand, waitForIdle } =
+  setupProjectStoreHarness(
+    () => [meta('p1')],
+    () => ({ __TAURI_INTERNALS__: {} }),
+  )
 
 const UPDATED_ISO = new Date(1_700_000_000_000).toISOString()
 
@@ -262,7 +239,7 @@ describe('tauriLoad：归一化与修复回写', () => {
     await vi.waitFor(() => expect(releaseA).not.toBeNull())
     // load 先捕获 A 的链（单次等待只能看到 A）
     const loading = projectStore.load('p1')
-    await new Promise((r) => setTimeout(r, 0))
+    await checkpoint()
     // A 在途期间旧编辑器卸载冲刷把 B 排进链；随后 A 落定
     const savingB = projectStore.save('p1', docOf('B'))
     ;(releaseA as unknown as () => void)()
@@ -1097,43 +1074,38 @@ describe('tauriCreate / delete / duplicate', () => {
 
   it('重叠删除混合成败：成功笔已移除项目时，失败笔不得回吐重建（PR #224 第十轮评审）', async () => {
     const savedIds: string[] = []
-    handlers.set('save_project', (args) => {
-      savedIds.push((args as { id: string }).id)
-    })
-    const releasers: Array<() => void> = []
-    const failSecond = { value: false }
-    handlers.set(
-      'delete_project',
-      () =>
-        new Promise<void>((resolve, reject) => {
-          if (failSecond.value) reject(new Error('瞬态删除失败'))
-          else releasers.push(resolve)
-        }),
+    handlers.set('save_project', (args) =>
+      savedIds.push((args as { id: string }).id),
     )
+    let releaseFirst!: () => void
+    let deleteCount = 0
+    handlers.set('delete_project', () => {
+      deleteCount += 1
+      if (deleteCount === 2) throw new Error('瞬态删除失败')
+      return new Promise<void>((resolve) => {
+        releaseFirst = resolve
+      })
+    })
     const { projectStore } = await load()
-    // 首笔删除（将成功）；重叠的第二笔（将失败）
     const first = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    failSecond.value = true
+    await waitForCommand('delete_project')
     const second = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 放行首笔（成功移除项目）；第二笔随后失败——其回吐分支不得重放
-    // 任何吸收写入（组级已成功）
-    releasers.shift()?.()
-    await expect(Promise.all([first, second])).rejects.toThrow(/瞬态删除失败/)
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    // 重放会用 create-if-missing 复活已删项目：save_project 不得为 p-x 落盘
+    const verdict = Promise.allSettled([first, second])
+    releaseFirst()
+    const outcomes = await verdict
+    expect(outcomes[0].status).toBe('fulfilled')
+    expect(outcomes[1].status).toBe('rejected')
+    await waitForIdle('p-x')
     expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
   })
 
   it('重叠删除收尾失败：组级成功须活到拒绝处理器判完（PR #224 第十一轮评审）', async () => {
     const savedIds: string[] = []
-    handlers.set('save_project', (args) => {
-      savedIds.push((args as { id: string }).id)
-    })
-    // 首笔成功、第二笔挂起后失败（收尾失败序）
+    handlers.set('save_project', (args) =>
+      savedIds.push((args as { id: string }).id),
+    )
     let resolveFirst!: () => void
-    let rejectSecond!: (e: Error) => void
+    let rejectSecond!: (error: Error) => void
     let deleteCount = 0
     handlers.set(
       'delete_project',
@@ -1146,63 +1118,54 @@ describe('tauriCreate / delete / duplicate', () => {
     )
     const { projectStore } = await load()
     const first = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await waitForCommand('delete_project')
     const second = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 第二笔在途期间：普通保存被吸收（墓碑仍在）
+    const verdict = Promise.allSettled([first, second])
     await projectStore.save('p-x', {
       name: '吸收稿',
       nodes: [],
       edges: [],
       settings: { characters: [], locations: [] },
     })
-    // 首笔成功落定 → 组级成功置位；第二笔失败 → 失败处理器判 group
-    //（红态：标记已被 finally/成功分支提前清除 → 误重放复活）
     resolveFirst()
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await first
+    await waitForCommand('delete_project', 2)
     rejectSecond(new Error('瞬态失败'))
-    await expect(Promise.allSettled([first, second])).resolves.toBeDefined()
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    // 吸收的文档不得被重放复活（save_project 零落盘）
+    const outcomes = await verdict
+    expect(outcomes[0].status).toBe('fulfilled')
+    expect(outcomes[1].status).toBe('rejected')
+    await waitForIdle('p-x')
     expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
   })
 
   it('重叠删除共享墓碑至最后一笔落定：间隙内的迟到普通保存仍被吸收（PR #224 第八轮评审）', async () => {
     const savedIds: string[] = []
-    handlers.set('save_project', (args) => {
-      savedIds.push((args as { id: string }).id)
-    })
+    handlers.set('save_project', (args) =>
+      savedIds.push((args as { id: string }).id),
+    )
     const releasers: Array<() => void> = []
     handlers.set(
       'delete_project',
-      () =>
-        new Promise<void>((resolve) => {
-          releasers.push(resolve)
-        }),
+      () => new Promise<void>((resolve) => releasers.push(resolve)),
     )
     const { projectStore } = await load()
-    // 首笔删除挂起（墓碑计数=1）
     const first = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 重叠的第二笔删除（如 duplicate 清理分支）：同链排队，计数=2
+    await waitForCommand('delete_project')
     const second = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 放行首笔：墓碑不得随之解除（第二笔仍在途）
-    releasers.shift()?.()
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    // 首笔落定后的间隙：迟到普通保存必须被吸收（不得越顶重建）
-    const lateDoc = {
+    releasers.shift()!()
+    await first
+    await waitForCommand('delete_project', 2)
+    const lateSave = projectStore.save('p-x', {
       name: '迟到保存',
       nodes: [],
       edges: [],
       settings: { characters: [], locations: [] },
-    }
-    const lateSave = projectStore.save('p-x', lateDoc)
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    // 放行第二笔并等待全部落定
-    releasers.shift()?.()
-    await Promise.all([first, second, lateSave])
-    // 保存被吸收（删除成功即丢弃）：save_project 不得为 p-x 落盘
+    })
+    await lateSave
+    expect(savedIds).toEqual([])
+    releasers.shift()!()
+    await Promise.all([first, second])
+    await waitForIdle('p-x')
     expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
   })
 
@@ -1215,45 +1178,33 @@ describe('tauriCreate / delete / duplicate', () => {
     }))
     handlers.set('copy_project_assets', () => undefined)
     let saveReached = false
-    handlers.set('save_project', (args) => {
-      if ((args as { id: string }).id === 'copy-t') saveReached = true
+    handlers.set('save_project', () => {
+      saveReached = true
     })
-    const deletedIds: string[] = []
     const releasers: Array<() => void> = []
-    handlers.set('delete_project', (args) => {
-      deletedIds.push((args as { id: string }).id)
-      return new Promise<void>((resolve) => {
-        releasers.push(resolve)
-      })
-    })
+    handlers.set(
+      'delete_project',
+      () => new Promise<void>((resolve) => releasers.push(resolve)),
+    )
     const { projectStore } = await load()
-    // 首个删除挂起：copy-t 的删除墓碑活跃
     const deleting = projectStore.delete('copy-t')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 墓碑窗口内发起 duplicate：load/create/copy 可进行，后续保存被拒绝
-    //（不得吸收报成功）→ catch 清理分支再排队一笔删除
-    // 立即挂 rejection 观察者（避免 50ms 窗口内的未处理拒绝）
+    await waitForCommand('delete_project')
     const duplicating = projectStore.duplicate('p1')
     const verdict = duplicating.then(
       () => 'resolved',
-      (err: unknown) => `rejected:${String(err)}`,
+      (error: unknown) => `rejected:${String(error)}`,
     )
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await waitForCommand('copy_project_assets')
+    await checkpoint()
     expect(saveReached).toBe(false)
-    // 放行全部挂起/后续入队的删除，两笔删除与 duplicate 全部落定
-    for (
-      let i = 0;
-      i < 50 && (deletedIds.length < 2 || releasers.length > 0);
-      i += 1
-    ) {
-      for (const release of releasers.splice(0)) release()
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    for (const release of releasers.splice(0)) release()
+    releasers.shift()!()
+    await deleting
+    await waitForCommand('delete_project', 2)
+    releasers.shift()!()
     await expect(verdict).resolves.toMatch(/^rejected:/)
     await expect(duplicating).rejects.toThrow(/删除中|不存在/)
-    await deleting
-    expect(deletedIds).toContain('copy-t')
+    await waitForIdle('copy-t')
+    expect(saveReached).toBe(false)
   })
 
   it('duplicate 的后续保存带 expectExisting=true（PR #224 评审：copy 后目标被排队的删除移走时不复活）', async () => {

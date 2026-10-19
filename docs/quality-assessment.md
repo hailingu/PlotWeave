@@ -21,6 +21,8 @@
 
 **后续状态更新（2026-10-19，#614）**：历史 `pw_request_submit` 的 completion 入口用 `Option<PwCompletion>` 表达可空 C 函数指针，NULL 在 ID 分配／登记／入队前返回 0；队列仍只保存有效回调。Rust ABI 回归覆盖 NULL completion、core/request 和非法 UTF-8，排空后验证唯一有效回执与无创建副作用。当前 Swift 原生工程仍不链接该 ABI；未做真实 C 宿主链接验收，历史评分未重算。
 
+**后续状态更新（2026-10-19，#600）**：目标保存／删除与列表维护测试统一 typed IPC 夹具、使用受控时钟／命令到达和链静止边界；快捷键测试逐例 cleanup 并核验监听卸载。Rust 项目锁、凭据及真实 invoke 回归改为明确释放门闸，150–200 ms 不再作为通过阈值，长超时仅兜底死锁。故障注入验证仍能检测播种越过保存链和同步阻塞回归；对应条目同步，历史评分未重算。
+
 ## 一、评分口径
 
 9 个维度、10 分制、等权。评级带：A+ 9.5–10.0、A 9.0–9.4、A- 8.5–8.9、B+ 8.0–8.4、B 7.5–7.9、B- 7.0–7.4、C+ 6.5–6.9、C 6.0–6.4、C- 5.5–5.9、D 4.0–5.4、E < 4.0。
@@ -91,7 +93,7 @@
 扣分：
 
 - **P3** Swift 原生测试没有覆盖率门禁：Xcode scheme 未开 `codeCoverageEnabled`，80% 下限只覆盖前端/Rust；原生服务/桥接的未测分支不可见（[#601](https://github.com/hailingu/PlotWeave/issues/601)）。
-- **P3** 关键保存/删除竞态测试仍用 10–50ms 真实 sleep 和窄负向窗口；Rust 用 400–500ms 真实持锁与 `<200ms` 阈值；Tauri mock 夹具已分叉（core vs `ipc/invoke`）；`useEditorHotkeys.test.tsx` 多次 `renderHook` 未 unmount，document 监听跨用例泄漏（[#600](https://github.com/hailingu/PlotWeave/issues/600)）。
+- **已修复（原 P3）** [#600](https://github.com/hailingu/PlotWeave/issues/600)：目标保存／删除测试以受控 Promise、时钟和链静止边界替代真实 sleep；Tauri 测试共用 `ipc/invoke` 夹具，快捷键测试逐例 cleanup 并核验监听归零。Rust 三类响应性回归以门闸持有期间的兄弟任务／心跳推进判定，时间仅观察；不声称全仓库已消除真实延迟。
 - **P3** 覆盖率只有全局 80% 下限，无逐文件下限；LCOV 中 `nativeEditorActions.ts` 70.4%、`useNativeEditorShell.ts` 66.7% 仍通过，native 命令参数/错误分支被全局均值掩盖。
 
 ### 3.5 工程基建与质量门禁 — 8.7 / A-
@@ -157,7 +159,7 @@
 | [#597](https://github.com/hailingu/PlotWeave/issues/597) | 3.3 | 原 P3，已修复 | 完成响应字节预算与摘要退役；合并后关闭 |
 | [#598](https://github.com/hailingu/PlotWeave/issues/598) | 3.9 | P3 | 原生导出默认开启创作大纲，与 Web/设计规格不一致 |
 | [#599](https://github.com/hailingu/PlotWeave/issues/599) | 3.9 | P3 | Web/Tauri AI 输入行缺少发送按钮 |
-| [#600](https://github.com/hailingu/PlotWeave/issues/600) | 3.4 | P3 | 保存/删除竞态测试依赖真实 sleep 且测试夹具隔离不足 |
+| [#600](https://github.com/hailingu/PlotWeave/issues/600) | 3.4 | 已修复（原 P3） | 受控交错、共享 IPC 夹具与监听清理 |
 | [#601](https://github.com/hailingu/PlotWeave/issues/601) | 3.4 | P3 | Swift 原生测试没有覆盖率门禁 |
 | [#602](https://github.com/hailingu/PlotWeave/issues/602) | 3.6 | P3 | workflow/README 分支保护与原生分支描述不一致 |
 | [#603](https://github.com/hailingu/PlotWeave/issues/603) | 3.9 | 已修复（原 P3） | 键盘菜单按钮锚点、首项聚焦与 Escape 归还 |
@@ -175,7 +177,7 @@
 3. Rust 删除目录 fsync；项目控制文件限读并避免在全局锁内全量解析（#591、#592）。
 4. **已完成 #593 实现修复（PR #624）**：核验器与 Node 版本取事件 base SHA，PR head 仅为 Git 数据；不再作为待修复项。工作流定义的外部强制保护/required review 尚未实施，需单独的所有者治理决定，不包含在本次已修复承诺中。
 5. 设置错误可见、文档弹窗模态（#594–#595）；**本变更已完成 #596** 的画布/侧栏焦点样式。
-6. P3：原生导出默认、AI 发送、测试确定性、Swift 覆盖率、文档一致性（#598–#602）；**已完成 #597** 的桥接完成响应预算，以及 **#603** 的首页菜单键盘入口。
+6. P3：原生导出默认、AI 发送、Swift 覆盖率、文档一致性（#598–#602）；**已完成 #597** 的桥接完成响应预算，以及 **#603** 的首页菜单键盘入口、**#600** 的目标测试确定性。
 
 预计修复上述 P2 后可回到 **9.2–9.3 / A**；若只按已知 issue 口径（不含本轮新发现），项目接近 9.1/A。
 
