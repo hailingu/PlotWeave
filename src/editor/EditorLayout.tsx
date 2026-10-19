@@ -7,6 +7,7 @@ import { useMemo } from 'react'
 import { isSwiftHost } from '../platform/hostEnvironment'
 import { EditorTitlebar } from './EditorTitlebar'
 import { ErrorBanner } from './ErrorBanner'
+import { saveStatusLabel, type SaveStatus } from './saveStatus'
 import { LeftPanel } from './panels/LeftPanel'
 import { RightPanel, type RightPanelAiProps } from './panels/RightPanel'
 import {
@@ -18,14 +19,19 @@ import type { EditorLayoutProps } from './editorLayoutProps'
 
 /** 布局横幅区（EditorLayout 拆分，issue #99）：自动保存失败与动作错误。 */
 function LayoutBanners({
+  saveStatus,
   saveError,
   actionError,
 }: {
+  readonly saveStatus: SaveStatus
   readonly saveError: string | null
   readonly actionError: string | null
 }) {
   return (
     <>
+      <output className="editor-save-status" aria-label="画布保存状态">
+        {saveStatusLabel(saveStatus)}
+      </output>
       {saveError !== null && (
         <ErrorBanner
           message={`自动保存失败：${saveError}（修改已保留，正在自动重试；可检查磁盘后继续编辑）`}
@@ -181,6 +187,7 @@ export function EditorLayout(props: EditorLayoutProps) {
       {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
       <LayoutTitlebar props={props} />
       <LayoutBanners
+        saveStatus={persistence.saveStatus}
         saveError={persistence.saveError}
         actionError={props.actionError}
       />
