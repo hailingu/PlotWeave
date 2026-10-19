@@ -216,8 +216,7 @@ product statistics.
 
 (Issue [#393](https://github.com/hailingu/PlotWeave/issues/393), implemented.)
 The frontend coverage floor is versioned and failable. `vite.config.ts` sets
-vitest `coverage.thresholds` to **80% overall line coverage** (global, not
-per-file), so `npm run test:coverage` exits non-zero the moment coverage
+vitest `coverage.thresholds` to **80% overall line coverage** (global), so `npm run test:coverage` exits non-zero the moment coverage
 drops below the floor — before any Sonar analysis runs. The value
 deliberately matches the local SonarQube server's Quality Gate coverage
 condition (80%, owner decision 2026-09-29) instead of tracking the measured
@@ -245,6 +244,18 @@ the 80% floor shared by both reports, and that boundary). The floor must not
 be met by widening `coverage.exclude`: `scripts/sonar-test-scope.test.ts`
 guards the exclusion list bidirectionally and pins the threshold value, so
 removing the floor or changing its value without review fails `npm test`.
+
+#### Native Canvas Per-File Lines (Issue #616)
+
+Every production `.ts`/`.tsx` module under `src/editor/nativeCanvas/` also requires **80% line coverage independently**, while the aggregate floor remains 80%. `scripts/native-canvas-coverage.ts` discovers the actual tree at configuration resolution, including new modules, and emits one exact-path threshold group per source. Test files and declaration-only files are outside product runtime coverage; there are no historical low-floor exceptions or new product exclusions.
+
+The pinned Vitest 4.1.11 applies its top-level `perFile` to all groups, so enabling that option would extend the scope to all `src/`. Instead, each exact-path group contains one source, using the provider's existing glob thresholds. Do not replace these groups with a directory aggregate that can absorb one low file. `scripts/sonar-test-scope.test.ts` guards the complete maintained-source inventory and the unchanged global floor; the discovery tests cover new files and literal glob paths.
+
+`npm run test:coverage -- --maxWorkers=4` and the mandatory fresh frontend coverage in local Git gates enforce these file floors. CI retains its existing `npm test` entry: it executes the configuration guard and behavior tests, without collecting coverage itself. Sonar's LCOV re-check and reused-report paths still enforce the overall 80% condition; they do not independently recompute the new per-file policy. Other frontend directories retain their existing aggregate-only policy.
+
+The initial full V8 run after adding this policy passed all behavior tests and measured 96.95% aggregate lines, yet correctly failed `NativeHostApp` (0%), `main` (77.77%), `nativeEditorActions` (71.42%), and `useNativeEditorShell` (66.66%). Behavior tests cover real entry lifetime, native graph/settings/episode commands, undo and rejected arguments to bring those files above the floor. No production runtime behavior changes or coverage exclusion changes are required.
+
+The complete follow-up run passed 246 files / 3416 tests at 97.47% aggregate lines. The four files measured 100% (`NativeHostApp`), 100% (`main`), 92.86% (`nativeEditorActions`), and 88.46% (`useNativeEditorShell`). An isolated real-provider boundary probe used the same global floor and source-inventory policy: one file at 80% with 98.18% aggregate passed; at 60% with 96.36% aggregate it failed. This probe tests the threshold contract, not physical host behavior; the entry/controller cases use browser DOM, and no new visual, VoiceOver, or real IME acceptance is claimed.
 
 ## TypeScript Engineering Practices
 

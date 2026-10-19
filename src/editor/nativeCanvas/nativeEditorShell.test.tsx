@@ -1281,3 +1281,166 @@ it('dragging a native node changes its position and history without opening prop
     canUndo: false,
   })
 })
+
+it.each(['scene', 'beat', 'dialogue', 'branch', 'shot', 'image'])(
+  'native create %s persists one typed node and remains undoable',
+  async (nodeType) => {
+    const view = nativeEditorFixture()
+    expect(await nativeCommand('editor.create', { nodeType })).toEqual({
+      ok: null,
+    })
+    const nodes = (await exportedDocument()).graph.nodes
+    expect(nodes).toHaveLength(2)
+    expect(
+      nodes.find((node: { id: string }) => node.id !== 'scene-a'),
+    ).toMatchObject({ type: nodeType })
+    expect(view.editorProjection().canUndo).toBe(true)
+    await nativeCommand('editor.undo')
+    expect(
+      (await exportedDocument()).graph.nodes.map(
+        (node: { id: string }) => node.id,
+      ),
+    ).toEqual(['scene-a'])
+  },
+)
+
+it('native duplicate owns a new identity and undo preserves the original scene', async () => {
+  nativeEditorFixture()
+  const before = await exportedDocument()
+  expect(await nativeCommand('editor.duplicate', { id: 'scene-a' })).toEqual({
+    ok: null,
+  })
+  const nodes = (await exportedDocument()).graph.nodes
+  const duplicate = nodes.find((node: { id: string }) => node.id !== 'scene-a')
+  expect(duplicate).toMatchObject({
+    type: 'scene',
+    data: { spec: { synopsis: '开场' } },
+  })
+  expect(duplicate.id).not.toBe('scene-a')
+  await nativeCommand('editor.undo')
+  expect(await exportedDocument()).toEqual(before)
+})
+
+it('native align updates selected positions as one undo unit', async () => {
+  nativeEditorFixture({
+    ...PROJECT,
+    nodes: [
+      {
+        ...SCENE,
+        selected: true,
+        width: 240,
+        height: 120,
+        position: { x: 0, y: 10 },
+      },
+      {
+        ...SCENE,
+        id: 'scene-b',
+        selected: true,
+        width: 240,
+        height: 120,
+        position: { x: 80, y: 200 },
+      },
+    ],
+  })
+  const before = await exportedDocument()
+  expect(await nativeCommand('editor.align', { alignment: 'left' })).toEqual({
+    ok: null,
+  })
+  expect(
+    (await exportedDocument()).graph.nodes.map(
+      (node: { layout: { position: unknown } }) => node.layout.position,
+    ),
+  ).toEqual([
+    { x: 0, y: 10 },
+    { x: 0, y: 200 },
+  ])
+  await nativeCommand('editor.undo')
+  expect(await exportedDocument()).toEqual(before)
+})
+
+it.each([
+  { kind: 'location', bucket: 'locations', patch: { name: '码头' } },
+  {
+    kind: 'document',
+    bucket: 'documents',
+    patch: { title: '小传', body: '正文' },
+  },
+])(
+  'native $kind create/update/delete share the real settings history',
+  async ({ kind, bucket, patch }) => {
+    nativeEditorFixture()
+    expect(await nativeCommand('editor.entityCreate', { kind })).toEqual({
+      ok: null,
+    })
+    const created = await exportedDocument()
+    const id = Object.keys(created.settings[bucket])[0]
+    const original = created.settings[bucket][id]
+    expect(id).toBeTypeOf('string')
+    expect(
+      await nativeCommand('editor.entityUpdate', { kind, id, patch }),
+    ).toEqual({ ok: null })
+    expect((await exportedDocument()).settings[bucket][id]).toMatchObject(patch)
+    await nativeCommand('editor.undo')
+    expect((await exportedDocument()).settings[bucket][id]).toEqual(original)
+    expect(await nativeCommand('editor.entityDelete', { kind, id })).toEqual({
+      ok: null,
+    })
+    expect((await exportedDocument()).settings[bucket]).toEqual({})
+    await nativeCommand('editor.undo')
+    expect((await exportedDocument()).settings[bucket][id]).toEqual(original)
+  },
+)
+
+it('native episode focus is view-only while renaming is persistent and undoable', async () => {
+  const view = nativeEditorFixture()
+  const before = await exportedDocument()
+  expect(await nativeCommand('editor.episodeFocus', { episode: 1 })).toEqual({
+    ok: null,
+  })
+  expect(view.editorProjection()).toMatchObject({
+    focusedEpisode: 1,
+    canUndo: false,
+  })
+  expect(await exportedDocument()).toEqual(before)
+  await nativeCommand('editor.episodeFocus', { episode: null })
+  expect(view.editorProjection()).toMatchObject({
+    focusedEpisode: null,
+    canUndo: false,
+  })
+  expect(
+    await nativeCommand('editor.episodeRename', { episode: 1, title: '序章' }),
+  ).toEqual({ ok: null })
+  expect((await exportedDocument()).episodeTitles).toEqual({ '1': '序章' })
+  await nativeCommand('editor.undo')
+  expect(await exportedDocument()).toEqual(before)
+})
+
+it('invalid native command arguments reject without changing the document or history', async () => {
+  const view = nativeEditorFixture({
+    ...PROJECT,
+    settings: {
+      characters: [{ id: 'c', name: '角色', gradient: 'blue' }],
+      locations: [],
+    },
+  })
+  const before = await exportedDocument()
+  const cases = [
+    ['editor.create', { nodeType: 'unknown' }],
+    ['editor.align', { alignment: '' }],
+    ['editor.align', { alignment: 'diagonal' }],
+    ['editor.entityCreate', { kind: 'audio' }],
+    ['editor.entityUpdate', { kind: 'character', id: 'c', patch: { name: 7 } }],
+    ['editor.exportPreview', { format: 'yaml' }],
+    ['editor.episodeFocus', { episode: 0 }],
+    ['editor.episodeRename', { episode: 1.5, title: 'invalid' }],
+    ['editor.episodeRename', { episode: 1, title: 7 }],
+    ['editor.unknown', {}],
+  ] as const
+  for (const [command, args] of cases) {
+    expect(await nativeCommand(command, args), command).toMatchObject({
+      error: { code: 'PW_INTENT_FAILED', message: expect.any(String) },
+    })
+    expect(await exportedDocument(), command).toEqual(before)
+    expect(view.editorProjection().canUndo, command).toBe(false)
+  }
+})
