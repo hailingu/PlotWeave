@@ -37,7 +37,7 @@ actor NativeLibrary {
         switch command {
         case .listLibraryAssets: return try await execute { state, number in state.response(state.listing, revision: number) }
         case .importLibraryAsset:
-            return try await importAsset(name: string(args, "name"), mime: string(args, "mime"), kind: string(args, "kind"), bytes: byteData(args["bytes"]))
+            return try await importAsset(name: args.requiredString("name", domain: .library), mime: args.requiredString("mime", domain: .library), kind: args.requiredString("kind", domain: .library), bytes: byteData(args["bytes"]))
         case .updateLibraryAsset:
             let id = try identity(args)
             guard let patch = args["patch"] else { throw NativeLibraryIndex.invalid("缺少修改对象") }
@@ -181,16 +181,11 @@ actor NativeLibrary {
 
     /// Identity validation precedes filesystem recovery for malformed requests.
     private func identity(_ args: [String: HostJSON]) throws -> String {
-        let id = try string(args, "id")
+        let id = try args.requiredString("id", domain: .library)
         guard NativeLibraryIndex.validID(id) else { throw NativeLibraryIndex.invalid("素材身份无效") }
         return id
     }
 
-    /// Required strings are never coerced from JSON numbers or null values.
-    private func string(_ args: [String: HostJSON], _ key: String) throws -> String {
-        guard let value = args[key]?.string else { throw NativeLibraryIndex.invalid("缺少必填字段") }
-        return value
-    }
 
     /// Existing Web imports must carry bounded integral bytes; native forms use Data directly.
     private func byteData(_ value: HostJSON?) throws -> Data {

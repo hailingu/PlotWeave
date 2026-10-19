@@ -21,9 +21,9 @@ actor NativeAssets {
         guard let command = Command(rawValue: command) else { throw HostFailure(code: "PW_HOST_COMMAND_UNAVAILABLE", message: "未知项目素材命令") }
         switch command {
         case .importProjectAssetFromLibrary:
-            let project = try string(args, "id")
+            let project = try args.requiredString("id", domain: .asset)
             try NativeProjectEnvelope.validateID(project)
-            let (entry, file) = try await library.source(id: string(args, "libraryAssetId"))
+            let (entry, file) = try await library.source(id: args.requiredString("libraryAssetId", domain: .asset))
             let bytes = try await Task.detached { try file.read(maxBytes: NativeLibrary.maximumBytes) }.value
             try Task.checkCancellation()
             guard let mime = entry["mime"]?.string, let path = entry["relPath"]?.string else { throw NativeLibraryIndex.invalid("源素材字段无效") }
@@ -31,13 +31,13 @@ actor NativeAssets {
                 extension: NativeAssetContract.fileExtension(name: path, mime: mime))
         case .validateProjectAsset:
             guard let asset = args["asset"] else { throw NativeLibraryIndex.invalid("缺少资产对象") }
-            return try await projects.validateAsset(id: string(args, "id"), asset: asset)
+            return try await projects.validateAsset(id: args.requiredString("id", domain: .asset), asset: asset)
         case .registerProjectAssetAlias:
-            try await projects.registerAlias(id: string(args, "id"), blankKey: string(args, "blankKey"), freshId: string(args, "freshId"))
+            try await projects.registerAlias(id: args.requiredString("id", domain: .asset), blankKey: args.requiredString("blankKey", domain: .asset), freshId: args.requiredString("freshId", domain: .asset))
             return .null
         case .getAssetMediaUrl:
             guard let scope = args["scope"] else { throw NativeLibraryIndex.invalid("缺少媒体作用域") }
-            let address = try NativeMediaAddress(scope: scope, assetId: string(args, "assetId"))
+            let address = try NativeMediaAddress(scope: scope, assetId: args.requiredString("assetId", domain: .asset))
             _ = try await open(address)
             return .string(address.url)
         }
@@ -60,9 +60,4 @@ actor NativeAssets {
         return file
     }
 
-    /// No missing or mistyped scalar acquires an implicit default at the host trust boundary.
-    private func string(_ args: [String: HostJSON], _ key: String) throws -> String {
-        guard let value = args[key]?.string else { throw NativeLibraryIndex.invalid("素材请求缺少必填字段") }
-        return value
-    }
 }
