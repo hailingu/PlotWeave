@@ -19,6 +19,8 @@
 
 **后续状态更新（2026-10-19，#603）**：Web 首页项目菜单的键盘激活改为按钮边界锚点并聚焦首项，Escape 归还触发器；指针定位及项目动作保留。DOM 行为测试覆盖定位、切换项目、取消与重命名焦点，未验收物理键盘／系统窗口；历史评分未重算。
 
+**后续状态更新（2026-10-19，#614）**：历史 `pw_request_submit` 的 completion 入口用 `Option<PwCompletion>` 表达可空 C 函数指针，NULL 在 ID 分配／登记／入队前返回 0；队列仍只保存有效回调。Rust ABI 回归覆盖 NULL completion、core/request 和非法 UTF-8，排空后验证唯一有效回执与无创建副作用。当前 Swift 原生工程仍不链接该 ABI；未做真实 C 宿主链接验收，历史评分未重算。
+
 ## 一、评分口径
 
 9 个维度、10 分制、等权。评级带：A+ 9.5–10.0、A 9.0–9.4、A- 8.5–8.9、B+ 8.0–8.4、B 7.5–7.9、B- 7.0–7.4、C+ 6.5–6.9、C 6.0–6.4、C- 5.5–5.9、D 4.0–5.4、E < 4.0。
@@ -125,7 +127,7 @@
 
 扣分：
 
-- **P3** `plotweave-ffi` 的 `pw_request_submit` 文档承诺 core/请求/回调为 NULL 时拒绝，但只检查 core/request；NULL completion 入队后在 `deliver` 调用空函数指针，宿主得到 UB/abort 而非 0。该 ABI 不在原生工程链接，未单开 issue。
+- **已修复（原 P3）** [#614](https://github.com/hailingu/PlotWeave/issues/614)：`pw_request_submit` 用可空入口类型并在入队前拒绝 NULL completion，返回 0 且不消耗 ID、不派发或产生回调；core/request NULL 行为保留。该 ABI 仍不在当前原生工程链接。
 - **P3** `WebCanvasHostView.pushAppearance` 用字符串插值拼 JS（内容来自 JSONEncoder，实际安全），与同文件 `dispatchEvent` 的 `arguments:` 严格度不一致；防御纵深一致性口子，非现实漏洞。
 
 ### 3.9 产品与交互设计 — 8.6 / A-
