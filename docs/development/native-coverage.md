@@ -4,7 +4,7 @@
 
 ## 运行与产物
 
-从仓库根目录使用钉版 Node 与 Xcode：
+从仓库根目录使用钉版 Node 与 Xcode；覆盖率解析遵循门禁已选择的 `PLOTWEAVE_NODE_BIN`，未设置时才从 PATH 选择 `node`：
 
 ```sh
 sh scripts/test-native.sh

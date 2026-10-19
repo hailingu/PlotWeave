@@ -63,4 +63,4 @@ trap 'exit 143' TERM
 set -- "$@" -enableCodeCoverage YES -resultBundlePath "$coverage_run/NativeTests.xcresult"
 "${PLOTWEAVE_XCODEBUILD_BIN:-xcodebuild}" "$@" -parallel-testing-enabled NO test
 "${PLOTWEAVE_XCRUN_BIN:-xcrun}" xccov view --report --json "$coverage_run/NativeTests.xcresult" > "$coverage_run/xccov.json"
-node "$script_directory/native-coverage.ts" "$coverage_run/xccov.json" "$repository_root" "$coverage_directory" "${PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE:-}"
+"${PLOTWEAVE_NODE_BIN:-node}" "$script_directory/native-coverage.ts" "$coverage_run/xccov.json" "$repository_root" "$coverage_directory" "${PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE:-}"

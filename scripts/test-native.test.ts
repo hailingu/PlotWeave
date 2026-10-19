@@ -30,6 +30,7 @@ interface NativeOptions {
   staleSummary?: boolean
   minimum?: string
   budget?: string
+  pathNodeExit?: number
 }
 
 /** A real source inventory with synthetic xccov output at the external tool boundary. */
@@ -89,6 +90,8 @@ function runNative(options: NativeOptions = {}) {
     mkdirSync(directory, { recursive: true })
     writeFileSync(resolve(directory, 'coverage-summary.json'), '{"stale":true}')
   }
+  if (options.pathNodeExit !== undefined)
+    nativeTool(root, log, 'node', options.pathNodeExit)
   const result = spawnSync(
     'sh',
     [
@@ -100,6 +103,11 @@ function runNative(options: NativeOptions = {}) {
       timeout: 10000,
       env: {
         ...process.env,
+        PLOTWEAVE_NODE_BIN: process.execPath,
+        PATH:
+          options.pathNodeExit === undefined
+            ? process.env.PATH
+            : `${root}:${process.env.PATH ?? ''}`,
         PLOTWEAVE_GATE_REPOSITORY_ROOT: root,
         PLOTWEAVE_GATE_CPU_BUDGET: options.budget ?? '4',
         TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS:
@@ -254,4 +262,15 @@ it('a failed new build invalidates the previously published summary', () => {
   const result = runNative({ npmExit: 23, staleSummary: true })
   expect(result.status).toBe(23)
   expect(result.summary).toBeNull()
+})
+
+it('uses the configured Node even when PATH resolves to an incompatible executable', () => {
+  const result = runNative({ pathNodeExit: 97 })
+  expect(result.status, result.stderr).toBe(0)
+  expect(result.calls.map((call) => call.tool)).toEqual([
+    'npm',
+    'xcodebuild',
+    'xcrun',
+  ])
+  expect(result.summary).toMatchObject({ coveredLines: 6, executableLines: 10 })
 })
