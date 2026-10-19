@@ -40,6 +40,7 @@ export default defineConfig({
       exclude: [
         'src/**/*.test-d.ts',
         'src/appShellTestScaffolding.tsx',
+        'src/projectStoreTestHarness.ts',
         'src/moduleGraph.ts',
         'src/model/convertFixtures.ts',
         'src/editor/ai/testGraphs.ts',

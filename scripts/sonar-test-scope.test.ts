@@ -27,6 +27,7 @@ const propertiesPath = resolve(repositoryRoot, 'sonar-project.properties')
  * issue #525 补录 App 壳测试共享脚手架，仓库相对路径）。 */
 const testFacilityFiles = [
   'src/appShellTestScaffolding.tsx',
+  'src/projectStoreTestHarness.ts',
   'src/editor/ai/testGraphs.ts',
   'src/editor/nodes/testScaffolding.tsx',
   'src/editor/panels/testDomStubs.ts',
