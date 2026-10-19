@@ -908,3 +908,26 @@ it('quit waits for a key edit through encryption and persistence before native e
   )
   expect(stored.providers[0]?.keyEnc).toBe('pw2:quit-key')
 })
+
+it('debounced save failures reach native diagnostics before close and clear after recovery (#594)', async () => {
+  const onClose = vi.fn()
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  vi.mocked(settingsStore.save).mockRejectedValueOnce(new Error('磁盘暂不可写'))
+  render(<SettingsView onClose={onClose} />)
+  await waitFor(() => expect(projection()?.phase).toBe('ready'))
+  vi.useFakeTimers()
+  try {
+    expect(
+      await intent('settings.setDefaults', { defaultImage: 'openai:gpt-4o' }),
+    ).toEqual({ ok: null })
+    await act(async () => vi.advanceTimersByTimeAsync(500))
+    expect(projection()?.error).toContain('磁盘暂不可写')
+    expect(onClose).not.toHaveBeenCalled()
+    expect(await intent('settings.close')).toEqual({ ok: null })
+    expect(projection()?.error).toBeNull()
+    expect(stored.defaultImage).toBe('openai:gpt-4o')
+    expect(onClose).toHaveBeenCalledTimes(1)
+  } finally {
+    vi.useRealTimers()
+  }
+})

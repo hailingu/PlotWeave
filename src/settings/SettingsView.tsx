@@ -196,15 +196,17 @@ function SettingsNav() {
   )
 }
 
-/** 设置页顶栏与关闭错误（SettingsView 拆分，issue #99）。 */
+/** 设置页顶栏与保存/关闭错误（SettingsView 拆分，issue #99）。 */
 function SettingsChrome({
   handleClose,
   closing,
-  closeError,
+  error,
+  retrySave,
 }: {
   readonly handleClose: () => void
   readonly closing: boolean
-  readonly closeError: string | null
+  readonly error: string | null
+  readonly retrySave: (() => void) | null
 }) {
   return (
     <>
@@ -222,14 +224,24 @@ function SettingsChrome({
           {closing ? '保存中…' : '完成'}
         </button>
       </header>
-      {closeError !== null && (
-        <p
+      {error !== null && (
+        <div
           className="settings-key-error"
           role="alert"
           style={{ margin: '8px 16px 0' }}
         >
-          {closeError}
-        </p>
+          <span>{error}</span>
+          {retrySave !== null && (
+            <button
+              type="button"
+              className="pw-dialog-btn"
+              onClick={retrySave}
+              disabled={closing}
+            >
+              重试保存
+            </button>
+          )}
+        </div>
       )}
     </>
   )
@@ -506,6 +518,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     handleClose,
     requestClose,
     trackPendingKey,
+    saveError,
+    retrySave,
     closeError,
     closing,
   } = useSettingsSaver(setSettings, onClose)
@@ -518,7 +532,10 @@ export function SettingsView({ onClose }: SettingsViewProps) {
   useNativeSettingsShell({
     settings,
     phase: loadPhase.status,
-    error: loadPhase.status === 'error' ? loadPhase.message : closeError,
+    error:
+      loadPhase.status === 'error'
+        ? loadPhase.message
+        : (closeError ?? saveError),
     closing,
     loadGeneration: loadGenRef,
     update,
@@ -532,7 +549,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
       <SettingsChrome
         handleClose={handleClose}
         closing={closing}
-        closeError={closeError}
+        error={closeError ?? saveError}
+        retrySave={saveError === null ? null : retrySave}
       />
       <main className="settings-body">
         <SettingsNav />

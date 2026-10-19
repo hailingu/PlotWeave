@@ -23,6 +23,10 @@ export interface SettingsSaver {
   requestClose: () => Promise<boolean>
   /** 将加密及后续状态写回登记为关闭/退出必须等待的在途工作。 */
   trackPendingKey: (work: Promise<void>) => Promise<void>
+  /** 保存失败的即时诊断；仅最新快照保存成功且无待存编辑时清除。 */
+  saveError: string | null
+  /** 在当前页面重试同一固定点冲刷，失败保留诊断，不触发关闭。 */
+  retrySave: () => void
   /** 关闭冲刷失败的可见可重试错误（null = 无）。 */
   closeError: string | null
   /** 关闭冲刷进行中（按钮「保存中…」防双击）。 */
@@ -31,6 +35,10 @@ export interface SettingsSaver {
 
 /** 冲刷/落盘所需的在途状态（ref 族）。 */
 interface SaverRefs {
+  /** Latest successful persistence clears both save and close diagnostics. */
+  readonly saved: () => void
+  /** Latest failed persistence publishes an error without changing snapshot ownership. */
+  readonly failed: (error: unknown) => void
   /** Key encryption and its state update complete before persistence can be considered drained. */
   readonly keyWork: { current: Set<Promise<void>> }
   /** 500ms 防抖计时器：冲刷每轮先清，防止计时器路径绕过 await 落盘。 */
@@ -42,6 +50,11 @@ interface SaverRefs {
   readonly saveChainRef: { current: Promise<void> | null }
   /** 已提交 save 的最新序号：失败回填只对最新提交的快照生效。 */
   readonly revRef: { current: number }
+}
+
+/** Immediate save diagnostics name the failure and retain the existing edit/close retry entries. */
+function saveFailureMessage(error: unknown): string {
+  return `保存设置失败：${error instanceof Error ? error.message : String(error)}——请重试保存或重试关闭`
 }
 
 /** 提交一次全量落盘到串行队列（S3358 模块级实现）：空闲时立即发起，
@@ -60,9 +73,17 @@ function enqueueSave(refs: SaverRefs, next: AppSettings): Promise<void> {
   void tail.finally(() => {
     if (refs.saveChainRef.current === tail) refs.saveChainRef.current = null
   })
-  void run.catch(() => {
-    if (rev === refs.revRef.current) refs.pendingSaveRef.current ??= next
-  })
+  void run.then(
+    () => {
+      if (rev === refs.revRef.current && refs.pendingSaveRef.current === null)
+        refs.saved()
+    },
+    (error: unknown) => {
+      if (rev !== refs.revRef.current) return
+      refs.pendingSaveRef.current ??= next
+      refs.failed(error)
+    },
+  )
   return run
 }
 
@@ -125,10 +146,13 @@ function useExitRegistration(
 }
 
 /** Coalesces Web/native close requests around the same fixed-point flush and visible retry state. */
-function useSettingsClose(flush: () => Promise<void>, onClose: () => void) {
+function useSettingsClose(
+  flush: () => Promise<void>,
+  onClose: () => void,
+  setCloseError: (error: string | null) => void,
+) {
   const [closing, setClosing] = useState(false)
   const closeRequest = useRef<Promise<boolean> | null>(null)
-  const [closeError, setCloseError] = useState<string | null>(null)
   const requestClose = useCallback((): Promise<boolean> => {
     if (closeRequest.current) return closeRequest.current
     setClosing(true)
@@ -150,13 +174,13 @@ function useSettingsClose(flush: () => Promise<void>, onClose: () => void) {
       if (closeRequest.current === request) closeRequest.current = null
     })
     return request
-  }, [flush, onClose])
+  }, [flush, onClose, setCloseError])
 
   const handleClose = useCallback((): void => {
     void requestClose()
   }, [requestClose])
 
-  return { handleClose, requestClose, closeError, closing }
+  return { handleClose, requestClose, closing }
 }
 
 /** 设置页「编辑即保存」的调度 hook：返回防抖落盘/关闭冲刷动作族与可见
@@ -165,12 +189,19 @@ export function useSettingsSaver(
   setSettings: (next: AppSettings) => void,
   onClose: () => void,
 ): SettingsSaver {
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [closeError, setCloseError] = useState<string | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingSaveRef = useRef<AppSettings | null>(null)
   const saveChainRef = useRef<Promise<void> | null>(null)
   const revRef = useRef(0)
   const keyWork = useRef(new Set<Promise<void>>())
   const refs = useRef({
+    saved: () => {
+      setSaveError(null)
+      setCloseError(null)
+    },
+    failed: (error: unknown) => setSaveError(saveFailureMessage(error)),
     saveTimer,
     pendingSaveRef,
     saveChainRef,
@@ -202,7 +233,13 @@ export function useSettingsSaver(
   )
   useExitRegistration(refs, flush)
 
-  const close = useSettingsClose(flush, onClose)
+  const close = useSettingsClose(flush, onClose, setCloseError)
+  const retrySave = useCallback(() => {
+    // 落盘诊断归 enqueueSave 的最新序号守卫；此处不能回写旧冲刷的错误。
+    void flush().catch((error: unknown) =>
+      console.warn('[SettingsView] 重试落盘失败', error),
+    )
+  }, [flush])
 
   // 卸载兜底（非常规关闭）：flush 只经 ref 读写，首帧闭包行为不变
   useEffect(() => {
@@ -215,6 +252,9 @@ export function useSettingsSaver(
 
   return {
     update,
+    saveError,
+    retrySave,
+    closeError,
     ...close,
     trackPendingKey,
   }
