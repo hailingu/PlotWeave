@@ -15,6 +15,8 @@
 
 **后续状态更新（2026-10-19，#596）**：节点已有独立键盘焦点虚线外环，设定集/资产删除按钮在键盘聚焦及行内焦点时显现；对应条目、issue 表和待办状态随本修复同步，历史评分未重算。焦点样式验证与物理键盘/系统窗口验收的区别见 [UI 设计](ui-design.md#26-无障碍变体)。
 
+**后续状态更新（2026-10-19，#597）**：完成响应已与在途 Task 分离，并加入 8 MiB 总计／1 MiB 单条编码字节预算；淘汰保留身份指纹和防重放，详情及测量边界见[桥合同](swiftui-react-flow-feature-parity.md#桥合同)。本次同步 #597 状态，历史评分未重算。
+
 ## 一、评分口径
 
 9 个维度、10 分制、等权。评级带：A+ 9.5–10.0、A 9.0–9.4、A- 8.5–8.9、B+ 8.0–8.4、B 7.5–7.9、B- 7.0–7.4、C+ 6.5–6.9、C 6.0–6.4、C- 5.5–5.9、D 4.0–5.4、E < 4.0。
@@ -76,7 +78,7 @@
 - **P2** `planSpliceIntoSpine` 在分叉/汇合图上删除节点的全部关联 sequence 边：`mine` 包含全部关联边并全部删除，而 `uniquePredecessor/uniqueSuccessor` 在多入/多出时返回 null，`adds` 只补一条。纯函数复现：`A→X, X→B, X→C` 拖 X 到 A 之后 → `removes=[a,b,c], adds=[A→X]`；汇合同理。`useOutlineDrop` 无危险预览且 600ms 后自动落盘，只能 ⌘Z 恢复（[#589](https://github.com/hailingu/PlotWeave/issues/589)）。
 - **P2** `delete_project_files` 删除资产目录与 JSON 后没有 `projects/` 目录 fsync，写路径已有该屏障；崩溃/断电可能留下 JSON 已删但资产已落盘的孤儿目录，或资产已删但 JSON 保留的媒体全丢项目（[#591](https://github.com/hailingu/PlotWeave/issues/591)）。
 - **P2** `read_verified_file` 用 `read_to_string` 无字节上限，`list_project_metas` 在全局 `projects_op_lock` 内逐个全量读取/解析；单个异常膨胀/损坏项目 JSON 可无界分配并阻塞保存/删除。库索引与设置都有 1 MiB 限读（[#592](https://github.com/hailingu/PlotWeave/issues/592)）。
-- **P3** 原生桥接结果缓存按 4096 条而非字节保留完整 `load_project` 文档；长时间切换项目可累积数百 MB（[#597](https://github.com/hailingu/PlotWeave/issues/597)）。
+- **已修复（原 P3）** [#597](https://github.com/hailingu/PlotWeave/issues/597)：完成 Task 不再驻留，回执有默认 8 MiB 总预算／1 MiB 单条上限，超限及淘汰后仅保留身份摘要，重复不重执行。在途响应及临时编码内存不计入该预算，未以此声明进程 RSS 上限。
 
 ### 3.4 测试与验证 — 8.8 / A-
 
@@ -148,7 +150,7 @@
 | [#594](https://github.com/hailingu/PlotWeave/issues/594) | 3.2 | P2 | 设置防抖保存失败没有用户可见诊断 |
 | [#595](https://github.com/hailingu/PlotWeave/issues/595) | 3.9 | P2 | 设定文档弹窗缺少模态契约，⌘, 可丢失未保存草稿 |
 | [#596](https://github.com/hailingu/PlotWeave/issues/596) | 3.9 | 原 P2，已修复 | 节点独立焦点环与侧栏删除按钮焦点显现，合并后关闭 |
-| [#597](https://github.com/hailingu/PlotWeave/issues/597) | 3.3 | P3 | 桥接结果缓存保留完整项目文档且无字节上限 |
+| [#597](https://github.com/hailingu/PlotWeave/issues/597) | 3.3 | 原 P3，已修复 | 完成响应字节预算与摘要退役；合并后关闭 |
 | [#598](https://github.com/hailingu/PlotWeave/issues/598) | 3.9 | P3 | 原生导出默认开启创作大纲，与 Web/设计规格不一致 |
 | [#599](https://github.com/hailingu/PlotWeave/issues/599) | 3.9 | P3 | Web/Tauri AI 输入行缺少发送按钮 |
 | [#600](https://github.com/hailingu/PlotWeave/issues/600) | 3.4 | P3 | 保存/删除竞态测试依赖真实 sleep 且测试夹具隔离不足 |
@@ -169,7 +171,7 @@
 3. Rust 删除目录 fsync；项目控制文件限读并避免在全局锁内全量解析（#591、#592）。
 4. **已完成 #593 实现修复（PR #624）**：核验器与 Node 版本取事件 base SHA，PR head 仅为 Git 数据；不再作为待修复项。工作流定义的外部强制保护/required review 尚未实施，需单独的所有者治理决定，不包含在本次已修复承诺中。
 5. 设置错误可见、文档弹窗模态（#594–#595）；**本变更已完成 #596** 的画布/侧栏焦点样式。
-6. P3：桥接缓存、原生导出默认、AI 发送、测试确定性、Swift 覆盖率、文档一致性、首页菜单键盘（#597–#603）。
+6. P3：原生导出默认、AI 发送、测试确定性、Swift 覆盖率、文档一致性、首页菜单键盘（#598–#603）；**本变更已完成 #597** 的桥接完成响应预算。
 
 预计修复上述 P2 后可回到 **9.2–9.3 / A**；若只按已知 issue 口径（不含本轮新发现），项目接近 9.1/A。
 
