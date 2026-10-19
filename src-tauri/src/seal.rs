@@ -26,6 +26,8 @@ use pbkdf2::pbkdf2_hmac;
 use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 
+use crate::hex_codec::{decode as hex_decode, encode as hex_encode, HexCase};
+
 /// envelope 版本前缀：算法/格式变更时递增。v2 相对 v1 的差异：
 /// PBKDF2 迭代派生（迭代数入 envelope）+ provider id 的 AAD 绑定。
 pub const ENVELOPE_PREFIX: &str = "pw2:";
@@ -226,8 +228,8 @@ fn open_v2_with(material: &str, provider_id: &str, body: &str) -> Result<String,
     if fields[2].len() != SALT_LEN * 2 {
         return Err("密文盐长度非法".into());
     }
-    let salt = hex_decode(fields[2]).ok_or("密文盐不是合法 hex")?;
-    let bytes = hex_decode(fields[3]).ok_or("密文不是合法 hex")?;
+    let salt = hex_decode(fields[2], HexCase::Either).ok_or("密文盐不是合法 hex")?;
+    let bytes = hex_decode(fields[3], HexCase::Either).ok_or("密文不是合法 hex")?;
     if bytes.len() <= NONCE_LEN {
         return Err("密文负载过短".into());
     }
@@ -253,7 +255,7 @@ fn open_legacy_with(material: &str, body: &str) -> Result<String, String> {
     if salt.len() != SALT_LEN * 2 {
         return Err("密文盐长度非法".into());
     }
-    let bytes = hex_decode(payload).ok_or("密文不是合法 hex")?;
+    let bytes = hex_decode(payload, HexCase::Either).ok_or("密文不是合法 hex")?;
     if bytes.len() <= NONCE_LEN {
         return Err("密文负载过短".into());
     }
@@ -270,28 +272,6 @@ fn open_legacy_with(material: &str, body: &str) -> Result<String, String> {
 /// 重封装迁移（issue #392）；迁移本身由 prefs 模块执行。
 pub fn is_legacy_envelope(envelope: &str) -> bool {
     envelope.starts_with(LEGACY_ENVELOPE_PREFIX)
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push_str(&format!("{b:02x}"));
-    }
-    out
-}
-
-fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(s.len() / 2);
-    for pair in bytes.chunks(2) {
-        let hi = (pair[0] as char).to_digit(16)?;
-        let lo = (pair[1] as char).to_digit(16)?;
-        out.push(((hi << 4) | lo) as u8);
-    }
-    Some(out)
 }
 
 /// 测试专用：构造旧版 `pw1:` 密文（seal 自测与 prefs 迁移测试共用）。
@@ -561,11 +541,31 @@ mod tests {
         );
     }
 
+    /// #628 preserves legacy envelope acceptance independently from media URL canonicality.
+    #[test]
+    fn hex_case_and_invalid_input_contract() {
+        assert_eq!(
+            hex_decode("00aBFF", HexCase::Either),
+            Some(vec![0, 171, 255])
+        );
+        assert_eq!(hex_encode(&[0, 171, 255]), "00abff");
+        assert_eq!(hex_decode("", HexCase::Either), Some(vec![]));
+        for invalid in ["a", "0g", "é", "ＦＦ", "ab cd", "\\00"] {
+            assert!(
+                hex_decode(invalid, HexCase::Either).is_none(),
+                "{invalid:?}"
+            );
+        }
+    }
+
     #[test]
     fn hex_helpers_roundtrip() {
         let bytes = vec![0x00, 0x0f, 0xff, 0xa5];
-        assert_eq!(hex_decode(&hex_encode(&bytes)).unwrap(), bytes);
-        assert!(hex_decode("0g").is_none());
-        assert!(hex_decode("abc").is_none());
+        assert_eq!(
+            hex_decode(&hex_encode(&bytes), HexCase::Either).unwrap(),
+            bytes
+        );
+        assert!(hex_decode("0g", HexCase::Either).is_none());
+        assert!(hex_decode("abc", HexCase::Either).is_none());
     }
 }

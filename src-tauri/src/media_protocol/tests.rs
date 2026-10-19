@@ -642,3 +642,22 @@ fn project_media_serves_assets_across_persisted_contract_sizes() {
     assert!(err.contains("20 MiB"), "意外诊断：{err}");
     cleanup(&root);
 }
+
+/// #628 keeps the existing lowercase-only media URL wire contract during codec sharing.
+#[test]
+fn project_media_hex_case_and_invalid_input_contract() {
+    assert_eq!(
+        parse_media_uri(&media_uri("pwmedia://localhost/project/p-1/4a"))
+            .unwrap()
+            .1,
+        "J"
+    );
+    for encoded in ["4A", "4aFf", "f", "gg", "ff", "c328", "efbca6efbca6"] {
+        let uri = media_uri(&format!("pwmedia://localhost/project/p-1/{encoded}"));
+        if encoded == "efbca6efbca6" {
+            assert_eq!(parse_media_uri(&uri).unwrap().1, "ＦＦ");
+        } else {
+            assert!(parse_media_uri(&uri).is_err(), "{encoded}");
+        }
+    }
+}

@@ -9,6 +9,8 @@
 use std::sync::{Condvar, Mutex, OnceLock};
 
 use serde_json::Value;
+
+use crate::hex_codec::{decode as hex_decode, encode as hex_encode, HexCase};
 use tauri::{AppHandle, Manager};
 
 use crate::assets::project_media::{
@@ -37,43 +39,7 @@ pub(crate) const MEDIA_SCHEME: &str = "pwmedia";
 /// 4×单文件上限（库 20 MiB / 项目 256 MiB）。
 pub(crate) const PROJECT_MEDIA_MAX_BYTES: usize = 256 * 1024 * 1024;
 
-/// 项目资产 id 的不透明契约（评审修复）：保存边界只要求非空白字符串 +
-/// Record 键/id 一致，normalizeAssetRecords 仅重发空白键——任意不透明 id
-/// （`bad]`/Unicode/超长/`%`/`..`/反斜杠）此前经 project_asset_path 可显示，
-/// 迁移后不得被库 id 白名单或百分号边界拒绝。URL 段以 hex 编码承载：输出
-/// 恒为 `[0-9a-f]`，URI 解析器无路径段歧义，任意字节序列无损往返。
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
-}
-
-/// hex 解码（[`hex_encode`] 的逆）：非法十六进制序列返回 None（调用方
-/// 按路径非法拒绝）。
-fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    let nibbles: Vec<u8> = s
-        .bytes()
-        .map(|b| match b {
-            b'0'..=b'9' => Some(b - b'0'),
-            b'a'..=b'f' => Some(b - b'a' + 10),
-            _ => None,
-        })
-        .collect::<Option<Vec<u8>>>()?;
-    Some(
-        nibbles
-            .chunks_exact(2)
-            .map(|pair| (pair[0] << 4) | pair[1])
-            .collect(),
-    )
-}
-
+// Opaque project IDs keep lowercase hex URL segments; parser policy remains lowercase-only.
 /// 项目资产 id 值域（命令面与协议解析同域）：非空白不透明字符串。长度
 /// 不另设限——文档 id 长度归索引大小上限治理。
 fn validate_project_media_id(id: &str) -> Result<(), String> {
@@ -158,8 +124,10 @@ pub(crate) fn parse_media_uri(uri: &tauri::http::Uri) -> Result<(MediaScope, Str
             return Err(invalid());
         }
         validate_id(project_id)?;
-        let asset_id = String::from_utf8(hex_decode(encoded_asset_id).ok_or_else(invalid)?)
-            .map_err(|_| invalid())?;
+        let asset_id = String::from_utf8(
+            hex_decode(encoded_asset_id, HexCase::Lowercase).ok_or_else(invalid)?,
+        )
+        .map_err(|_| invalid())?;
         validate_project_media_id(&asset_id)?;
         return Ok((
             MediaScope::Project {
