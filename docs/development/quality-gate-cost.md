@@ -198,12 +198,14 @@ experienced as sustained chassis heat on every gated operation. The cap
 spreads the same work over fewer cores: peak power drops, wall time rises
 ([CPU-Budget Baseline](#cpu-budget-baseline-2026-10-16)).
 
+Issue #601 also applies the same positive-integer budget (unset: fixed `4`) to `scripts/test-native.sh` through Xcode `-jobs`. Tests remain serial. Normal native regression collects a separate App line-coverage report; stress disables instrumentation. This applies locally and in native CI, while plain npm/other CI commands below retain their existing policy. Native remains absent from the uniform commit-creation cost. See [Native Coverage](native-coverage.md).
+
 - **Scope**: `scripts/sonar-quality-gate.sh` (frontend coverage runs as
   `npm run test:coverage -- --maxWorkers <budget>`) and
   `scripts/rust-coverage.sh` (build parallelism `--jobs <budget>`; test
   execution `RUST_TEST_THREADS=<budget>`), including standalone
   `rust-coverage.sh` invocations, which resolve the same default when run
-  outside the gate. Plain `npm test`, `npm run build`, and CI are
+  outside the gate. Plain `npm test`, `npm run build`, and frontend/Rust CI are
   deliberately **not** capped — CI never runs this gate (Sonar stays
   local), and the cap is a local-machine comfort measure, not a repo-wide
   test policy.

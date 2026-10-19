@@ -148,6 +148,17 @@ jobs:
         # App-hosted 的窗口、焦点及退出委托共享一个 NSApplication；各套件不能并发改写它。
         # 默认保留功能回归，持续性能及长循环测量由 test-native.sh stress 按需运行。
         run: sh scripts/test-native.sh
+      - name: Upload native Swift coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-coverage-${{ github.run_attempt }}
+          path: |
+            native/macos/build/coverage/coverage-summary.json
+            native/macos/build/coverage/coverage-summary.md
+            native/macos/build/coverage/xccov.json
+          # Collection itself fails closed; failed builds may not have produced reports.
+          if-no-files-found: ignore
 
   # 门禁证据核验（issue #548 方案 1）：本地门禁（Sonar + 覆盖率）在托管
   # runner 上不可达，改为服务端复核其版本化自述证据 docs/development/

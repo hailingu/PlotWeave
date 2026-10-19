@@ -1,4 +1,8 @@
 import {
+  writeNativeCoverageSource,
+  writeXccovStub,
+} from './native-coverage-fixture'
+import {
   chmodSync,
   copyFileSync,
   existsSync,
@@ -224,6 +228,7 @@ function seedHistory(sandbox: string): void {
 /** 复制真实钩子与门禁脚本进沙箱并提交为被跟踪内容（沙箱内的门禁工具
  * 属于被推状态，不得构成快路径的未跟踪降级因素）。 */
 function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
+  writeNativeCoverageSource(sandbox)
   mkdirSync(resolve(sandbox, 'bin'), { recursive: true })
   mkdirSync(resolve(sandbox, 'scripts'), { recursive: true })
   mkdirSync(resolve(sandbox, '.githooks'), { recursive: true })
@@ -242,6 +247,7 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
     'test-native.sh',
+    'native-coverage.ts',
   ]) {
     copyFileSync(
       resolve(repositoryRoot, 'scripts', script),
@@ -273,6 +279,7 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
       'gate-history.jsonl',
       '/bin/',
       '/coverage/',
+      '/native/macos/build/',
       '/rust-coverage/',
       '/.scannerwork/',
       '/origin.git/',
@@ -298,6 +305,7 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
 /** 安装记录并受控返回的外部命令替身（npm / cargo-llvm-cov / 扫描器 /
  * curl），门禁次数以 sonar-scanner 日志行计、依赖安装以 npm ci 计。 */
 function writeScenarioStubs(bin: string): void {
+  writeXccovStub(resolve(bin, 'xcrun'))
   writeExecutable(
     resolve(bin, 'xcodebuild'),
     String.raw`printf 'xcodebuild %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
@@ -358,6 +366,12 @@ function scenarioEnvironment(
     // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
     PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
     PLOTWEAVE_XCODEBUILD_BIN: resolve(bin, 'xcodebuild'),
+    PLOTWEAVE_XCRUN_BIN: resolve(bin, 'xcrun'),
+    PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE: '',
+    GITHUB_STEP_SUMMARY: resolve(
+      sandbox,
+      'native/macos/build/coverage/step-summary.md',
+    ),
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),
@@ -424,6 +438,9 @@ function preparePushScenario(options?: {
   const bin = resolve(sandbox, 'bin')
   mkdirSync(resolve(sandbox, 'coverage'))
   mkdirSync(resolve(sandbox, '.scannerwork'))
+  mkdirSync(resolve(sandbox, 'native/macos/build/coverage'), {
+    recursive: true,
+  })
   writeScenarioStubs(bin)
   const env = scenarioEnvironment(
     sandbox,

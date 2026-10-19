@@ -1,4 +1,8 @@
 import {
+  writeNativeCoverageSource,
+  writeXccovStub,
+} from './native-coverage-fixture'
+import {
   appendFileSync,
   chmodSync,
   copyFileSync,
@@ -25,6 +29,7 @@ const temporaryDirectories: string[] = []
 function repositoryFixture(fullGate: boolean) {
   return gitScenarioFixture((root) => {
     initScratchRepository(root)
+    writeNativeCoverageSource(root)
     seedHistory(root)
     copyScenarioFiles(root)
     if (!fullGate) {
@@ -140,6 +145,7 @@ function copyScenarioFiles(sandbox: string): string {
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
     'test-native.sh',
+    'native-coverage.ts',
   ]) {
     copyFileSync(
       resolve(repositoryRoot, 'scripts', script),
@@ -163,6 +169,7 @@ function copyScenarioFiles(sandbox: string): string {
 /** 安装记录并受控返回的外部命令替身（npm / cargo-llvm-cov / 扫描器 /
  * curl）；完整流水线以 sonar-scanner 替身日志行计数。 */
 function writeScenarioStubs(bin: string): void {
+  writeXccovStub(resolve(bin, 'xcrun'))
   writeExecutable(
     resolve(bin, 'xcodebuild'),
     String.raw`printf 'xcodebuild %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"`,
@@ -220,6 +227,12 @@ function scenarioEnvironment(
     // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
     PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
     PLOTWEAVE_XCODEBUILD_BIN: resolve(bin, 'xcodebuild'),
+    PLOTWEAVE_XCRUN_BIN: resolve(bin, 'xcrun'),
+    PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE: '',
+    GITHUB_STEP_SUMMARY: resolve(
+      sandbox,
+      'native/macos/build/coverage/step-summary.md',
+    ),
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),
@@ -261,6 +274,9 @@ function prepareHookScenario(
   const bin = resolve(sandbox, 'bin')
   mkdirSync(resolve(sandbox, 'coverage'))
   mkdirSync(resolve(sandbox, '.scannerwork'))
+  mkdirSync(resolve(sandbox, 'native/macos/build/coverage'), {
+    recursive: true,
+  })
   writeScenarioStubs(bin)
   const env = scenarioEnvironment(sandbox, bin, logPath, qualityGateStatus)
 

@@ -1,6 +1,5 @@
 #!/bin/sh
-# 原生测试公共入口：默认保留功能回归，stress 显式运行原规模压力/性能测量。
-# 选择契约见 quality-gate-push.md「Native Regression And Stress」。
+# 原生公共入口：功能回归采集 App 覆盖率，stress 保留原规模且关闭 instrumentation。
 set -eu
 
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -15,18 +14,53 @@ if [ "$#" -gt 1 ]; then
   printf '[NATIVE_TEST_ARGUMENTS_INVALID] 原生测试入口只接受一个模式参数。\n' >&2
   exit 2
 fi
+native_jobs=${PLOTWEAVE_GATE_CPU_BUDGET:-4}
+case $native_jobs in
+  *[!0-9]*|'') printf '[GATE_CPU_BUDGET_INVALID] 原生构建预算须为正整数。\n' >&2; exit 2 ;;
+esac
+if ! [ "$native_jobs" -ge 1 ] 2>/dev/null; then
+  printf '[GATE_CPU_BUDGET_INVALID] 原生构建预算须为正整数。\n' >&2
+  exit 2
+fi
 
 cd "$repository_root"
+coverage_directory="$repository_root/native/macos/build/coverage"
+if [ "$mode" = regression ]; then
+  mkdir -p "$coverage_directory"
+  # 本入口拥有的报告先失效，构建/测试失败时不能留下伪装为本轮的旧摘要。
+  rm -f "$coverage_directory/coverage-summary.json" "$coverage_directory/coverage-summary.md" "$coverage_directory/xccov.json"
+fi
 "${PLOTWEAVE_NPM_BIN:-npm}" run build:native-canvas
 set -- -project native/macos/PlotWeaveNative.xcodeproj \
   -scheme PlotWeaveNative -destination 'platform=macOS' \
-  -derivedDataPath native/macos/build/DerivedData
-if [ "$mode" = stress ]; then
-  # 用完整套件选择参数化测量；保留同套件的轻量报告校验。
-  set -- "$@" '-only-testing:PlotWeaveNativeTests/WebCanvasPerformanceTests' \
-    '-only-testing:PlotWeaveNativeTests/WebCanvasFirstDragLatencyTests/sameNodeFirstAndSecondDragRecordStartupEvidence()'
-fi
-printf '[native-tests] 模式：%s（窗口/焦点回归串行运行）\n' "$mode"
+  -derivedDataPath native/macos/build/DerivedData -jobs "$native_jobs"
 TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=$stress_enabled
 export TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS
-exec "${PLOTWEAVE_XCODEBUILD_BIN:-xcodebuild}" "$@" -parallel-testing-enabled NO test
+printf '[native-tests] 模式：%s（串行；构建预算 %s）\n' "$mode" "$native_jobs"
+if [ "$mode" = stress ]; then
+  set -- "$@" -enableCodeCoverage NO \
+    '-only-testing:PlotWeaveNativeTests/WebCanvasPerformanceTests' \
+    '-only-testing:PlotWeaveNativeTests/WebCanvasFirstDragLatencyTests/sameNodeFirstAndSecondDragRecordStartupEvidence()'
+  exec "${PLOTWEAVE_XCODEBUILD_BIN:-xcodebuild}" "$@" -parallel-testing-enabled NO test
+fi
+
+# 每轮独立结果目录；成功后删除大体积 bundle，失败时保留诊断取证。
+coverage_run=$(mktemp -d "$repository_root/native/macos/build/native-coverage.XXXXXX")
+cleanup_coverage() {
+  native_status=$?
+  trap - 0 HUP INT TERM
+  if [ "$native_status" -eq 0 ]; then
+    rm -rf "$coverage_run"
+  else
+    printf '[NATIVE_COVERAGE_DIAGNOSTICS] 保留本轮结果：%s\n' "$coverage_run" >&2
+  fi
+  exit "$native_status"
+}
+trap cleanup_coverage 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+set -- "$@" -enableCodeCoverage YES -resultBundlePath "$coverage_run/NativeTests.xcresult"
+"${PLOTWEAVE_XCODEBUILD_BIN:-xcodebuild}" "$@" -parallel-testing-enabled NO test
+"${PLOTWEAVE_XCRUN_BIN:-xcrun}" xccov view --report --json "$coverage_run/NativeTests.xcresult" > "$coverage_run/xccov.json"
+node "$script_directory/native-coverage.ts" "$coverage_run/xccov.json" "$repository_root" "$coverage_directory" "${PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE:-}"
