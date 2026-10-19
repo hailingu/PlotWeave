@@ -6,6 +6,8 @@
 
 > 当前路径同步（2026-10-04）：原 `src/native-canvas/` 演示源码已迁至 `src/editor/nativeCanvas/`，遵守 `dev` 的 shell → editor 运行时边界；`native-canvas.html` 指向新入口。以下 2026-09-15 记录中的旧路径、命令和结果均为当时的历史证据，构建命令与资源输出保持不变。
 
+> 当前代码清理（2026-10-19，[#615](https://github.com/hailingu/PlotWeave/issues/615)）：无生产消费者的 `ShellStage` 阶段记录与两个自证常量测试已删除，显式演示夹具采用当前用途标签。下文该类型及测试结果仍是 P1 当时的历史证据，不再描述当前产品能力；现行状态/服务与功能验证见[业务功能补齐记录](swiftui-react-flow-feature-parity.md)。
+
 ## Xcode 27 工具链同步（2026-10-07）
 
 所有者在本任务中要求将项目设置更新为 Xcode 27；本节取代下方 P1-1 的当前工具链约束，旧记录保留为历史证据。本次为工程/CI 配置与规范文档更新，不改变原生业务阶段、画布协议或最低部署版本。验证对应 `codex/swiftui-react-flow` 工作区在 `08653d21cb45f0a70b96651c590b4eec37397ff6` 上的本轮未提交配置更新，不构成提交或托管 CI 证据。

@@ -56,13 +56,13 @@ const VIEWPORT_STYLE = {
 
 /**
  * 演示页的生成调度 stub（§4.1 未接通能力显式禁用，不返回假成功）：
- * P1 视觉首片不接真实模型服务——jobOf 恒空闲、start 仅留可观察提示，
+ * 显式隔离夹具不接真实模型服务——jobOf 恒空闲、start 仅留可观察提示，
  * 不伪造 running/产物（生产实现在 editor/imagegen，由 EditorView 装配）。
  */
 const DEMO_IMAGE_GEN_API: ImageGenApi = {
   jobOf: () => null,
   start: () => {
-    console.info('[demo] 画布演示未接生成服务：文生图在 P4 接通')
+    console.info('[demo] 隔离演示夹具未接生成服务，请使用生产编辑入口')
   },
   cancel: () => undefined,
 }
@@ -104,7 +104,7 @@ export function NativeCanvasApp({ graph }: NativeCanvasAppProps) {
         <div style={BADGE_STYLE}>
           {graph
             ? `${DEMO_GRAPH_LABEL} · ${CANVAS_PERF_LABEL} · 不落盘`
-            : `${DEMO_GRAPH_LABEL} · P1 视觉首片 · 不落盘`}
+            : `${DEMO_GRAPH_LABEL} · 隔离演示夹具 · 不落盘`}
         </div>
       </div>
     </div>
