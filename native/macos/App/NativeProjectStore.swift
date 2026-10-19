@@ -40,8 +40,8 @@ actor NativeProjectStore {
             guard let command = Command(rawValue: command) else { throw HostFailure.commandUnavailable(command) }
             switch command {
             case .listProjects: return try listProjects()
-            case .createProject: return try createProject(name: string(args, "name"))
-            case .loadProject: return try loadProject(id: string(args, "id"))
+            case .createProject: return try createProject(name: args.requiredString("name", domain: .project))
+            case .loadProject: return try loadProject(id: args.requiredString("id", domain: .project))
             case .saveProject:
                 guard let doc = args["doc"] else { throw invalid("缺少 doc 字段") }
                 let existing: Bool
@@ -50,16 +50,16 @@ actor NativeProjectStore {
                 case .bool(let flag): existing = flag
                 default: throw invalid("expectExisting 必须是布尔值")
                 }
-                return try saveProject(id: string(args, "id"), doc: doc, expectExisting: existing)
-            case .deleteProject: try deleteProject(id: string(args, "id")); return .null
-            case .loadAiSession: return try loadAiSession(id: string(args, "id"))
+                return try saveProject(id: args.requiredString("id", domain: .project), doc: doc, expectExisting: existing)
+            case .deleteProject: try deleteProject(id: args.requiredString("id", domain: .project)); return .null
+            case .loadAiSession: return try loadAiSession(id: args.requiredString("id", domain: .project))
             case .saveAiSession:
                 guard let session = args["session"] else { throw invalid("缺少 session 字段") }
-                try saveAiSession(id: string(args, "id"), session: session); return .null
+                try saveAiSession(id: args.requiredString("id", domain: .project), session: session); return .null
             case .verifyProjectAssets:
                 guard let assets = args["assets"] else { throw invalid("缺少 assets 字段") }
-                return try verifyAssets(id: string(args, "id"), assets: assets)
-            case .copyProjectAssets: try copyAssets(from: string(args, "fromId"), to: string(args, "toId")); return .null
+                return try verifyAssets(id: args.requiredString("id", domain: .project), assets: assets)
+            case .copyProjectAssets: try copyAssets(from: args.requiredString("fromId", domain: .project), to: args.requiredString("toId", domain: .project)); return .null
             }
         } catch let failure as HostFailure { throw failure }
         catch { throw HostFailure(code: "PW_STORAGE_ERROR", message: "原生存储操作失败：\(error.localizedDescription)") }
@@ -289,11 +289,6 @@ actor NativeProjectStore {
     private func validSession(_ value: HostJSON) -> Bool { value.object != nil && value["schemaVersion"] == .number(1) && value["entries"]?.arrayValue != nil }
     /// The AI read wire distinguishes missing, malformed and valid sessions explicitly.
     private func sessionCopy(_ session: HostJSON?, corrupt: Bool) -> HostJSON { .object(["session": session ?? .null, "corrupt": .bool(corrupt)]) }
-    /// Required wire strings never receive permissive empty defaults.
-    private func string(_ args: [String: HostJSON], _ key: String) throws -> String {
-        guard let value = args[key]?.string, !value.isEmpty else { throw invalid("缺少 \(key) 字段") }
-        return value
-    }
     /// Shared invalid-input code is separate from persisted missing/corrupt record diagnostics.
     private func invalid(_ message: String) -> HostFailure { NativeProjectEnvelope.invalid(message) }
 }

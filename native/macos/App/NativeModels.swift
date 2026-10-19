@@ -71,7 +71,7 @@ actor NativeModels {
         case .llmImageGenerate:
             guard let request = args["request"]?.object else { throw invalid("缺少生图 request") }
             return try await image(request)
-        case .llmImageCancel: return .object(["cancelled": .bool(cancel(try string(args, "jobId")))])
+        case .llmImageCancel: return .object(["cancelled": .bool(cancel(try args.requiredString("jobId", domain: .model)))])
         }
     }
 
@@ -85,10 +85,10 @@ actor NativeModels {
 
     /// Credential lookup stays in the prefs actor; the existing chat request/assistant JSON shape is retained.
     private func chat(_ args: [String: HostJSON]) async throws -> HostJSON {
-        let provider = try string(args, "providerId")
+        let provider = try args.requiredString("providerId", domain: .model)
         try NativeSeal.validateProvider(provider)
         let model = try selectedModel(args)
-        let url = try endpoint(string(args, "baseUrl"), suffix: "chat/completions")
+        let url = try endpoint(args.requiredString("baseUrl", domain: .model), suffix: "chat/completions")
         guard let messages = args["messages"] else { throw invalid("缺少 messages") }
         let key = try await preferences.providerSecret(provider)
         guard !closed else { throw HostFailure(code: "PW_CORE_CLOSED", message: "原生模型服务已关闭") }
@@ -105,7 +105,7 @@ actor NativeModels {
     /// One job owns its monotonic total budget, registration and flag through the final durable media commit.
     private func image(_ args: [String: HostJSON]) async throws -> HostJSON {
         let deadline = ContinuousClock.now.advanced(by: .seconds(600))
-        let job = try string(args, "jobId")
+        let job = try args.requiredString("jobId", domain: .model)
         guard !job.isEmpty, active[job] == nil else { throw invalid("生图 jobId 为空或已在运行") }
         let flag = NativeModelCancellation()
         if let index = tombstones.firstIndex(of: job) { tombstones.remove(at: index); flag.cancel() }
@@ -113,19 +113,19 @@ actor NativeModels {
         defer { flag.cancel(); active.removeValue(forKey: job) }
         return try await withTaskCancellationHandler {
             try flag.check(deadline)
-            let project = try string(args, "projectId")
+            let project = try args.requiredString("projectId", domain: .model)
             try NativeProjectEnvelope.validateID(project)
-            let provider = try string(args, "providerId")
+            let provider = try args.requiredString("providerId", domain: .model)
             try NativeSeal.validateProvider(provider)
             let model = try selectedModel(args)
-            let prompt = try string(args, "prompt").trimmingCharacters(in: .whitespacesAndNewlines)
+            let prompt = try args.requiredString("prompt", domain: .model).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !prompt.isEmpty else { throw invalid("Prompt 不能为空") }
-            let size = try string(args, "size")
-            let url = try endpoint(string(args, "baseUrl"), suffix: "images/generations")
+            let size = try args.requiredString("size", domain: .model)
+            let url = try endpoint(args.requiredString("baseUrl", domain: .model), suffix: "images/generations")
             let key = try await NativeDeadline.run(until: deadline) { try await self.preferences.providerSecret(provider) }
             try flag.check(deadline)
-            /// Existing OpenAI-compatible body carries model/messages or prompt/size without new fields.
-    let body: HostJSON = .object(["model": .string(model), "prompt": .string(prompt), "size": .string(size)])
+            // Preserve the existing OpenAI-compatible generation body without adding request fields.
+            let body: HostJSON = .object(["model": .string(model), "prompt": .string(prompt), "size": .string(size)])
             let bytes = try await imageBytes(url: url, key: key, body: body, flag: flag, deadline: deadline)
             guard bytes.count <= 32 * 1024 * 1024, let mime = Self.imageMIME(bytes) else { throw invalid("生成内容超过上限或不是支持的图像格式（PNG/JPEG/WebP/GIF）") }
             try flag.check(deadline)
@@ -179,16 +179,11 @@ actor NativeModels {
 
     /// Model whitespace is validated without rewriting the provider's existing model identifier.
     private func selectedModel(_ args: [String: HostJSON]) throws -> String {
-        let model = try string(args, "model")
+        let model = try args.requiredString("model", domain: .model)
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw invalid("未选择模型") }
         return model
     }
 
-    /// IPC string arguments retain type distinctions and never echo caller-controlled data into errors.
-    private func string(_ args: [String: HostJSON], _ key: String) throws -> String {
-        guard let value = args[key]?.string else { throw invalid("模型请求字符串参数缺失或类型错误") }
-        return value
-    }
 
     /// Existing generated-image formats are determined by bytes, never by a provider's claimed MIME.
     private static func imageMIME(_ data: Data) -> String? {
