@@ -408,7 +408,15 @@ two complementary backstops (方案 1 + 方案 2):
    `.github/workflows/ci.yml` runs `scripts/verify-gate-evidence.ts` on
    every pull request targeting `dev` or `main` (`ubuntu-latest`,
    pull-request events only — push runs contain server-created merge
-   commits that have no local ledger record by design). For the range
+   commits that have no local ledger record by design). Since issue #593,
+   the job checks out the immutable event `pull_request.base.sha`; both the
+   verifier and `.nvmrc` come from that base snapshot. It fetches the event
+   head SHA as Git objects without checking out the head, installing its
+   dependencies, or executing its files, then passes both exact SHAs to the
+   base verifier. A missing base verifier or unavailable head object fails
+   the job; there is no fallback to the PR's verifier. A PR changing the
+   verifier is checked by the already-integrated base version, while its new
+   behavior is exercised by the ordinary frontend script tests. For the range
    `merge-base(base, head)..head`, against the ledger **as versioned at the
    PR head**:
    - Every commit **except the tip** must have an evidence record: a line
@@ -449,6 +457,23 @@ two complementary backstops (方案 1 + 方案 2):
      semantics; they do not fail the check by themselves.
    - The script always reads original Git objects
      (`GIT_NO_REPLACE_OBJECTS=1`, matching the push gate, PR #442).
+
+   **Workflow-definition boundary (issue #593).** This base-code selection
+   closes replacement of the verifier alone. The `pull_request` workflow
+   definition itself is still supplied by the PR merge, so an author who
+   also rewrites that workflow can change the selection or the check. The
+   existing branch protection does not require an approving review; this
+   change does not claim an immutable server-side executor or independently
+   authenticated gate execution. Enforcing workflow integrity requires a
+   separately authorized review/protection policy or trusted external
+   executor. No protection, permission, or default-branch deployment is
+   changed here. An independently deployed `pull_request_target` workflow
+   was evaluated but not enabled: GitHub documents its workflow source as
+   the default branch, while this task integrates only into `dev`, and it
+   introduces a separate event-policy/privilege boundary. See [GitHub event
+   semantics](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target)
+   and [secure use](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target).
+   The unsigned self-report boundary from issue #431 remains unchanged.
 
    This check is why the ordinary commit paths now stage pending records
    into each commit (issue #548): with materialize-at-push only, the

@@ -158,7 +158,7 @@ jobs:
   # 范围额外识别集成边界：合并提交跳过、被集成分支 tip（合并的非首父）
   # 同告警、台账入库前的历史提交豁免（PR #581 评审 5542207474）。
   # 与分支保护（issue #548 方案 2）互补：
-  # 本校验证明门禁确曾通过并留证，分支保护关闭直推。只读台账、不新增
+  # 本校验复核自述台账的留证约束（不证明真实执行），分支保护关闭直推。只读台账、不新增
   # 本地门禁变体（quality-gate-cost.md 的单一成本决策不变）。语义与容差
   # 见 docs/development/quality-gate-evidence.md。仅 PR 事件运行：push 到
   # dev/main 的运行包含服务端创建的合并提交，本无本地台账记录。
@@ -169,16 +169,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # 完整历史：merge-base 与 base 分支引用都需要
+          # #593：执行代码及 .nvmrc 取自事件 base 的不可变提交；PR 只提供 Git 对象。
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
       - name: 校验 PR 提交的门禁证据（issue #548）
         env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           # 集成边界豁免仅本仓库自身的 dev → main 发布 PR 启用：base 为
           # main、head 为 dev、且 head 仓库即本仓库——fork 中同名 dev 分
           # 支不获豁免（PR #581 评审 5542342537/5542467935/5542611194：分
           # 支保护不限制 PR 来源，短分支名可被 fork 复刻）；其余一律留证
           RELEASE_BOUNDARY: ${{ github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && '1' || '' }}
-        run: node scripts/verify-gate-evidence.ts --base "origin/${{ github.event.pull_request.base.ref }}" --head "${{ github.event.pull_request.head.sha }}" ${RELEASE_BOUNDARY:+--release-boundary}
+        run: |
+          # 只获取对象，不检出、安装依赖或执行 head 的任何内容；失败不回退到 PR 核验器。
+          git fetch --no-tags origin "$HEAD_SHA"
+          node scripts/verify-gate-evidence.ts --base "$BASE_SHA" --head "$HEAD_SHA" ${RELEASE_BOUNDARY:+--release-boundary}
