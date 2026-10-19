@@ -22,7 +22,7 @@ import {
   type SetStateAction,
 } from 'react'
 import type { AssetRef } from '../../model/document'
-import { IPC_COMMANDS } from '../../ipc/commands'
+import { IPC_COMMANDS, type ImageCancelResult } from '../../ipc/commands'
 import { isBrowserPreviewHost } from '../../platform/hostEnvironment'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
@@ -299,7 +299,7 @@ function useJobWriteGuard(
       pendingCancellations.clear()
       for (const job of Object.values(readJobs())) {
         if (job?.status === 'running') {
-          void tauriInvoke(IPC_COMMANDS.llmImageCancel, {
+          void tauriInvoke<ImageCancelResult>(IPC_COMMANDS.llmImageCancel, {
             jobId: job.jobId,
           }).catch((err: unknown) => {
             // 卸载后无 UI 宿主（issue #160）：控制台留痕即可定位——
@@ -343,7 +343,7 @@ function useNodeDeletionWatch(
     for (const [nodeId, job] of Object.entries(jobsRef.current)) {
       if (alive.has(nodeId)) continue
       if (job?.status === 'running') {
-        void tauriInvoke(IPC_COMMANDS.llmImageCancel, {
+        void tauriInvoke<ImageCancelResult>(IPC_COMMANDS.llmImageCancel, {
           jobId: job.jobId,
         }).catch((err: unknown) => {
           // 宿主已删无节点级 UI 宿主（issue #160）：控制台留痕定位；
@@ -492,7 +492,9 @@ function useImageCancel(
       pendingCancellationsRef.current.set(nodeId, jobId)
       const ownsDiagnostic = () =>
         pendingCancellationsRef.current.get(nodeId) === jobId
-      void tauriInvoke(IPC_COMMANDS.llmImageCancel, { jobId })
+      void tauriInvoke<ImageCancelResult>(IPC_COMMANDS.llmImageCancel, {
+        jobId,
+      })
         .catch((err: unknown) => {
           if (
             ownsDiagnostic() &&

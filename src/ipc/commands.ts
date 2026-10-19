@@ -59,3 +59,9 @@ export const IPC_COMMANDS = {
  * 错误与变量中转都在编译期拒绝，不依赖守卫的词法扫描（issue #394 评审
  * 5339899090）。 */
 export type IpcCommandName = (typeof IPC_COMMANDS)[keyof typeof IPC_COMMANDS]
+
+/** #630 cancellation reply: an active local flag was marked; remote billing may still continue.
+ * False still records bounded pre-cancellation for an unknown/finished id. */
+export interface ImageCancelResult {
+  readonly cancelled: boolean
+}

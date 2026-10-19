@@ -298,19 +298,22 @@ describe('生成调度：用户取消的失败反馈（issue #160）', () => {
     expect(applyDataPatch).not.toHaveBeenCalled()
   })
 
-  it('取消 IPC 成功：作业清空且无错误条目（正常路径零噪音）', async () => {
-    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
-    vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
-      if (cmd === 'llm_image_generate') return new Promise(() => {})
-      return Promise.resolve({})
-    })
-    setupHarness()
-    void apiRef!.start('img1')
-    await waitFor(() => expect(generateCount()).toBe(1))
-    apiRef!.cancel('img1')
-    await new Promise((r) => setTimeout(r, 0))
-    expect(apiRef!.jobOf('img1')).toBeNull()
-  })
+  it.each([true, false])(
+    '取消 IPC 成功（cancelled=%s）：作业清空且无错误条目',
+    async (cancelled) => {
+      ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+      vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+        if (cmd === 'llm_image_generate') return new Promise(() => {})
+        return Promise.resolve({ cancelled })
+      })
+      setupHarness()
+      void apiRef!.start('img1')
+      await waitFor(() => expect(generateCount()).toBe(1))
+      apiRef!.cancel('img1')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(apiRef!.jobOf('img1')).toBeNull()
+    },
+  )
 })
 
 /** 可控 IPC 响应：显式安排生成与取消完成顺序，避免计时器竞态。 */

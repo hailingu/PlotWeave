@@ -82,31 +82,56 @@ struct NativeModelsTests {
         await #expect(throws: HostFailure.self) { try await invalid.invoke(command: "llm_image_generate", args: Self.imageArgs(id)) }
     }
 
-    /// Both pre-cancel and cancellation during a provider response prevent a late media commit.
+    /// Returned activity is precise while held HTTP proves cancellation still prevents a late commit.
     @Test func cancelledJobNeverCommitsAndCanRetryWithNewIdentity() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
         try await fixture.configure()
         let id = try await fixture.createProject()
         let started = Mutex(false)
+        let (gate, release) = AsyncStream<Void>.makeStream()
+        defer { release.finish() }
         let models = fixture.models(post: { _ in
             started.withLock { $0 = true }
-            try await Task.sleep(for: .milliseconds(30))
+            for await _ in gate {}
             return try Self.reply(.object(["data": .array([.object(["b64_json": .string(Self.png.base64EncodedString())])])]))
         })
-        #expect(try await models.invoke(command: "llm_image_cancel", args: ["jobId": .string("job")]) == .null)
-        await #expect(throws: HostFailure.self) { try await models.invoke(command: "llm_image_generate", args: Self.imageArgs(id)) }
-        #expect(!started.withLock { $0 })
-        let generation = Task { try await models.invoke(command: "llm_image_generate", args: Self.imageArgs(id)) }
-        for _ in 0..<5000 {
-            if started.withLock({ $0 }) { break }
-            try await Task.sleep(for: .milliseconds(1))
+        await #expect(throws: HostFailure.self) {
+            try await models.invoke(command: "llm_image_cancel", args: ["jobId": .number(1)])
         }
-        try #require(started.withLock { $0 })
-        _ = try await models.invoke(command: "llm_image_cancel", args: ["jobId": .string("job")])
-        await #expect(throws: HostFailure.self) { try await generation.value }
+        for _ in 0..<2 {
+            #expect(try await models.invoke(command: "llm_image_cancel", args: ["jobId": .string("job")]) == .object(["cancelled": .bool(false)]))
+        }
+        await #expect(throws: HostFailure.self) {
+            try await models.invoke(command: "llm_image_generate", args: Self.imageArgs(id))
+        }
+        #expect(!started.withLock { $0 })
+        try await withThrowingTaskGroup(of: HostJSON.self) { group in
+            group.addTask { try await models.invoke(command: "llm_image_generate", args: Self.imageArgs(id)) }
+            defer { release.finish(); group.cancelAll() }
+            for _ in 0..<5000 {
+                if started.withLock({ $0 }) { break }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            try #require(started.withLock { $0 })
+            for _ in 0..<2 {
+                #expect(try await models.invoke(command: "llm_image_cancel", args: ["jobId": .string("job")]) == .object(["cancelled": .bool(true)]))
+            }
+            release.finish()
+            do {
+                _ = try await group.next()
+                Issue.record("Cancelled generation must not return an asset")
+            } catch {
+                #expect(error is HostFailure)
+            }
+        }
+        #expect(try await models.invoke(command: "llm_image_cancel", args: ["jobId": .string("job")]) == .object(["cancelled": .bool(false)]))
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("projects/" + id).path))
         #expect(try await models.invoke(command: "llm_image_generate", args: Self.imageArgs(id, job: "fresh"))["id"]?.string != nil)
+        await models.close()
+        await #expect(throws: HostFailure.self) {
+            try await models.invoke(command: "llm_image_cancel", args: ["jobId": .string("fresh")])
+        }
     }
 
     /// A project deleted while HTTP is pending cannot be recreated by its completed model result.
