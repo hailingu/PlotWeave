@@ -39,7 +39,13 @@ enum NativeLayoutFixture {
                 if let split = view as? NSSplitView, split.isVertical, split.arrangedSubviews.count == 2,
                    let detail = split.arrangedSubviews.last, canvas.isDescendant(of: detail),
                    let sidebar = split.arrangedSubviews.first {
-                    if !visible { return split.isSubviewCollapsed(sidebar) || sidebar.isHiddenOrHasHiddenAncestor }
+                    if !visible {
+                        let collapsed = split.isSubviewCollapsed(sidebar) || sidebar.isHiddenOrHasHiddenAncestor
+                        let targetWidth = split.bounds.width
+                        return collapsed && targetWidth > 0
+                            && abs(detail.bounds.width - targetWidth) < 1
+                            && abs(canvas.bounds.width - targetWidth) < 1
+                    }
                     return !split.isSubviewCollapsed(sidebar) && !sidebar.isHiddenOrHasHiddenAncestor && sidebar.bounds.width > 1
                         && (expectedCanvasWidth.map { abs(canvas.bounds.width - $0) < 1 } ?? true)
                 }
