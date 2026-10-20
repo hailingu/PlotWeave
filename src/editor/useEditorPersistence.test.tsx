@@ -300,3 +300,52 @@ describe('useEditorPersistence（链上重存成功对齐完成语义，PR #174 
     expect(committed).toBe(true)
   })
 })
+
+/** The canvas keeps one callback; it must save current committed metadata, graph and writer. */
+describe('viewport persistence after a project metadata commit', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('keeps callback identity and saves current content through the latest writer', async () => {
+    const onSave = vi.fn<(doc: ProjectContent) => void>()
+    const updatedSave = vi.fn<(doc: ProjectContent) => void>()
+    const fixture = renderHook(
+      ({ project, save }) => {
+        const doc = useEditorDocument(project)
+        return { doc, persistence: useEditorPersistence(project, doc, save) }
+      },
+      { initialProps: { project: PROJECT, save: onSave } },
+    )
+    const move = fixture.result.current.persistence.onMoveEnd
+    fixture.rerender({
+      project: { ...PROJECT, name: 'renamed' },
+      save: updatedSave,
+    })
+    expect(fixture.result.current.persistence.onMoveEnd).toBe(move)
+    const nodes: ProjectContent['nodes'] = [
+      {
+        id: 'beat',
+        type: 'beat',
+        position: { x: 4, y: 8 },
+        data: { name: 'latest', tone: '' },
+      },
+    ]
+    act(() => {
+      fixture.result.current.doc.setNodes(nodes)
+    })
+    expect(fixture.result.current.persistence.onMoveEnd).toBe(move)
+    act(() => {
+      move(null, { x: 11, y: 22, zoom: 1.5 })
+    })
+    await flush()
+    expect(onSave).not.toHaveBeenCalled()
+    expect(updatedSave).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        name: 'renamed',
+        nodes,
+        viewport: { x: 11, y: 22, zoom: 1.5 },
+      }),
+    )
+    fixture.unmount()
+  })
+})

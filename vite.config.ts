@@ -54,6 +54,7 @@ export default defineConfig({
         'src/moduleGraph.ts',
         'src/model/convertFixtures.ts',
         'src/editor/ai/testGraphs.ts',
+        'src/editor/concurrentRenderTestScaffolding.ts',
         'src/editor/nodes/testScaffolding.tsx',
         'src/editor/panels/testDomStubs.ts',
         'src/styles/cssColorContract.ts',

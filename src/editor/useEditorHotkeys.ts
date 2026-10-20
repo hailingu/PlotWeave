@@ -10,7 +10,7 @@
  * 输入法消费，含 WebKit 晚于 compositionend 到达的 keyCode 229，
  * issue #570），不触发热键动作。
  */
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { isCompositionKey } from '../platform/compositionKey'
 
 /** 快捷键动作集：删除选中前由调用方给出当前选中 id 列表（读画布镜像 ref）。 */
@@ -66,9 +66,11 @@ function runHistoryKeys(e: KeyboardEvent, actions: EditorHotkeyActions): void {
 /** 编辑器全局快捷键 hook（撤销/重做/删除等）：监听只挂一次，动作经
  * ref 读取最新实现；输入焦点、输入法组合与弹窗态的抑制规则在实现内。 */
 export function useEditorHotkeys(actions: EditorHotkeyActions): void {
-  // 动作经 ref 读取：监听只挂一次，动作实现随渲染更新（等价于原 deps 重挂）。
+  // 监听只挂一次；仅发布已提交的动作，挂起/丢弃渲染不得改写可见树的目标。
   const ref = useRef(actions)
-  ref.current = actions
+  useLayoutEffect(() => {
+    ref.current = actions
+  }, [actions])
 
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
