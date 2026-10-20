@@ -50,4 +50,4 @@
 
 ## SwiftUI 分支导入 dev（2026-10-04）
 
-本地 `dev` 合并进 `codex/swiftui-react-flow` 时保留现行数据模型主题拆分与旧章节兼容入口，原生迁移职责同步到[总体分层](data-model/overview.md#二总体分层)、[持久化](data-model/persistence.md#十本地存储体系)和[UI §12](ui-design.md#十二macos-原生界面与服务已实现验收边界保留)。实现归属、FFI 保存存在性、IPC 收敛与门禁范围见[P2 合并同步](swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)，原生启动及路由验证见[开发工作流](development/workflow.md#原生画布演示与验证)。本次是既有阶段与 `dev` 的兼容性同步，P2 后续业务链路和原生视觉验收仍待续。
+本地 `dev` 合并进 `codex/swiftui-react-flow` 时保留现行数据模型主题拆分与旧章节兼容入口，原生迁移职责同步到[总体分层](data-model/overview.md#二总体分层)、[持久化](data-model/persistence.md#十本地存储体系)和[UI §12](ui-design.md#十二macos-原生界面与服务已实现验收边界保留)。实现归属、FFI 保存存在性、IPC 收敛与门禁范围见[P2 合并同步](swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)，原生启动及路由验证见[开发工作流](development/workflow.md#原生应用启动与验证)。本次是既有阶段与 `dev` 的兼容性同步，P2 后续业务链路和原生视觉验收仍待续。

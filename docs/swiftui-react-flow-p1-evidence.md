@@ -130,7 +130,7 @@ xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNati
 
 测试日志中的 `com.apple.linkd.autoShortcut` 连接失败为 ad-hoc 签名宿主注册 App Intents 的系统级噪音，不影响测试结果。
 
-**矩阵覆盖说明**：本切片只建立工程与占位窗口，未触及[改造计划 §6](swiftui-react-flow-migration-plan.md#六关键状态与不变量矩阵)任何行的可观察行为；M01–M03（就绪握手、布局/命中、输入交接）待下一切片接入 WKWebView 与画布夹具后验证。本切片新增源码的唯一行为是"骨架窗口如实标注阶段"，由 `ShellStageTests` 覆盖；该测试为骨架创建时随工程一并引入，未单独走先红后绿（工程建立前无可运行测试宿主）。
+**矩阵覆盖说明**：本切片只建立工程与占位窗口，未触及[改造计划 §6](swiftui-react-flow-migration-plan.md#6-关键状态与不变量矩阵)任何行的可观察行为；M01–M03（就绪握手、布局/命中、输入交接）待下一切片接入 WKWebView 与画布夹具后验证。本切片新增源码的唯一行为是"骨架窗口如实标注阶段"，由 `ShellStageTests` 覆盖；该测试为骨架创建时随工程一并引入，未单独走先红后绿（工程建立前无可运行测试宿主）。
 
 **失败场景、尚未接通的能力与未验证原因**：
 
