@@ -55,3 +55,44 @@ PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE=80 sh scripts/test-native.sh
 Rust 的 `store::validate::tests::shared_asset_contract_vectors` 与 Swift 的 `NativeAssetContractVectorTests.sharedAssetContractVectors` 各自调用真实叶子谓词，独立构建与运行；Web 的 `src/model/assetContract.test.ts` 通过 `parseProject` 检查活动路径隔离。两宿主另用真实临时项目验证保留引用上报、未修复保存拒绝、修复后保存／重开，以及隔离字节不被改写。前端仍是唯一归一化修复点，完整语义见[资产模型](../data-model/assets.md)。
 
 运行方式：在 `crates/` 执行 `cargo test -p plotweave-core --lib store::validate::tests::`；在仓库根执行 `npm test -- src/model/assetContract.test.ts --maxWorkers=4` 与公开原生入口 `sh scripts/test-native.sh`。这些用例自然进入既有 Rust、前端和 native 回归，任一消费方偏离向量即由相应测试失败报告。CPU 预算仍固定为本机既有的 4，原生覆盖率保持 report-only、stress 显式 opt-in；向量不新增覆盖率地板，也不替代真实 UI 或网络验收。
+
+## 安全传输与原生呈现用例（#657）
+
+[#657](https://github.com/hailingu/PlotWeave/issues/657) 的基线取自 dev
+`4fde8c0c2ad45a9f8cce167ce1988e713e39e8ea` 的既有 CI 报告：App
+7433/9481 行、70/70 文件，无缺报；下表八文件当时均为 0 行命中。
+本轮补的是可执行行为证据，默认仍为 report-only，不设置新的 native 下限，
+不排除文件、不改统计方式；前端/Rust 80% 与固定 CPU 4 保持不变。
+
+| 生产文件 | 验证行为 | 保留边界 |
+| --- | --- | --- |
+| `NativePinnedHTTP.swift` | 数值 IPv4/IPv6 端点、非公网及 origin 拒绝、直连建立报告与非直连证据拒绝、默认信任拒绝、原主机证书身份、实际 HTTP authority/路径/无凭据、同 URL 新响应、取消/期限关闭连接、超限响应拒绝 | 连接工厂将已验证端点重定向到测试拥有的回环 TLS 服务；未访问公网、真实代理或付费提供商，未验收所有网络设备/信任链 |
+| `NativePublicDNS.swift` | 真实系统数值 IPv4/IPv6 解析、两个阻塞线程容量、取消后槽位仍归线程、期限返回、失败/完成释放槽位 | 系统阻塞解析不能被强制中断；测试不请求外部 DNS，不模拟其所有 C ABI 失败 |
+| `NativeLibraryView.swift` | 经真实 sheet/service 加载持久化素材、实际搜索控件过滤、过滤不改磁盘 | 未遍历系统文件选择器、所有导入/删除确认/编组菜单分支 |
+| `NativeLibrarySheet.swift` | 打开 service 共享 actor，真实加载完成后显示素材 | 未模拟服务根目录不可用的所有呈现分支 |
+| `NativeLibraryForms.swift` | 实际表单编辑/保存动作、补丁可持久化并重开、空可选字段的 null 补丁、编组稳定 ID、空名称/忙碌禁用 | 服务层仍负责校验与原子写入；未遍历所有 Picker 组合 |
+| `NativeLibraryThumbnail.swift` | 持久化无效图像的失败/重试控件，以及有效字节替换后的恢复 | 未做像素快照或每种图像解码器验收；受限文件读取及容量另有服务测试 |
+| `NativeProjectSettingsView.swift` | 实际原生新增动作经生产 Web 创建角色、选择对应详情、原项目/条目持久化后重开 | 本轮未验证焦点敏感字段增量输入，未穷举地点、文档关系与删除确认组合；不建立第二份原生可写文档 |
+| `NativeMarkdownText.swift` | 实际 SwiftUI 呈现标题、行内内容、引用、列表、代码，以及不支持格式的原文/恢复提示 | 不验收字体、像素布局、VoiceOver 或真实 IME |
+
+网络入口仍由生产实现先校验 origin 和公网地址，再建立显式数值端点，并用原始
+主机名配置 TLS 身份。测试观察到 `NWParameters.preferNoProxies` 原先为 false。它仅控制直连偏好，
+SDK 明确允许失败后代理回退，不能据此声称严格禁用代理。生产实现读取 Network 建立报告，在发送 HTTP 请求前拒绝代理连接或报告缺失。
+负例使用真实本地 TLS 连接与受控的非直连报告，断言服务端没有收到 HTTP 请求；
+正例读取真实 Network 建立报告。未实测用户的系统代理、PAC 或企业网络配置，
+也不声称 Network 在报告产生前绝不会尝试代理握手。
+已有嵌入地址策略继续允许其中的公网 IPv4，拒绝其中的非公网 IPv4。
+
+TLS 服务只绑定回环地址。测试运行时生成合成证书，在私有临时目录短暂存储密钥，
+用 `kSecImportToMemoryOnly` 导入，随后删除目录，不修改用户 Keychain、系统信任、
+代理、共享 Cookie 或缓存。默认信任负例不安装自定义验证器；正例仅在测试工厂中
+提供合成锚点，仍调用 `SecTrustEvaluateWithError` 校验原始主机名，错误主机名负例
+不能发送 HTTP 请求。失败可能由 Network 错误或已有单调期限收束；不据此宣称
+所有证书失败均立即返回。原始查询串及端点不出现在错误文本中。
+
+执行入口仍是 `sh scripts/test-native.sh`；新增用例自然进入常规回归与独立 App
+覆盖率报告。`NativePinnedHTTPExecutionTests`、`NativeDNSOwnershipTests`、
+`NativeNetworkExecutionTests`、`NativeLibraryPresentationExecutionTests`、
+`NativeProjectSettingsExecutionTests` 和 `NativeMarkdownRenderingExecutionTests`
+分别持有自己的套接字、线程、临时目录或窗口；压力测试继续显式 opt-in。
+覆盖率命中与上述行为证据一起阅读，不能把非零行命中当作完整安全或视觉验收。
