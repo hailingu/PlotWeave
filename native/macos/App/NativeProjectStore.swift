@@ -237,12 +237,13 @@ actor NativeProjectStore {
         try directory.write(encoded, name: "ai-session.json")
     }
 
-    /// Verification reports only lexically valid references whose actual ordinary file cannot be opened safely.
+    /// Verification reports reserved quarantine references without opening them, plus unsafe or missing active files.
     private func verifyAssets(id: String, assets: HostJSON) throws -> HostJSON {
         try NativeProjectEnvelope.validateID(id)
         let fields = assets["byId"]?.object ?? [:]
         let bad = fields.keys.sorted().filter { key in
-            guard let path = fields[key]?["relPath"]?.string, NativeAssetContract.activeRelPath(path) else { return false }
+            guard let path = fields[key]?["relPath"]?.string, NativeAssetContract.lexicalRelPath(path) else { return false }
+            guard NativeAssetContract.activeRelPath(path) else { return true }
             return (try? projectDirectory(id: id).media(path, mime: fields[key]?["mime"]?.string ?? "application/octet-stream")) == nil
         }
         return .array(bad.map(HostJSON.string))

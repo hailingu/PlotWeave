@@ -28,16 +28,24 @@ function isCanonicalMime(s: string): boolean {
   )
 }
 
-/** relPath 词法校验（§7.1，与 Rust is_valid_asset_rel_path 同域）：纯相对路径，
+/** 活动 relPath 词法校验（§7.1/§7.2，与两宿主 active 谓词同域）：纯相对路径，
  * 首段固定 assets、组件不含空段/`.`/`..`——解析目标必须位于项目资产子目录内
- * （空串经首段检查一并拒绝）。 */
-function isLexicalAssetRelPath(p: string): boolean {
-  if (p.includes('\\') || p.startsWith('/') || p !== p.trim()) return false
+ * （空串经首段检查一并拒绝），隔离区 `.trash` 组件不得进入活动索引。 */
+function isActiveAssetRelPath(p: string): boolean {
+  if (
+    p.includes('\\') ||
+    p.includes('\0') ||
+    p.startsWith('/') ||
+    p !== p.trim()
+  )
+    return false
   const comps = p.split('/')
   return (
     comps[0] === 'assets' &&
     comps.length >= 2 &&
-    comps.slice(1).every((c) => c !== '' && c !== '.' && c !== '..')
+    comps
+      .slice(1)
+      .every((c) => c !== '' && c !== '.' && c !== '..' && c !== '.trash')
   )
 }
 
@@ -95,9 +103,9 @@ function daysInMonth(year: number, month: number): number {
 function assetIsolationReason(entry: Record<string, unknown>): string | null {
   if (
     typeof entry.relPath !== 'string' ||
-    !isLexicalAssetRelPath(entry.relPath)
+    !isActiveAssetRelPath(entry.relPath)
   ) {
-    return 'relPath 缺失、非字符串或越出资产子目录'
+    return 'relPath 缺失、非字符串、越出资产子目录或指向保留隔离区'
   }
   if (
     typeof entry.mime !== 'string' ||
@@ -131,7 +139,7 @@ export function normalizeAssetRecords(
   for (const [key, entry] of Object.entries(byId)) {
     if (invalidKeys.has(key)) {
       warnings.push(
-        `资产 ${key} 的媒体文件实路径复验未通过（缺失/符号链接/逃逸），已从索引隔离`,
+        `资产 ${key} 的媒体文件实路径复验未通过（缺失/符号链接/逃逸/保留隔离区），已从索引隔离`,
       )
       delete byId[key]
       continue

@@ -47,3 +47,11 @@ PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE=80 sh scripts/test-native.sh
 2026-10-19 的 #615 清理仅删除无生产消费者的阶段类型与两个常量自证测试。正式公共入口回归为 318 tests / 67 suites 通过；App 7371/9427 行（78.19%），清单为 69/69，无缺报文件。原缺口来自被移除的死类型，未增加产品排除、改变阈值或减少可测行分母；上方 #601 的历史基线与测试数量保留。
 
 此变更建立报告链路及失败契约，没有为提高数字而补齐所有未测分支，也没有重新评分历史质量基线。覆盖率不验证视觉快照、VoiceOver 或真实 IME；既有验收边界保持不变。
+
+## 共享资产契约向量
+
+[#649](https://github.com/hailingu/PlotWeave/issues/649)／[#650](https://github.com/hailingu/PlotWeave/issues/650) 的[资产契约向量](../../crates/plotweave-core/testdata/asset-contract.json)是手工维护的 v1 JSON 测试数据，不生成生产代码，不增加依赖。`relPaths` 分别声明基础词法与活动索引判定，`mimes` 声明规范 MIME 判定；每例有可诊断的 `id`。修改已接受契约时，在这一份数据中增加普通值、拒绝值及近邻对照，再分别运行消费方，不能靠同步复制期望值掩盖分歧。
+
+Rust 的 `store::validate::tests::shared_asset_contract_vectors` 与 Swift 的 `NativeAssetContractVectorTests.sharedAssetContractVectors` 各自调用真实叶子谓词，独立构建与运行；Web 的 `src/model/assetContract.test.ts` 通过 `parseProject` 检查活动路径隔离。两宿主另用真实临时项目验证保留引用上报、未修复保存拒绝、修复后保存／重开，以及隔离字节不被改写。前端仍是唯一归一化修复点，完整语义见[资产模型](../data-model/assets.md)。
+
+运行方式：在 `crates/` 执行 `cargo test -p plotweave-core --lib store::validate::tests::`；在仓库根执行 `npm test -- src/model/assetContract.test.ts --maxWorkers=4` 与公开原生入口 `sh scripts/test-native.sh`。这些用例自然进入既有 Rust、前端和 native 回归，任一消费方偏离向量即由相应测试失败报告。CPU 预算仍固定为本机既有的 4，原生覆盖率保持 report-only、stress 显式 opt-in；向量不新增覆盖率地板，也不替代真实 UI 或网络验收。

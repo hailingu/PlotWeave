@@ -1,0 +1,222 @@
+{
+  "version": 1,
+  "contract": "docs/data-model/assets.md §7.1/§7.2; issues #649/#650",
+  "relPaths": [
+    {
+      "id": "ordinary",
+      "input": "assets/x.png",
+      "lexical": true,
+      "active": true
+    },
+    {
+      "id": "nested",
+      "input": "assets/images/x.png",
+      "lexical": true,
+      "active": true
+    },
+    {
+      "id": "unicode",
+      "input": "assets/角色/shot 1.png",
+      "lexical": true,
+      "active": true
+    },
+    {
+      "id": "quarantine",
+      "input": "assets/.trash/x.png",
+      "lexical": true,
+      "active": false
+    },
+    {
+      "id": "quarantine-leaf",
+      "input": "assets/.trash",
+      "lexical": true,
+      "active": false
+    },
+    {
+      "id": "nested-quarantine",
+      "input": "assets/old/.trash/x.png",
+      "lexical": true,
+      "active": false
+    },
+    {
+      "id": "nonreserved-prefix",
+      "input": "assets/.trashcan/x.png",
+      "lexical": true,
+      "active": true
+    },
+    {
+      "id": "parent",
+      "input": "assets/../x.png",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "dot",
+      "input": "assets/./x.png",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "absolute",
+      "input": "/assets/x.png",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "drive",
+      "input": "C:/assets/x.png",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "backslash",
+      "input": "assets\\x.png",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "empty-component",
+      "input": "assets//x.png",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "trailing-slash",
+      "input": "assets/x/",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "root-only",
+      "input": "assets",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "empty",
+      "input": "",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "leading-space",
+      "input": " assets/x.png",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "trailing-space",
+      "input": "assets/x.png ",
+      "lexical": false,
+      "active": false
+    },
+    {
+      "id": "nul",
+      "input": "assets/x\u0000.png",
+      "lexical": false,
+      "active": false
+    }
+  ],
+  "mimes": [
+    {
+      "id": "png",
+      "input": "image/png",
+      "accepted": true
+    },
+    {
+      "id": "audio",
+      "input": "audio/mpeg",
+      "accepted": true
+    },
+    {
+      "id": "video",
+      "input": "video/mp4",
+      "accepted": true
+    },
+    {
+      "id": "binary",
+      "input": "application/octet-stream",
+      "accepted": true
+    },
+    {
+      "id": "html-lexical",
+      "input": "text/html",
+      "accepted": true
+    },
+    {
+      "id": "svg-lexical",
+      "input": "image/svg+xml",
+      "accepted": true
+    },
+    {
+      "id": "vendor",
+      "input": "application/vnd.plot+json",
+      "accepted": true
+    },
+    {
+      "id": "punctuation",
+      "input": "x-test/!#$%&'+-.^_`|~",
+      "accepted": true
+    },
+    {
+      "id": "empty",
+      "input": "",
+      "accepted": false
+    },
+    {
+      "id": "missing-type",
+      "input": "/png",
+      "accepted": false
+    },
+    {
+      "id": "missing-subtype",
+      "input": "image/",
+      "accepted": false
+    },
+    {
+      "id": "wildcard-type",
+      "input": "*/png",
+      "accepted": false
+    },
+    {
+      "id": "wildcard-subtype",
+      "input": "image/*",
+      "accepted": false
+    },
+    {
+      "id": "parameter",
+      "input": "image/png;charset=utf-8",
+      "accepted": false
+    },
+    {
+      "id": "extra-slash",
+      "input": "image/png/x",
+      "accepted": false
+    },
+    {
+      "id": "uppercase",
+      "input": "image/PNG",
+      "accepted": false
+    },
+    {
+      "id": "leading-space",
+      "input": " image/png",
+      "accepted": false
+    },
+    {
+      "id": "trailing-space",
+      "input": "image/png ",
+      "accepted": false
+    },
+    {
+      "id": "unicode",
+      "input": "image/图",
+      "accepted": false
+    },
+    {
+      "id": "nul",
+      "input": "image/p\u0000ng",
+      "accepted": false
+    }
+  ]
+}
