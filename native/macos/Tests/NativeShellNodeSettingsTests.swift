@@ -14,17 +14,17 @@ struct NativeShellNodeSettingsTests {
         defer { fixture.close() }
         try fixture.publish(sequence: 1, request: 0, node: nil)
         try await fixture.settle()
-        fixture.layout.inspectorVisible = false
+        try await fixture.collapseInspector()
         try fixture.publish(sequence: 2, request: 1, node: "node-a")
         try await fixture.settle()
         #expect(fixture.layout.inspectorVisible)
         #expect(fixture.state.editor["selected"]?["id"]?.string == "node-a")
-        fixture.layout.inspectorVisible = false
+        try await fixture.collapseInspector()
         try fixture.publish(sequence: 3, request: 2, node: "node-b")
         try await fixture.settle()
         #expect(fixture.layout.inspectorVisible)
         #expect(fixture.state.editor["selected"]?["id"]?.string == "node-b")
-        fixture.layout.inspectorVisible = false
+        try await fixture.collapseInspector()
         try fixture.publish(sequence: 4, request: 3, node: "node-b")
         try await fixture.settle()
         #expect(fixture.layout.inspectorVisible, "A fresh request must reopen the same target after native collapse")
@@ -37,7 +37,7 @@ struct NativeShellNodeSettingsTests {
         defer { fixture.close() }
         try fixture.publish(sequence: 1, request: 1, node: "node-a")
         try await fixture.settle()
-        fixture.layout.inspectorVisible = false
+        try await fixture.collapseInspector()
         try fixture.publish(sequence: 2, request: 1, node: "node-a", title: "ordinary projection")
         try await fixture.settle()
         #expect(!fixture.layout.inspectorVisible)
@@ -60,7 +60,7 @@ struct NativeShellNodeSettingsTests {
         defer { fixture.close() }
         try fixture.publish(sequence: 1, request: 1, node: "node-a")
         try await fixture.settle()
-        fixture.layout.inspectorVisible = false
+        try await fixture.collapseInspector()
         try fixture.publish(sequence: 2, request: 1, node: "node-a", route: "settings")
         try await fixture.settle()
         try fixture.publish(sequence: 3, request: 1, node: "node-b")
@@ -76,7 +76,7 @@ struct NativeShellNodeSettingsTests {
         try fixture.publish(sequence: 2, request: 9, node: "node-b")
         try await fixture.settle()
         #expect(fixture.layout.inspectorVisible)
-        fixture.layout.inspectorVisible = false
+        try await fixture.collapseInspector()
         try fixture.publish(sequence: 3, request: 10, node: "node-a", project: "replacement-project")
         try await fixture.settle()
         #expect(!fixture.layout.inspectorVisible)
@@ -89,11 +89,11 @@ struct NativeShellNodeSettingsTests {
         defer { fixture.close() }
         try fixture.publish(sequence: 1, request: nil, node: nil)
         try await fixture.settle()
-        fixture.layout.inspectorVisible = false
+        try await fixture.collapseInspector()
         try fixture.publish(sequence: 2, request: nil, node: "node-a")
         try await fixture.settle()
         #expect(fixture.layout.inspectorVisible)
-        fixture.layout.inspectorVisible = false
+        try await fixture.collapseInspector()
         try fixture.publish(sequence: 3, request: nil, node: "node-a", title: "ordinary legacy update")
         try await fixture.settle()
         #expect(!fixture.layout.inspectorVisible)
@@ -116,6 +116,10 @@ struct NativeShellNodeSettingsTests {
         var session = ""
         /// Captured WebKit identity survives every property-panel transition.
         var webView: WKWebView?
+        /// Exact consumer receipts prevent a negative visibility assertion from passing before its projection runs.
+        private var handledProjection: HostJSON?
+        /// A fixture-owned divider position makes full reopening observable without relying on a timed animation.
+        private let inspectorWidth: CGFloat = 320
 
         /// A disposable native window exercises the actual SwiftUI onChange and inspector composition.
         init() {
@@ -124,7 +128,8 @@ struct NativeShellNodeSettingsTests {
             window.isReleasedWhenClosed = false
             window.level = .floating
             window.contentView = NSHostingView(rootView: NativeShellRoot(
-                layout: layout, demoMode: true, services: services, application: state
+                layout: layout, demoMode: true, services: services, application: state,
+                onInspectorProjectionHandled: { [weak self] in self?.handledProjection = $0 }
             ))
             window.contentView?.layoutSubtreeIfNeeded()
             window.orderFrontRegardless()
@@ -142,6 +147,12 @@ struct NativeShellNodeSettingsTests {
                         if count == 9 {
                             fixture.webView = webView
                             fixture.session = coordinator.sessionId
+                            try await NativeLayoutFixture.waitForInspector(in: fixture.window, visible: true)
+                            let split = try #require(fixture.window.contentView.flatMap { NativeLayoutFixture.inspectorSplit(in: $0) })
+                            split.setPosition(split.bounds.width - fixture.inspectorWidth, ofDividerAt: 0)
+                            try await NativeLayoutFixture.waitForInspector(
+                                in: fixture.window, visible: true, expectedWidth: fixture.inspectorWidth
+                            )
                             return fixture
                         }
                     }
@@ -171,8 +182,23 @@ struct NativeShellNodeSettingsTests {
             ])
         }
 
-        /// Yielding lets the real SwiftUI observer apply each distinct transition before the next one.
-        func settle() async throws { try await Task.sleep(for: .milliseconds(400)) }
+        /// The real leaf must finish this exact snapshot before either positive or negative assertions run.
+        func settle() async throws {
+            let expected = state.projection
+            try await NativeLayoutFixture.wait(in: window, for: "inspector projection consumption") {
+                self.handledProjection == expected
+            }
+            try await NativeLayoutFixture.waitForInspector(
+                in: window, visible: layout.inspectorVisible, expectedWidth: inspectorWidth
+            )
+        }
+
+        /// Manual collapse is a separate native transition and must finish before another request can reopen it.
+        func collapseInspector() async throws {
+            try await settle()
+            layout.inspectorVisible = false
+            try await NativeLayoutFixture.waitForInspector(in: window, visible: false)
+        }
 
         /// Releasing the native composition tears down only this fixture's hosted page and appearance observers.
         func close() { window.close(); window.contentView = nil }
