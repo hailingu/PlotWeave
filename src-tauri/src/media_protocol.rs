@@ -349,19 +349,39 @@ fn media_failure_diagnostic(err: &str) -> String {
     format!("媒体请求失败：{err}")
 }
 
-/// 响应映射（句柄域测试与协议处理器共用）：命中 → 200 + 索引 mime；
+/// Only response headers are narrowed; stored MIME, immutable bytes and media authorization stay unchanged.
+/// SVG remains an image, with document scripting independently disabled by the response CSP.
+fn media_response_mime(mime: &str) -> &str {
+    if is_canonical_mime(mime)
+        && ["image/", "audio/", "video/"]
+            .iter()
+            .any(|family| mime.starts_with(family))
+    {
+        mime
+    } else {
+        "application/octet-stream"
+    }
+}
+
+/// 响应映射（句柄域测试与协议处理器共用）：命中 → 200 + 安全媒体类型；
 /// 任何失败 → 404 纯文本——不区分错误种类，避免向 webview 泄露盘面细节。
 fn media_http_response(
     result: Result<(String, Vec<u8>), String>,
 ) -> tauri::http::Response<Vec<u8>> {
     const NOT_FOUND: &str = "媒体不可用";
+    let response = tauri::http::Response::builder()
+        .header("Content-Security-Policy", "sandbox; script-src 'none'")
+        .header("X-Content-Type-Options", "nosniff");
     match result {
-        Ok((mime, bytes)) => tauri::http::Response::builder()
+        Ok((mime, bytes)) => response
             .status(tauri::http::StatusCode::OK)
-            .header(tauri::http::header::CONTENT_TYPE, mime)
+            .header(
+                tauri::http::header::CONTENT_TYPE,
+                media_response_mime(&mime),
+            )
             .body(bytes)
             .expect("固定形状的媒体响应构造不可能失败"),
-        Err(_) => tauri::http::Response::builder()
+        Err(_) => response
             .status(tauri::http::StatusCode::NOT_FOUND)
             .header(
                 tauri::http::header::CONTENT_TYPE,
