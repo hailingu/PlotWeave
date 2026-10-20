@@ -65,6 +65,9 @@ final class NativeHostServices {
             try await coordinator.dispatchEvent(name, payload: payload)
         }
         if let library {
+            // This connection owns a one-shot actor assignment, not a library I/O operation.
+            // The library holds one replaceable sink with a weak page; coordinator/router
+            // invalidation rejects later delivery, without retaining a departed Web view.
             Task { [weak coordinator] in
                 await library.connectDiagnostics { [weak coordinator] payload in
                     do { try await coordinator?.dispatchEvent("library-diagnostics", payload: payload) }
@@ -152,7 +155,9 @@ final class NativeHostServices {
     /// WebKit's synchronous configuration installs a handler without triggering storage or network I/O.
     func makeMediaScheme() -> NativeMediaScheme? { assets.map { NativeMediaScheme(assets: $0) } }
 
-    /// Tests drain and close their project owner before removing isolated fixture data.
+    /// Tests drain the long-lived model/project work before removing isolated fixture data.
+    /// Library/assets have no retained worker or descriptor to close: per-request files and
+    /// locks belong to their operations, and diagnostic delivery retains only a weak page.
     func close() async {
         await models?.close()
         await projectStore?.close()

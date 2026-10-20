@@ -81,7 +81,9 @@ final class CanvasAppearanceState {
 
     /// Starts observing system appearance and accessibility display
     /// settings (KVO-compliant `NSWorkspace` properties). Idempotent: a
-    /// second call replaces the observers.
+    /// second call replaces the observers. These tokens own all four callback registrations.
+    /// Their Task adapters only hop to MainActor for synchronous refresh; they start no I/O.
+    /// stopObserving revokes delivery, while an already queued hop may finish one refresh.
     func startObserving() {
         appearanceObservation = NSApp?.observe(
             \.effectiveAppearance,
@@ -113,7 +115,8 @@ final class CanvasAppearanceState {
     }
 
     /// Stops observing and detaches the change handler so a retained state
-    /// object can never push into a gone web view.
+    /// object can never push into a gone web view. Queued actor hops need no I/O cancellation:
+    /// refresh may still update this retained snapshot, but cannot call the detached handler.
     func stopObserving() {
         appearanceObservation = nil
         workspaceObservations = []

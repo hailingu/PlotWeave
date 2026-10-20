@@ -237,7 +237,8 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
     private func startReadyTimeout() {
         readyTimeoutTask?.cancel()
         readyTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.readyTimeout))
+            do { try await Task.sleep(for: .seconds(Self.readyTimeout)) }
+            catch { return } // Cancellation ends this owned deadline without a canvas failure.
             guard !Task.isCancelled, let self else { return }
             self.invalidateSession(canvasFailed: true)
             self.state.fail("画布在 \(Int(Self.readyTimeout)) 秒内未报告就绪。")
@@ -274,6 +275,9 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
     ) {
         let body = message.body
         let trusted = isTrusted(message)
+        // WebKit owns a reply obligation; the router owns and cancels the session's business work.
+        // This adapter must still return that work's structured stale/failure result after teardown,
+        // rather than cancelling only the waiter and abandoning WebKit's reply handler.
         Task { @MainActor [router] in
             let reply = await router.handle(body, trustedMainFrame: trusted)
             replyHandler(reply.webValue, nil)
