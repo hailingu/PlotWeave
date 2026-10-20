@@ -146,7 +146,7 @@ fn slow_credential_phase_keeps_async_siblings_responsive() {
     let (entered, started) = tokio::sync::oneshot::channel();
     let (release, gate) = std::sync::mpsc::channel();
     let start = std::time::Instant::now();
-    let credential = runtime.spawn(chat_credential(move || {
+    let credential = runtime.spawn(chat_credential::<String>(move || {
         entered.send(()).unwrap();
         if gate
             .recv_timeout(std::time::Duration::from_secs(10))

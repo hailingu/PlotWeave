@@ -273,6 +273,7 @@ mod read_boundary_tests;
 mod transport_tests;
 
 mod key_migration;
+mod provider_binding;
 
 #[cfg(test)]
 mod key_migration_tests;
@@ -336,48 +337,45 @@ fn open_key_from_text(
     Some(Ok(secret))
 }
 
-/// 解析 provider 当前可用的 key：优先 settings.json 的 `keyEnc` 密文；
-/// 密文缺失时只读回退历史钥匙串数据（不再写入钥匙串）。
-/// crate 内共享：图像生成代理（imagegen）与对话代理（llm_chat）同域。
-/// 同步阻塞访问（目录确保、文件读取、密文解析，可能触发机器标识子进程
-/// 或历史钥匙串）：调用方必须把它作为完整同步工作交由阻塞调度
-/// （issue #279），不得在异步工作线程上直调。
-pub(crate) fn provider_secret(app: &AppHandle, provider_id: &str) -> Result<String, String> {
+/// Read the destination and envelope from one bounded, trusted snapshot before opening a key.
+/// Blocking I/O, machine discovery and legacy readonly keychain work remain off async workers.
+pub(crate) fn provider_credential(
+    app: &AppHandle,
+    provider_id: &str,
+    requested: &str,
+) -> Result<provider_binding::ProviderCredential, String> {
     validate_provider_id(provider_id)?;
     let dir = prefs_data_dir(app)?;
     let root = open_prefs_root(&dir)?;
-    // 信任边界：与 load_prefs 同一读取边界（锚定句柄 + no-follow 归类 +
-    // 身份绑定，issue #391）与大小上限（cap+1 限读，issue #147）——超限
-    // 硬拒绝；读取失败（含缺失/UTF-8 失败/异型条目拒绝/替换拒绝）维持
-    // 原语义落入钥匙串只读回退——被拒绝的条目无法携带 keyEnc
-    match read_prefs_text_capped(&root) {
-        Ok(text) => {
-            if let Some(outcome) = open_key_from_text(&root, &text, provider_id) {
-                return outcome;
-            }
+    let text = read_prefs_text_capped(&root).map_err(|error| match error {
+        PrefsReadError::TooLarge => "设置文件过大，拒绝读取密文".to_string(),
+        PrefsReadError::Io(source) => format!("读取 provider 服务配置失败：{source}"),
+        PrefsReadError::NotRegularFile => "provider 设置不是可信普通文件，已拒绝读取".to_string(),
+        PrefsReadError::Replaced => "provider 设置在读取时被替换，已拒绝读取".to_string(),
+    })?;
+    provider_binding::from_text(&text, provider_id, requested, || {
+        if let Some(outcome) = open_key_from_text(&root, &text, provider_id) {
+            return outcome;
         }
-        Err(PrefsReadError::TooLarge) => return Err("设置文件过大，拒绝读取密文".into()),
-        Err(PrefsReadError::Io(_)) => {}
-        Err(PrefsReadError::NotRegularFile) | Err(PrefsReadError::Replaced) => {}
-    }
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, provider_id)
-        .map_err(|e| format!("钥匙串不可用：{e}"))?;
-    match entry.get_password() {
-        Ok(key) => Ok(key),
-        Err(keyring::Error::NoEntry) => Err("未配置 API key，请在设置页填写".to_string()),
-        Err(e) => Err(format!("读取 key 失败：{e}")),
-    }
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, provider_id)
+            .map_err(|e| format!("钥匙串不可用：{e}"))?;
+        match entry.get_password() {
+            Ok(key) => Ok(key),
+            Err(keyring::Error::NoEntry) => Err("未配置 API key，请在设置页填写".to_string()),
+            Err(e) => Err(format!("读取 key 失败：{e}")),
+        }
+    })
 }
 
-/// 对话命令的凭据阶段（issue #279）：`provider_secret` 是完整同步工作
+/// 对话命令的凭据阶段（issue #279）：`provider_credential` 是完整同步工作
 /// （数据目录确保、cap+1 受限读取、密文解析、必要时机器标识子进程与
 /// 历史钥匙串回退），经既有 `blocking::run` 交由阻塞线程池——不在首次
 /// await 前占用异步工作线程。领域错误原样上浮；密钥留在后端；HTTP
 /// 只在凭据成功后由 chat_completion 发出。`load` 由调用方注入：生产
-/// 绑定 provider_secret，测试注入受控延迟以验证兄弟任务响应性。
-async fn chat_credential(
-    load: impl FnOnce() -> Result<String, String> + Send + 'static,
-) -> Result<String, String> {
+/// 绑定 provider_credential，测试注入受控延迟以验证兄弟任务响应性。
+async fn chat_credential<T: Send + 'static>(
+    load: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
     crate::blocking::run("llm_chat", load).await
 }
 
@@ -460,13 +458,14 @@ pub async fn llm_chat(
     if model.trim().is_empty() {
         return Err("未选择模型".into());
     }
-    let key = chat_credential(move || provider_secret(&app, &provider_id)).await?;
+    let credential =
+        chat_credential(move || provider_credential(&app, &provider_id, &base_url)).await?;
     chat_completion(
-        &base_url,
+        &credential.base_url,
         &model,
         messages,
         tools,
-        &key,
+        &credential.key,
         CHAT_REQUEST_TIMEOUT_SECS,
     )
     .await

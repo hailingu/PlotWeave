@@ -89,9 +89,10 @@ actor NativeModels {
         let provider = try args.requiredString("providerId", domain: .model)
         try NativeSeal.validateProvider(provider)
         let model = try selectedModel(args)
-        let url = try endpoint(args.requiredString("baseUrl", domain: .model), suffix: "chat/completions")
+        let baseURL = try args.requiredString("baseUrl", domain: .model)
         guard let messages = args["messages"] else { throw invalid("缺少 messages") }
-        let key = try await preferences.providerSecret(provider)
+        let credential = try await preferences.providerCredential(provider, baseURL: baseURL, suffix: "chat/completions")
+        let (url, key) = (credential.url, credential.key)
         guard !closed else { throw HostFailure(code: "PW_CORE_CLOSED", message: "原生模型服务已关闭") }
         try Task.checkCancellation()
         var body: [String: HostJSON] = ["model": .string(model), "messages": messages, "stream": .bool(false)]
@@ -122,8 +123,11 @@ actor NativeModels {
             let prompt = try args.requiredString("prompt", domain: .model).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !prompt.isEmpty else { throw invalid("Prompt 不能为空") }
             let size = try args.requiredString("size", domain: .model)
-            let url = try endpoint(args.requiredString("baseUrl", domain: .model), suffix: "images/generations")
-            let key = try await NativeDeadline.run(until: deadline) { try await self.preferences.providerSecret(provider) }
+            let baseURL = try args.requiredString("baseUrl", domain: .model)
+            let credential = try await NativeDeadline.run(until: deadline) {
+                try await self.preferences.providerCredential(provider, baseURL: baseURL, suffix: "images/generations")
+            }
+            let (url, key) = (credential.url, credential.key)
             try flag.check(deadline)
             // Preserve the existing OpenAI-compatible generation body without adding request fields.
             let body: HostJSON = .object(["model": .string(model), "prompt": .string(prompt), "size": .string(size)])
@@ -157,15 +161,6 @@ actor NativeModels {
         if tombstones.count >= 64 { tombstones.removeFirst() }
         tombstones.append(job)
         return false
-    }
-
-    /// Endpoint concatenation remains the existing base URL plus path suffix and is checked before any POST.
-    private func endpoint(_ base: String, suffix: String) throws -> URL {
-        var value = base
-        while value.hasSuffix("/") { value.removeLast() }
-        guard let url = URL(string: value + "/" + suffix) else { throw NativeNetworkPolicy.refused("服务地址必须是有效的 HTTP 或 HTTPS URL") }
-        try NativeNetworkPolicy.provider(url)
-        return url
     }
 
     /// Provider bytes remain bounded and only valid JSON enters response shape validation.

@@ -66,7 +66,7 @@ fn redirect_policy() -> redirect::Policy {
 }
 
 /// 保持已有路径拼接方式，在构造客户端、附加 Bearer 之前校验最终请求地址。
-fn endpoint_url(base_url: &str, endpoint: &str) -> Result<Url, ProxyError> {
+pub(crate) fn endpoint_url(base_url: &str, endpoint: &str) -> Result<Url, ProxyError> {
     let url =
         Url::parse(&format!("{}/{endpoint}", base_url.trim_end_matches('/'))).map_err(|_| {
             ProxyError::ProviderRefused {

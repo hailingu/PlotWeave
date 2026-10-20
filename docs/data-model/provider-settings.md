@@ -102,3 +102,9 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 验证记录（2026-10-01）：7 项新增权限回归与旧密文迁移的权限断言先红后绿；红相文件 mode 为 `0644`，预期为 `0600`，且注入复用备份收权失败时保存未拒绝。绿相完整 Rust 检查通过：在 `src-tauri` 执行 `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，607 项单元测试及全部集成目标通过，包含共用备份、模块图、迁移失败和并发保存回归。初次沙箱内 `cargo test --lib prefs::` 的 5 项 HTTP 夹具因禁止绑定环回端口失败，允许本地端口后完整测试通过。文档未配置自动行为检查；按创建／复用权限、备份顺序、两条写入口及历史／平台边界作结构化复核。
 
 维护性复核：受影响文件均低于 800 行，新增／修改执行单元均低于 80 代码行。`store/persist.rs` 为 612 行，越过 600 行讨论阈值：本次仅参数化已有原子写协议，权限策略独立为 27 行叶子模块；保留原协议在同一文件避免拆开目标复核、失败清理与屏障的审阅上下文，没有新增 I/O 协议副本。`library_fs.rs` 610 行仅增加备份默认权限字段，不扩展既有行为。圈复杂度 `N/A — no configured complexity tool`，人工检查执行跨度与嵌套深度。
+
+### 首跳凭据目的地绑定（#653）
+
+聊天与生图均从同一持久化 provider 快照取得目标和密文，调用方 `baseUrl` 只作等价性核对；缺失、损坏、重复或地址不一致的配置在解密／发送前拒绝。已配置的自建 HTTPS 与显式回环 HTTP 保留；Rust 历史 Keychain 只读回退也须先确认已保存目标。设置仍在保存中时，调用方可在保存成功后重新发起请求。
+
+图片下载独立采用 HTTPS、公网地址及每跳固定 DNS 答案的边界（#655），不继承 provider 的本地 HTTP 例外。完整策略、不变量矩阵、验证方法与限制见[模型网络边界](../development/model-network-boundaries.md)。

@@ -4,7 +4,11 @@
 //! 恢复（issue #145）、MIME 嗅探/b64 解码/url 成员、公网边界与下载
 //! 目标静态校验。
 
+use super::download::*;
+use super::public_address::is_public_ip;
 use super::*;
+use reqwest::Url;
+use std::net::IpAddr;
 
 mod cancellation;
 use serde_json::json;
@@ -228,7 +232,7 @@ fn download_target_static_checks_reject_nonpublic_literals() {
             .is_none()
     );
     assert!(static_target_violation_with(
-        &"http://cdn.example.test/a.png".parse().unwrap(),
+        &"https://cdn.example.test/a.png".parse().unwrap(),
         is_public_ip
     )
     .is_none());
@@ -248,7 +252,7 @@ fn remaining_budget_bounds_job_stages() {
 #[test]
 fn key_load_budget_gate_skips_blocking_access_when_expired() {
     let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
-    let err = tauri::async_runtime::block_on(bounded_key_load(deadline, || {
+    let err = tauri::async_runtime::block_on(bounded_key_load::<String>(deadline, || {
         panic!("预算耗尽不得发起阻塞凭据访问")
     }))
     .expect_err("预算耗尽应拒绝");
@@ -490,7 +494,7 @@ fn dns_resolver_busy_fails_fast_at_inflight_cap_and_recovers() {
 #[test]
 fn dns_budget_gate_precedes_resolver() {
     let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
-    let url: Url = "http://cdn.example.test/a.png".parse().expect("合法 url");
+    let url: Url = "https://cdn.example.test/a.png".parse().expect("合法 url");
     let err = tauri::async_runtime::block_on(ensure_public_download_target_with(
         &url,
         deadline,
@@ -612,3 +616,56 @@ mod download;
 
 /// 生图产物落盘的阻塞调度测试（issue #310），见 tests/persist.rs。
 mod persist;
+
+/// #655: download compatibility follows the approved native HTTPS and allocated-public-IP boundary.
+#[test]
+fn download_policy_matches_native_contract() {
+    for url in [
+        "http://8.8.8.8/a.png",
+        "https://user:password@8.8.8.8/a.png",
+        "https://8.8.8.8:0/a.png",
+    ] {
+        assert!(
+            static_target_violation_with(&url.parse().unwrap(), is_public_ip).is_some(),
+            "{url}"
+        );
+    }
+    for ip in [
+        "192.0.2.1",
+        "198.18.0.1",
+        "203.0.113.1",
+        "2001:db8::1",
+        "2001::1",
+        "2d00::1",
+        "2606:4700::200:5efe:10.0.0.1",
+    ] {
+        assert!(!is_public_ip(ip.parse().unwrap()), "{ip}");
+    }
+    assert!(is_public_ip("192.0.0.9".parse().unwrap()));
+}
+
+/// Cross-host expected data is hand-authored independently of either classifier implementation.
+#[test]
+fn shared_download_network_vectors() {
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../crates/plotweave-core/testdata/model-network.json"
+    ))
+    .unwrap();
+    assert_eq!(vectors["version"], 1);
+    for row in vectors["addresses"].as_array().unwrap() {
+        let input = row["input"].as_str().unwrap();
+        assert_eq!(
+            is_public_ip(input.parse().unwrap()),
+            row["accepted"].as_bool().unwrap(),
+            "{input}"
+        );
+    }
+    for row in vectors["urls"].as_array().unwrap() {
+        let input = row["input"].as_str().unwrap();
+        assert_eq!(
+            static_target_violation_with(&input.parse().unwrap(), is_public_ip).is_none(),
+            row["accepted"].as_bool().unwrap(),
+            "{input}"
+        );
+    }
+}

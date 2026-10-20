@@ -27,6 +27,53 @@ struct NativeModelsTests {
         #expect(request.maximum == 16 * 1024 * 1024)
     }
 
+    /// The backend must bind both command families to the persisted provider destination before exposing its key to POST.
+    @Test(arguments: ["chat", "image"], ["https://other.fixture.invalid/v1", "https://provider.example/other", "https://provider.example:8443/v1", "http://localhost:47820/v1"])
+    func configuredProviderRejectsCallerDestinationOverride(command: String, target: String) async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        try await fixture.configure()
+        let id = try await fixture.createProject()
+        let seen = Mutex(0)
+        let models = fixture.models(post: { _ in
+            seen.withLock { $0 += 1 }
+            return try Self.reply(.object([
+                "choices": .array([.object(["message": .object(["role": .string("assistant"), "content": .string("fixture")])])]),
+                "data": .array([.object(["b64_json": .string(Self.png.base64EncodedString())])])
+            ]))
+        })
+        var args = command == "chat" ? Self.chatArgs : try #require(Self.imageArgs(id)["request"]?.object)
+        args["baseUrl"] = .string(target)
+        await #expect(throws: HostFailure.self) {
+            try await models.invoke(command: command == "chat" ? "llm_chat" : "llm_image_generate", args: command == "chat" ? args : ["request": .object(args)])
+        }
+        #expect(seen.withLock { $0 } == 0, "Untrusted baseUrl reached credential-bearing POST")
+    }
+
+    /// Configured custom providers retain both command families, including explicit local HTTP.
+    @Test(arguments: ["chat", "image"], ["https://CUSTOM.example:443/v1///", "http://localhost:47820/v1", "http://127.0.0.1:47820/v1", "http://[::1]:47820/v1"])
+    func configuredProviderUsesPersistedDestination(command: String, base: String) async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        try await fixture.configure(baseURL: base)
+        let id = try await fixture.createProject()
+        let seen = Mutex(0)
+        let models = fixture.models(post: { request in
+            #expect(request.key == "fixture-key")
+            #expect(request.url.host?.lowercased() == URL(string: base)?.host?.lowercased())
+            #expect(request.url.path == (command == "chat" ? "/v1/chat/completions" : "/v1/images/generations"))
+            seen.withLock { $0 += 1 }
+            return try Self.reply(.object([
+                "choices": .array([.object(["message": .object(["role": .string("assistant"), "content": .string("fixture")])])]),
+                "data": .array([.object(["b64_json": .string(Self.png.base64EncodedString())])])
+            ]))
+        })
+        var args = command == "chat" ? Self.chatArgs : try #require(Self.imageArgs(id)["request"]?.object)
+        args["baseUrl"] = .string(base.hasPrefix("https") ? "https://custom.example/v1" : base + "/")
+        _ = try await models.invoke(command: command == "chat" ? "llm_chat" : "llm_image_generate", args: command == "chat" ? args : ["request": .object(args)])
+        #expect(seen.withLock { $0 } == 1)
+    }
+
     /// Missing keys, malformed model inputs and unsafe remote HTTP never issue a billable request.
     @Test func preflightFailuresNeverReachHTTP() async throws {
         let fixture = Fixture()
@@ -157,18 +204,20 @@ struct NativeModelsTests {
     @Test func providerFailureRedactsSecretsAndRejectsInvalidChatShapes() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
-        try await fixture.configure()
+        let base = "https://fixture-user:fixture-password@provider.example/v1?token=query-secret#fragment-secret"
+        try await fixture.configure(baseURL: base)
         let models = fixture.models(post: { request in
             NativeHTTPReply(status: 503, headers: [:], body: Data((request.key + " " + request.url.absoluteString + " " + (request.url.user ?? "") + " " + (request.url.password ?? "")).utf8))
         })
         var args = Self.chatArgs
-        args["baseUrl"] = .string("https://fixture-user:fixture-password@provider.example/v1?token=query-secret#fragment-secret")
+        args["baseUrl"] = .string(base)
         do { _ = try await models.invoke(command: "llm_chat", args: args); Issue.record("服务错误不能成功") }
         catch let failure as HostFailure {
             #expect(failure.code == "PW_MODEL_STATUS")
             for secret in ["fixture-key", "fixture-user", "fixture-password", "query-secret", "fragment-secret"] { #expect(!failure.message.contains(secret)) }
             #expect(failure.message.contains("503"))
         }
+        try await fixture.configure()
         for bytes in [Data("{bad".utf8), Data("{\"choices\":[{\"message\":\"wrong\"}]}".utf8)] {
             let invalid = fixture.models(post: { _ in NativeHTTPReply(status: 200, headers: [:], body: bytes) })
             await #expect(throws: HostFailure.self) { try await invalid.invoke(command: "llm_chat", args: Self.chatArgs) }
@@ -236,9 +285,9 @@ struct NativeModelsTests {
             projects = NativeProjectStore(root: root)
         }
         /// The same frontend set-key then full-save sequence configures this synthetic provider.
-        func configure() async throws {
+        func configure(baseURL: String = "https://provider.example/v1") async throws {
             let encrypted = try await preferences.invoke(command: "set_provider_key", args: ["providerId": .string("openai"), "key": .string("fixture-key")])
-            _ = try await preferences.invoke(command: "save_prefs", args: ["prefs": .object(["providers": .array([.object(["id": .string("openai"), "keyEnc": encrypted])])])])
+            _ = try await preferences.invoke(command: "save_prefs", args: ["prefs": .object(["providers": .array([.object(["id": .string("openai"), "baseUrl": .string(baseURL), "keyEnc": encrypted])])])])
         }
         /// A real create command ensures generation addresses an existing project rather than a loose directory.
         func createProject() async throws -> String { try #require(try await projects.invoke(command: "create_project", args: ["name": .string("模型剧")])["id"]?.string) }
