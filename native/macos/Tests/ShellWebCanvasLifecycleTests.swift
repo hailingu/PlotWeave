@@ -61,7 +61,7 @@ struct ShellWebCanvasLifecycleTests {
 
         try await NativeLayoutFixture.waitForInspector(in: window, visible: true)
         layout.toggleInspector()
-        try await NativeLayoutFixture.waitForInspector(in: window, visible: false)
+        try await NativeLayoutFixture.waitForInspector(in: window, visible: false, canvas: webView)
         try await NativeLayoutFixture.waitForSidebar(in: window, canvas: webView, visible: true)
         let expandedCanvasWidth = webView.bounds.width
         try NativeSidebarControlFixture.press(in: window)
@@ -161,7 +161,7 @@ struct ShellWebCanvasLifecycleTests {
         let identity = ObjectIdentifier(webView)
         try await NativeLayoutFixture.waitForInspector(in: window, visible: true)
         layout.toggleInspector()
-        try await NativeLayoutFixture.waitForInspector(in: window, visible: false)
+        try await NativeLayoutFixture.waitForInspector(in: window, visible: false, canvas: webView)
         #expect(ObjectIdentifier(try await waitForWebView(in: window)) == identity)
         #if DEBUG
         #expect(webView.isInspectable)

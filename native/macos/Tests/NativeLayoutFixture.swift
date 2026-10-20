@@ -17,11 +17,23 @@ enum NativeLayoutFixture {
     }
 
     /// A visible inspector must be fully revealed; a sliver during expansion is not completion.
-    static func waitForInspector(in window: NSWindow, visible: Bool, expectedWidth: CGFloat? = nil) async throws {
+    /// Canvas callers also wait for the released trailing space while retaining the visible sidebar.
+    static func waitForInspector(in window: NSWindow, visible: Bool, expectedWidth: CGFloat? = nil,
+                                 canvas: WKWebView? = nil) async throws {
         try await wait(in: window, for: "inspector visible=\(visible)") {
             guard let split = window.contentView.flatMap({ inspectorSplit(in: $0) }),
-                  let column = split.arrangedSubviews.last else { return !visible }
-            if !visible { return split.isSubviewCollapsed(column) || column.isHiddenOrHasHiddenAncestor }
+                  let column = split.arrangedSubviews.last else { return !visible && canvas == nil }
+            if !visible {
+                guard split.isSubviewCollapsed(column) || column.isHiddenOrHasHiddenAncestor else { return false }
+                guard let canvas else { return true }
+                guard let detail = split.arrangedSubviews.first, canvas.isDescendant(of: detail) else { return false }
+                let detailFrame = detail.convert(detail.bounds, to: split)
+                let canvasFrame = canvas.convert(canvas.bounds, to: split)
+                return canvasFrame.width > 0 && split.bounds.width > 0
+                    && abs(detailFrame.width - split.bounds.width) < 1
+                    && abs(detailFrame.maxX - split.bounds.maxX) < 1
+                    && abs(canvasFrame.maxX - split.bounds.maxX) < 1
+            }
             let width = column.bounds.width
             let unclipped = column.bounds.intersection(column.visibleRect).width
             return !split.isSubviewCollapsed(column) && !column.isHiddenOrHasHiddenAncestor
@@ -63,14 +75,17 @@ enum NativeLayoutFixture {
 
     /// Timeout diagnostics retain actual column widths and collapse flags without snapshots or user content.
     private static func summary(in window: NSWindow) -> String {
-        /// Every split is included because nested navigation and inspector transitions finish independently.
+        /// Nested splits and canvas frames expose independent native transitions without private class names.
         func splits(in view: NSView) -> [String] {
             let own = (view as? NSSplitView).map { split in
                 "split vertical=\(split.isVertical) columns=" + split.arrangedSubviews.map {
                     "frame=\($0.frame)/visible=\($0.visibleRect)/collapsed=\(split.isSubviewCollapsed($0))/hidden=\($0.isHidden)"
                 }.joined(separator: ",")
             }.map { [$0] } ?? []
-            return own + view.subviews.flatMap { splits(in: $0) }
+            let canvas = (view as? WKWebView).map {
+                ["canvas bounds=\($0.bounds)/windowFrame=\($0.convert($0.bounds, to: nil))"]
+            } ?? []
+            return own + canvas + view.subviews.flatMap { splits(in: $0) }
         }
         return window.contentView.map { splits(in: $0).joined(separator: "; ") } ?? "content view unavailable"
     }
