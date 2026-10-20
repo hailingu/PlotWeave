@@ -25,9 +25,8 @@ struct NativeProjectSettingsExecutionTests {
             let controls = try await fixture.controls.strings()
             #expect(controls.contains(name) && controls.contains("名称"))
             _ = try await fixture.state.request("app.home")
-            try await NativeCoverageWindow.wait("Home transition did not finish its save barrier") { fixture.state.route == "home" }
-            let store = try #require(fixture.services.projectStore)
-            let saved = try await store.invoke(command: "load_project", args: ["id": .string(id)])
+            try await NativeCoverageWindow.wait("Home transition did not finish") { fixture.state.route == "home" }
+            let saved = try await fixture.persistedCharacter(projectID: id, entityID: entityID, name: name)
             #expect(saved["settings"]?["characters"]?[entityID]?["name"]?.string == name)
             _ = try await fixture.state.request("app.open", args: ["id": .string(id)])
             try await NativeCoverageWindow.wait("Saved native-created character did not reopen") {
@@ -82,6 +81,19 @@ struct NativeProjectSettingsExecutionTests {
             _ = try await state.request("app.open", args: ["id": .string(id)])
             try await NativeCoverageWindow.wait("Production project did not open") { self.state.route == "editor" && self.state.projectId == id }
             return id
+        }
+
+        /// Home projection may precede asynchronous unmount saves; observe the actual durable entity receipt.
+        func persistedCharacter(projectID: String, entityID: String, name: String) async throws -> HostJSON {
+            let store = try #require(services.projectStore)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+            var saved = try await store.invoke(command: "load_project", args: ["id": .string(projectID)])
+            while saved["settings"]?["characters"]?[entityID]?["name"]?.string != name, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+                saved = try await store.invoke(command: "load_project", args: ["id": .string(projectID)])
+            }
+            try #require(saved["settings"]?["characters"]?[entityID]?["name"]?.string == name, "Native-created character was not persisted before the deadline")
+            return saved
         }
 
         /// Stop Web delivery and drain real service work before removing only this fixture's files.
