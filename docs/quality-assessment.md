@@ -23,6 +23,8 @@
 
 **后续状态更新（2026-10-19，#600）**：目标保存／删除与列表维护测试统一 typed IPC 夹具、使用受控时钟／命令到达和链静止边界；快捷键测试逐例 cleanup 并核验监听卸载。Rust 项目锁、凭据及真实 invoke 回归改为明确释放门闸，150–200 ms 不再作为通过阈值，长超时仅兜底死锁。故障注入验证仍能检测播种越过保存链和同步阻塞回归；对应条目同步，历史评分未重算。
 
+**后续状态更新（2026-10-20，#632）**：[PR #670](https://github.com/hailingu/PlotWeave/pull/670) 已移除覆盖率配置注释与 TypeScript 标准中会过期的实测基线，改为引用所评估运行的 LCOV 报告和自报台账摘要，并保留台账的证据边界。对应扣分条目同步标记为已修复；本次不改变 80% 下限，也不重算历史评分。
+
 ## 一、评分口径
 
 9 个维度、10 分制、等权。评级带：A+ 9.5–10.0、A 9.0–9.4、A- 8.5–8.9、B+ 8.0–8.4、B 7.5–7.9、B- 7.0–7.4、C+ 6.5–6.9、C 6.0–6.4、C- 5.5–5.9、D 4.0–5.4、E < 4.0。
@@ -114,7 +116,7 @@
 
 - **P3** `workflow.md` 第 89 行称“不断言 branch protection 已配置”，同一文件第 95 行又称已启用；AGENTS.md 与 API 均证实已启用。入口文档否定实际强制策略（[#602](https://github.com/hailingu/PlotWeave/issues/602)）。
 - **P3** `README.md`、`workflow.md`、`file-size-guard.md` 仍把当前原生实现挂在已不存在的 `codex/swiftui-react-flow` 分支；远端只有 `dev`/`main`（并入 [#602](https://github.com/hailingu/PlotWeave/issues/602)）。
-- **P3** `vite.config.ts` 注释仍写 98.13% 覆盖率基线，门禁实际 96.91%；不单独开单。
+- **已修复（原 P3）** [#632](https://github.com/hailingu/PlotWeave/issues/632)：`vite.config.ts` 注释与 TypeScript 标准不再写死实测基线，改为引用对应运行的 LCOV 报告、台账摘要及核验边界；80% 下限保持，历史评分未重算（[PR #670](https://github.com/hailingu/PlotWeave/pull/670)）。
 
 ### 3.7 可维护性与一致性 — 9.0 / A-
 
