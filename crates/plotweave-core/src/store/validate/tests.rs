@@ -417,3 +417,91 @@ fn new_project_document_carries_all_settings_buckets() {
     }
     assert!(prepare_save("p-x", &file).is_ok());
 }
+
+/// Issues #649/#650: one versioned wire-data corpus pins both host leaf contracts.
+#[test]
+fn shared_asset_contract_vectors() {
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("../../../testdata/asset-contract.json")).unwrap();
+    assert_eq!(vectors["version"], 1);
+    let paths = vectors["relPaths"].as_array().unwrap();
+    let mimes = vectors["mimes"].as_array().unwrap();
+    assert!(!paths.is_empty() && !mimes.is_empty());
+    for row in paths {
+        let input = row["input"].as_str().unwrap();
+        assert_eq!(
+            is_valid_asset_rel_path(input),
+            row["lexical"].as_bool().unwrap(),
+            "lexical {}",
+            row["id"]
+        );
+        assert_eq!(
+            is_valid_active_asset_rel_path(input),
+            row["active"].as_bool().unwrap(),
+            "active {}",
+            row["id"]
+        );
+    }
+    for row in mimes {
+        assert_eq!(
+            is_canonical_mime(row["input"].as_str().unwrap()),
+            row["accepted"].as_bool().unwrap(),
+            "MIME {}",
+            row["id"]
+        );
+    }
+}
+
+/// Owns the temporary regression tree even when an assertion unwinds.
+struct QuarantineFixtureCleanup(std::path::PathBuf);
+
+impl Drop for QuarantineFixtureCleanup {
+    /// Only this test's generated root is released; no user project tree is reachable.
+    fn drop(&mut self) {
+        cleanup_temp(&self.0);
+    }
+}
+
+/// Reserved bytes remain untouched while load reporting and save refusal allow a repaired index.
+#[test]
+fn quarantine_asset_references_recover_without_touching_bytes() {
+    use crate::store::{load_project_file, persist_project};
+    let projects = temp_projects_dir();
+    let _cleanup = QuarantineFixtureCleanup(projects.clone());
+    let assets_dir = projects.join("p-1/assets");
+    fs::create_dir_all(assets_dir.join(".trash")).unwrap();
+    fs::write(assets_dir.join(".trash/held.png"), b"quarantined").unwrap();
+    fs::write(assets_dir.join("ok.png"), b"active").unwrap();
+    let mut doc = valid_save_doc();
+    let asset = |id: &str, path: &str| json!({"id":id,"relPath":path,"mime":"image/png","source":"upload","createdAt":"2026-08-01T00:00:00.000Z"});
+    doc.assets = json!({"byId": {
+        "held":asset("held", "assets/.trash/held.png"),
+        "missing":asset("missing", "assets/.trash/missing.png"),
+        "ok":asset("ok", "assets/ok.png")
+    }});
+    let original = serde_json::to_vec(&doc).unwrap();
+    fs::write(projects.join("p-1.json"), &original).unwrap();
+    let root = cap(&projects);
+    let loaded = load_project_file(&root, "p-1").unwrap();
+    assert_eq!(
+        unverifiable_asset_keys(&root, "p-1", &loaded.assets),
+        vec!["held", "missing"]
+    );
+    assert!(matches!(
+        persist_project(&root, "p-1", loaded.clone()),
+        Err(StoreError::InvalidInput { .. })
+    ));
+    assert_eq!(fs::read(projects.join("p-1.json")).unwrap(), original);
+    doc.assets["byId"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|key, _| key == "ok");
+    persist_project(&root, "p-1", doc.clone()).unwrap();
+    assert_eq!(load_project_file(&root, "p-1").unwrap().assets, doc.assets);
+    assert_eq!(
+        fs::read(assets_dir.join(".trash/held.png")).unwrap(),
+        b"quarantined"
+    );
+    assert_eq!(fs::read(assets_dir.join("ok.png")).unwrap(), b"active");
+    cleanup_temp(&projects);
+}

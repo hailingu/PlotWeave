@@ -524,3 +524,44 @@ fn ensure_child_dir_host_sync_failure_removes_created_dir_and_retries() {
     assert!(projects.join("p-1").is_dir(), "重试后目录应存在");
     cleanup(&root);
 }
+
+/// Issues #649/#650: the graph admission boundary must consume the active disk contract too.
+#[test]
+fn asset_admission_matches_shared_active_path_vectors() {
+    let vectors: Value = serde_json::from_str(include_str!(
+        "../../../crates/plotweave-core/testdata/asset-contract.json"
+    ))
+    .unwrap();
+    let paths = vectors["relPaths"].as_array().unwrap();
+    assert!(!paths.is_empty());
+    for row in paths {
+        let asset = json!({
+            "id":"candidate","relPath":row["input"],"mime":"image/png",
+            "source":"upload","createdAt":"2026-08-01T00:00:00.000Z"
+        });
+        assert_eq!(
+            validate_asset_ref(&asset).is_ok(),
+            row["active"].as_bool().unwrap(),
+            "{}",
+            row["id"]
+        );
+    }
+}
+
+/// An existing quarantine file cannot become an active graph reference through the public preflight.
+#[test]
+fn asset_admission_refuses_existing_quarantine_file() {
+    let (projects, _library, root) = temp_fixture();
+    seed_project(&projects, "p-1");
+    let mut asset = seed_valid_asset(&projects);
+    assert!(validate_project_asset_with(&cap(&projects), "p-1", &asset).is_ok());
+    let quarantine = projects.join("p-1/assets/.trash");
+    fs::create_dir_all(&quarantine).unwrap();
+    fs::write(quarantine.join("held.png"), b"private quarantine").unwrap();
+    asset["relPath"] = json!("assets/.trash/held.png");
+    let result = validate_project_asset_with(&cap(&projects), "p-1", &asset);
+    let bytes = fs::read(quarantine.join("held.png")).unwrap();
+    cleanup(&root);
+    assert!(result.is_err(), "reserved reference admitted: {result:?}");
+    assert_eq!(bytes, b"private quarantine");
+}

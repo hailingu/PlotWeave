@@ -47,10 +47,10 @@ pub fn is_canonical_mime(s: &str) -> bool {
         _ => false,
     }
 }
-/// 词法 relPath（§7.1）：纯相对路径（正斜杠分隔，拒绝绝对路径/盘符/反斜杠），
+/// 词法 relPath（§7.1）：纯相对路径（正斜杠分隔，拒绝绝对路径/盘符/反斜杠/NUL），
 /// 解析目标必须位于项目资产子目录内——首段固定 `assets`，组件不含空段/`.`/`..`。
 pub fn is_valid_asset_rel_path(p: &str) -> bool {
-    if p.is_empty() || p != p.trim() {
+    if p.is_empty() || p != p.trim() || p.contains('\0') {
         return false;
     }
     if p.starts_with('/') || p.contains('\\') {
@@ -176,7 +176,7 @@ fn validate_save_assets(assets: &serde_json::Value) -> Result<(), String> {
             _ => return Err(format!("资产 {key} 的内嵌 id 空白或与 Record 键不一致")),
         }
         match get_str("relPath") {
-            Some(p) if is_valid_asset_rel_path(p) => {}
+            Some(p) if is_valid_active_asset_rel_path(p) => {}
             _ => return Err(format!("资产 {key} 的 relPath 非法或越出资产子目录")),
         }
         match get_str("mime") {
@@ -293,7 +293,7 @@ pub(crate) fn verify_save_asset_files(
         let Some(rel) = entry.get("relPath").and_then(|v| v.as_str()) else {
             continue;
         };
-        if !is_valid_asset_rel_path(rel) {
+        if !is_valid_active_asset_rel_path(rel) {
             continue;
         }
         let handle =
@@ -304,7 +304,8 @@ pub(crate) fn verify_save_asset_files(
 }
 /// §7.1/§10.5 加载侧资产实路径复验内核：返回文档 assets.byId 中词法合法、
 /// 但以受信资产根 no-follow 验证失败（缺失/符号链接/非普通文件/逃逸）的
-/// 记录键。词法非法或形状缺失的条目不在此报告——前端形状归一化负责隔离。
+/// 记录键；保留 `.trash` 命名空间无论实文件是否存在均报告，且不打开其字节。
+/// 基础词法非法或形状缺失的条目不在此报告——前端形状归一化负责隔离。
 pub fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Value) -> Vec<String> {
     let mut bad = Vec::new();
     let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
@@ -317,7 +318,7 @@ pub fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Val
         if !is_valid_asset_rel_path(rel) {
             continue;
         }
-        if verify_asset_real_path(root, id, rel).is_err() {
+        if !is_valid_active_asset_rel_path(rel) || verify_asset_real_path(root, id, rel).is_err() {
             bad.push(key.clone());
         }
     }

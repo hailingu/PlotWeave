@@ -2,11 +2,16 @@ import Foundation
 
 /// Shared native AssetRef leaf policy: paths, concrete MIME and canonical UTC never depend on a host framework.
 enum NativeAssetContract {
-    /// Only active assets-relative paths are valid; the reserved quarantine tree is never addressable.
-    static func activeRelPath(_ path: String) -> Bool {
+    /// Lexical paths are relative to assets; load verification separately reports reserved quarantine references.
+    static func lexicalRelPath(_ path: String) -> Bool {
         guard path == path.trimmingCharacters(in: .whitespacesAndNewlines), !path.contains("\\"), !path.contains("\0") else { return false }
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
-        return parts.count >= 2 && parts.first == "assets" && parts.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." && $0 != ".trash" }
+        return parts.count >= 2 && parts.first == "assets" && parts.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    }
+
+    /// Only active assets-relative paths are valid; the reserved quarantine tree is never addressable.
+    static func activeRelPath(_ path: String) -> Bool {
+        lexicalRelPath(path) && !path.split(separator: "/").contains(".trash")
     }
 
     /// RFC token characters form exactly one specific type/subtype, without wildcards, parameters or uppercase.

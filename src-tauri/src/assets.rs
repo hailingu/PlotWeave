@@ -20,8 +20,8 @@ use crate::isotime::{is_canonical_utc_timestamp, now_iso};
 use crate::library_fs::{atomic_write_with, library_root, open_library_asset};
 use crate::media_format::{ext_for, ext_for_mime};
 use crate::store::{
-    is_canonical_mime, is_valid_asset_rel_path, new_id, open_dir_bound, projects_dir, to_ipc_text,
-    validate_id, verify_asset_real_path,
+    is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path, new_id,
+    open_dir_bound, projects_dir, to_ipc_text, validate_id, verify_asset_real_path,
 };
 
 pub(crate) mod error;
@@ -241,7 +241,7 @@ pub(crate) fn write_generated_asset(
 
 /// 单条 AssetRef 形状校验 + 规范化（§7.1，与前端 normalizeAssetRecords、
 /// Rust 保存边界 validate_save_assets 同域）：relPath 词法（首段 assets、
-/// 无空段/`.`/`..`）、mime 规范化（trim + 小写）后须为规范形、source 枚举、
+/// 无空段/`.`/`..`/保留 `.trash`）、mime 规范化（trim + 小写）后须为规范形、source 枚举、
 /// createdAt 必须是规范 UTC（toISOString 形）。返回规范化条目。
 fn validate_asset_ref(asset: &Value) -> Result<Value, String> {
     let id = asset
@@ -252,7 +252,7 @@ fn validate_asset_ref(asset: &Value) -> Result<Value, String> {
     let rel_path = asset
         .get("relPath")
         .and_then(Value::as_str)
-        .filter(|p| is_valid_asset_rel_path(p))
+        .filter(|p| is_valid_active_asset_rel_path(p))
         .ok_or_else(|| format!("资产 {id} 的 relPath 缺失或越出资产子目录"))?;
     let mime_raw = asset
         .get("mime")
