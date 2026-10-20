@@ -50,11 +50,16 @@ actor NativePreferences {
         }
     }
 
-    /// Secrets are available only to model services; missing or corrupt settings never read Tauri's keychain.
-    func providerSecret(_ provider: String) throws -> String {
+    /// Bind the endpoint and cipher from one actor-serialized snapshot before opening any secret.
+    func providerCredential(_ provider: String, baseURL: String, suffix: String) throws -> NativeProviderCredential {
         try NativeSeal.validateProvider(provider)
         let value = try load()
-        guard let envelope = value["providers"]?.arrayValue?.first(where: { $0["id"]?.string == provider })?["keyEnc"]?.string else {
+        let entries = value["providers"]?.arrayValue?.filter { $0["id"]?.string == provider } ?? []
+        guard entries.count == 1, let entry = entries.first, let configured = entry["baseUrl"]?.string else {
+            throw NativeNetworkPolicy.refused("缺少唯一有效的 provider 服务配置，请重新保存设置")
+        }
+        let url = try NativeProviderBinding.endpoint(configured: configured, requested: baseURL, suffix: suffix)
+        guard let envelope = entry["keyEnc"]?.string else {
             throw HostFailure(code: "PW_KEY_MISSING", message: "未配置 API key，请在设置页填写")
         }
         let secret = try NativeSeal.open(provider: provider, envelope: envelope, material: machine())
@@ -62,7 +67,7 @@ actor NativePreferences {
             do { try migrate(provider: provider, opened: envelope, secret: secret) }
             catch { NativeLog.preferences.warning("PlotWeave PW_KEY_MIGRATION_FAILED: legacy settings envelope remains unchanged") }
         }
-        return secret
+        return NativeProviderCredential(url: url, key: secret)
     }
 
     /// Only true absence receives defaults; all unreadable, invalid, oversized or nonregular entries reject.

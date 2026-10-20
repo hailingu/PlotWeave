@@ -57,7 +57,7 @@ struct NativePreferencesTests {
             Issue.record("Non-object settings must reject instead of becoming defaults")
         } catch let error as HostFailure { #expect(error.code == "PW_PREFS_CORRUPT") }
         do {
-            _ = try await fixture.prefs.providerSecret("openai")
+            _ = try await fixture.prefs.providerCredential("openai", baseURL: "https://provider.example/v1", suffix: "").key
             Issue.record("Secret reads must retain the same corruption boundary")
         } catch let error as HostFailure { #expect(error.code == "PW_PREFS_CORRUPT") }
         #expect(try Data(contentsOf: fixture.file) == damaged)
@@ -115,7 +115,7 @@ struct NativePreferencesTests {
         #expect(!envelope.contains("fixture-secret"))
         #expect(!FileManager.default.fileExists(atPath: fixture.file.path))
         _ = try await fixture.prefs.invoke(command: "save_prefs", args: ["prefs": Self.settings(key: envelope)])
-        #expect(try await fixture.prefs.providerSecret("openai") == "fixture-secret-测试")
+        #expect(try await fixture.prefs.providerCredential("openai", baseURL: "https://provider.example/v1", suffix: "").key == "fixture-secret-测试")
         #expect(throws: HostFailure.self) { try NativeSeal.open(provider: "other", envelope: envelope, material: Self.material) }
     }
 
@@ -126,7 +126,7 @@ struct NativePreferencesTests {
         let fixture = try Fixture()
         defer { fixture.remove() }
         _ = try await fixture.prefs.invoke(command: "save_prefs", args: ["prefs": Self.settings(key: Self.v1)])
-        #expect(try await fixture.prefs.providerSecret("openai") == "fixture-secret-测试")
+        #expect(try await fixture.prefs.providerCredential("openai", baseURL: "https://provider.example/v1", suffix: "").key == "fixture-secret-测试")
         let migrated = try await fixture.prefs.invoke(command: "load_prefs", args: [:])
         #expect(migrated["providers"]?.array.first?["keyEnc"]?.string?.hasPrefix("pw2:600000:openai:") == true)
         #expect(migrated["unrecognized"] == .array([.number(7), .bool(true)]))
@@ -137,7 +137,7 @@ struct NativePreferencesTests {
     @Test func unavailableIdentityOrKeyHasNoFallback() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        await #expect(throws: HostFailure.self) { try await fixture.prefs.providerSecret("openai") }
+        await #expect(throws: HostFailure.self) { try await fixture.prefs.providerCredential("openai", baseURL: "https://provider.example/v1", suffix: "").key }
         let unavailable = NativePreferences(root: fixture.root, machineMaterial: { throw HostFailure(code: "PW_MACHINE_UNAVAILABLE", message: "fixture failure") })
         await #expect(throws: HostFailure.self) {
             try await unavailable.invoke(command: "set_provider_key", args: ["providerId": .string("openai"), "key": .string("fixture-secret")])
@@ -197,7 +197,7 @@ struct NativePreferencesTests {
 
     /// Opaque field preservation is checked independently of the frontend's normalization helpers.
     private static func settings(key: String) -> HostJSON {
-        .object(["providers": .array([.object(["id": .string("openai"), "label": .string("OpenAI"), "keyEnc": .string(key), "models": .array([.string("model")])])]),
+        .object(["providers": .array([.object(["id": .string("openai"), "label": .string("OpenAI"), "baseUrl": .string("https://provider.example/v1"), "keyEnc": .string(key), "models": .array([.string("model")])])]),
                  "defaultChat": .string("openai:model"), "defaultImage": .null,
                  "unrecognized": .array([.number(7), .bool(true)])])
     }
