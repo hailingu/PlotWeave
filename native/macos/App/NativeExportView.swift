@@ -72,6 +72,9 @@ struct NativeExportView: View {
         delivering = true
         error = nil
         receipt = nil
+        // The user's immutable delivery request owns this adapter through the system service's
+        // actual panel decision and awaited atomic write. It may complete after preview dismissal;
+        // dismissal is not an I/O cancellation or a success receipt, and no editor write is owned here.
         Task { @MainActor in
             defer { delivering = false }
             do {

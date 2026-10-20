@@ -165,6 +165,9 @@ final class NativeApplicationState {
         error = nil
         if blocksUI { pending += 1; busy = true }
         let intent = enqueueNativeIntent(command, args: args)
+        // Completion adapter for the future owned by nativeIntents, not a second command.
+        // beginSession/invalidate cancel that future; session checks below reject late results.
+        // Keep the adapter alive to settle the presentation acknowledgment, including failure.
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
