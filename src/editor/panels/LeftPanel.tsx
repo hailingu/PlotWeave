@@ -173,18 +173,18 @@ function useOutlineGroups(
     .slice()
     .sort((a, b) => a.position.x - b.position.x || (a.id < b.id ? -1 : 1))
     .map((n) => n.id)
-  const cacheRef = useRef<{
-    content: CanvasNode[]
-    order: string[]
-    source: CanvasNode[]
-  } | null>(null)
-  const cache = cacheRef.current
+  // 条件式派生 state 随 React 的提交/丢弃边界回滚，不在渲染中改写共享 ref。
+  const [cache, setCache] = useState(() => ({
+    content: contentNodes,
+    order,
+    source: nodes,
+  }))
   const sameOrder =
-    cache?.order.length === order.length &&
+    cache.order.length === order.length &&
     cache.order.every((id, i) => id === order[i])
-  const stale = cache?.content !== contentNodes || !sameOrder
-  if (stale) cacheRef.current = { content: contentNodes, order, source: nodes }
-  const source = stale ? nodes : (cache?.source ?? nodes)
+  const stale = cache.content !== contentNodes || !sameOrder
+  if (stale) setCache({ content: contentNodes, order, source: nodes })
+  const source = stale ? nodes : cache.source
   return useMemo(
     () => buildOutlineGroups(source, edges, episodeTitles),
     [source, edges, episodeTitles],

@@ -27,7 +27,7 @@ import { CANVAS_GRID_SIZE } from './canvasAlignment'
 import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPersistence } from './useEditorPersistence'
 import type { CanvasView } from './useCanvasView'
-import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
+import type { EditorDocument } from './useEditorDocument'
 import { useCanvasPerformance } from './useCanvasPerformance'
 import {
   CanvasPerformancePanel,
@@ -46,8 +46,8 @@ const CANVAS_SNAP_GRID: [number, number] = [CANVAS_GRID_SIZE, CANVAS_GRID_SIZE]
  * 函数同步登记。
  */
 export interface EditorCanvasRegionProps {
-  /** 打开的项目：视口决定首开 fitView 与 defaultViewport。 */
-  readonly project: EditorProjectContent
+  /** 打开时的视口种子；项目名等无关元数据不进入画布 memo 边界。 */
+  readonly viewport: EditorDocument['viewport']
   /** 画布容器：ReactFlow 挂载点。 */
   readonly canvasRef: RefObject<HTMLDivElement>
   /** 会话文档：节点/连线状态与写通道（useEditorDocument 按字段 memo）。 */
@@ -108,7 +108,7 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
     >
       <Profiler id="canvas" onRender={perf.onRender}>
         <CanvasFlow
-          project={props.project}
+          viewport={props.viewport}
           doc={props.doc}
           displayNodes={props.displayNodes}
           inspection={inspection}
@@ -130,27 +130,10 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
   )
 }
 
-/** 框架接线与装饰分开，采样开关不会改变 React Flow 的挂载身份。 */
-function CanvasFlow({
-  project,
-  doc,
-  displayNodes,
-  inspection,
-  onConnect,
-  onNodeContextMenu,
-  onEdgeContextMenu,
-  onPaneContextMenu,
-  isValidConnection,
-  onMoveEnd,
-  onAutoLayout,
-  onAlignNodes,
-  snapToGrid,
-  swiftHost,
-  onToggleSnap,
-  perf,
-}: Pick<
+/** ReactFlow 实际消费的输入；类型声明独立于组件执行体。 */
+type CanvasFlowProps = Pick<
   EditorCanvasRegionProps,
-  | 'project'
+  | 'viewport'
   | 'doc'
   | 'displayNodes'
   | 'onConnect'
@@ -167,7 +150,27 @@ function CanvasFlow({
   readonly swiftHost: boolean
   readonly onToggleSnap: () => void
   readonly perf: ReturnType<typeof useCanvasPerformance>
-}) {
+}
+
+/** 框架接线与装饰分开，采样开关不会改变 React Flow 的挂载身份。 */
+function CanvasFlow({
+  viewport,
+  doc,
+  displayNodes,
+  inspection,
+  onConnect,
+  onNodeContextMenu,
+  onEdgeContextMenu,
+  onPaneContextMenu,
+  isValidConnection,
+  onMoveEnd,
+  onAutoLayout,
+  onAlignNodes,
+  snapToGrid,
+  swiftHost,
+  onToggleSnap,
+  perf,
+}: CanvasFlowProps) {
   return (
     <ReactFlow
       nodes={displayNodes}
@@ -192,10 +195,10 @@ function CanvasFlow({
       /* 删除统一走命令栈（含连线清理），禁用内置 Delete 行为 */
       deleteKeyCode={null}
       /* 有持久化视口则恢复，否则首开 fitView（§3 视口随文档持久化） */
-      {...(project.viewport !== undefined && {
-        defaultViewport: project.viewport,
+      {...(viewport !== undefined && {
+        defaultViewport: viewport,
       })}
-      fitView={!project.viewport}
+      fitView={!viewport}
       onMoveEnd={onMoveEnd}
     >
       <CanvasDecorations

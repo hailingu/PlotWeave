@@ -29,6 +29,7 @@ const testFacilityFiles = [
   'src/appShellTestScaffolding.tsx',
   'src/projectStoreTestHarness.ts',
   'src/editor/ai/testGraphs.ts',
+  'src/editor/concurrentRenderTestScaffolding.ts',
   'src/editor/nodes/testScaffolding.tsx',
   'src/editor/panels/testDomStubs.ts',
   'src/model/convertFixtures.ts',

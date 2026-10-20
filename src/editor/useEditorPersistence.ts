@@ -4,7 +4,7 @@
  * onMoveEnd 发布响应式视口与同步 ref，再经 markDirty 换入最新文档——纯平移/缩放也
  * 落盘，卸载冲刷与后续内容保存拿到的都是最新视口（不落 stale 值）。
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import type { Viewport } from '@xyflow/react'
 import { errorBannerMessage } from './errorBannerMessage'
 import { sessionDoc } from './sessionDoc'
@@ -130,13 +130,16 @@ export function useEditorPersistence(
     handleRetryPersistedSuccess,
   )
 
-  const onMoveEnd = useCallback(
-    (_event: unknown, viewport: Viewport) => {
-      doc.updateViewport(viewport)
-      markDirty(buildSessionDoc(project, doc, viewport))
-    },
-    [doc, markDirty, project],
-  )
+  // 项目和保存回调变化不改变画布事件身份；只发布已提交的文档与写通道。
+  const moveContext = useRef({ project, doc, markDirty })
+  useLayoutEffect(() => {
+    moveContext.current = { project, doc, markDirty }
+  }, [project, doc, markDirty])
+  const onMoveEnd = useCallback((_event: unknown, viewport: Viewport) => {
+    const current = moveContext.current
+    current.doc.updateViewport(viewport)
+    current.markDirty(buildSessionDoc(current.project, current.doc, viewport))
+  }, [])
 
   return { saveStatus, saveError, markDirty, onMoveEnd, whenCanvasCommitted }
 }

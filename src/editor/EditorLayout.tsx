@@ -58,7 +58,7 @@ function toCanvasRegionProps(
   props: EditorLayoutProps,
 ): EditorCanvasRegionProps {
   return {
-    project: props.project,
+    viewport: props.project.viewport,
     canvasRef: props.canvasRef,
     doc: props.doc,
     displayNodes: props.view.displayNodes,

@@ -1,12 +1,13 @@
 /**
  * 编辑器文档状态（EditorView 拆出的状态域）：节点/连线/设定集/集标题/资产
  * 索引/集聚焦六个会话状态，外加命令栈与拖放读取「当前值」所需的镜像 ref
- * 与已完成视口（数据模型 §3 视口随文档持久化）。内容镜像在渲染期赋值：undo/redo
- * 闭包必须在 setState updater 之外读到最新状态（StrictMode 下 updater 双调）。
+ * 与已完成视口（数据模型 §3 视口随文档持久化）。内容镜像在提交时同步：undo/redo
+ * 闭包在 setState updater 之外读取，避免 StrictMode 双调副作用与未提交渲染泄漏。
  * 返回对象按字段 memo：状态不变时保持引用稳定，下游 useMemo/useCallback 有效。
  */
 import {
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -100,20 +101,22 @@ function sameNodeContent(a: CanvasNode, b: CanvasNode): boolean {
 }
 
 /** 内容稳定投影（issue #157）：数组引用仅在内容差异时更换，条目保持
- * 当时的原节点对象（消费方不读会话态键）。 */
+ * 当时的原节点对象（消费方不读会话态键）。缓存归 React 管理：条件式更新
+ * 只调整本组件的派生状态，被丢弃的渲染不会替换已提交的内容引用。 */
 function useContentNodes(nodes: CanvasNode[]): CanvasNode[] {
-  const ref = useRef(nodes)
+  const [content, setContent] = useState(nodes)
   if (
-    ref.current.length !== nodes.length ||
+    content.length !== nodes.length ||
     // 长度相等已由首条件保证；undefined 守卫消解下标读取的缺失分支
-    ref.current.some((n, i) => {
+    content.some((n, i) => {
       const next = nodes[i]
       return next !== undefined && !sameNodeContent(n, next)
     })
   ) {
-    ref.current = nodes
+    setContent(nodes)
+    return nodes
   }
-  return ref.current
+  return content
 }
 
 /** 状态镜像 refs（useEditorDocument 拆分，issue #99）：命令的 undo/redo
@@ -127,15 +130,17 @@ function useDocumentMirrorRefs(
   episodeTitles: Record<number, string>,
 ) {
   const nodesRef = useRef(nodes)
-  nodesRef.current = nodes
   const edgesRef = useRef(edges)
-  edgesRef.current = edges
   const settingsRef = useRef(settings)
-  settingsRef.current = settings
   const assetsRef = useRef(assets)
-  assetsRef.current = assets
   const episodeTitlesRef = useRef(episodeTitles)
-  episodeTitlesRef.current = episodeTitles
+  useLayoutEffect(() => {
+    nodesRef.current = nodes
+    edgesRef.current = edges
+    settingsRef.current = settings
+    assetsRef.current = assets
+    episodeTitlesRef.current = episodeTitles
+  }, [nodes, edges, settings, assets, episodeTitles])
   return { nodesRef, edgesRef, settingsRef, assetsRef, episodeTitlesRef }
 }
 
