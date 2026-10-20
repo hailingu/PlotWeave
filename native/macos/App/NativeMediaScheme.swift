@@ -52,7 +52,7 @@ final class NativeMediaScheme: NSObject, WKURLSchemeHandler {
             let (file, maximum) = try await loader(url)
             try checkCurrent(id, generation: generation)
             guard file.size >= 0, file.size <= maximum else { throw NativeDirectory.refused("媒体超过读取上限") }
-            try sendResponse(task, url: url, status: 200, mime: file.mime, length: file.size)
+            try sendResponse(task, url: url, status: 200, mime: mediaContentType(file.mime), length: file.size)
             responseStarted = true
             var offset: Int64 = 0
             while offset < file.size {
@@ -79,10 +79,20 @@ final class NativeMediaScheme: NSObject, WKURLSchemeHandler {
         return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
     }
 
+    /// Narrow only the response declaration; stored MIME and bytes retain their existing contract.
+    /// SVG remains a legitimate image, while response CSP independently denies document scripting.
+    private func mediaContentType(_ mime: String) -> String {
+        guard NativeAssetContract.mime(mime), ["image/", "audio/", "video/"].contains(where: { mime.hasPrefix($0) }) else {
+            return "application/octet-stream"
+        }
+        return mime
+    }
+
     /// A response is sent only for a current request; Content-Length refers to the selected immutable descriptor.
     private func sendResponse(_ task: any WKURLSchemeTask, url: URL, status: Int, mime: String, length: Int64) throws {
         guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": mime, "Content-Length": String(length), "Cache-Control": "no-store"]) else {
+            headerFields: ["Content-Type": mime, "Content-Length": String(length), "Cache-Control": "no-store",
+                           "Content-Security-Policy": "sandbox; script-src 'none'", "X-Content-Type-Options": "nosniff"]) else {
             throw HostFailure(code: "PW_MEDIA_RESPONSE", message: "媒体响应不可用")
         }
         task.didReceive(response)

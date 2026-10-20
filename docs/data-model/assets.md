@@ -137,3 +137,7 @@ interface AssetGroup {
   则 ` 副本 2`、` 副本 3`…），拼接结果按字符数超过 64（§9.3 项目名校验口径）时先
   截断源名至可容纳后缀再拼接——直接追加后缀会让接近上限的合法源名复制即被
   持久化层拒绝，复制操作必须总能成功。
+
+### 媒体响应的文档隔离（#654）
+
+`pwmedia` 的响应层保留规范的图片／音频／视频类型，其他声明仅以 `application/octet-stream` 交付原字节；磁盘 `AssetRef.mime` 和共享词法规则不变。SVG 继续以图片类型交付，媒体响应统一附带强制 sandbox／禁脚本 CSP 与 nosniff；404 保持固定纯文本。读取授权、描述符身份、容量和取消仍由原 owner 负责。真实 WK 正向对照、SVG 文档／图片回归及限制见[媒体响应边界](../development/media-response-boundary.md)。

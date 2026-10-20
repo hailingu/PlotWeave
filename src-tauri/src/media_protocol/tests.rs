@@ -660,3 +660,75 @@ fn project_media_hex_case_and_invalid_input_contract() {
         }
     }
 }
+
+/// #654: headers restrict active documents without changing legitimate media declarations or response bytes.
+#[test]
+fn media_response_restricts_documents_and_disables_scripts() {
+    for (mime, expected) in [
+        ("image/png", "image/png"),
+        ("image/svg+xml", "image/svg+xml"),
+        ("audio/mpeg", "audio/mpeg"),
+        ("video/mp4", "video/mp4"),
+        ("text/html", "application/octet-stream"),
+        ("application/xhtml+xml", "application/octet-stream"),
+        ("application/pdf", "application/octet-stream"),
+    ] {
+        let response = media_http_response(Ok((mime.into(), b"fixture".to_vec())));
+        assert_eq!(response.status(), tauri::http::StatusCode::OK);
+        assert_eq!(response.body(), b"fixture");
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            expected,
+            "{mime}"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("content-security-policy")
+                .and_then(|v| v.to_str().ok()),
+            Some("sandbox; script-src 'none'")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-content-type-options")
+                .and_then(|v| v.to_str().ok()),
+            Some("nosniff")
+        );
+    }
+}
+
+/// Dirty declarations cannot inject headers, and fixed error responses retain their established safe body/type.
+#[test]
+fn media_response_handles_dirty_mime_and_preserves_safe_404() {
+    for mime in [
+        "image/png\r\nX-Injected: value",
+        "Image/PNG",
+        "image/*",
+        "",
+        "image/png; charset=utf-8",
+    ] {
+        let reply = media_http_response(Ok((mime.into(), b"fixture".to_vec())));
+        assert_eq!(
+            reply.headers().get("content-type").unwrap(),
+            "application/octet-stream"
+        );
+        assert!(reply.headers().get("x-injected").is_none());
+        assert_eq!(reply.body(), b"fixture");
+    }
+    let reply = media_http_response(Err("private disk failure".into()));
+    assert_eq!(reply.status(), tauri::http::StatusCode::NOT_FOUND);
+    assert_eq!(
+        reply.headers().get("content-type").unwrap(),
+        "text/plain; charset=utf-8"
+    );
+    assert_eq!(
+        reply.headers().get("content-security-policy").unwrap(),
+        "sandbox; script-src 'none'"
+    );
+    assert_eq!(
+        reply.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
+    assert_eq!(reply.body(), "媒体不可用".as_bytes());
+}
