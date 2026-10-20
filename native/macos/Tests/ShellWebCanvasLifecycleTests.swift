@@ -47,7 +47,7 @@ struct ShellWebCanvasLifecycleTests {
             rootView: NativeShellRoot(layout: layout, appearance: appearance, demoMode: true)
         )
         window.orderFront(nil)
-        defer { window.close() }
+        defer { window.close(); window.contentView = nil }
 
         let webView = try await waitForWebView(in: window)
         try await waitForReadyCanvas(webView)
@@ -59,15 +59,19 @@ struct ShellWebCanvasLifecycleTests {
         try await webView.evaluateJavaScript("window.__pwLifecycleProbe = 314159")
         let identity = ObjectIdentifier(webView)
 
+        try await NativeLayoutFixture.waitForInspector(in: window, visible: true)
         layout.toggleInspector()
-        try await settle()
+        try await NativeLayoutFixture.waitForInspector(in: window, visible: false, canvas: webView)
+        try await NativeLayoutFixture.waitForSidebar(in: window, canvas: webView, visible: true)
         let expandedCanvasWidth = webView.bounds.width
         try NativeSidebarControlFixture.press(in: window)
-        try await settle()
+        try await NativeLayoutFixture.waitForSidebar(in: window, canvas: webView, visible: false)
         #expect(!layout.sidebarVisible)
         #expect(webView.bounds.width > expandedCanvasWidth, "折叠实际侧栏必须释放画布宽度")
         try NativeSidebarControlFixture.press(in: window)
-        try await settle()
+        try await NativeLayoutFixture.waitForSidebar(
+            in: window, canvas: webView, visible: true, expectedCanvasWidth: expandedCanvasWidth
+        )
         #expect(layout.sidebarVisible)
         #expect(abs(webView.bounds.width - expandedCanvasWidth) < 1, "重新展开恢复原画布宽度")
 
@@ -111,7 +115,7 @@ struct ShellWebCanvasLifecycleTests {
             rootView: NativeShellRoot(layout: layout, appearance: appearance, demoMode: true)
         )
         window.orderFront(nil)
-        defer { window.close() }
+        defer { window.close(); window.contentView = nil }
 
         let webView = try await waitForWebView(in: window)
         try await waitForReadyCanvas(webView)
@@ -145,7 +149,7 @@ struct ShellWebCanvasLifecycleTests {
             )
         )
         window.orderFront(nil)
-        defer { window.close() }
+        defer { window.close(); window.contentView = nil }
 
         let webView = try await waitForWebView(in: window)
         try await waitForReadyCanvas(webView)
@@ -155,8 +159,9 @@ struct ShellWebCanvasLifecycleTests {
         #expect(!webView.isInspectable, "Release canvas must retain WebKit's closed default")
         #endif
         let identity = ObjectIdentifier(webView)
+        try await NativeLayoutFixture.waitForInspector(in: window, visible: true)
         layout.toggleInspector()
-        try await settle()
+        try await NativeLayoutFixture.waitForInspector(in: window, visible: false, canvas: webView)
         #expect(ObjectIdentifier(try await waitForWebView(in: window)) == identity)
         #if DEBUG
         #expect(webView.isInspectable)
@@ -182,11 +187,6 @@ struct ShellWebCanvasLifecycleTests {
             scheme = try await hostColorScheme(webView)
         }
         return scheme
-    }
-
-    /// Lets SwiftUI apply the layout change before re-asserting identity.
-    private func settle() async throws {
-        try await Task.sleep(for: .milliseconds(400))
     }
 
     /// Finds the shell's WKWebView once SwiftUI mounted the canvas section.

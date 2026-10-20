@@ -6,6 +6,10 @@ struct NativeShellRoot: View {
     /// Isolated-fixture fragment (`fixture` demo default or `perf:N` M15 scales).
     let demoFragment: String
     let services: NativeHostServices?
+    /// An optional integration receipt follows the leaf consumer, including requests rejected by its guards.
+    private let onInspectorProjectionHandled: (@MainActor (HostJSON) -> Void)?
+    /// Optional receipt exposes native presentation writes independently of projected edit requests.
+    private let onInspectorVisibilitySet: (@MainActor (Bool) -> Void)?
     @State private var layout: ShellLayoutState
     @State private var appearance: CanvasAppearanceState
     @State private var application: NativeApplicationState
@@ -20,11 +24,15 @@ struct NativeShellRoot: View {
         demoFragment: String = "fixture",
         services: NativeHostServices? = nil,
         application: NativeApplicationState = NativeApplicationState(),
-        windowPresentation: NativeWelcomeWindowController = NativeWelcomeWindowController()
+        windowPresentation: NativeWelcomeWindowController = NativeWelcomeWindowController(),
+        onInspectorProjectionHandled: (@MainActor (HostJSON) -> Void)? = nil,
+        onInspectorVisibilitySet: (@MainActor (Bool) -> Void)? = nil
     ) {
         self.demoMode = demoMode
         self.demoFragment = demoFragment
         self.services = services
+        self.onInspectorProjectionHandled = onInspectorProjectionHandled
+        self.onInspectorVisibilitySet = onInspectorVisibilitySet
         _layout = State(initialValue: layout)
         _appearance = State(initialValue: appearance)
         _application = State(initialValue: application)
@@ -53,13 +61,15 @@ struct NativeShellRoot: View {
             )
         }
         .toolbar { NativeEditorToolbar(state: application, layout: layout) }
-        .inspector(isPresented: editorPanelsAvailable ? $layout.inspectorVisible : .constant(false)) {
+        .inspector(isPresented: inspectorVisibilityBinding($layout.inspectorVisible)) {
             NativeInspectorView(state: application, visible: editorPanelsAvailable && layout.inspectorVisible)
                 .inspectorColumnWidth(min: 300, ideal: 360, max: 640)
                 .toolbar { NativeInspectorToolbar(state: application, layout: layout) }
         }
         .navigationTitle(application.projectName)
-        .background(NativeInspectorRequestObserver(state: application, layout: layout, available: editorPanelsAvailable)
+        .background(NativeInspectorRequestObserver(
+            state: application, layout: layout, available: editorPanelsAvailable, onHandled: onInspectorProjectionHandled
+        )
             .frame(width: 0, height: 0))
         .sheet(isPresented: $application.exportVisible) {
             NativeExportView(state: application, services: services ?? .shared, projectId: application.projectId ?? "")
@@ -82,6 +92,19 @@ struct NativeShellRoot: View {
         }
         .task { appearance.startObserving() }
         .onDisappear { appearance.stopObserving() }
+    }
+
+    /// Production retains the original binding; integration receipts observe writes with the same transaction.
+    private func inspectorVisibilityBinding(_ original: Binding<Bool>) -> Binding<Bool> {
+        guard editorPanelsAvailable else { return .constant(false) }
+        guard let onInspectorVisibilitySet else { return original }
+        return Binding(
+            get: { original.wrappedValue },
+            set: { visible, transaction in
+                original.transaction(transaction).wrappedValue = visible
+                onInspectorVisibilitySet(visible)
+            }
+        )
     }
 
     /// Project panels belong to an active editor; the isolated canvas fixture retains panel lifecycle coverage.
@@ -112,12 +135,15 @@ private struct NativeInspectorRequestObserver: View {
     let layout: ShellLayoutState
     /// Nonediting routes retain their original guard against replaying properties.
     let available: Bool
+    /// Receipt delivery happens after the real effect rather than after envelope acceptance.
+    let onHandled: (@MainActor (HostJSON) -> Void)?
 
     /// A noninteractive retained observer keeps ordinary graph updates out of the root's dependencies.
     var body: some View {
         Color.clear.allowsHitTesting(false)
             .onChange(of: state.projection) { previous, current in
                 revealRequestedNodeInspector(previous: previous, current: current)
+                onHandled?(current)
             }
     }
 
