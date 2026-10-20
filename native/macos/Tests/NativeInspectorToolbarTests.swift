@@ -10,7 +10,8 @@ struct NativeInspectorToolbarTests {
     /// Creation stays inside the inspector's leading edge while project tools follow its trailing edge.
     @Test func inspectorToolsUseAvailableColumnWidth() async throws {
         let layout = ShellLayoutState()
-        let window = try makeWindow(layout: layout)
+        let receipt = VisibilityReceipt()
+        let window = try makeWindow(layout: layout, receipt: receipt)
         defer { window.close(); window.contentView = nil }
         let split = try await waitForInspector(in: window)
         try expectTwoEnds(in: window)
@@ -18,10 +19,12 @@ struct NativeInspectorToolbarTests {
         try await waitForTwoEnds(in: window, expectedWidth: 300)
         try expectTwoEnds(in: window)
         layout.toggleInspector()
+        try await waitForVisibility(false, in: window, layout: layout, receipt: receipt)
         try await NativeLayoutFixture.waitForInspector(in: window, visible: false)
         #expect(try frame(of: "添加节点", in: window).width > 0)
         #expect(try frame(of: "检查器", in: window).width > 0)
         layout.toggleInspector()
+        try await waitForVisibility(true, in: window, layout: layout, receipt: receipt)
         _ = try await waitForInspector(in: window, expectedWidth: 300)
         try expectTwoEnds(in: window)
         window.setContentSize(NSSize(width: 1400, height: 800))
@@ -36,7 +39,7 @@ struct NativeInspectorToolbarTests {
     }
 
     /// A read-only projection isolates native toolbar presentation from Web sessions and user storage.
-    private func makeWindow(layout: ShellLayoutState) throws -> NSWindow {
+    private func makeWindow(layout: ShellLayoutState, receipt: VisibilityReceipt) throws -> NSWindow {
         let state = NativeApplicationState()
         state.beginSession("inspector-toolbar")
         try state.receiveProjection([
@@ -56,7 +59,7 @@ struct NativeInspectorToolbarTests {
             Text("画布")
         }
         .toolbar { NativeEditorToolbar(state: state, layout: layout) }
-        .inspector(isPresented: Binding(get: { layout.inspectorVisible }, set: { layout.inspectorVisible = $0 })) {
+        .inspector(isPresented: Binding(get: { layout.inspectorVisible }, set: { layout.inspectorVisible = $0; receipt.value = $0 })) {
             Text("检查器").inspectorColumnWidth(min: 300, ideal: 360, max: 640)
                 .toolbar { NativeInspectorToolbar(state: state, layout: layout) }
         }
@@ -65,6 +68,20 @@ struct NativeInspectorToolbarTests {
         window.contentView = NSHostingView(rootView: root)
         window.orderFront(nil)
         return window
+    }
+
+    /// Only real native presentation writebacks satisfy a subsequent opposite transition.
+    @MainActor private final class VisibilityReceipt {
+        /// Initial mounting need not write a binding; later transitions must publish their own value.
+        var value: Bool?
+    }
+
+    /// Physical column geometry can precede a pending SwiftUI visibility writeback.
+    private func waitForVisibility(_ visible: Bool, in window: NSWindow,
+                                   layout: ShellLayoutState, receipt: VisibilityReceipt) async throws {
+        try await NativeLayoutFixture.wait(in: window, for: "native inspector binding visible=\(visible)") {
+            receipt.value == visible && layout.inspectorVisible == visible
+        }
     }
 
     /// Readiness includes the real toolbar arrangement rather than merely nonzero frames.
@@ -76,7 +93,7 @@ struct NativeInspectorToolbarTests {
 
     /// Divider and window changes finish only when the requested column width and all original invariants hold.
     private func waitForTwoEnds(in window: NSWindow, expectedWidth: CGFloat? = nil) async throws {
-        try await NativeLayoutFixture.wait(in: window, for: "two-ended inspector toolbar") {
+        try await NativeLayoutFixture.wait(in: window, for: "two-ended inspector toolbar width=\(String(describing: expectedWidth))") {
             guard let split = window.contentView.flatMap({ NativeLayoutFixture.inspectorSplit(in: $0) }),
                   let column = split.arrangedSubviews.last, !split.isSubviewCollapsed(column),
                   (300...640).contains(column.bounds.width),

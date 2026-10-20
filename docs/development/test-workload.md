@@ -127,3 +127,5 @@
 `ShellWebCanvasLifecycleTests` 等待实际侧栏与检查器状态：侧栏折叠除 collapsed／hidden 外，还要求 detail 栏与 WKWebView 都达到当前 split view 的完整可用宽度；重新展开时等待原有画布宽度恢复。测试继续检查同一 WKWebView、页面标记和外观同步。`NativeInspectorToolbarTests` 在当前 split view 完成窗口尺寸更新后移动分隔条，再等待真实目标栏宽与两端排列，保留原有七项几何断言；轮询缺席控件时使用无断言读取，避免 `try?` 捕获错误后仍由 `#require` 记录失败。共享 `NativeLayoutFixture` 只使用公开 AppKit 几何与布局 API，20ms 是轮询间隔，5 秒只兜底停滞并报告原生列诊断，不是通过阈值；三处夹具不再以固定 400ms 作为完成依据。
 
 范围限于该 issue 点名的三个套件，不把全部 `Task.sleep` 视为缺陷，不增加默认 stress、快照、VoiceOver 或真实 IME 验收。CPU 预算仍为 4，覆盖率保持原有口径。CI 只在面向 dev／main 的 PR 及 dev／main 推送上运行；验证保留这一触发策略，分别记录 PR head 和合并后相同代码树的 dev 推送，不把它们表述成同一个提交 SHA。
+
+工具栏夹具在折叠与重新打开之后也等待真实显示 Binding 回写，再进入反向切换或窗口缩放；初次挂载不伪造回写回执。最终 head 的首次 CI 通过后，同 head 重复 native 验收仍捕捉到检查器在 1400 点容器中停留于 300 点、未达到请求的 500 点。新增回写等待收敛这一夹具仍缺失的完成条件；本机事件诊断只有顺序正常的通过样本，不能据此断言该次 CI 失败的内部原因已被完全证明。
