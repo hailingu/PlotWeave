@@ -5,6 +5,7 @@
  */
 import { useMemo } from 'react'
 import { isSwiftHost } from '../platform/hostEnvironment'
+import { EditorRegionBoundary } from './EditorRegionBoundary'
 import { EditorTitlebar } from './EditorTitlebar'
 import { ErrorBanner } from './ErrorBanner'
 import { saveStatusLabel, type SaveStatus } from './saveStatus'
@@ -178,20 +179,17 @@ function LayoutTitlebar({ props }: { readonly props: EditorLayoutProps }) {
   )
 }
 
-/** 编辑器整体布局：顶部工具栏（§3.3）+ 三栏主体（§3.4）+ 浮层。 */
-export function EditorLayout(props: EditorLayoutProps) {
-  const { doc, panels, persistence, view, graph } = props
+/** 三栏展示域各自隔离；文档、保存、历史和原生注册仍由上层持有。 */
+function LayoutBody(props: EditorLayoutProps) {
+  const { doc, panels, view, graph } = props
   const rightAi = useRightAi(props)
   return (
-    <div className="editor-root">
-      {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
-      <LayoutTitlebar props={props} />
-      <LayoutBanners
-        saveStatus={persistence.saveStatus}
-        saveError={persistence.saveError}
-        actionError={props.actionError}
-      />
-      <div className="editor-body">
+    <div className="editor-body">
+      <EditorRegionBoundary
+        projectId={props.project.id}
+        region="left"
+        beforeRetry={panels.closeDocument}
+      >
         <LeftPanel
           {...toDocDialogProps(panels)}
           open={panels.leftOpen && !isSwiftHost()}
@@ -210,7 +208,19 @@ export function EditorLayout(props: EditorLayoutProps) {
           onRenameEpisode={graph.episodes.renameEpisode}
           onOutlineDrop={graph.outlineDrop}
         />
+      </EditorRegionBoundary>
+      <EditorRegionBoundary projectId={props.project.id} region="canvas">
         <EditorCanvasRegion {...toCanvasRegionProps(props)} />
+      </EditorRegionBoundary>
+      <EditorRegionBoundary
+        projectId={props.project.id}
+        region="right"
+        persistentError={
+          props.aiSessionError === null
+            ? null
+            : `AI 会话：${props.aiSessionError}`
+        }
+      >
         <RightPanel
           open={panels.rightOpen && !isSwiftHost()}
           width={panels.rightWidth}
@@ -224,8 +234,34 @@ export function EditorLayout(props: EditorLayoutProps) {
           settings={doc.settings}
           ai={rightAi}
         />
-      </div>
-      <EditorOverlays {...toOverlaysProps(props)} />
+      </EditorRegionBoundary>
+    </div>
+  )
+}
+
+/** 编辑器整体布局：顶部工具栏（§3.3）+ 三栏主体（§3.4）+ 浮层。 */
+export function EditorLayout(props: EditorLayoutProps) {
+  const { panels, persistence } = props
+  return (
+    <div className="editor-root">
+      {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
+      <LayoutTitlebar props={props} />
+      <LayoutBanners
+        saveStatus={persistence.saveStatus}
+        saveError={persistence.saveError}
+        actionError={props.actionError}
+      />
+      <LayoutBody {...props} />
+      <EditorRegionBoundary
+        projectId={props.project.id}
+        region="overlays"
+        onDismiss={() => {
+          panels.setExportOpen(false)
+          panels.setCtxMenu(null)
+        }}
+      >
+        <EditorOverlays {...toOverlaysProps(props)} />
+      </EditorRegionBoundary>
     </div>
   )
 }
