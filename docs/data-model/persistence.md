@@ -19,7 +19,7 @@
 | 兼容性差异 | v1 文档、AI 会话与资产引用沿用既有格式；旧扁平 v0 格式支持已随 [#519 处置](https://github.com/hailingu/PlotWeave/issues/519)退役，两栈判型统一拒绝并保留原文件，此前记录的脏 legacy 小数 `updated_at` 排序差异不再存在。 |
 | 验证缺口 | 单应用实例范围保持；不承诺跨进程媒体替换与文档之间的事务。原子写的系统调用故障注入（临时文件同步、rename、rename 后父目录同步）已随 [issue #543](https://github.com/hailingu/PlotWeave/issues/543) 由 Swift 测试验收，见下方验证记录；真实系统面板、IME、VoiceOver、视觉、性能与签名分发仍未验收，不能由隔离根测试推定通过。 |
 
-详细落地与缺口见[总体分层](overview.md#二-总体分层)、[功能补齐记录](../swiftui-react-flow-feature-parity.md)及[修复矩阵 R20–R21](../swiftui-react-flow-pr526-fixes.md)。下文明确标注 Tauri／Rust 的实现说明继续描述其基线，不意味着 Swift 调用这些内核；公共文档格式与失败语义仍适用于两条服务路径。
+详细落地与缺口见[总体分层](overview.md#二总体分层)、[功能补齐记录](../swiftui-react-flow-feature-parity.md)及[修复矩阵 R20–R21](../swiftui-react-flow-pr526-fixes.md)。下文明确标注 Tauri／Rust 的实现说明继续描述其基线，不意味着 Swift 调用这些内核；公共文档格式与失败语义仍适用于两条服务路径。
 
 验证记录（2026-10-15，[issue #543](https://github.com/hailingu/PlotWeave/issues/543)）：Swift 原子写的系统 fsync／rename 故障注入已验收。测试专用 `NativeAtomicWriteFaults` 以互斥锁保护、绑定写入目录描述符的阶段注入包装真实系统调用（临时文件 `fsync`、提交 `renameat`／`renameatx_np`、rename 后父目录 `fsync`）——故障窗口只拦截登记目录的写入，并发执行的其他测试套件使用各自临时根与描述符，永不被拦截或计入阶段记录，不依赖运行器串行；与 Rust `store::persist::faults` 基线同级。生产路径无活动注入时按原样执行，不改变成功保存的文件布局、时间戳或 v0 拒绝行为。`NativeAtomicWriteFaultTests` 在隔离临时根上经 `save_project` 命令观察三类失败：临时文件同步与 rename 失败（提交前）——`PW_STORAGE_ERROR` 上浮、磁盘保持旧文档、无临时文件残留、注入撤除后重试收敛为新文档；rename 后目录屏障失败（提交后）——如实报错、新文档已落盘不回滚、重试幂等收敛。三阶段以「已抵达阶段」记录自证守卫（rename 前置于屏障）。注入为 errno 级阶段模拟（EIO），不等同真实断电实验；Tauri／Rust 基线故障测试保留，不替代本路径，也不被本路径替代。
 
