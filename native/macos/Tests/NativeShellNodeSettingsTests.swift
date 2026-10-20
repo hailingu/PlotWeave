@@ -118,6 +118,8 @@ struct NativeShellNodeSettingsTests {
         var webView: WKWebView?
         /// Exact consumer receipts prevent a negative visibility assertion from passing before its projection runs.
         private var handledProjection: HostJSON?
+        /// Native binding writes acknowledge presentation independently of early frame and projected-request updates.
+        private var visibilityReceipt: Bool?
         /// A fixture-owned divider position makes full reopening observable without relying on a timed animation.
         private let inspectorWidth: CGFloat = 320
 
@@ -129,7 +131,10 @@ struct NativeShellNodeSettingsTests {
             window.level = .floating
             window.contentView = NSHostingView(rootView: NativeShellRoot(
                 layout: layout, demoMode: true, services: services, application: state,
-                onInspectorProjectionHandled: { [weak self] in self?.handledProjection = $0 }
+                onInspectorProjectionHandled: { [weak self] in self?.handledProjection = $0 },
+                onInspectorVisibilitySet: { [weak self] value in
+                    self?.visibilityReceipt = value
+                }
             ))
             window.contentView?.layoutSubtreeIfNeeded()
             window.orderFrontRegardless()
@@ -153,6 +158,7 @@ struct NativeShellNodeSettingsTests {
                             try await NativeLayoutFixture.waitForInspector(
                                 in: fixture.window, visible: true, expectedWidth: fixture.inspectorWidth
                             )
+                            fixture.visibilityReceipt = true
                             return fixture
                         }
                     }
@@ -188,16 +194,23 @@ struct NativeShellNodeSettingsTests {
             try await NativeLayoutFixture.wait(in: window, for: "inspector projection consumption") {
                 self.handledProjection == expected
             }
-            try await NativeLayoutFixture.waitForInspector(
-                in: window, visible: layout.inspectorVisible, expectedWidth: inspectorWidth
-            )
+            let visible = layout.inspectorVisible
+            try await waitForPresentation(visible: visible)
         }
 
         /// Manual collapse is a separate native transition and must finish before another request can reopen it.
         func collapseInspector() async throws {
             try await settle()
             layout.inspectorVisible = false
-            try await NativeLayoutFixture.waitForInspector(in: window, visible: false)
+            try await waitForPresentation(visible: false)
+        }
+
+        /// AppKit can reach the target frame before SwiftUI receives its native visibility write.
+        private func waitForPresentation(visible: Bool) async throws {
+            try await NativeLayoutFixture.wait(in: window, for: "native inspector binding visible=\(visible)") {
+                self.visibilityReceipt == visible && self.layout.inspectorVisible == visible
+            }
+            try await NativeLayoutFixture.waitForInspector(in: window, visible: visible, expectedWidth: inspectorWidth)
         }
 
         /// Releasing the native composition tears down only this fixture's hosted page and appearance observers.

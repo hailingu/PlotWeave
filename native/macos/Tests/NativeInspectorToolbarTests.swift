@@ -25,7 +25,12 @@ struct NativeInspectorToolbarTests {
         _ = try await waitForInspector(in: window, expectedWidth: 300)
         try expectTwoEnds(in: window)
         window.setContentSize(NSSize(width: 1400, height: 800))
-        split.setPosition(900, ofDividerAt: 0)
+        try await NativeLayoutFixture.wait(in: window, for: "resized inspector container") {
+            guard let current = window.contentView.flatMap({ NativeLayoutFixture.inspectorSplit(in: $0) }) else { return false }
+            return abs(current.bounds.width - 1400) < 1
+        }
+        let resizedSplit = try #require(window.contentView.flatMap { NativeLayoutFixture.inspectorSplit(in: $0) })
+        resizedSplit.setPosition(900, ofDividerAt: 0)
         try await waitForTwoEnds(in: window, expectedWidth: 500)
         try expectTwoEnds(in: window)
     }
