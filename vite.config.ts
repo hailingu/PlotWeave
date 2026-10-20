@@ -24,8 +24,9 @@ export default defineConfig({
       // 覆盖率下限（issue #393）：整体行覆盖率 ≥ 80%，跌破即本命令非零
       // 退出。数值与本机 SonarQube 服务端 Quality Gate 的 80% 行覆盖率条件
       // 对齐（服务端条件不在版本控制内，这是仓库侧可失败的等价下限），
-      // 不追踪实测基线（98.13%，见 typescript-standard.md「Coverage Floor
-      // And Baseline」），差额留作余量。口径为行覆盖率——与门禁台账
+      // 不追踪逐次实测值；运行摘要见 docs/development/gate-history.jsonl，
+      // 报告来源与核验边界见 typescript-standard.md「Coverage Floor And
+      // Baseline」。口径为行覆盖率——与门禁台账
       // frontendLineCoveragePercent 同一 LCOV DA 口径，sonar-quality-gate.sh
       // 在扫描前按同一口径复核两份报告；分支等其余口径不设下限（Rust 侧
       // 无分支口径，见 rust-standard.md「测试覆盖率」）。恰等于下限通过。

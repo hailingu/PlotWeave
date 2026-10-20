@@ -230,11 +230,12 @@ just below the floor that would round to a displayed `80.00%` is still
 rejected, and rounded percentages remain display- and ledger-only —
 mirroring the server's "below the condition fails" semantics.
 
-Measured baseline, recorded for reference (2026-09-29): **98.1% line
-coverage** — vitest v8 metric 98.12%, and the gate ledger's LCOV `DA` metric
-98.13 for the same tree. The gap to the floor is headroom, not a commitment
-to maintain the baseline value; per-run values stay visible in
-`docs/development/gate-history.jsonl`.
+Measured coverage varies with the inspected tree and is not a fixed baseline.
+Assess headroom using the LCOV report (`coverage/lcov.info`) from the run being
+assessed and the per-run summaries in [gate-history.jsonl](gate-history.jsonl).
+The ledger contains executor-reported summaries, not independent proof of
+execution; its boundaries and verification procedure are documented in
+[Gate Run Evidence Record](quality-gate-evidence.md#gate-run-evidence-record-issue-355).
 
 Boundaries: only **line** coverage has a floor — branch metrics have none on
 either side of the stack (the Rust report has no branch metric on the pinned
