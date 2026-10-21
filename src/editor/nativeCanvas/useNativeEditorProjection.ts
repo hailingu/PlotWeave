@@ -7,6 +7,9 @@ import type { EditorController } from '../useEditorController'
 import type { EditorProjectContent } from '../useEditorDocument'
 import type { CanvasNode } from '../nodes/types'
 
+const DISABLED_NODES: CanvasNode[] = []
+const DISABLED_SOURCES: readonly unknown[] = []
+
 /** Projection fields come from the existing controller, never a second editable document. */
 interface ProjectionInput {
   projectId: string
@@ -50,9 +53,11 @@ function inspectorSeeds(
 /** Expensive content projections have semantic inputs independent of position/session frames. */
 function useContentProjection(input: ProjectionInput, enabled: boolean) {
   const { doc, panels, view } = input.editor
-  const target =
-    doc.nodes.find((node) => node.id === panels.openSettingsId) ??
-    view.selectedNode
+  const contentNodes = enabled ? doc.contentNodes : DISABLED_NODES
+  const target = enabled
+    ? (doc.nodes.find((node) => node.id === panels.openSettingsId) ??
+      view.selectedNode)
+    : undefined
   const id = target?.id,
     type = target?.type,
     data = target?.data
@@ -64,36 +69,40 @@ function useContentProjection(input: ProjectionInput, enabled: boolean) {
     [id, type, data],
   )
   const seeds = useMemo(
-    () => (enabled ? inspectorSeeds(doc.contentNodes, type) : []),
-    [enabled, doc.contentNodes, type],
+    () => (enabled ? inspectorSeeds(contentNodes, type) : []),
+    [enabled, contentNodes, type],
   )
   const nodes = useMemo(
     () =>
       enabled
-        ? doc.contentNodes.map((node) => ({
+        ? contentNodes.map((node) => ({
             id: node.id,
             type: node.type,
             label: nodeLabelOf(node),
           }))
         : [],
-    [enabled, doc.contentNodes],
+    [enabled, contentNodes],
   )
   const outline = useOutlineGroups(
-    doc.nodes,
-    doc.contentNodes,
+    enabled ? doc.nodes : DISABLED_NODES,
+    contentNodes,
     doc.edges,
     doc.episodeTitles,
     enabled,
   )
-  const contentRevision = useContentRevision([
-    doc.contentNodes,
-    doc.edges,
-    doc.settings,
-    doc.assets,
-    doc.episodeTitles,
-    doc.viewport,
-    input.project.name,
-  ])
+  const contentRevision = useContentRevision(
+    enabled
+      ? [
+          doc.contentNodes,
+          doc.edges,
+          doc.settings,
+          doc.assets,
+          doc.episodeTitles,
+          doc.viewport,
+          input.project.name,
+        ]
+      : DISABLED_SOURCES,
+  )
   return { selected, seeds, nodes, outline, contentRevision }
 }
 

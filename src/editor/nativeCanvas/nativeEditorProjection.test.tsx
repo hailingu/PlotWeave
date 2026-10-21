@@ -53,8 +53,13 @@ function Wrapper({ children }: { children: ReactNode }) {
 }
 
 /** Capture the actual JSON wire shape without replacing controller or transport policy. */
-function fixture(swift = true, project = PROJECT) {
+function fixture(
+  swift = true,
+  project = PROJECT,
+  useShell = useNativeEditorShell,
+) {
   const post = vi.fn()
+  const renders = vi.fn()
   if (swift)
     host.__pwNativeHost = {
       kind: 'swift',
@@ -71,6 +76,7 @@ function fixture(swift = true, project = PROJECT) {
   const attempts = vi.fn()
   const hook = renderHook(
     ({ name, draft }: { name: string; draft: boolean }) => {
+      renders()
       const viewport = useReactFlow()
       const editor = useEditorController({
         project,
@@ -78,7 +84,7 @@ function fixture(swift = true, project = PROJECT) {
         screenToFlowPosition: viewport.screenToFlowPosition,
         fitView: viewport.fitView,
       })
-      useNativeEditorShell({
+      useShell({
         projectId: PROJECT.id,
         project: { ...project, name },
         aiSessionLoadFailed: false,
@@ -104,7 +110,16 @@ function fixture(swift = true, project = PROJECT) {
         'contentRevision' in value &&
         'projectId' in value,
     ).length
-  return { ...hook, builds, encodedCount, projection, post, attempts, release }
+  return {
+    ...hook,
+    builds,
+    renders,
+    encodedCount,
+    projection,
+    post,
+    attempts,
+    release,
+  }
 }
 
 /** Real position changes leave content stable; x ties follow the shared id comparator. */
@@ -318,3 +333,52 @@ it('invalidates the shared order cache for attached shots and retains host episo
   act(() => view.result.current.editor.doc.setEpisodeTitles({ 2: 'Second' }))
   expect(view.projection().outline[0].title).toBe('Second')
 })
+
+/** Same real controller without native delivery establishes its own required render work. */
+function useNoNativeShell() {
+  return undefined
+}
+
+/** Apply identical document mutations to the bare and native-enabled controller owners. */
+function changeNonNativeField(view: ReturnType<typeof fixture>, field: string) {
+  act(() => {
+    const doc = view.result.current.editor.doc
+    switch (field) {
+      case 'edges':
+        doc.setEdges([{ id: 'ab', source: 'a', target: 'b' }])
+        break
+      case 'settings':
+        doc.setSettings({ characters: [], locations: [] })
+        break
+      case 'assets':
+        doc.setAssets({ byId: {} })
+        break
+      case 'viewport':
+        doc.updateViewport({ x: 8, y: 10, zoom: 2 })
+        break
+      case 'name':
+        view.rerender({ name: 'Renamed', draft: false })
+        break
+    }
+  })
+}
+
+it.each(['edges', 'settings', 'assets', 'viewport', 'name'])(
+  'non-Swift %s updates do not create a native-only render pass',
+  (field) => {
+    const control = fixture(false, PROJECT, useNoNativeShell)
+    control.renders.mockClear()
+    changeNonNativeField(control, field)
+    const requiredRenders = control.renders.mock.calls.length
+    expect(requiredRenders).toBeGreaterThan(0)
+    control.unmount()
+    vi.restoreAllMocks()
+    const view = fixture(false)
+    view.renders.mockClear()
+    changeNonNativeField(view, field)
+    expect(view.renders).toHaveBeenCalledTimes(requiredRenders)
+    expect(view.builds).not.toHaveBeenCalled()
+    expect(view.encodedCount()).toBe(0)
+    expect(view.post).not.toHaveBeenCalled()
+  },
+)
