@@ -272,6 +272,7 @@ function nativeEditorFixture(project = PROJECT) {
 
 /** Native presentation observations stay separate from the authoritative document export. */
 interface NodeSettingsProjection {
+  inspectorSeeds: { id: string; type: string; data: Record<string, unknown> }[]
   aiOpen: boolean
   editingNodeId: string | null
   nodeSettingsRequest: number
@@ -295,6 +296,57 @@ async function exportedDocument() {
   }
   return JSON.parse(result.ok.text)
 }
+
+it('projects one inspector preparation seed without selecting or editing the document', async () => {
+  const view = nativeEditorFixture(PROJECT)
+  expect(view.editorProjection()).toMatchObject({
+    inspectorSeeds: [{ id: SCENE.id, type: SCENE.type, data: SCENE.data }],
+    selected: null,
+    editingNodeId: null,
+    canUndo: false,
+  })
+  const document = await exportedDocument()
+  expect(document.graph.nodes).toHaveLength(1)
+  expect(document.graph.nodes[0].id).toBe(SCENE.id)
+  const { name, ...spec } = SCENE.data
+  expect(document.graph.nodes[0].data.meta.label).toBe(name)
+  expect(document.graph.nodes[0].data.spec).toEqual(spec)
+})
+
+it('empty and selected projects do not duplicate a preparation seed', async () => {
+  const view = nativeEditorFixture({ ...PROJECT, nodes: [] })
+  expect(view.editorProjection().inspectorSeeds).toEqual([])
+  await act(async () => {
+    await intent('editor.create', { nodeType: 'scene' })
+  })
+  const firstSelected = view.editorProjection().selected?.id
+  expect(firstSelected).toBeTruthy()
+  expect(view.editorProjection().inspectorSeeds).toEqual([])
+  await act(async () => {
+    await intent('editor.create', { nodeType: 'beat' })
+  })
+  expect(view.editorProjection().inspectorSeeds).toMatchObject([
+    { id: firstSelected, type: 'scene' },
+  ])
+  expect(view.editorProjection().selected?.id).not.toBe(firstSelected)
+})
+
+it('prepares one representative per existing kind instead of one form per graph node', () => {
+  const project = nativeListProject()
+  const view = nativeEditorFixture({
+    ...project,
+    nodes: [...project.nodes, { ...SCENE, id: 'other-scene' }],
+  })
+  const seeds = view.editorProjection().inspectorSeeds
+  expect(seeds).toHaveLength(
+    new Set(project.nodes.map((node) => node.type)).size,
+  )
+  expect(new Set(seeds.map((node) => node.type)).size).toBe(seeds.length)
+  expect(seeds.length).toBeLessThanOrEqual(6)
+  expect(seeds.filter((node) => node.type === 'scene')).toMatchObject([
+    { id: SCENE.id },
+  ])
+})
 
 it('consecutive native entity edits retain both fields before acknowledgment', async () => {
   nativeEditorFixture({

@@ -11,14 +11,45 @@ nonisolated enum NativeIntegerDraft {
     }
 }
 
+/// A reused control resets drafts by document target even when two nodes project identical values.
+struct NativeNodeFieldIdentity: Equatable {
+    /// A reopened project never inherits the previous document's input draft.
+    let projectID: String
+    /// Empty identity marks a prepared inactive form; real selection rebinds to its immutable node ID.
+    let nodeID: String
+}
+
+extension EnvironmentValues {
+    /// Ordinary forms keep their lifecycle; inspector controls additionally follow their captured node target.
+    @Entry var nativeFieldIdentity: NativeNodeFieldIdentity? = nil
+}
+
+/// Local input text belongs to one target; reading a new target immediately falls back to its projected value.
+private struct NativeFieldDraft {
+    private var identity: NativeNodeFieldIdentity?
+    private var text = ""
+
+    /// A new identity never displays the previous node's incomplete draft during the view update.
+    func value(for identity: NativeNodeFieldIdentity?, fallback: String) -> String {
+        self.identity == identity ? text : fallback
+    }
+
+    /// Only the native control owns transient text; authoritative document data stays in React.
+    mutating func replace(_ text: String, identity: NativeNodeFieldIdentity?) {
+        self.identity = identity
+        self.text = text
+    }
+}
+
 /// Native text drafts submit while editing so application quit never depends on a later focus change.
 struct NativeTextField: View {
     let label: String
     let value: String
     let onSubmit: (String) -> Void
-    @State private var draft = ""
+    @State private var draft = NativeFieldDraft()
     @FocusState private var focused: Bool
     @Environment(\.nativeInspectorFields) private var inspectorFields
+    @Environment(\.nativeFieldIdentity) private var fieldIdentity
 
     var body: some View {
         if inspectorFields { NativeInspectorField(label: label) { input } }
@@ -27,12 +58,21 @@ struct NativeTextField: View {
 
     /// The presentation wrapper shares the existing draft, focus and incremental commit behavior.
     private var input: some View {
-        TextField(label, text: $draft, axis: .vertical)
+        TextField(label, text: Binding(
+            get: { draft.value(for: fieldIdentity, fallback: value) },
+            set: { text in
+                draft.replace(text, identity: fieldIdentity)
+                if focused && text != value { onSubmit(text) }
+            }
+        ), axis: .vertical)
             .accessibilityLabel(label)
             .focused($focused)
-            .onChange(of: draft) { _, updated in if focused && updated != value { onSubmit(updated) } }
-            .onAppear { draft = value }
-            .onChange(of: value) { _, updated in if !focused { draft = updated } }
+            .onAppear { draft.replace(value, identity: fieldIdentity) }
+            .onChange(of: value) { _, updated in if !focused { draft.replace(updated, identity: fieldIdentity) } }
+            .onChange(of: fieldIdentity) { _, _ in
+                focused = false
+                draft.replace(value, identity: fieldIdentity)
+            }
     }
 }
 
@@ -42,9 +82,10 @@ struct NativeNumberField: View {
     let value: Double?
     var onClear: (() -> Void)? = nil
     let onSubmit: (Double) -> Void
-    @State private var draft = ""
+    @State private var draft = NativeFieldDraft()
     @FocusState private var focused: Bool
     @Environment(\.nativeInspectorFields) private var inspectorFields
+    @Environment(\.nativeFieldIdentity) private var fieldIdentity
 
     var body: some View {
         if inspectorFields { NativeInspectorField(label: label) { input } }
@@ -54,24 +95,31 @@ struct NativeNumberField: View {
     /// Numeric drafts and explicit clearing remain native controls with one validation path.
     private var input: some View {
         HStack {
-            TextField(label, text: $draft).focused($focused)
+            TextField(label, text: Binding(
+                get: { draft.value(for: fieldIdentity, fallback: displayValue) },
+                set: { text in
+                    draft.replace(text, identity: fieldIdentity)
+                    if focused, let number = NativeIntegerDraft.parse(text), number != value { onSubmit(number) }
+                }
+            )).focused($focused)
                 .accessibilityLabel(label)
                 .onAppear { refresh() }
                 .onChange(of: value) { _, _ in if !focused { refresh() } }
-                .onChange(of: draft) { _, text in
-                    if focused, let number = NativeIntegerDraft.parse(text), number != value { onSubmit(number) }
-                }
+                .onChange(of: fieldIdentity) { _, _ in focused = false; refresh() }
             if let onClear {
-                Button("清除", systemImage: "xmark.circle") { draft = ""; onClear() }.labelStyle(.iconOnly)
+                Button("清除", systemImage: "xmark.circle") { draft.replace("", identity: fieldIdentity); onClear() }.labelStyle(.iconOnly)
             }
         }
     }
 
     /// Display values originate from validated projections; clearing is a separate domain action.
-    private func refresh() { draft = value.map { String(format: "%.0f", $0) } ?? "" }
+    private func refresh() { draft.replace(displayValue, identity: fieldIdentity) }
+
+    /// Incomplete edits stay local while projected numbers retain the existing integer display format.
+    private var displayValue: String { value.map { String(format: "%.0f", $0) } ?? "" }
 }
 
-/// A captured project/node identity accompanies every field action until the form is replaced.
+/// Every rendered binding captures an immutable project/node target even when its native control is reused.
 @MainActor
 struct NativeNodeTarget {
     let state: NativeApplicationState

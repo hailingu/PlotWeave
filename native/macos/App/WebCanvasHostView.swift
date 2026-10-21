@@ -20,6 +20,8 @@ struct WebCanvasHostView: NSViewRepresentable {
 
     /// Visibility belongs to shell navigation, independent of page lifecycle.
     var isPresented = true
+    /// Loading may keep Web layout active while native fields are still preparing; release keyboard input independently.
+    var acceptsInput = true
 
     func makeCoordinator() -> WebCanvasCoordinator {
         WebCanvasCoordinator(
@@ -53,7 +55,7 @@ struct WebCanvasHostView: NSViewRepresentable {
         // SwiftUI opacity and FocusState alone do not resign a WebKit first
         // responder. Release only this hidden canvas's responder, leaving
         // another window or an already-focused home control untouched.
-        if !isPresented, let window = webView.window,
+        if (!isPresented || !acceptsInput), let window = webView.window,
             let responder = window.firstResponder as? NSView,
             responder.isDescendant(of: webView) {
             window.makeFirstResponder(nil)

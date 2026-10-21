@@ -105,7 +105,7 @@ CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建�
 入口的选择契约为：默认向 Xcode 显式传入环境变量
 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=0`；Xcode 去掉 `TEST_RUNNER_`
 前缀后把该值转发给测试宿主（[Apple 环境变量说明](https://developer.apple.com/documentation/xcode/environment-variable-reference)），
-以下五个方法通过 Swift Testing 的 `.enabled` 条件跳过。
+以下六个方法通过 Swift Testing 的 `.enabled` 条件跳过。
 开关未设置或不是精确值 `1` 时同样跳过：
 
 - `WebCanvasPerformanceTests/sustainedScriptedOperationsMatchFixtureScale(scale:)`
@@ -113,12 +113,18 @@ CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建�
 - `WebCanvasPerformanceTests/repeatedHostedCanvasCyclesKeepTotalMemoryBounded()`
 - `WebCanvasPerformanceTests/repeatedReloadsRecordLongMemoryTrend()`
 - `WebCanvasFirstDragLatencyTests/sameNodeFirstAndSecondDragRecordStartupEvidence()`
+- `WebCanvasFirstDragLatencyTests/openedProjectFirstDragsRecordPreparedEntryEvidence(mixedTypes:)`（首拖专用入口的项目加载对照）
 
 `sh scripts/test-native.sh stress` 传入环境变量 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1`，
 通过 `-only-testing` 选择整个 `WebCanvasPerformanceTests` 套件与首拖测量；
 套件内三个轻量报告校验也保留。采用套件选择是因为实测 Xcode 27 的方法级
 筛选未匹配两个参数化测量；启用条件由 Swift Testing 自身执行，避免默认
 门禁因筛选标识未匹配而意外跑压力测试。
+
+针对首拖问题的同条件调查可显式使用 `sh scripts/test-native.sh first-drag`（issue #688）：
+只选择 `WebCanvasFirstDragLatencyTests` 套件，启用该套件中的首拖测量并关闭覆盖率；
+不选择 `WebCanvasPerformanceTests`，因此不运行大图持续交互、窗口重建或长循环 reload。
+原 `stress` 的选择、规模与断言不变；默认功能回归仍关闭压力开关。
 
 这将六组 100/500/1000 节点持续交互、五次窗口重建、100 次 reload 和首拖
 对照测量移出默认门禁，原来的规模、等待、断言与证据口径保留。

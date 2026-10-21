@@ -199,6 +199,37 @@ it('stress 显式开启原规模测量，关闭覆盖率且不采集报告', () 
   expect(result.summary).toBeNull()
 })
 
+it('first-drag 仅启用首拖套件，不运行大图或长循环且不采覆盖率', () => {
+  const result = runNative({ mode: 'first-drag' })
+  expect(result.status).toBe(0)
+  expect(result.calls.map((call) => call.tool)).toEqual(['npm', 'xcodebuild'])
+  expect(result.calls[1]?.stress).toBe('1')
+  const args = result.calls[1]?.args ?? []
+  expect(args).toContain(
+    '-only-testing:PlotWeaveNativeTests/WebCanvasFirstDragLatencyTests',
+  )
+  expect(args.filter((arg) => arg.startsWith('-only-testing:'))).toHaveLength(1)
+  expect(args).not.toContain(
+    '-only-testing:PlotWeaveNativeTests/WebCanvasPerformanceTests',
+  )
+  expect(
+    args.slice(
+      args.indexOf('-enableCodeCoverage'),
+      args.indexOf('-enableCodeCoverage') + 2,
+    ),
+  ).toEqual(['-enableCodeCoverage', 'NO'])
+  expect(result.summary).toBeNull()
+})
+
+it('first-drag 透传构建与首拖失败，不转成默认回归或成功', () => {
+  for (const options of [{ npmExit: 23 }, { xcodeExit: 29 }]) {
+    const result = runNative({ mode: 'first-drag', ...options })
+    expect(result.status).toBe(options.npmExit ?? options.xcodeExit)
+    expect(result.summary).toBeNull()
+    expect(result.calls.some((call) => call.tool === 'xcrun')).toBe(false)
+  }
+})
+
 it.each([
   [23, 0, 1],
   [0, 65, 2],

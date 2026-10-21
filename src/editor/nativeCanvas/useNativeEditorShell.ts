@@ -141,6 +141,24 @@ function execute(
   return panelIntent(input, command)
 }
 
+/** One existing node supplies read-only native field preparation without changing selection or history. */
+function inspectorNode(node: CanvasNode | undefined) {
+  return node ? { id: node.id, type: node.type, data: node.data } : null
+}
+
+/** One representative per existing kind prepares bounded native controls; selected data already travels separately. */
+function inspectorSeeds(nodes: CanvasNode[], selected: CanvasNode | undefined) {
+  const seen = new Set<CanvasNode['type']>()
+  if (selected) seen.add(selected.type)
+  const seeds: NonNullable<ReturnType<typeof inspectorNode>>[] = []
+  for (const node of nodes) {
+    if (seen.has(node.type)) continue
+    seen.add(node.type)
+    seeds.push({ id: node.id, type: node.type, data: node.data })
+  }
+  return seeds
+}
+
 /** Projects data needed by native chrome; continuous graph positions stay in Web. */
 function snapshot(input: NativeEditorInput, contentRevision: number) {
   const { doc, history, persistence, view, panels } = input.editor
@@ -157,13 +175,8 @@ function snapshot(input: NativeEditorInput, contentRevision: number) {
     saveError: persistence.saveError,
     editingNodeId: panels.openSettingsId,
     nodeSettingsRequest: panels.nodeSettingsRequest,
-    selected: selected
-      ? {
-          id: selected.id,
-          type: selected.type,
-          data: selected.data,
-        }
-      : null,
+    selected: inspectorNode(selected),
+    inspectorSeeds: inspectorSeeds(doc.contentNodes, selected),
     nodes: doc.contentNodes.map((node) => ({
       id: node.id,
       type: node.type,

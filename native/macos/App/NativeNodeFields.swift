@@ -83,8 +83,8 @@ struct NativeNodeFields: View {
             }
         }
     }
-    private var locations: [HostJSON] { target.state.editor["settings"]?["locations"]?.array ?? [] }
-    private var characters: [HostJSON] { target.state.editor["settings"]?["characters"]?.array ?? [] }
+    private var locations: [HostJSON] { target.state.editorSettings["locations"]?.array ?? [] }
+    private var characters: [HostJSON] { target.state.editorSettings["characters"]?.array ?? [] }
     private var cast: [String] { (data["characterIds"]?.array ?? []).compactMap(\.string) }
 }
 

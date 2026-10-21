@@ -33,10 +33,11 @@ struct WebCanvasSection: View {
                     catch { state.fail(error.localizedDescription) }
                 },
                 onConnection: { application?.connect($0) },
-                isPresented: canvasPresented
+                isPresented: canvasPresented,
+                acceptsInput: application?.editorPreparation.pending != true
             )
             .opacity(canvasPresented ? 1 : 0)
-            .allowsHitTesting(demoMode || application?.route == "editor")
+            .allowsHitTesting(demoMode || (application?.route == "editor" && application?.editorPreparation.pending != true))
             .accessibilityHidden(!canvasPresented)
             if !demoMode, state.phase == .ready, let application {
                 switch application.route {
@@ -122,6 +123,6 @@ private struct NativeCanvasZoom: View {
         .labelStyle(.iconOnly).controlSize(.small)
         .padding(.horizontal, 12).padding(.vertical, 8)
         .glassEffect(.regular, in: .capsule)
-        .disabled(state.busy)
+        .disabled(state.busy || state.editorPreparation.pending)
     }
 }

@@ -10,9 +10,9 @@ struct NativeEditorToolbar: ToolbarContent {
         if state.route == "editor" {
             ToolbarItemGroup(placement: .navigation) {
                 Button("撤销", systemImage: "arrow.uturn.backward") { state.sendEditor("editor.undo") }
-                    .disabled(!state.canUndo || state.busy)
+                    .disabled(!state.canUndo || state.busy || state.editorPreparation.pending)
                 Button("重做", systemImage: "arrow.uturn.forward") { state.sendEditor("editor.redo") }
-                    .disabled(!state.canRedo || state.busy)
+                    .disabled(!state.canRedo || state.busy || state.editorPreparation.pending)
             }
         }
     }
@@ -50,7 +50,7 @@ struct NativeProjectLibraryButton: View {
     var body: some View {
         Button("返回项目片库", systemImage: "house") { state.send("app.home") }
             .help("返回项目片库")
-            .disabled(state.route != "editor" || state.busy)
+            .disabled(state.route != "editor" || state.busy || state.editorPreparation.pending)
     }
 }
 
@@ -66,7 +66,7 @@ private struct NativeEditorActions: View {
             Button("AI", systemImage: "sparkles") { layout.inspectorVisible = true; state.sendEditor("editor.ai") }
             Button("导出", systemImage: "square.and.arrow.up") { state.exportVisible = true }
         }
-        .disabled(state.busy)
+        .disabled(state.busy || state.editorPreparation.pending)
     }
 }
 
@@ -85,6 +85,6 @@ private struct NativeNodeCreationMenu: View {
             }
         }
         .menuIndicator(.hidden)
-        .disabled(state.busy)
+        .disabled(state.busy || state.editorPreparation.pending)
     }
 }
