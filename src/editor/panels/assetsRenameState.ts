@@ -68,6 +68,10 @@ export const failRename = (
   return baseline
 }
 
+/** Read the durable chain anchor before opening deletion confirmation, without ending an active rename. */
+export const renameBaselineSnapshot = (id: string): string | undefined =>
+  renameBaseline.get(id)
+
 /** 删除终结：代际 +1 失效一切在途响应（跨实例）、清除锚定基线并解除
  * 该资产的未解决错误。 */
 export const forgetRename = (id: string): void => {

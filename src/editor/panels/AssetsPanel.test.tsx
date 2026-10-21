@@ -134,7 +134,7 @@ describe('AssetsPanel 类别内操作', () => {
     fireEvent.click(await screen.findByRole('button', { name: '删除' }))
     expect(screen.queryByText('女主正面')).toBeNull()
     expect(spies.remove).toHaveBeenCalledWith('a1')
-    expect(revokeSpy).toHaveBeenCalledWith('blob:mock-url')
+    await waitFor(() => expect(revokeSpy).toHaveBeenCalledWith('blob:mock-url'))
   })
 })
 
