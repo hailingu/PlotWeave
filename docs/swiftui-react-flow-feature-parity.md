@@ -1,5 +1,7 @@
 # 原生版本功能补齐记录
 
+> **历史证据归档（2026-10-21 整理，issues #666／#667）**：当前支持范围、验收状态与契约核对请从[当前功能状态](swiftui-react-flow-current-state.md)阅读。本页以下 22 个二级小节及其嵌套记录保留原文、原锚点和原执行范围；“未创建 PR”“CI 未运行”“待验收”等描述只对应各次记录，不是当前结论。历史结果不因本次整理升级为验收通过，也不重新开启已取消的验收项。
+
 > 2026-10-18 所有者决策（[issue #569](https://github.com/hailingu/PlotWeave/issues/569)）：PlotWeave 不支持 VoiceOver；取消原生界面与 WKWebView 画布的朗读、导航、焦点顺序、rotor 及 Web 辅助功能树验收，按不计划支持关闭 #569。下文各轮“VoiceOver 未验收／待人工验证”保留为历史事实，不再代表待完成项，也不表示验收通过。现有键盘、语义标签、axe 审计和外观辅助功能保持；当前设计见 [UI §2.6](ui-design.md#26-无障碍变体) 与[迁移计划 §1](swiftui-react-flow-migration-plan.md#1-目标与范围)。
 
 > 2026-10-12：[PR #526 评审与 CI 修复](swiftui-react-flow-pr526-fixes.md)收紧 Swift 图像下载的特殊用途地址策略，恢复欢迎列表规范毫秒时间的相对展示，并将测试宿主隔离提前到 TestAction。CI／现行原生路由串行执行共享 NSApplication 的完整目标；历史并行失败与各次旧命令仍保留原执行范围。
