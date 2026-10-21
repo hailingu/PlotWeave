@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { currentNativeNode, nativeNodePatch } from './nativeNodeActions'
 import type { ReactFlowInstance } from '@xyflow/react'
@@ -7,8 +7,7 @@ import {
   publishNativeProjection,
   registerNativeIntentHandler,
 } from '../../platform/nativeShell'
-import { buildOutlineGroups } from '../outline'
-import { nodeLabelOf } from '../useAiBridge'
+import { useNativeEditorProjection } from './useNativeEditorProjection'
 import type { EditorController } from '../useEditorController'
 import type { CanvasNode } from '../nodes/types'
 import type { CanvasAlignment } from '../canvasAlignment'
@@ -141,60 +140,12 @@ function execute(
   return panelIntent(input, command)
 }
 
-/** One existing node supplies read-only native field preparation without changing selection or history. */
-function inspectorNode(node: CanvasNode | undefined) {
-  return node ? { id: node.id, type: node.type, data: node.data } : null
-}
-
-/** One representative per existing kind prepares bounded native controls; selected data already travels separately. */
-function inspectorSeeds(nodes: CanvasNode[], selected: CanvasNode | undefined) {
-  const seen = new Set<CanvasNode['type']>()
-  if (selected) seen.add(selected.type)
-  const seeds: NonNullable<ReturnType<typeof inspectorNode>>[] = []
-  for (const node of nodes) {
-    if (seen.has(node.type)) continue
-    seen.add(node.type)
-    seeds.push({ id: node.id, type: node.type, data: node.data })
-  }
-  return seeds
-}
-
-/** Projects data needed by native chrome; continuous graph positions stay in Web. */
-function snapshot(input: NativeEditorInput, contentRevision: number) {
-  const { doc, history, persistence, view, panels } = input.editor
-  const selected =
-    doc.nodes.find((node) => node.id === panels.openSettingsId) ??
-    view.selectedNode
-  return {
-    aiSessionLoadFailed: input.aiSessionLoadFailed,
-    aiSessionError: input.aiSessionError,
-    projectId: input.projectId,
-    contentRevision,
-    canUndo: history.canUndo,
-    canRedo: history.canRedo,
-    saveError: persistence.saveError,
-    editingNodeId: panels.openSettingsId,
-    nodeSettingsRequest: panels.nodeSettingsRequest,
-    selected: inspectorNode(selected),
-    inspectorSeeds: inspectorSeeds(doc.contentNodes, selected),
-    nodes: doc.contentNodes.map((node) => ({
-      id: node.id,
-      type: node.type,
-      label: nodeLabelOf(node),
-    })),
-    outline: buildOutlineGroups(doc.nodes, doc.edges, doc.episodeTitles),
-    settings: doc.settings,
-    assets: doc.assets,
-    focusedEpisode: doc.focusedEpisode,
-    zoom: doc.viewport?.zoom ?? 1,
-    aiOpen: panels.rightOpen && panels.rightTab === 'ai',
-  }
-}
-
 /** Stable native action owner and deduplicated read-only projection for a live editor. */
 export function useNativeEditorShell(input: NativeEditorInput): void {
   const latest = useRef(input)
-  latest.current = input
+  useLayoutEffect(() => {
+    latest.current = input
+  }, [input])
   useEffect(() => {
     if (!isSwiftHost()) return
     let alive = true
@@ -211,25 +162,7 @@ export function useNativeEditorShell(input: NativeEditorInput): void {
       remove()
     }
   }, [])
-  const revision = useRef<{ sources: readonly unknown[]; value: number }>({
-    sources: [],
-    value: 0,
-  })
-  const doc = input.editor.doc
-  const sources = [
-    doc.contentNodes,
-    doc.edges,
-    doc.settings,
-    doc.assets,
-    doc.episodeTitles,
-    doc.viewport,
-    input.project.name,
-  ]
-  if (sources.some((value, index) => value !== revision.current.sources[index]))
-    revision.current = { sources, value: revision.current.value + 1 }
-  const encoded = isSwiftHost()
-    ? JSON.stringify(snapshot(input, revision.current.value))
-    : ''
+  const encoded = useNativeEditorProjection(input)
   useEffect(() => {
     if (encoded)
       publishNativeProjection('editor', JSON.parse(encoded) as unknown)
