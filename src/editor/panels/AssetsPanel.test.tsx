@@ -872,11 +872,14 @@ describe('AssetsPanel 缩略图失败与重试（issue #142）', () => {
     fireEvent.click(await screen.findByText('角色设定'))
     fireEvent.click(await screen.findByRole('button', { name: /重试/ }))
     // 在途期间：失败诊断与重试入口保留——不得提前消失成惰性占位
-    await new Promise((r) => setTimeout(r, 30))
+    await waitFor(() => expect(store.mediaUrl).toHaveBeenCalledTimes(2))
+    expect(releaseRetry).toBeTypeOf('function')
     expect(screen.getByRole('button', { name: /重试/ })).toBeTruthy()
     expect(screen.getByTitle(/媒体读取失败：磁盘错误/)).toBeTruthy()
     // 落定成功后清除
-    releaseRetry?.()
+    await act(async () => {
+      releaseRetry?.()
+    })
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /重试/ })).toBeNull(),
     )
@@ -897,18 +900,35 @@ describe('AssetsPanel 缩略图失败与重试（issue #142）', () => {
       expect(document.querySelectorAll('img')).toHaveLength(1),
     )
   })
+})
 
+describe('AssetsPanel 失败态不自动重试（issue #684）', () => {
   it('失败后普通父渲染不反复重试（稳定观察回调 + 错误态不观察）', async () => {
-    const store = mockStore([asset()])
-    const media = store.mediaUrl.mockRejectedValue(new Error('坏'))
-    const { rerender } = render(<AssetsPanel />)
-    fireEvent.click(await screen.findByText('角色设定'))
-    await screen.findByRole('button', { name: /重试/ })
-    const calls = media.mock.calls.length
-    rerender(<AssetsPanel />)
-    await new Promise((r) => setTimeout(r, 20))
-    rerender(<AssetsPanel />)
-    await new Promise((r) => setTimeout(r, 20))
-    expect(media.mock.calls).toHaveLength(calls)
+    vi.useFakeTimers()
+    try {
+      const store = mockStore([asset()])
+      const media = store.mediaUrl.mockRejectedValue(new Error('坏'))
+      const { rerender } = render(<AssetsPanel />)
+      await act(async () => {})
+      fireEvent.click(screen.getByText('角色设定'))
+      await act(async () => {})
+      expect(screen.getByRole('button', { name: /重试/ })).toBeTruthy()
+      expect(media).toHaveBeenCalledTimes(1)
+
+      // 从首次失败前接管时钟，逐次排空重渲染后的计时器与 Promise 工作。
+      for (let renderCount = 0; renderCount < 2; renderCount += 1) {
+        rerender(<AssetsPanel />)
+        await act(async () => {
+          await vi.runAllTimersAsync()
+        })
+        expect(vi.getTimerCount()).toBe(0)
+        expect(media).toHaveBeenCalledTimes(1)
+        expect(screen.getByRole('button', { name: /重试/ })).toBeTruthy()
+        expect(screen.getByTitle('Error: 坏')).toBeTruthy()
+      }
+    } finally {
+      cleanup()
+      vi.useRealTimers()
+    }
   })
 })
