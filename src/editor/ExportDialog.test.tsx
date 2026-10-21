@@ -6,7 +6,14 @@
  * .md 下载触发。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { ExportDialog } from './ExportDialog'
 import { buildScriptExport, type ScriptExportModel } from './exportScript'
 import { buildCanvasNode } from './nodeFactory'
@@ -529,12 +536,13 @@ describe('ExportDialog（剪贴板回退与下载）', () => {
     stubClipboard(vi.fn().mockRejectedValue(new Error('denied')))
     setup()
     const selectSpy = vi.spyOn(window.getSelection()!, 'addRange')
-    fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 850))
-    })
-    expect(selectSpy).toHaveBeenCalled()
-    selectSpy.mockRestore()
+    try {
+      fireEvent.click(screen.getByRole('button', { name: '复制全文' }))
+      await waitFor(() => expect(selectSpy).toHaveBeenCalled())
+      expect(window.getSelection()?.toString()).toBe('# 正文\n第一场')
+    } finally {
+      selectSpy.mockRestore()
+    }
   })
 
   it('下载 .md：Blob 建链触发 a.click 并回收 ObjectURL', () => {
