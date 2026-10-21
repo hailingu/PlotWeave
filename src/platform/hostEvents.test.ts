@@ -109,6 +109,12 @@ it('一个消费者抛错不吞掉其他监听并留下结构化诊断', async (
   expect(error).toHaveBeenCalledWith(
     '[Host] 事件消费失败',
     expect.objectContaining({ code: 'PW_HOST_EVENT_HANDLER_FAILED' }),
+    {
+      level: 'ERROR',
+      target: 'plotweave::frontend::host',
+      code: 'PW_HOST_EVENT_HANDLER_FAILED',
+      message: '[Host] 事件消费失败',
+    },
   )
   offFailed()
   offPeer()

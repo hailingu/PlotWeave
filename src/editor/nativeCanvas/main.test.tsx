@@ -158,10 +158,19 @@ describe('native Web entry disposal failures (#573)', () => {
     await boot()
     await act(async () => hide())
     expect(document.getElementById('root')?.childElementCount).toBe(0)
-    expect(report).toHaveBeenCalledWith('[Canvas] 页面清理失败', {
-      code: 'PW_CANVAS_DISPOSE_FAILED',
-      error,
-    })
+    expect(report).toHaveBeenCalledWith(
+      '[Canvas] 页面清理失败',
+      {
+        code: 'PW_CANVAS_DISPOSE_FAILED',
+        error,
+      },
+      {
+        level: 'ERROR',
+        target: 'plotweave::frontend::canvas',
+        code: 'PW_CANVAS_DISPOSE_FAILED',
+        message: '[Canvas] 页面清理失败',
+      },
+    )
   })
 
   it('reports unexpected startup failure without mounting or leaving a rejecting promise', async () => {
@@ -172,10 +181,19 @@ describe('native Web entry disposal failures (#573)', () => {
       .mockImplementation(() => undefined)
     await boot()
     expect(document.getElementById('root')?.childElementCount).toBe(0)
-    expect(report).toHaveBeenCalledWith('[Canvas] 页面初始化失败', {
-      code: 'PW_CANVAS_INITIALIZATION_FAILED',
-      error,
-    })
+    expect(report).toHaveBeenCalledWith(
+      '[Canvas] 页面初始化失败',
+      {
+        code: 'PW_CANVAS_INITIALIZATION_FAILED',
+        error,
+      },
+      {
+        level: 'ERROR',
+        target: 'plotweave::frontend::canvas',
+        code: 'PW_CANVAS_INITIALIZATION_FAILED',
+        message: '[Canvas] 页面初始化失败',
+      },
+    )
   })
 })
 

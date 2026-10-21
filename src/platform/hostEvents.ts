@@ -1,6 +1,16 @@
 /** Tauri 与 Swift 两类宿主事件的统一入口，监听归属于当前页面生命周期。 */
 import { detectHostKind } from './hostEnvironment'
 import { currentSwiftHostSession, SwiftHostError } from './swiftHost'
+import { createDiagnostic } from '../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  pwHostEventHandlerFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::host',
+    'PW_HOST_EVENT_HANDLER_FAILED',
+  ),
+}
 
 /** 应用真正消费的宿主事件名；未知事件不能进入业务回调。 */
 export type HostEventName = 'app-quit-requested' | 'library-diagnostics'
@@ -29,7 +39,7 @@ function eventState(host: HostEventWindow, sessionId: string): SwiftEventState {
     if (currentSwiftHostSession() !== sessionId) return
     if (name !== 'app-quit-requested' && name !== 'library-diagnostics') return
     const reportFailure = (error: unknown) =>
-      console.error('[Host] 事件消费失败', {
+      logEvents.pwHostEventHandlerFailed('[Host] 事件消费失败', {
         code: 'PW_HOST_EVENT_HANDLER_FAILED',
         name,
         error,

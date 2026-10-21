@@ -12,6 +12,26 @@ import type { AppSettings } from './types'
 import { settingsStore } from './settingsStore'
 import { registerSettingsFlushGate } from './settingsSaveRegistry'
 import { assertWebWriteAllowed } from '../webExitFence'
+import { createDiagnostic } from '../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  settingsDebouncedSaveFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::settings',
+    'SETTINGS_DEBOUNCED_SAVE_FAILED',
+  ),
+  settingsRetrySaveFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::settings',
+    'SETTINGS_RETRY_SAVE_FAILED',
+  ),
+  settingsUnmountSaveFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::settings',
+    'SETTINGS_UNMOUNT_SAVE_FAILED',
+  ),
+}
 
 /** useSettingsSaver 的返回：编辑写入、关闭处理、可见错误与关态。 */
 export interface SettingsSaver {
@@ -219,7 +239,10 @@ export function useSettingsSaver(
       saveTimer.current = setTimeout(() => {
         pendingSaveRef.current = null
         enqueueSave(refs, next).catch((err) =>
-          console.warn('[SettingsView] 防抖落盘失败', err),
+          logEvents.settingsDebouncedSaveFailed(
+            '[SettingsView] 防抖落盘失败',
+            err,
+          ),
         )
       }, 500)
     },
@@ -237,7 +260,7 @@ export function useSettingsSaver(
   const retrySave = useCallback(() => {
     // 落盘诊断归 enqueueSave 的最新序号守卫；此处不能回写旧冲刷的错误。
     void flush().catch((error: unknown) =>
-      console.warn('[SettingsView] 重试落盘失败', error),
+      logEvents.settingsRetrySaveFailed('[SettingsView] 重试落盘失败', error),
     )
   }, [flush])
 
@@ -245,7 +268,10 @@ export function useSettingsSaver(
   useEffect(() => {
     return () => {
       void flush().catch((err) =>
-        console.warn('[SettingsView] 卸载冲刷保存失败', err),
+        logEvents.settingsUnmountSaveFailed(
+          '[SettingsView] 卸载冲刷保存失败',
+          err,
+        ),
       )
     }
   }, [flush])

@@ -5,6 +5,26 @@ import {
   publishCleanupPending,
   publishLibraryWarnings,
 } from './libraryDiagnostics'
+import { createDiagnostic } from '../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  libraryIndexEntryQuarantined: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::library',
+    'LIBRARY_INDEX_ENTRY_QUARANTINED',
+  ),
+  libraryCleanupPending: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::library',
+    'LIBRARY_CLEANUP_PENDING',
+  ),
+  libraryDiagnosticsListenerFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::library',
+    'LIBRARY_DIAGNOSTICS_LISTENER_FAILED',
+  ),
+}
 
 /** 警告始终保留并写诊断日志，待清理快照独立按后端序号收敛。
  * 不携带诊断的响应不清除旧状态；显式快照缺少有效序号时记录错误。 */
@@ -16,14 +36,17 @@ export function reportLibraryDiagnostics(input: unknown): void {
   if (Array.isArray(result.warnings)) {
     for (const warning of result.warnings) {
       if (typeof warning === 'string' && warning !== '')
-        console.warn('[Library] 索引条目隔离：', warning)
+        logEvents.libraryIndexEntryQuarantined(
+          '[Library] 索引条目隔离：',
+          warning,
+        )
     }
   }
   const pending = result.cleanupPending
   if (pending === undefined && result.diagnosticsRevision === undefined) return
   publishCleanupPending(pending, result.diagnosticsRevision)
   if (Array.isArray(pending) && pending.length > 0)
-    console.warn('[Library] 删除隔离区待清理：', pending)
+    logEvents.libraryCleanupPending('[Library] 删除隔离区待清理：', pending)
 }
 
 /** 应用启动屏障：库读取/拷贝恢复事件必须在首个组件请求之前可接收。
@@ -46,7 +69,7 @@ export async function initializeLibraryDiagnostics(): Promise<
       reportLibraryDiagnostics(payload)
     })
   } catch (error) {
-    console.error('[Library] 实时诊断监听失败', {
+    logEvents.libraryDiagnosticsListenerFailed('[Library] 实时诊断监听失败', {
       code: 'LIBRARY_DIAGNOSTICS_LISTENER_FAILED',
       error,
     })

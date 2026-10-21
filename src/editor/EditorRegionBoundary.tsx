@@ -1,5 +1,15 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import './editorRegionBoundary.css'
+import { createDiagnostic } from '../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  editorRegionRenderFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::editor',
+    'EDITOR_REGION_RENDER_FAILED',
+  ),
+}
 
 /** 编辑器独立展示域；文档、历史与保存所有者必须位于边界之外。 */
 type EditorRegion = 'left' | 'canvas' | 'right' | 'overlays'
@@ -37,7 +47,7 @@ class RegionFailureBoundary extends Component<
 
   /** 保留原始错误对象与完整组件栈，同时标识具体失败区域。 */
   componentDidCatch(error: unknown, info: ErrorInfo) {
-    console.error(
+    logEvents.editorRegionRenderFailed(
       '[PlotWeave] 区域渲染失败',
       { code: 'EDITOR_REGION_RENDER_FAILED', region: this.props.region },
       error,

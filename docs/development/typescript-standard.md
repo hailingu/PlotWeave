@@ -36,6 +36,30 @@ written in English for agent interoperability.
   settings (`npm run build`); do not suppress errors with
   `@ts-ignore`/`@ts-expect-error` without an explanatory comment.
 
+### Structured Diagnostics
+
+Frontend warnings and errors use `src/diagnostics.ts` (issue #686). Callers
+bind an explicit `WARN`/`ERROR` level, domain `target`, and stable machine
+`code` with `createDiagnostic`; dynamic codes use `reportDiagnostic`.
+The common record uses the same `level`, `target`, and `message` field names
+and uppercase level values as the Rust host sink, with an additional `code`.
+
+The console keeps the original prefix as its first argument and every
+original context argument in its original position. The final argument is
+the common record, whose `message` equals that prefix. Existing structured
+payloads keep their own `message`, `code`, `region`, source and stack fields;
+Error objects and other context retain their references. Do not stringify,
+copy, inspect or flatten arbitrary context to build a record. The sink uses
+the matching console level at emission time; creating a reporter is silent.
+The browser object channel preserves rich context while the Rust host writes
+JSON to stderr; this does not add a frontend file transport or filter setting.
+
+Production code must not call `console.warn` or `console.error` directly
+outside the shared sink. `src/diagnostics.contract.test.ts` checks direct
+named console calls through the TypeScript AST. Diagnostics do not replace
+visible failure feedback or change the owner's retry, cancellation or
+rethrow behavior.
+
 ### Strict Type Check Entry
 
 (Issues [#230](https://github.com/hailingu/PlotWeave/issues/230) and
