@@ -76,6 +76,16 @@ function decision() {
   return { promise, resolve, reject }
 }
 
+/** File and metadata scenarios share named completion gates without scheduling real delays. */
+function pauseByName(
+  gates: Map<string, ReturnType<typeof decision>>,
+  name: string,
+) {
+  const gate = decision()
+  gates.set(name, gate)
+  return gate
+}
+
 /** Storage changes only on acknowledged success; the first deletion is controlled and imports may reject by filename. */
 function mutationStorage(
   options: { holdList?: boolean; holdMedia?: boolean } = {},
@@ -87,6 +97,7 @@ function mutationStorage(
   const media = decision()
   const mediaRequests: string[] = []
   const importGates = new Map<string, ReturnType<typeof decision>>()
+  const renameGates = new Map<string, ReturnType<typeof decision>>()
   const imported: string[] = []
   let deletes = 0
   invoke.mockImplementation(async (command, raw) => {
@@ -121,6 +132,7 @@ function mutationStorage(
       return structuredClone(asset)
     }
     if (command === IPC_COMMANDS.updateLibraryAsset) {
+      if (args.patch.name) await renameGates.get(args.patch.name)?.promise
       const current = assets.get(args.id)
       if (!current) throw new Error('missing asset')
       const updated = { ...current, ...args.patch }
@@ -141,11 +153,8 @@ function mutationStorage(
     mediaRequests,
     imported,
     names: () => [...assets.values()].map((a) => a.name),
-    pauseImport: (name: string) => {
-      const gate = decision()
-      importGates.set(name, gate)
-      return gate
-    },
+    pauseImport: (name: string) => pauseByName(importGates, name),
+    pauseRename: (name: string) => pauseByName(renameGates, name),
   }
 }
 
@@ -346,4 +355,78 @@ it('does not start a new thumbnail for an import acknowledged after unmount', as
   await act(async () => importGate.resolve())
   expect(storage.names()).toEqual(['原有.png', '迟到.png'])
   expect(storage.mediaRequests).toEqual([storage.original.id])
+})
+
+it.each([
+  ['listed', false, false],
+  ['imported', false, false],
+  ['listed', true, false],
+  ['imported', true, false],
+  ['listed', false, true],
+  ['imported', false, true],
+] as const)(
+  'restores durable %s metadata: renameSucceeds=%s, settledBeforeConfirm=%s',
+  async (origin, renameSucceeds, settledBeforeConfirm) => {
+    const storage = mutationStorage()
+    const renaming = storage.pauseRename('待决.png')
+    await mountOtherAssets()
+    const originalName = origin === 'listed' ? '原有.png' : '新导入.png'
+    if (origin === 'imported') {
+      pickFiles([originalName])
+      await screen.findByRole('button', { name: originalName })
+    }
+    const target = (await libraryStore.list()).find(
+      (asset) => asset.name === originalName,
+    )
+    if (!target) throw new Error('Missing independently persisted fixture')
+    expect(libraryStore.persistedSnapshot(target.id)).toBeUndefined()
+    fireEvent.doubleClick(screen.getByRole('button', { name: originalName }))
+    const input = screen.getByRole('textbox', {
+      name: `资产名 ${originalName}`,
+    })
+    fireEvent.change(input, { target: { value: '待决.png' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.blur(input)
+    await screen.findByRole('button', { name: '待决.png' })
+    fireEvent.click(screen.getByRole('button', { name: '删除资产 待决.png' }))
+    const confirm = await screen.findByRole('button', { name: '删除' })
+    const settleRename = async () => {
+      await act(async () => {
+        if (renameSucceeds) renaming.resolve()
+        else renaming.reject(new Error('改名拒绝'))
+      })
+    }
+    if (settledBeforeConfirm) await settleRename()
+    fireEvent.click(confirm)
+    if (!settledBeforeConfirm) await settleRename()
+    await act(async () => storage.deletion.reject(new Error('删除拒绝')))
+    expect(await screen.findByText(/删除拒绝/)).toBeTruthy()
+    const expectedName = renameSucceeds ? '待决.png' : originalName
+    const absentName = renameSucceeds ? originalName : '待决.png'
+    expect(screen.getByRole('button', { name: expectedName })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: absentName })).toBeNull()
+    expect(screen.queryByText(/改名拒绝/)).toBeNull()
+    expect(storage.names()).toEqual(
+      origin === 'listed' ? [expectedName] : ['原有.png', expectedName],
+    )
+  },
+)
+
+it('cancelling a pending delete keeps the real rename failure and rollback active', async () => {
+  const storage = mutationStorage()
+  const renaming = storage.pauseRename('待决.png')
+  await mountOtherAssets()
+  fireEvent.doubleClick(screen.getByRole('button', { name: '原有.png' }))
+  const input = screen.getByRole('textbox', { name: '资产名 原有.png' })
+  fireEvent.change(input, { target: { value: '待决.png' } })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  fireEvent.blur(input)
+  await screen.findByRole('button', { name: '待决.png' })
+  fireEvent.click(screen.getByRole('button', { name: '删除资产 待决.png' }))
+  fireEvent.click(await screen.findByRole('button', { name: '取消' }))
+  await act(async () => renaming.reject(new Error('改名拒绝')))
+  expect(await screen.findByText(/改名拒绝/)).toBeTruthy()
+  expect(screen.getByRole('button', { name: '原有.png' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: '待决.png' })).toBeNull()
+  expect(storage.names()).toEqual(['原有.png'])
 })

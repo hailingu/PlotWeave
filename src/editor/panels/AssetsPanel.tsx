@@ -18,6 +18,7 @@ import {
   failRename,
   forgetRename,
   renameErrorsSnapshot,
+  renameBaselineSnapshot,
   subscribeRenameErrors,
 } from './assetsRenameState'
 import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
@@ -67,6 +68,23 @@ function useLibraryAssetList() {
   return { assets, setAssets, error, setError, loading, ...thumbnails }
 }
 
+/** Confirmation retains its displayed asset and an independently captured durable name for a rejected deletion. */
+interface AssetRemoval {
+  readonly asset: LibraryAsset
+  readonly fallbackName: string
+}
+
+/** Opening a dialog must not clear rename state; confirmed metadata can still advance before deletion finishes. */
+function assetRemovalTarget(asset: LibraryAsset): AssetRemoval {
+  return {
+    asset,
+    fallbackName:
+      libraryStore.persistedSnapshot(asset.id)?.name ??
+      renameBaselineSnapshot(asset.id) ??
+      asset.name,
+  }
+}
+
 /** 确认后执行删除（AssetsPanel 拆分，issue #99）：移除列表项并回收缩
  * 略 URL（blob: 回收防长会话内存泄漏）；落盘删除交给库门面。仅在
  * ConfirmDeleteDialog 确认后调用。行先乐观隐藏，拒绝恢复最近落盘条目；
@@ -98,15 +116,16 @@ function removeLibraryAsset(
 /** 删除确认框（AssetsPanel 拆分，issue #99）：✕ 只发起请求，确认后
  * 执行移除并回收缩略 URL；落盘删除交给库门面（删除不可恢复）。 */
 function RemoveAssetDialog({
-  asset,
+  target,
   onClose,
   onConfirm,
 }: {
-  readonly asset: LibraryAsset | null
+  readonly target: AssetRemoval | null
   readonly onClose: () => void
-  readonly onConfirm: (asset: LibraryAsset) => void
+  readonly onConfirm: (target: AssetRemoval) => void
 }) {
-  if (!asset) return null
+  if (!target) return null
+  const { asset } = target
   return (
     <ConfirmDeleteDialog
       title="删除资产"
@@ -114,7 +133,7 @@ function RemoveAssetDialog({
       onCancel={onClose}
       onConfirm={() => {
         onClose()
-        onConfirm(asset)
+        onConfirm(target)
       }}
     />
   )
@@ -542,7 +561,7 @@ export function AssetsPanel() {
   } = useLibraryAssetList()
   const [selectedKind, setSelectedKind] = useState<LibraryKind | null>(null)
   /** 待删除资产（非 null 时弹应用内确认框）。 */
-  const [pendingRemove, setPendingRemove] = useState<LibraryAsset | null>(null)
+  const [pendingRemove, setPendingRemove] = useState<AssetRemoval | null>(null)
   const count = (kind: LibraryKind) =>
     assets.filter((a) => a.kind === kind).length
   const { busy, fileRef, importFiles, onPick } = useAssetImport(
@@ -554,10 +573,11 @@ export function AssetsPanel() {
   const { commitTags, tagsError, forgetTags } = useAssetTagsCommit(setAssets)
   const { rename, renameError, forgetRename } = useAssetRename(setAssets)
 
-  const remove = (asset: LibraryAsset) => {
+  const remove = ({ asset, fallbackName }: AssetRemoval) => {
     forgetTags(asset.id)
     forgetRename(asset.id)
-    removeLibraryAsset(asset, setAssets, forgetUrl, setError)
+    const fallback = { ...asset, name: fallbackName }
+    removeLibraryAsset(fallback, setAssets, forgetUrl, setError)
   }
 
   return (
@@ -586,7 +606,9 @@ export function AssetsPanel() {
           onVisible={refreshUrl}
           onRename={rename}
           onTagsBlur={commitTags}
-          onRequestRemove={setPendingRemove}
+          onRequestRemove={(asset) =>
+            setPendingRemove(assetRemovalTarget(asset))
+          }
         />
       )}
       {busy && !loading && <div className="pw-assets-hint">导入中…</div>}
@@ -597,7 +619,7 @@ export function AssetsPanel() {
         tagsError={tagsError}
       />
       <RemoveAssetDialog
-        asset={pendingRemove}
+        target={pendingRemove}
         onClose={() => setPendingRemove(null)}
         onConfirm={remove}
       />
