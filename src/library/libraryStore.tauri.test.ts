@@ -229,6 +229,67 @@ describe('libraryStore Tauri 路径：写操作警告', () => {
   })
 })
 
+describe('libraryStore 原生宿主路径：导入大小边界', () => {
+  it.each(['tauri', 'swift'])('超限文件在%s宿主读取之前拒绝', async (host) => {
+    if (host === 'swift') {
+      vi.stubGlobal('window', { __pwNativeHost: { kind: 'swift' } })
+    }
+    const { libraryStore } = await load()
+    const file = new File(['x'], 'large.png', { type: 'image/png' })
+    Object.defineProperty(file, 'size', { value: 20 * 1024 * 1024 + 1 })
+    const read = vi
+      .spyOn(file, 'arrayBuffer')
+      .mockRejectedValue(new Error('unexpected full read'))
+    await expect(libraryStore.put(file, 'reference')).rejects.toThrow(
+      '文件超过 20 MiB 上限',
+    )
+    expect(read).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it.each([20 * 1024 * 1024 - 1, 20 * 1024 * 1024])(
+    '声明大小%s在界内仍读取并传原字节',
+    async (size) => {
+      invoke.mockResolvedValue(entry())
+      const { libraryStore } = await load()
+      const file = new File([new Uint8Array([1, 255])], 'edge.png', {
+        type: 'image/png',
+      })
+      // 只注入边界元数据，不用20MiB数字数组测前置判定。
+      Object.defineProperty(file, 'size', { value: size })
+      const read = vi.spyOn(file, 'arrayBuffer')
+      await expect(libraryStore.put(file, 'other')).resolves.toMatchObject({
+        id: 'la-1',
+      })
+      expect(read).toHaveBeenCalledOnce()
+      expect(invoke.mock.calls[0][1]).toMatchObject({ bytes: [1, 255] })
+    },
+  )
+
+  it('实际缓冲超过上限时在Array.from之前拒绝，不依赖声明大小', async () => {
+    invoke.mockResolvedValue(entry())
+    const { libraryStore } = await load()
+    const file = new File(['x'], 'changed.png', { type: 'image/png' })
+    const buffer = new ArrayBuffer(20 * 1024 * 1024 + 1)
+    const read = vi.spyOn(file, 'arrayBuffer').mockResolvedValue(buffer)
+    const expand = vi.spyOn(Array, 'from')
+    try {
+      await expect(libraryStore.put(file, 'other')).rejects.toThrow(
+        '文件超过 20 MiB 上限',
+      )
+      expect(
+        expand.mock.calls.some(
+          ([value]) => value instanceof Uint8Array && value.buffer === buffer,
+        ),
+      ).toBe(false)
+      expect(read).toHaveBeenCalledOnce()
+      expect(invoke).not.toHaveBeenCalled()
+    } finally {
+      expand.mockRestore()
+    }
+  })
+})
+
 describe('libraryStore Tauri 路径：put', () => {
   it('字节数组序列化传参，返回条目经归一化', async () => {
     invoke.mockResolvedValue(entry({ id: 'la-9' }))

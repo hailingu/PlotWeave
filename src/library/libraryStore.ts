@@ -138,8 +138,15 @@ async function tauriList(): Promise<LibraryAsset[]> {
     .filter((a): a is LibraryAsset => a !== null)
 }
 
+/** 与两种宿主共享20 MiB契约：元数据先阻止整文件读取，实际长度再阻止JS数组展开。 */
+function requireBoundedImport(size: number): void {
+  if (size > 20 * 1024 * 1024) throw new Error('文件超过 20 MiB 上限')
+}
+
 async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
+  requireBoundedImport(file.size)
   const bytes = new Uint8Array(await file.arrayBuffer())
+  requireBoundedImport(bytes.byteLength)
   const entry = await ipcInvoke<RawAsset>(IPC_COMMANDS.importLibraryAsset, {
     name: file.name,
     mime: file.type || 'application/octet-stream',
