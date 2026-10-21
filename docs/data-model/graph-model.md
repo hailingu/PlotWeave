@@ -101,6 +101,8 @@ type StoryNode =
 
 节点里写的一切内容——梗概、台词、以及将来 AI 生成的 prompt——都是 `spec` 的字段，随 `project.json` 持久化，无需额外存储。
 
+`src/model/document.ts` 保留本节与命令契约使用的公开 `NodeSpec` 名称（[issue #664](https://github.com/hailingu/PlotWeave/issues/664)）：它只汇总六种规格形状，不自带判别字段。当前生产读写仍使用 `StoryNode` 的 `type`／`spec` 对应关系；保留这个领域说明与类型组合接口，不意味着可用宽联合替代节点判别或运行时校验。
+
 ```ts
 type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec | ImageSpec
 

@@ -1,3 +1,4 @@
+import type { ForwardedAiThreadCallbacks } from './aiThreadCallbacks'
 /**
  * ✦AI 会话回合域（issue #99 自 AiThread.tsx 按域拆出）：在途回合的
  * 登记/认领/持有（issue #63 跨卸载交付）、单轮发送与认领条目重定映射。
@@ -223,7 +224,10 @@ function usePendingTurnClaim(
 }
 
 /** useAiTurn 的选项契约（AiThread 容器透传）。 */
-export interface UseAiTurnOpts {
+export interface UseAiTurnOpts extends Omit<
+  ForwardedAiThreadCallbacks,
+  'onApplyAiBatch'
+> {
   readonly projectId: string
   readonly activeOption: ChatModelOption | null
   readonly activeProvider: AppSettings['providers'][number] | null
@@ -233,14 +237,6 @@ export interface UseAiTurnOpts {
   readonly setArmedIdx: (idx: number | null) => void
   // 可选接线允许显式 undefined（undefined = 未接线，issue #231）
   readonly canvasDigest?: string | undefined
-  readonly onValidateAi?: ((text: string) => BatchValidation | null) | undefined
-  readonly onValidateCommands?:
-    ((commands: AiCommand[]) => BatchValidation | null) | undefined
-  readonly onReadNode?: ((nodeId: string) => string | null) | undefined
-  readonly onReadSettings?: (() => string) | undefined
-  readonly onReadDocument?: ((documentId: string) => string | null) | undefined
-  readonly onFindNodes?:
-    ((query: string, offset?: number, cursor?: string) => string) | undefined
 }
 
 /** 认领落定结果的交付（useAiTurn 拆分，issue #99）：条目映射见

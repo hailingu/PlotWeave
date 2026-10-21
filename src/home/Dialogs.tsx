@@ -1,3 +1,4 @@
+import { DialogFooter } from '../ui/DialogFooter'
 import { useEffect, useRef, useState } from 'react'
 import { isCompositionKey } from '../platform/compositionKey'
 
@@ -66,20 +67,10 @@ export function RenameDialog({
             }}
           />
         </div>
-        <div className="pw-dialog-foot">
-          <span className="pw-sp" />
-          <button type="button" className="pw-dialog-btn" onClick={onCancel}>
-            取消
-          </button>
-          <button
-            type="button"
-            className="pw-dialog-btn pw-dialog-btn-primary"
-            onClick={submit}
-            disabled={!name.trim()}
-          >
-            重命名
-          </button>
-        </div>
+        <DialogFooter
+          secondary={{ label: '取消', onClick: onCancel }}
+          primary={{ label: '重命名', onClick: submit, disabled: !name.trim() }}
+        />
       </dialog>
     </div>
   )
@@ -124,19 +115,11 @@ export function ConfirmDeleteDialog({
         <div className="pw-dialog-body">
           <p className="pw-dialog-text">{message}</p>
         </div>
-        <div className="pw-dialog-foot">
-          <span className="pw-sp" />
-          <button type="button" className="pw-dialog-btn" onClick={onCancel}>
-            取消
-          </button>
-          <button
-            type="button"
-            className="pw-dialog-btn pw-dialog-danger"
-            onClick={onConfirm}
-          >
-            删除
-          </button>
-        </div>
+        <DialogFooter
+          secondary={{ label: '取消', onClick: onCancel }}
+          primary={{ label: '删除', onClick: onConfirm }}
+          primaryKind="danger"
+        />
       </dialog>
     </div>
   )

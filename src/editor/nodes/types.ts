@@ -25,12 +25,6 @@ import type { DialogueLine } from '../../model/document'
  * nodes/patch.ts 的 PatchShape（剥离索引签名）判别化收口。
  */
 
-/** 角色头像的派生视图：label 为单字名，gradient 为设定集头像配色的占位渐变。 */
-export interface NodeAvatar {
-  label: string
-  gradient: string
-}
-
 /**
  * 场景节点（索引卡）：卡片分区对应索引卡字段。
  * 引用一律存设定集实体 id（§5 改名不断引用），渲染时经 ProjectSettings 解析；

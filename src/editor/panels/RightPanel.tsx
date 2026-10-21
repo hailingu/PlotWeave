@@ -1,11 +1,7 @@
+import type { AiThreadCallbacks } from './aiThreadCallbacks'
 import type { ComponentProps } from 'react'
 import { SegmentedControl } from './SegmentedControl'
 import { PanelResizer } from './PanelResizer'
-import {
-  type BatchValidation,
-  type AiCommand,
-  type ValidatedCommand,
-} from '../ai/commands'
 import { type ProjectSettings } from '../settings'
 import { resolveCharacterName, resolveLocationName } from '../settings'
 import { AiThread, AiSettingsButton } from './AiThread'
@@ -138,7 +134,7 @@ function inspectorRows(
  * 保存通道——在此单点声明，由装配层一次捆绑、`RightPanel` 整体透传。
  * 会话字段在聚合内去 `ai` 前缀（`ai.session` 而非 `ai.aiSession`）。
  */
-export interface RightPanelAiProps {
+export interface RightPanelAiProps extends AiThreadCallbacks {
   /** 项目 id：AI 在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
   readonly projectId: string
   /** 打开设置页（§8.2 BYOK 配置入口）。 */
@@ -149,26 +145,6 @@ export interface RightPanelAiProps {
   /** AI 执行卡的提交身份（§12.2 / issue #139）：批次计数必带、画布确认
    * 等待器可选（嵌套形状禁止「有等待器无计数」的误配）；省略 = 隔离装配。 */
   readonly commitIdentity?: AiCommitIdentity
-  /** 校验助手回复中的命令批次（§6/数据模型 §12）；纯讨论回复返回 null。 */
-  readonly onValidateAi?: (text: string) => BatchValidation | null
-  /** 校验工具调用映射出的命令数组（tool-calling 通道）。 */
-  readonly onValidateCommands?: (
-    commands: AiCommand[],
-  ) => BatchValidation | null
-  /** 读工具 get_node：返回节点 JSON 文本，节点不存在返回 null。 */
-  readonly onReadNode?: (nodeId: string) => string | null
-  /** 读工具 get_settings_snapshot（issue 44）：返回设定集清单 JSON 文本。 */
-  readonly onReadSettings?: () => string
-  /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON，不存在返回 null。 */
-  readonly onReadDocument?: (documentId: string) => string | null
-  /** 读工具 find_nodes（issue #275 评审）：按名称检索全部节点与关联连线。 */
-  readonly onFindNodes?: (
-    query: string,
-    offset?: number,
-    cursor?: string,
-  ) => string
-  /** 执行已确认的批次：整批为一条复合命令入栈，返回错误文案或 null。 */
-  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
   /** 当前项目恢复的 AI 会话与其独立保存通道。 */
   // 可显式 undefined = 无恢复快照（issue #231）
   readonly session?: AiSession | undefined

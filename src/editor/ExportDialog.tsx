@@ -1,3 +1,4 @@
+import { DialogFooter } from '../ui/DialogFooter'
 import { useRef, useState } from 'react'
 import { useModalKeyboard } from './useModalKeyboard'
 import type { ScriptExportModel } from './exportScript'
@@ -38,7 +39,11 @@ function ExportDialogFoot({
   readonly download: () => void
 }) {
   return (
-    <div className="pw-dialog-foot pw-export-foot">
+    <DialogFooter
+      className="pw-export-foot"
+      secondary={{ label: copied ? '✓ 已复制' : '复制全文', onClick: copyAll }}
+      primary={{ label: `下载 .${format}`, onClick: download }}
+    >
       <label className="pw-export-toggle">
         <span>导出格式</span>
         <select
@@ -61,18 +66,7 @@ function ExportDialogFoot({
         </label>
       )}
       <span className="pw-dialog-hint">{hint}</span>
-      <span className="pw-sp" />
-      <button type="button" className="pw-dialog-btn" onClick={copyAll}>
-        {copied ? '✓ 已复制' : '复制全文'}
-      </button>
-      <button
-        type="button"
-        className="pw-dialog-btn pw-dialog-btn-primary"
-        onClick={download}
-      >
-        下载 .{format}
-      </button>
-    </div>
+    </DialogFooter>
   )
 }
 
