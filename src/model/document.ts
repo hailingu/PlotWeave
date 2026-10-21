@@ -116,7 +116,9 @@ export interface ImageSpec {
   outputs: { primary?: GeneratedOutput }
 }
 
-/** 节点 spec 的判别联合：形状由 StoryNode.type 决定。 */
+/** 数据模型 §4.2/命令契约公开的规格形状联合（issue #664 保留理由）。
+ * 本联合不含判别字段；当前生产读写使用 StoryNode 的 type/spec 对应关系，
+ * 不用它替代判别节点或运行时校验。保留领域说明与类型组合的现有公开名称。 */
 export type NodeSpec =
   SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec | ImageSpec
 

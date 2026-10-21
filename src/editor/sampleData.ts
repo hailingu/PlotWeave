@@ -41,23 +41,4 @@ export const SAMPLE_SETTINGS: ProjectSettings = {
   ],
 }
 
-/** 首页资产库六分类占位（docs/ui-design.md §8.1，跨项目个人库）。 */
-export interface AssetCategory {
-  kind: string
-  label: string
-  icon: string
-  count: number
-}
-
-/** 首页资产库六分类的占位展示数据（§8.1 演示内容，当前无消费方——
- * 真实分类表以 libraryStore 的 LIBRARY_KINDS 为准）。 */
-export const ASSET_CATEGORIES: AssetCategory[] = [
-  { kind: 'character', label: '角色设定', icon: '👤', count: 2 },
-  { kind: 'location', label: '场景设定', icon: '🏞', count: 3 },
-  { kind: 'wardrobe', label: '服化道', icon: '🧥', count: 0 },
-  { kind: 'colorlight', label: '色彩光影', icon: '🎨', count: 1 },
-  { kind: 'reference', label: '风格参考', icon: '🖼', count: 4 },
-  { kind: 'other', label: '其他', icon: '📦', count: 0 },
-]
-
 export type { CharacterEntity, LocationEntity } from './settings'

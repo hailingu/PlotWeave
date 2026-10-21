@@ -1,3 +1,4 @@
+import { DialogFooter } from '../../ui/DialogFooter'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { DocumentEntity, ProjectSettings } from '../settings'
@@ -239,20 +240,17 @@ export function DocumentEditorDialog({
             onToggle={draft.toggleRelated}
           />
         </div>
-        <div className="pw-dialog-foot">
+        <DialogFooter
+          primary={{
+            label: '保存',
+            onClick: save,
+            disabled: draft.title.trim() === '',
+          }}
+        >
           <span className="pw-dialog-hint">
             标题为空时无法保存；编辑中全局撤销挂起；Esc 关闭放弃改动
           </span>
-          <span className="pw-sp" />
-          <button
-            type="button"
-            className="pw-dialog-btn pw-dialog-btn-primary"
-            disabled={draft.title.trim() === ''}
-            onClick={save}
-          >
-            保存
-          </button>
-        </div>
+        </DialogFooter>
       </dialog>
     </div>,
     document.body,

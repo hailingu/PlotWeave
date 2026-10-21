@@ -1,3 +1,7 @@
+import type {
+  AiThreadCallbacks,
+  ForwardedAiThreadCallbacks,
+} from './aiThreadCallbacks'
 import {
   memo,
   useEffect,
@@ -6,11 +10,6 @@ import {
   type Dispatch,
   type SetStateAction,
 } from 'react'
-import {
-  type AiCommand,
-  type BatchValidation,
-  type ValidatedCommand,
-} from '../ai/commands'
 import { useSettingsSnapshot } from '../../settings/useSettingsSnapshot'
 import { listChatModels, type ChatModelOption } from '../../settings/types'
 import { cardResultEntry } from './aiThreadModel'
@@ -111,8 +110,7 @@ function trimStaleUndoClaim(text: string): string {
  * MAX_SAFE_INTEGER 产生重复 key 与下次加载被归一化丢弃的条目。 */
 function restoreThreadEntries(
   initialSession: AiSession | undefined,
-  validateCommands:
-    ((commands: AiCommand[]) => BatchValidation | null) | undefined,
+  validateCommands: AiThreadCallbacks['onValidateCommands'],
   aiRevision: number | undefined,
 ): ThreadEntry[] {
   return (initialSession?.entries ?? []).map((entry, index) => {
@@ -185,17 +183,17 @@ function cardAfterExecution(
  * 等待器时标注 uncommitted 并记录执行后批次计数——持久化层据此降级为
  * pending，画布落盘确认后再写 executed。回执关联卡片 id（可能追加在
  * 会话尾部）：未确认落盘的执行按关联剔除回执。 */
-function applyCardExecution(args: {
-  readonly thread: ThreadEntry[]
-  readonly setThread: Dispatch<SetStateAction<ThreadEntry[]>>
-  readonly setArmedIdx: Dispatch<SetStateAction<number | null>>
-  readonly entry: ThreadEntry
-  readonly idx: number
-  readonly nextId: () => number
-  readonly onApplyAiBatch?:
-    ((commands: ValidatedCommand[]) => string | null) | undefined
-  readonly identity?: AiCommitIdentity | undefined
-}): void {
+function applyCardExecution(
+  args: Pick<ForwardedAiThreadCallbacks, 'onApplyAiBatch'> & {
+    readonly thread: ThreadEntry[]
+    readonly setThread: Dispatch<SetStateAction<ThreadEntry[]>>
+    readonly setArmedIdx: Dispatch<SetStateAction<number | null>>
+    readonly entry: ThreadEntry
+    readonly idx: number
+    readonly nextId: () => number
+    readonly identity?: AiCommitIdentity | undefined
+  },
+): void {
   const { setThread, setArmedIdx, entry, idx, nextId } = args
   if (entry.card?.status !== 'pending' || !args.onApplyAiBatch) return
   const err = args.onApplyAiBatch(entry.card.v.commands)
@@ -216,16 +214,17 @@ function applyCardExecution(args: {
 
 /** 会话线程域（逻辑 hook，issue #39 拆分）：条目追加、预览卡执行/忽略
  * 与危险批次的两步确认武装态；threadRef 供容器做滚动跟随。 */
-function useAiThreadMessages(opts: {
-  // 可选接线全链允许显式 undefined（undefined = 未接线，issue #231）
-  readonly onApplyAiBatch?:
-    ((commands: ValidatedCommand[]) => string | null) | undefined
-  readonly initialSession?: AiSession | undefined
-  readonly onValidateCommands?:
-    ((commands: AiCommand[]) => BatchValidation | null) | undefined
-  /** 提交身份（issue #139）：计数供恢复对账，等待器决定 executed 落盘推迟。 */
-  readonly identity?: AiCommitIdentity | undefined
-}) {
+function useAiThreadMessages(
+  opts: Pick<
+    ForwardedAiThreadCallbacks,
+    'onApplyAiBatch' | 'onValidateCommands'
+  > & {
+    // 可选接线全链允许显式 undefined（undefined = 未接线，issue #231）
+    readonly initialSession?: AiSession | undefined
+    /** 提交身份（issue #139）：计数供恢复对账，等待器决定 executed 落盘推迟。 */
+    readonly identity?: AiCommitIdentity | undefined
+  },
+) {
   const [thread, setThread] = useState<ThreadEntry[]>(() =>
     restoreThreadEntries(
       opts.initialSession,
@@ -511,24 +510,12 @@ function AiEntryBody({
  * 逻辑在 useAiModels/useAiThreadMessages/useAiTurn，纯函数在 aiThreadModel.ts。
  */
 /** ✦AI 会话面板的对外契约：校验/读工具/执行回调、恢复会话及其持久化通道。 */
-interface AiThreadProps {
+interface AiThreadProps extends ForwardedAiThreadCallbacks {
   /** 项目 id：在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
   readonly projectId: string
   // 可选接线允许显式 undefined（undefined = 未接线，issue #231）
   readonly onOpenSettings?: (() => void) | undefined
   readonly canvasDigest?: string | undefined
-  readonly onValidateAi?: ((text: string) => BatchValidation | null) | undefined
-  readonly onValidateCommands?:
-    ((commands: AiCommand[]) => BatchValidation | null) | undefined
-  readonly onReadNode?: ((nodeId: string) => string | null) | undefined
-  readonly onReadSettings?: (() => string) | undefined
-  /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON。 */
-  readonly onReadDocument?: ((documentId: string) => string | null) | undefined
-  /** 读工具 find_nodes（issue #275 评审）：按名称检索全部节点与关联连线。 */
-  readonly onFindNodes?:
-    ((query: string, offset?: number, cursor?: string) => string) | undefined
-  readonly onApplyAiBatch?:
-    ((commands: ValidatedCommand[]) => string | null) | undefined
   /** 执行卡的提交身份（issue #139）：计数必带、等待器可选；见 AiCommitIdentity。 */
   readonly commitIdentity?: AiCommitIdentity | undefined
   /** 打开项目时恢复的独立会话快照。 */

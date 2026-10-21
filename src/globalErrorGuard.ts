@@ -43,11 +43,6 @@ function report(label: string, diagnostic: GlobalErrorDiagnostic): void {
   console.error(`[GlobalError] ${label}`, diagnostic)
 }
 
-/** unhandledrejection 事件的最小结构形状（真实事件 + 测试桩共用）。 */
-export interface UnhandledRejectionEventLike {
-  reason: unknown
-}
-
 /** 未处理 Promise 拒绝 → 结构化诊断并输出。 */
 export function handleUnhandledRejection(event: { reason: unknown }): void {
   const reason = event.reason
