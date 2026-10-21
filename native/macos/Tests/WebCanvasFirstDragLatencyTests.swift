@@ -18,10 +18,20 @@ struct WebCanvasFirstDragLatencyTests {
 
     private struct Timeout: Error {}
 
+    /// A long frame interval is relative to the same threshold move, so startup and post-drop work remain distinct.
+    private struct FrameGap: Decodable {
+        let startMs: Double
+        let endMs: Double
+    }
+
     /// One measured drag: values come from the page itself, never inferred host-side.
     private struct DragReport: Decodable {
         let firstPositionMs: Double?
         let maxFrameMs: Double
+        let startupMaxFrameMs: Double
+        let gestureMaxFrameMs: Double
+        let postDragMaxFrameMs: Double
+        let longFrames: [FrameGap]
         let over33Ms: Int
         let frameSamples: Int
         let movedPx: Double
@@ -67,6 +77,25 @@ struct WebCanvasFirstDragLatencyTests {
         print("PW-DRAG preselect=click " + Self.describe(preselected))
         print("PW-DRAG projection=dropped " + Self.describe(dropped.report))
         print("PW-DRAG projection=renamed " + Self.describe(renamed.report))
+        await fixture.services.close()
+    }
+
+    /// Open a saved graph without editor creation/selection prewarming; each target is dragged for the first time.
+    @Test(.enabled(if: NativeStressTestProfile.enabled, "按需运行：sh scripts/test-native.sh first-drag"), arguments: [false, true])
+    func openedProjectFirstDragsRecordPreparedEntryEvidence(mixedTypes: Bool) async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let mounted = try await openSavedProject(fixture, mixedTypes: mixedTypes)
+        #expect(mounted.state.selectedNodeID == nil, "加载准备不能提前选择任一测量目标")
+        let targets = mixedTypes ? Array(0...6) : Array(0...2)
+        for index in targets {
+            let expected = "entry-\(index)"
+            #expect(mounted.state.selectedNodeID != expected)
+            let report = try await runDragVariant(mounted: mounted, nodeIndex: index, inspectorVisible: true)
+            try assertStructural(report, variant: "project-entry-\(index)", expectedNodes: 18)
+            #expect(mounted.state.selectedNodeID == expected, "目标必须是另一个真实未预选节点，不能重复测量被夹紧的可见索引")
+            print("PW-DRAG project-entry mixed=\(mixedTypes) target=\(expected) " + Self.describe(report))
+        }
         await fixture.services.close()
     }
 
@@ -116,6 +145,53 @@ struct WebCanvasFirstDragLatencyTests {
                 arguments: [:], in: nil, contentWorld: .page)
         }
         return mounted
+    }
+
+    /// Save all graph data before mounting the first shell; a fixed viewport keeps every intended target visible.
+    private func openSavedProject(_ fixture: Fixture, mixedTypes: Bool) async throws -> (window: NSWindow, state: NativeApplicationState, layout: ShellLayoutState) {
+        let projects = try #require(fixture.services.projectStore)
+        let metadata = try await projects.invoke(command: "create_project", args: ["name": .string("项目就绪首拖")])
+        let id = try #require(metadata["id"]?.string)
+        var document = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        let kinds = ["scene", "scene", "beat", "dialogue", "branch", "shot", "image"]
+        let nodes = (0..<18).map { savedNode(index: $0, type: mixedTypes && $0 < kinds.count ? kinds[$0] : "scene") }
+        let edges: [HostJSON] = mixedTypes ? [] : (0..<19).map { index in
+            .object(["id": .string("edge-\(index)"), "source": .string("entry-\(index < 17 ? index : index - 17)"),
+                "target": .string("entry-\(index < 17 ? index + 1 : index - 15)"), "data": .object(["kind": .string("sequence")])])
+        }
+        document["graph"] = .object(["nodes": .array(nodes), "edges": .array(edges),
+            "viewport": .object(["x": .number(10), "y": .number(10), "zoom": .number(0.4)])])
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(document), "expectExisting": .bool(true)])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let webView = try #require(Self.findWebView(mounted.window.contentView))
+        try await waitForHostReady(webView)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        do {
+            try await wait {
+                mounted.state.editor["nodes"]?.arrayValue?.count == 18 && !mounted.state.editorPreparation.pending
+            }
+        } catch {
+            print("PW-ENTRY-INCOMPLETE nodes=\(mounted.state.editor["nodes"]?.arrayValue?.count ?? -1) pending=\(mounted.state.editorPreparation.pending) route=\(mounted.state.route) error=\(mounted.state.error ?? "none") active=\(mounted.state.editorPreparation.activatedKinds.sorted()) expected=\(mounted.state.editorPreparation.seeds.compactMap { $0["type"]?.string }) prepError=\(mounted.state.editorPreparation.error ?? "none")")
+            throw error
+        }
+        return mounted
+    }
+
+    /// Canonical persisted nodes exercise six real field kinds, with no API calls, media or user content.
+    private func savedNode(index: Int, type: String) -> HostJSON {
+        let spec: [String: HostJSON]
+        switch type {
+        case "beat": spec = ["tone": .string("平静")]
+        case "dialogue": spec = ["lines": .array([.object(["id": .string("line"), "kind": .string("line"), "side": .string("left"), "text": .string("继续"), "vo": .bool(false)])])]
+        case "branch": spec = ["prompt": .string("继续？"), "options": .array([.object(["id": .string("option"), "label": .string("继续")])])]
+        case "shot": spec = ["shotNo": .number(Double(index + 1)), "size": .string("中景"), "picture": .string("远处"), "prompt": .string(""), "refs": .array([])]
+        case "image": spec = ["model": .string(""), "prompt": .string("天空"), "size": .string("1024x1536"), "outputs": .object([:])]
+        default: spec = ["sceneNo": .number(Double(index + 1)), "interior": .bool(true), "time": .string("夜"), "synopsis": .string("场景"), "characterIds": .array([])]
+        }
+        return .object(["id": .string("entry-\(index)"), "type": .string(type),
+            "layout": .object(["position": .object(["x": .number(Double(40 + index % 3 * 360)), "y": .number(Double(40 + index / 3 * 240))])]),
+            "data": .object(["meta": .object(["scene", "beat", "dialogue"].contains(type) ? ["label": .string("节点 \(index)")] : [:]), "spec": .object(spec)])])
     }
 
     /// Only the disposable page's projection transport is delayed; real intents, graph edits and replies stay live.
@@ -191,8 +267,8 @@ struct WebCanvasFirstDragLatencyTests {
     }
 
     /// Structural invariants only; measured milliseconds are recorded, never thresholded.
-    private func assertStructural(_ report: VariantReport, variant: String) throws {
-        #expect(report.nodeCount == 15, "\(variant): the seeded graph must stay mounted")
+    private func assertStructural(_ report: VariantReport, variant: String, expectedNodes: Int = 15) throws {
+        #expect(report.nodeCount == expectedNodes, "\(variant): the seeded graph must stay mounted")
         for (label, drag) in [("first", report.first), ("second", report.second)] {
             #expect(drag.movedPx > 0, "\(variant)/\(label): the drag must move the node")
             #expect(drag.frameSamples > 0, "\(variant)/\(label): the rAF sampler must observe frames")
@@ -206,6 +282,8 @@ struct WebCanvasFirstDragLatencyTests {
             let first = drag.firstPositionMs.map { String(format: "%.1f", $0) } ?? "null"
             return "firstPosition=\(first)ms maxFrame=\(String(format: "%.1f", drag.maxFrameMs))ms"
                 + " over33=\(drag.over33Ms) samples=\(drag.frameSamples) moved=\(String(format: "%.1f", drag.movedPx))px"
+                + " phaseMax=\(Int(drag.startupMaxFrameMs))/\(Int(drag.gestureMaxFrameMs))/\(Int(drag.postDragMaxFrameMs))ms"
+                + " gaps=\(drag.longFrames.map { "\(Int($0.startMs))-\(Int($0.endMs))" }.joined(separator: ","))"
         }
         return "nodes=\(report.nodeCount) first[\(text(report.first))] second[\(text(report.second))]"
     }
@@ -235,18 +313,31 @@ struct WebCanvasFirstDragLatencyTests {
           const list = visible.length >= 2 ? visible : nodes;
           return list[Math.min(index, list.length - 1)];
         };
+        // Intervals crossing mouseup remain attributed to the gesture; fully post-drop intervals stay separate.
+        const framePhases = (intervals, endedAt) => {
+          const max = (values) => values.length ? Math.max(...values.map((frame) => frame.delta)) : 0;
+          return {
+            startupMaxFrameMs: max(intervals.filter((frame) => frame.startMs < 100 && frame.endMs >= 0)),
+            gestureMaxFrameMs: max(intervals.filter((frame) => frame.startMs <= endedAt && frame.endMs >= 0)),
+            postDragMaxFrameMs: max(intervals.filter((frame) => frame.startMs > endedAt)),
+            longFrames: intervals.filter((frame) => frame.delta > 33)
+              .map(({startMs, endMs}) => ({startMs, endMs})),
+          };
+        };
         const dragOnce = async (node) => {
           const rect = node.getBoundingClientRect();
           const startX = rect.left + rect.width / 2;
           const startY = rect.top + rect.height / 2;
           const before = parseTranslate(node);
           const frames = [];
+          const intervals = [];
           let previous = performance.now();
           let firstPositionMs = null;
           let thresholdAt = 0;
           let frameId = 0;
           const tick = (at) => {
             frames.push(at - previous);
+            intervals.push({delta: at - previous, startMs: previous - thresholdAt, endMs: at - thresholdAt});
             previous = at;
             frameId = requestAnimationFrame(tick);
           };
@@ -267,6 +358,7 @@ struct WebCanvasFirstDragLatencyTests {
             await sleep(16);
             fire(window, 'mousemove', startX + 10 + step * 8, startY + 6 + step * 3, 1);
           }
+          const endedAt = performance.now() - thresholdAt;
           fire(window, 'mouseup', startX + 10 + steps * 8, startY + 6 + steps * 3, 0);
           await sleep(300);
           cancelAnimationFrame(frameId);
@@ -274,6 +366,7 @@ struct WebCanvasFirstDragLatencyTests {
           const after = parseTranslate(node);
           return {
             firstPositionMs: firstPositionMs,
+            ...framePhases(intervals, endedAt),
             maxFrameMs: frames.length ? Math.max(...frames) : 0,
             over33Ms: frames.filter((delta) => delta > 33).length,
             frameSamples: frames.length,

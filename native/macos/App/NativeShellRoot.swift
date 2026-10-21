@@ -81,6 +81,8 @@ struct NativeShellRoot: View {
             NativeLibrarySheet(state: application, services: services ?? .shared)
         }
         .frame(minWidth: 960, minHeight: 600)
+        .disabled(application.editorPreparation.pending)
+        .overlay { NativeEditorPreparationOverlay(state: application, inspectorVisible: editorPanelsAvailable && layout.inspectorVisible) }
         .background(NativeWelcomeWindow(isWelcome: welcomeAvailable, state: application, controller: windowPresentation)
             .frame(width: 0, height: 0))
         .background(NativeSidebarTitlebar(layout: layout, available: editorPanelsAvailable, expanded: layout.sidebarVisible)

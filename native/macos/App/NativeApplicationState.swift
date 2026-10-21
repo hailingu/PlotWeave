@@ -5,6 +5,8 @@ import Observation
 @MainActor
 @Observable
 final class NativeApplicationState {
+    /// A separate presentation owner tracks project-entry field preparation; document writes remain in React.
+    let editorPreparation = NativeEditorPreparation()
     /// Only validated, monotonically ordered snapshots are exposed to native presentation.
     private(set) var projection: HostJSON = .object([:])
     /// Domain values share the validated owner while observation stays local to their consumers.
@@ -55,6 +57,10 @@ final class NativeApplicationState {
     private(set) var editorOutline = HostJSON.null
     /// Episode focus follows its own slice so selection commits leave the outline header quiet.
     private(set) var focusedEpisode = HostJSON.null
+    /// Cached node forms observe project settings independently of selection-only editor updates.
+    private(set) var editorSettings = HostJSON.null
+    /// Asset MIME readers likewise avoid invalidating every cached form on a new selection.
+    private(set) var editorAssets = HostJSON.null
     /// Row highlight observes the selected identity without re-mapping outline groups.
     private(set) var selectedNodeID: String?
     /// History toolbar buttons observe flags instead of the whole editor domain.
@@ -74,6 +80,7 @@ final class NativeApplicationState {
     /// Starts one page generation before observing its projection stream.
     func beginSession(_ sessionId: String) {
         guard sessionId != activeSession else { return }
+        editorPreparation.reset()
         activeSession = sessionId
         nativeIntents.values.forEach { $0.cancel() }
         nativeIntents.removeAll()
@@ -130,6 +137,7 @@ final class NativeApplicationState {
         aiProjection = value["ai"] ?? .null
         imageProjection = value["image"] ?? .null
         settingsProjection = value["settings"] ?? .null
+        editorPreparation.receive(projectID: projectId, editor: editor)
         projection = value
     }
 
@@ -137,6 +145,8 @@ final class NativeApplicationState {
     private func publishEditorChrome() {
         let editor = editorProjection["projectId"]?.string == projectId ? editorProjection : .null
         editorOutline = editor["outline"] ?? .null
+        editorSettings = editor["settings"] ?? .null
+        editorAssets = editor["assets"] ?? .null
         focusedEpisode = editor["focusedEpisode"] ?? .null
         selectedNodeID = editor["selected"]?["id"]?.string
         canUndo = editor["canUndo"]?.bool == true

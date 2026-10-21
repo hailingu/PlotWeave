@@ -50,7 +50,7 @@
 | 保留边界／已取消验收 | 视觉快照验收已取消；保留现有外观／几何测试，不新增快照验收要求，历史截图不升级为当前产品验收 | 本页沿用既定所有者范围；已有外观／几何合同见[UI 设计](ui-design.md)，历史截图仍在[归档](swiftui-react-flow-feature-parity.md) |
 | 保留边界／未验证 | 真实中文输入法未测是已接受边界；组合键／草稿等自动回归不能写成真实 IME 验收，也不重新增加本轮工作 | [输入与焦点设计](ui-design.md)、[P5 历史证据](swiftui-react-flow-p5-evidence.md) |
 | 保留边界／未验证 | 真实公网 TLS、付费模型、真实文件／保存面板选址、完整应用视觉与系统交互的人工验收不由注入传输或几何断言替代 | [模型与资产合同](data-model/assets.md)、[归档各域原始范围](swiftui-react-flow-feature-parity.md) |
-| 保留边界／条件性证据 | 已有简化特效、15 节点／15 连线的用户样本曾确认拖动跟手；不据此宣称首拖、标准特效、更大图或高刷新率全部通过 | [画布性能诊断](development/canvas-performance-diagnostics.md)；性能诊断已实现，常规功能回归照跑 |
+| 保留边界／条件性证据 | 已有简化特效、15 节点／15 连线用户跟手反馈；#688 加载准备后，18 节点保存图的十组未预选目标首／二拖未出现 >33ms 间隔；有限 Debug 合成输入不替代真实触控板、标准特效、大图或高刷新率验收 | [画布性能诊断](development/canvas-performance-diagnostics.md)；性能诊断已实现，常规功能回归照跑 |
 | 保留边界／显式 opt-in | 昂贵的原生压力、长循环及首拖测量仅显式请求时运行；CPU 默认固定 4。Native 覆盖率默认 report-only、minimum null；前端／Rust 整体地板仍为 80% | [功能／压力路由](development/quality-gate-push.md#native-regression-and-stress)、[CPU 预算](development/quality-gate-cost.md#gate-cpu-budget-2026-10-16-owner-direction)、[Native 覆盖率](development/native-coverage.md)、[Rust 口径](development/rust-standard.md#test-coverage) |
 
 ## 可核对的验证快照与维护

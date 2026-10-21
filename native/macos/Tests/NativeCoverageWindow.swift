@@ -31,7 +31,7 @@ final class NativeCoverageWindow {
     /// The public text-field delegate follows the same production binding route as typed edits.
     func enter(_ value: String, replacing previous: String) async throws {
         var field: NSTextField?
-        try await Self.wait { field = self.descendants(self.window.contentView).compactMap { $0 as? NSTextField }.first { $0.isEditable && $0.stringValue == previous }; return field != nil }
+        try await Self.wait { field = self.descendants(self.window.contentView).compactMap { $0 as? NSTextField }.first { $0.isEditable && $0.isEnabled && !$0.isHiddenOrHasHiddenAncestor && !$0.visibleRect.isEmpty && $0.stringValue == previous }; return field != nil }
         let target = try #require(field)
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(target)

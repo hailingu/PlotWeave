@@ -16,6 +16,7 @@ struct NativeEditorSliceObservationTests {
         withObservationTracking {
             _ = state.editorOutline; _ = state.focusedEpisode
             _ = state.canUndo; _ = state.canRedo; _ = state.canvasZoom
+            _ = state.editorSettings; _ = state.editorAssets
         } onChange: { chrome.withLock { $0 += 1 } }
         let selection = Mutex(0)
         withObservationTracking { _ = state.selectedNodeID } onChange: { selection.withLock { $0 += 1 } }
@@ -62,6 +63,7 @@ struct NativeEditorSliceObservationTests {
         withObservationTracking {
             _ = state.editorOutline; _ = state.focusedEpisode; _ = state.selectedNodeID
             _ = state.canUndo; _ = state.canRedo; _ = state.canvasZoom
+            _ = state.editorSettings; _ = state.editorAssets
         } onChange: { changes.withLock { $0 += 1 } }
         switch mode {
         case "switch":
@@ -75,6 +77,32 @@ struct NativeEditorSliceObservationTests {
         #expect(state.editorOutline == .null && state.focusedEpisode == .null)
         #expect(state.selectedNodeID == nil && !state.canUndo && !state.canRedo)
         #expect(state.canvasZoom == 1)
+        #expect(state.editorSettings == .null && state.editorAssets == .null)
+    }
+
+    /// Retained inactive inspectors must receive real setting/asset edits without observing selection-only updates.
+    @Test(arguments: ["settings", "assets"])
+    func inspectorContextNotifiesOnlyItsChangedReader(slice: String) throws {
+        let state = try makeChromeState()
+        let changed = Mutex(0)
+        let quiet = Mutex(0)
+        withObservationTracking { _ = context(state, slice) } onChange: { changed.withLock { $0 += 1 } }
+        withObservationTracking { _ = context(state, slice == "settings" ? "assets" : "settings") } onChange: { quiet.withLock { $0 += 1 } }
+        var next = chromeFixture()
+        var editor = try #require(next["editor"] as? [String: Any])
+        if slice == "settings" { editor[slice] = ["characters": [["id": "character", "name": "新名"]], "locations": []] }
+        else { editor[slice] = ["byId": ["asset": ["mime": "audio/wav"]]] }
+        next["editor"] = editor
+        try publish(state, sequence: 2, projection: next)
+        #expect(changed.withLock { $0 } == 1)
+        #expect(quiet.withLock { $0 } == 0)
+        if slice == "settings" { #expect(state.editorSettings["characters"]?.array.first?["name"]?.string == "新名") }
+        else { #expect(state.editorAssets["byId"]?["asset"]?["mime"]?.string == "audio/wav") }
+    }
+
+    /// Each cached field observes only the project-filtered data it actually displays.
+    private func context(_ state: NativeApplicationState, _ slice: String) -> HostJSON {
+        slice == "settings" ? state.editorSettings : state.editorAssets
     }
 
     // MARK: helpers
@@ -91,6 +119,8 @@ struct NativeEditorSliceObservationTests {
     private func chromeFixture(selected: String? = "node-a", project: String = "project") -> [String: Any] {
         var editor: [String: Any] = [
             "projectId": project,
+            "settings": ["characters": [["id": "character", "name": "原名"]], "locations": []],
+            "assets": ["byId": ["asset": ["mime": "image/png"]]],
             "outline": [
                 ["episode": 1, "title": "第一集", "rows": [["id": "node-a", "label": "场景甲", "level": 1]]],
                 ["episode": 2, "title": "第二集", "rows": [["id": "node-c", "label": "未聚焦节点", "level": 1]]],

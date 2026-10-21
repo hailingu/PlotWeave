@@ -7,8 +7,8 @@ repository_root=${PLOTWEAVE_GATE_REPOSITORY_ROOT:-$(CDPATH= cd -- "$script_direc
 mode=${1:-regression}
 case $mode in
   regression) stress_enabled=0 ;;
-  stress) stress_enabled=1 ;;
-  *) printf '[NATIVE_TEST_MODE_INVALID] 用法：sh scripts/test-native.sh [regression|stress]\n' >&2; exit 2 ;;
+  stress|first-drag) stress_enabled=1 ;;
+  *) printf '[NATIVE_TEST_MODE_INVALID] 用法：sh scripts/test-native.sh [regression|stress|first-drag]\n' >&2; exit 2 ;;
 esac
 if [ "$#" -gt 1 ]; then
   printf '[NATIVE_TEST_ARGUMENTS_INVALID] 原生测试入口只接受一个模式参数。\n' >&2
@@ -42,6 +42,13 @@ if [ "$mode" = stress ]; then
     '-only-testing:PlotWeaveNativeTests/WebCanvasPerformanceTests' \
     '-only-testing:PlotWeaveNativeTests/WebCanvasFirstDragLatencyTests/sameNodeFirstAndSecondDragRecordStartupEvidence()'
   exec "${PLOTWEAVE_XCODEBUILD_BIN:-xcodebuild}" "$@" -parallel-testing-enabled NO test
+fi
+
+# 单独选择首拖证据，避免为小图交互调查启动大图和长循环（issue #688）。
+if [ "$mode" = first-drag ]; then
+  exec "${PLOTWEAVE_XCODEBUILD_BIN:-xcodebuild}" "$@" -enableCodeCoverage NO \
+    '-only-testing:PlotWeaveNativeTests/WebCanvasFirstDragLatencyTests' \
+    -parallel-testing-enabled NO test
 fi
 
 # 每轮独立结果目录；成功后删除大体积 bundle，失败时保留诊断取证。

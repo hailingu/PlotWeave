@@ -51,7 +51,7 @@ private struct NativeDialogueRow: View {
     let target: NativeNodeTarget
     let id: String
     let item: HostJSON
-    private var characters: [HostJSON] { target.state.editor["settings"]?["characters"]?.array ?? [] }
+    private var characters: [HostJSON] { target.state.editorSettings["characters"]?.array ?? [] }
 
     var body: some View {
         Group {
@@ -99,7 +99,7 @@ private struct NativeShotRefRow: View {
     let item: HostJSON
     private var mime: String? {
         guard let asset = item["assetId"]?.string else { return nil }
-        return target.state.editor["assets"]?["byId"]?[asset]?["mime"]?.string
+        return target.state.editorAssets["byId"]?[asset]?["mime"]?.string
     }
 
     var body: some View {
