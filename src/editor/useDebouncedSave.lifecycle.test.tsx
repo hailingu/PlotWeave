@@ -58,25 +58,32 @@ function deferred() {
 }
 
 it.each(['save', 'result'] as const)(
-  '%s callback identity changes do not flush or reset an existing debounce deadline',
+  '%s callback changes keep the deadline and dispatch to the current committed owner',
   async (kind) => {
-    const save = vi.fn()
+    const save = vi.fn<Save>()
+    const latestSave = vi.fn<Save>()
+    const latestResult = vi.fn()
     const view = mountSave(save)
     const changed = { ...view.initial, doc: doc('已编辑') }
     view.rerender(changed)
     await advance(200)
-    view.rerender({
-      ...changed,
-      onSave: kind === 'save' ? (next) => save(next) : save,
-      onResult: kind === 'result' ? vi.fn() : changed.onResult,
-    })
+    const activeSave = kind === 'save' ? latestSave : save
+    const activeResult = kind === 'result' ? latestResult : changed.onResult
+    view.rerender({ ...changed, onSave: activeSave, onResult: activeResult })
     expect(save).not.toHaveBeenCalled()
+    expect(latestSave).not.toHaveBeenCalled()
     expect(hasPendingCanvasSaves()).toBe(true)
     expect(view.result.current.saveStatus).toBe('saving')
     await advance(399)
     expect(save).not.toHaveBeenCalled()
+    expect(latestSave).not.toHaveBeenCalled()
     await advance(1)
-    expect(save).toHaveBeenCalledExactlyOnceWith(changed.doc)
+    expect(activeSave).toHaveBeenCalledExactlyOnceWith(changed.doc)
+    expect(kind === 'save' ? save : latestSave).not.toHaveBeenCalled()
+    expect(activeResult).toHaveBeenCalledExactlyOnceWith(null)
+    expect(
+      kind === 'result' ? changed.onResult : latestResult,
+    ).not.toHaveBeenCalled()
     expect(hasPendingCanvasSaves()).toBe(false)
   },
 )
@@ -134,23 +141,56 @@ it('only real unmount supplements an in-flight write with the newest edit', asyn
   expect(save).toHaveBeenCalledTimes(2)
 })
 
-it('a failed write retains its retry deadline across a parent rerender', async () => {
-  const save = vi.fn<Save>().mockRejectedValueOnce(new Error('只读'))
-  const view = mountSave(save)
+it('a failed obsolete writer is replaced without moving its retry deadline', async () => {
+  const failure = new Error('旧 writer 只读')
+  const obsolete = vi.fn<Save>().mockRejectedValue(failure)
+  const latest = vi.fn<Save>()
+  const latestResult = vi.fn()
+  const view = mountSave(obsolete)
   const changed = { ...view.initial, doc: doc('保留重试') }
   view.rerender(changed)
   await advance(600)
   expect(view.result.current.saveStatus).toBe('failed')
+  expect(view.initial.onResult).toHaveBeenCalledExactlyOnceWith(failure)
   expect(hasPendingCanvasSaves()).toBe(true)
   await advance(200)
-  view.rerender({ ...changed, onSave: (next) => save(next) })
-  expect(save).toHaveBeenCalledTimes(1)
+  view.rerender({ ...changed, onSave: latest, onResult: latestResult })
+  expect(obsolete).toHaveBeenCalledTimes(1)
+  expect(latest).not.toHaveBeenCalled()
   expect(view.result.current.saveStatus).toBe('failed')
   await advance(399)
-  expect(save).toHaveBeenCalledTimes(1)
+  expect(latest).not.toHaveBeenCalled()
   await advance(1)
-  expect(save).toHaveBeenCalledTimes(2)
+  expect(latest).toHaveBeenCalledExactlyOnceWith(changed.doc)
+  expect(obsolete).toHaveBeenCalledTimes(1)
+  expect(latestResult).toHaveBeenCalledExactlyOnceWith(null)
+  expect(view.initial.onResult).toHaveBeenCalledTimes(1)
   expect(view.result.current.saveStatus).toBe('saved')
+  expect(hasPendingCanvasSaves()).toBe(false)
+})
+
+it('an in-flight loop uses current committed callbacks for its next document and receipts', async () => {
+  const pending = deferred()
+  const obsolete = vi.fn<Save>(() => pending.promise)
+  const latest = vi.fn<Save>()
+  const latestResult = vi.fn()
+  const view = mountSave(obsolete)
+  const first = doc('已交付A')
+  view.rerender({ ...view.initial, doc: first })
+  await advance(600)
+  const second = doc('尚未交付B')
+  view.rerender({
+    ...view.initial,
+    doc: second,
+    onSave: latest,
+    onResult: latestResult,
+  })
+  expect(latest).not.toHaveBeenCalled()
+  await act(async () => pending.resolve())
+  expect(obsolete).toHaveBeenCalledExactlyOnceWith(first)
+  expect(latest).toHaveBeenCalledExactlyOnceWith(second)
+  expect(view.initial.onResult).not.toHaveBeenCalled()
+  expect(latestResult.mock.calls).toEqual([[null], [null]])
   expect(hasPendingCanvasSaves()).toBe(false)
 })
 
@@ -230,4 +270,49 @@ it('StrictMode lifecycle replay stays silent and the real dirty unmount writes o
   view.unmount()
   await advance(5000)
   expect(save).toHaveBeenCalledExactlyOnceWith(changed.doc)
+})
+
+it('a timer cannot adopt callbacks from an uncommitted suspended render', async () => {
+  const committed = vi.fn<Save>()
+  const committedResult = vi.fn()
+  const uncommitted = vi.fn<Save>()
+  const uncommittedResult = vi.fn()
+  const never = deferred()
+  const initial: SaveProps = {
+    doc: doc(),
+    onSave: committed,
+    onResult: committedResult,
+  }
+  const view = renderHook(
+    (props: SaveProps) => {
+      const state = useDebouncedSave(
+        props.doc,
+        props.onSave,
+        600,
+        props.onResult,
+      )
+      if (props.suspend) throw never.promise
+      return state
+    },
+    {
+      initialProps: initial,
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <Suspense fallback={null}>{children}</Suspense>
+      ),
+    },
+  )
+  const changed = { ...initial, doc: doc('已提交计时器') }
+  view.rerender(changed)
+  view.rerender({
+    ...changed,
+    onSave: uncommitted,
+    onResult: uncommittedResult,
+    suspend: true,
+  })
+  await advance(600)
+  expect(committed).toHaveBeenCalledExactlyOnceWith(changed.doc)
+  expect(committedResult).toHaveBeenCalledExactlyOnceWith(null)
+  expect(uncommitted).not.toHaveBeenCalled()
+  expect(uncommittedResult).not.toHaveBeenCalled()
+  view.unmount()
 })
