@@ -10,6 +10,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -245,13 +246,17 @@ function useSignatureSaveWatch(
   ])
 }
 
-/** 卸载冲刷（useDebouncedSave 拆分）：effect 依赖变化会重跑本 effect——
- * 重置卸载标记，仅真正的卸载触发 onUnmount 冲刷。 */
+/** 卸载冲刷（#699）：生命周期只绑定稳定 refs；回调在 commit 后更新，
+ * 父级渲染不会清计时器或冒充卸载，未提交渲染也不能替换卸载动作。 */
 function useUnmountFlush(
   unmountedRef: MutableRefObject<boolean>,
   saveTimer: SaveTimerRef,
   onUnmount: () => void,
 ) {
+  const committedOnUnmount = useRef(onUnmount)
+  useLayoutEffect(() => {
+    committedOnUnmount.current = onUnmount
+  }, [onUnmount])
   useEffect(() => {
     unmountedRef.current = false
     return () => {
@@ -260,9 +265,9 @@ function useUnmountFlush(
         clearTimeout(saveTimer.current)
         saveTimer.current = null
       }
-      onUnmount()
+      committedOnUnmount.current()
     }
-  }, [onUnmount, saveTimer, unmountedRef])
+  }, [saveTimer, unmountedRef])
 }
 
 /** 启动保存循环并登记/解除在途 Promise（useSaveFlush 拆出，PR #174 评审：
