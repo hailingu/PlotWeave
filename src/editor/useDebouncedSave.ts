@@ -10,6 +10,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -245,13 +246,17 @@ function useSignatureSaveWatch(
   ])
 }
 
-/** 卸载冲刷（useDebouncedSave 拆分）：effect 依赖变化会重跑本 effect——
- * 重置卸载标记，仅真正的卸载触发 onUnmount 冲刷。 */
+/** 卸载冲刷（#699）：生命周期只绑定稳定 refs；回调在 commit 后更新，
+ * 父级渲染不会清计时器或冒充卸载，未提交渲染也不能替换卸载动作。 */
 function useUnmountFlush(
   unmountedRef: MutableRefObject<boolean>,
   saveTimer: SaveTimerRef,
   onUnmount: () => void,
 ) {
+  const committedOnUnmount = useRef(onUnmount)
+  useLayoutEffect(() => {
+    committedOnUnmount.current = onUnmount
+  }, [onUnmount])
   useEffect(() => {
     unmountedRef.current = false
     return () => {
@@ -260,9 +265,9 @@ function useUnmountFlush(
         clearTimeout(saveTimer.current)
         saveTimer.current = null
       }
-      onUnmount()
+      committedOnUnmount.current()
     }
-  }, [onUnmount, saveTimer, unmountedRef])
+  }, [saveTimer, unmountedRef])
 }
 
 /** 启动保存循环并登记/解除在途 Promise（useSaveFlush 拆出，PR #174 评审：
@@ -394,6 +399,28 @@ function useFlushSave(
   return flushSave
 }
 
+/** 同一保存 owner 的稳定转发入口：计时器、重试和在途接力在实际交付时
+ * 读取最新已 commit 的写通道，回执也交给最新已 commit 的订阅方。
+ * layout effect 发布，禁止未提交渲染泄漏；转发不新增 Promise/调度边界。 */
+function useCommittedSaveCallbacks(
+  onSave: (doc: ProjectContent) => void | Promise<void>,
+  onSaveResult: ((err: unknown) => void) | undefined,
+) {
+  const committed = useRef({ onSave, onSaveResult })
+  useLayoutEffect(() => {
+    committed.current = { onSave, onSaveResult }
+  }, [onSave, onSaveResult])
+  const save = useCallback(
+    (doc: ProjectContent) => committed.current.onSave(doc),
+    [],
+  )
+  const result = useCallback(
+    (error: unknown) => committed.current.onSaveResult?.(error),
+    [],
+  )
+  return { save, result }
+}
+
 /** 冲刷与标脏动作（useDebouncedSave 拆分，issue #118 评审：主 hook 守
  * 80 行上限）：消费保存闸 refs 组装三条动作通道。闸 ref 实例内恒稳定，
  * 列入依赖以满足 exhaustive-deps（issue #99 拆分）。 */
@@ -403,6 +430,7 @@ function useSaveFlush(
   onSaveResult: ((err: unknown) => void) | undefined,
   delayMs: number,
 ) {
+  const { save, result } = useCommittedSaveCallbacks(onSave, onSaveResult)
   const {
     saveTimer,
     dirtyRef,
@@ -412,7 +440,7 @@ function useSaveFlush(
     setSaveStatus,
   } = gates
 
-  const flushSave = useFlushSave(gates, onSave, onSaveResult, delayMs)
+  const flushSave = useFlushSave(gates, save, result, delayMs)
   const flushForExit = useExitFlushAction(flushSave, gates.inFlightPromiseRef)
 
   const markDirty = useCallback(
@@ -441,11 +469,11 @@ function useSaveFlush(
    * 补交前置脏已清，在途保存落定后循环不会再重复交付。 */
   const flushOnUnmount = useCallback(() => {
     if (inFlightRef.current) {
-      deliverLatestAfterUnmount(latestRef, dirtyRef, onSave, onSaveResult)
+      deliverLatestAfterUnmount(latestRef, dirtyRef, save, result)
       return
     }
     void flushSave()
-  }, [dirtyRef, flushSave, inFlightRef, latestRef, onSave, onSaveResult])
+  }, [dirtyRef, flushSave, inFlightRef, latestRef, save, result])
 
   return { flushSave, markDirty, flushOnUnmount, flushForExit }
 }
