@@ -1,0 +1,35 @@
+/* 失败界面不继承折叠侧栏的 hidden/零宽状态，原生宿主也可就地恢复。 */
+.editor-region-error {
+  box-sizing: border-box;
+  flex: none;
+  width: 220px;
+  max-width: 30vw;
+  min-width: 0;
+  padding: 16px;
+  overflow: auto;
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}
+
+.editor-region-error--canvas {
+  flex: 1;
+  width: auto;
+  max-width: none;
+}
+
+.editor-region-error--overlays {
+  position: fixed;
+  z-index: 300;
+  top: 20%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  max-height: 70vh;
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+}
+
+.editor-region-error button {
+  margin: 4px 8px 4px 0;
+}
