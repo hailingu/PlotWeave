@@ -2,6 +2,8 @@
 
 本文是对 PlotWeave 设计与实现质量的评估记录：给出分维度评分、综合评级与每条结论的证据。它不是工程门禁，不新增规范或契约。缺陷结论供排期参考；已有所有者决策的事项不因本记录而重新成为扣分项。
 
+**当前基线追加评估（2026-10-21）**：`dev` @ `05c9df40` 的当前复核见第七节，当前综合为 **9.2 / A**；第三节至第六节保留 `3cf7146` 历史记录，不随第七节重写或回填。
+
 - **评估基线**：`dev` @ `3cf7146`（2026-10-18）。上一份记录基线为 `96fb373`（2026-10-13，9.1 / A），两者维度划分与口径不同，不作为本轮跟踪对比；其记录的 [#545](https://github.com/hailingu/PlotWeave/issues/545)–[#549](https://github.com/hailingu/PlotWeave/issues/549)、[#552](https://github.com/hailingu/PlotWeave/issues/552)、[#553](https://github.com/hailingu/PlotWeave/issues/553) 等扣分点已在本基线核实关闭。
 - **评估性质**：只读审阅加 issue 建档。按前端/React、Rust/Tauri、Swift 原生、测试体系、工程门禁、文档治理、产品交互、安全八个方向并行审查，并直接复核关键扣分证据（剧情流接缝纯函数复现、Rust 删除/读取路径、原生失败生命周期、CI 门禁核验器、设置/模态/焦点路径、GitHub 分支保护 API）。本轮新建 issue [#589](https://github.com/hailingu/PlotWeave/issues/589)–[#603](https://github.com/hailingu/PlotWeave/issues/603) 共 15 个；关闭截图/UI 自动化类 [#550](https://github.com/hailingu/PlotWeave/issues/550)、[#571](https://github.com/hailingu/PlotWeave/issues/571)。
 - **证据强度**：文件行数、测试数量、依赖与 `gh` 状态由本次直接核对；覆盖率数值取自最近一次门禁产物（前端 96.91%、Rust 85.34%）。本轮运行了 `npm run check:size`、`npm run typecheck:strict`、`npm run lint -- --max-warnings=0` 与完整 `npm test`；**没有**重跑 `cargo test`、`xcodebuild` 或 SonarQube，Rust/Swift 结论是代码路径核实，不是本机运行验证（详见第六节）。
@@ -202,3 +204,64 @@
 > 完整统一门禁）。那是推送门禁策略变更，不改变本文对 `3cf7146` 代码的
 > 评分；策略与边界见[推送门禁](development/quality-gate-push.md#scoped-push-routing-2026-10-18)
 > 与[成本决策](development/quality-gate-cost.md#scoped-push-cost-2026-10-18-owner-direction)。
+
+## 七、当前基线追加评估（2026-10-21，HEAD 05c9df40）
+
+本节是对 `3cf7146` 历史记录的独立追加复核，不重写第三节至第六节的历史证据。评估性质为只读审阅加定向复现；基线为 `dev` @ `05c9df4030b09ec316fbb6822b46077a39dfd624`（2026-10-21 20:40）。工作区评估开始时无 open issue；上一轮记录中的 #681、#682、#684、#685、#686、#687、#688 均已关闭，本节不重复扣分。
+
+### 7.1 当前评分
+
+| 维度 | 评分 | 评级 |
+| --- | ---: | --- |
+| 架构与模块设计 | 9.4 | A |
+| 代码质量与类型安全 | 9.3 | A |
+| 数据持久化与健壮性 | 9.4 | A |
+| 测试与验证 | 9.1 | A |
+| 工程基建与质量门禁 | 9.2 | A |
+| 文档与治理 | 9.2 | A |
+| 安全性 | 9.3 | A |
+| 产品与交互设计 | 8.9 | A- |
+| 可维护性与一致性 | 9.1 | A |
+| **综合** | **9.2** | **A** |
+
+等权计算：`(9.4 + 9.3 + 9.4 + 9.1 + 9.2 + 9.2 + 9.3 + 8.9 + 9.1) / 9 = 82.9 / 9 = 9.211`，按一位小数记为 **9.2 / A**。历史基线 `3cf7146` 的 8.9 / A- 保留，不因本节回填或改写。
+
+### 7.2 本轮扣分点（均为 P3）
+
+1. **原生画布投影逐帧重算**（[#698](https://github.com/hailingu/PlotWeave/issues/698)）。`snapshot()` 在每次渲染调用 `buildOutlineGroups`，并在 Swift 宿主每次渲染执行完整 `JSON.stringify`；`sources` 比较只更新 `contentRevision`，不跳过快照计算。临时 Swift 宿主测试中，一次只改变 `position` 的拖动帧触发两次完整 `snapshot()`，两条调用栈均为 `snapshot → useNativeEditorShell → EditorWindow`。18 节点下 #688 实测首拖最大 19–29ms，未出现 >33ms 间隔，因此当前不是用户可见卡顿；问题是随图规模线性增长的质量债。证据：[`useNativeEditorShell.ts:185`](https://github.com/hailingu/PlotWeave/blob/05c9df4030b09ec316fbb6822b46077a39dfd624/src/editor/nativeCanvas/useNativeEditorShell.ts#L185)、[`:230`](https://github.com/hailingu/PlotWeave/blob/05c9df4030b09ec316fbb6822b46077a39dfd624/src/editor/nativeCanvas/useNativeEditorShell.ts#L230)。
+2. **防抖“卸载冲刷”受 `onSave` 身份变化影响**（[#699](https://github.com/hailingu/PlotWeave/issues/699)）。[`App.tsx:86`](https://github.com/hailingu/PlotWeave/blob/05c9df4030b09ec316fbb6822b46077a39dfd624/src/App.tsx#L86) 每次渲染新建内联 `onSave`；[`useDebouncedSave.ts:250`](https://github.com/hailingu/PlotWeave/blob/05c9df4030b09ec316fbb6822b46077a39dfd624/src/editor/useDebouncedSave.ts#L250) 的 effect 依赖 `onUnmount`，而 `flushOnUnmount` 依赖 `onSave`（[`:442`](https://github.com/hailingu/PlotWeave/blob/05c9df4030b09ec316fbb6822b46077a39dfd624/src/editor/useDebouncedSave.ts#L442)）。临时 hook 测试在 600ms 内仅替换 `onSave` 身份，保存被提前调用 1 次（期望 0）；影响是额外写入、削弱防抖和混淆失败/卸载分支，未观察到编辑丢失。
+3. **资产面板失败后本地列表不回填**（[#700](https://github.com/hailingu/PlotWeave/issues/700)）。[`AssetsPanel.tsx:119`](https://github.com/hailingu/PlotWeave/blob/05c9df4030b09ec316fbb6822b46077a39dfd624/src/editor/panels/AssetsPanel.tsx#L119) 在 `libraryStore.remove` 前移除本地行，失败分支只 `setError`；[`:168`](https://github.com/hailingu/PlotWeave/blob/05c9df4030b09ec316fbb6822b46077a39dfd624/src/editor/panels/AssetsPanel.tsx#L168) 的批量导入在全部成功后 `setAssets`，部分失败时已成功项不进入列表。触发需只读目录/删除日志冲突/多选中单个不可读文件；重新挂载可恢复，不丢数据。
+
+上述三项在评分时均为未登记的新发现，因此计入 9.2 的轻微折减；现已建档为 #698–#700，按仓库“已知 issue 不重复扣分”的规则，后续复评不再把它们作为新的扣分点，仅保留为质量债与验收线索。
+
+### 7.3 未扣分边界
+
+- **已有 issue**：评估开始时 open issue 为 0；#681–#688 已关闭；#698–#700 由本次复核创建，均为 P3。
+- **UI 自动化**：按所有者决定不因缺少 UI 自动化扣分。
+- **所有者决策**：三栈并存、Tauri/Swift 双实现、80 行函数上限的人工执行、VoiceOver 不支持、Windows 不支持、原生覆盖率 report-only，均不重新当作缺陷。
+- **保留边界**：托管 CI 不跑本机 Sonar；`gate-evidence` 工作流定义仍由 PR 提供且台账为自述；`git am` 等路径不触发钩子；同用户替换 `projects/` 树不在威胁模型内。
+- **交付边界**：`README.md` 明确当前 Release 仅提供源码归档，尚无签名、公证和安装验收的 macOS 安装包；这是产品交付成熟度限制，不是代码缺陷。
+- **真实设备边界**：#688 的原生首拖修复使用 Debug 合成输入；真实触控板、120Hz、Release 呈现仍未验收，不据此宣称所有性能问题已闭环。
+
+### 7.4 当前验证记录
+
+已运行（仓库根，Node 24.18.0；除非另注）：
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run format:check` | 通过 |
+| `npm run lint -- --max-warnings=0` | 通过，零警告 |
+| `npm run typecheck:strict` | 通过 |
+| `npm run check:size` | 通过：`{"code":"SIZE_CHECK_COMPLETE","checked":834,"excluded":66,"passed":true}` |
+| `npm run build` | 通过：418 模块；EditorView chunk 451.91 kB |
+| `npm audit --audit-level=high` | 0 vulnerabilities |
+| `npm test` | 3,489 用例：3,472 通过，17 失败；失败集中在 `scripts/gate-tree-marker.test.ts`、`scripts/pre-push-refs.test.ts`、`scripts/sonar-quality-gate.test.ts`，根因是本沙箱 `ps`/临时目录权限，不是产品失败 |
+| `npx vitest run --coverage`（排除上述 3 个受沙箱阻断的 scripts 套件） | 257 文件 / 3,334 用例通过；行 97.54%、语句 96.32%、分支 91.54% |
+| `cargo test`（`src-tauri`） | 408 通过，0 失败 |
+| `cargo test`（`crates`） | 142 + 4 + 8 = 154 通过，0 失败 |
+| `cargo fmt --check && cargo clippy --all-targets -- -D warnings`（两个 workspace） | 通过 |
+| GitHub Actions `ci` @ `05c9df40` | success；workflow 含 frontend / rust / native / gate-evidence，dev push 的 gate-evidence 按规则跳过 |
+
+未运行：原生 `xcodebuild`（本机 Xcode 27.1，仓库钉版 27.0；以 HEAD 的 CI success 作为原生证据）、SonarQube 服务端、真实安装包与真机体验。Rust/Swift 的本地结论以源码核实、CI 记录和上述可执行检查为限；`npm test` 的 17 项沙箱失败与托管 CI 的 success 不矛盾，托管 runner 具备测试所需的进程身份能力。
+
+**当前结论**：仓库工程骨架、类型纪律、持久化协议和安全边界仍处于 A 档上限水平；本轮未发现 P1/P2，未发现需要推翻既有设计决策的缺陷。当前 9.2 / A 与历史 8.9 / A- 是两个不同基线的独立记录：历史分数不因修复或当前复核回填，当前分数也不改写历史证据。

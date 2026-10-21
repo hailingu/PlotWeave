@@ -104,7 +104,8 @@ function useLibraryAssetList() {
 
 /** 确认后执行删除（AssetsPanel 拆分，issue #99）：移除列表项并回收缩
  * 略 URL（blob: 回收防长会话内存泄漏）；落盘删除交给库门面。仅在
- * ConfirmDeleteDialog 确认后调用（删除不可恢复）。 */
+ * ConfirmDeleteDialog 确认后调用。行先乐观隐藏，拒绝恢复最近落盘条目；
+ * 缩略 URL 仅在成功后回收，失败保留以供恢复行与显式重试。 */
 function removeLibraryAsset(
   asset: LibraryAsset,
   urls: Record<string, string>,
@@ -116,17 +117,24 @@ function removeLibraryAsset(
     setError(WEB_EXIT_PENDING)
     return
   }
+  setError(null)
   setAssets((list) => list.filter((a) => a.id !== asset.id))
-  const url = urls[asset.id]
-  if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
-  setUrls((u) => {
-    const next = { ...u }
-    delete next[asset.id]
-    return next
+  runWebOperation(async () => {
+    await libraryStore.remove(asset.id)
+    const url = urls[asset.id]
+    if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+    setUrls((u) => {
+      const next = { ...u }
+      delete next[asset.id]
+      return next
+    })
+  }).catch((err) => {
+    const restored = libraryStore.persistedSnapshot(asset.id) ?? asset
+    setAssets((list) =>
+      list.some((a) => a.id === asset.id) ? list : [...list, restored],
+    )
+    setError(String(err))
   })
-  runWebOperation(() => libraryStore.remove(asset.id)).catch((err) =>
-    setError(String(err)),
-  )
 }
 
 /** 删除确认框（AssetsPanel 拆分，issue #99）：✕ 只发起请求，确认后
@@ -151,7 +159,8 @@ function RemoveAssetDialog({
 }
 
 /** 导入与选取状态族（AssetsPanel 拆分，issue #99）：多选导入（逐文件
- * 入库、追加列表并预热缩略）、分类选取经隐藏 file input 触发。 */
+ * 入库后立即追加并预热缩略；后续拒绝保留已成功项并标明文件），分类
+ * 选取经隐藏 file input 触发，不因部分失败重放已成功的 put。 */
 function useAssetImport(
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
   setError: (err: string | null) => void,
@@ -164,15 +173,21 @@ function useAssetImport(
     if (!files || files.length === 0) return
     setBusy(true)
     setError(null)
+    const kind = importKind.current
+    let currentFile: File | undefined
     try {
-      const added: LibraryAsset[] = []
       for (const file of Array.from(files)) {
-        added.push(await libraryStore.put(file, importKind.current))
+        currentFile = file
+        const added = await libraryStore.put(file, kind)
+        setAssets((list) => [...list, added])
+        refreshUrl(added)
       }
-      setAssets((list) => [...list, ...added])
-      for (const a of added) refreshUrl(a)
     } catch (err) {
-      setError(String(err))
+      setError(
+        currentFile
+          ? `导入「${currentFile.name}」失败：${String(err)}`
+          : String(err),
+      )
     } finally {
       setBusy(false)
       if (fileRef.current) fileRef.current.value = ''

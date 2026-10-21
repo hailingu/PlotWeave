@@ -44,6 +44,8 @@ interface AssetRef {
 
 ### 7.2 库资产的分类与编组
 
+**Web 资产面板回执呈现（[issue #700](https://github.com/hailingu/PlotWeave/issues/700)）**：面板逐个显示 `put` 已确认的成功条目；后续导入失败不隐藏或撤销这些结果，错误包含失败文件名。确认删除后保持既有乐观隐藏，只有 `remove` 成功才回收缩略 URL；拒绝时按资产 ID 恢复门面最近持久化条目（无快照时原条目），保留错误与显式重新确认入口，不覆盖并发新增项。该显示恢复不回写库、不重发变更，不改变同资产队列、提交不确定性及下述宿主日志恢复合同；Swift 原生图库模型的失败重读继续沿原规则。
+
 **Swift 原生批量导入呈现（[PR #526](https://github.com/hailingu/PlotWeave/pull/526)）**：原生系统选择的文件逐个沿 `NativeLibrary` 落盘，不新增整批事务或自动重试。后段读取或导入失败时，`NativeLibraryModel` 重读权威列表，显示已提交的真实资产并保留失败提示；其他写入口共用失败重读。列表恢复也失败时保留最后有效快照，同时报告原错误与刷新失败，不制造空索引。关闭使旧任务失去发布权限；原生选择注入仅供本机组合和隔离测试，不增加 Web 文件路径入口。见[矩阵 R16–R17](../swiftui-react-flow-pr526-fixes.md)。 所选 URL 使用 no-follow、非阻塞打开，随后由 `NativeMediaFile` 在实际 descriptor 上核验普通文件；FIFO 不等待 writer、目录／symlink 不读取，失败回到同一列表恢复路径，既有普通文件字节上限与取消保持（[PR #526 R26](../swiftui-react-flow-pr526-fixes.md)）。 接纳导入或直接变更的展示批次还同步登记应用级退出资格（[issue #529](https://github.com/hailingu/PlotWeave/issues/529)）：批次落定——含失败重读与 sheet 取消完成——先于退出事件投递与最终批准，最终批准复查仍有在途批次时拒绝 `PW_NATIVE_LIBRARY_PENDING` 并保留重试；已提交项与 R38 恢复保持，不自动重放或回滚，只读刷新不设资格，合同详见[桥的原生图库批次退出资格](../swiftui-react-flow-feature-parity.md#桥合同)。
 
 **Swift 导入恢复（[PR #526 R38](../swiftui-react-flow-pr526-fixes.md#导入媒体与索引失败恢复r38)，所有者于 2026-10-13 授权）**：`NativeLibrary` 在持有 actor／flock 的同一操作中先校验候选索引并完成必要原件备份。媒体临时文件写入及 fsync 后，从已打开 descriptor 取得精确 `(dev, ino)`；在最终媒体 rename 前，将 assetId、relPath、身份、随机隔离名及 `importPending: true` 耐久登记到既有 `asset-delete-journal.json` 对象。登记仍受 512 KiB 投影和 1 MiB 限读／写预算约束，日志及父目录未同步成功时不得落位媒体；`.trash` 仍须为同文件系统的受信目录。随后媒体排他 rename／资产父目录 fsync、完整索引原子提交／库目录 fsync，才按已提交索引退役导入记录。索引提交或收尾失败原样返回，不把失败等同未提交，也不自动重放导入。
