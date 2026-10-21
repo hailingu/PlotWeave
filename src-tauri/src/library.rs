@@ -194,8 +194,9 @@ pub async fn import_library_asset(
     name: String,
     mime: String,
     kind: String,
-    bytes: Vec<u8>,
+    bytes: import_bytes::ImportBytes,
 ) -> Result<Value, String> {
+    let bytes = bytes.into_bytes().map_err(|e| e.to_string())?;
     crate::blocking::run("import_library_asset", move || {
         let library = library_root(&app).map_err(|e| e.to_string())?;
         diagnostics::with_snapshot(
@@ -500,6 +501,7 @@ pub async fn update_library_asset(
 pub(crate) mod diagnostics;
 pub(crate) mod error;
 pub(crate) mod group_commands;
+mod import_bytes;
 #[cfg(test)]
 mod read_only_tests;
 #[cfg(test)]
