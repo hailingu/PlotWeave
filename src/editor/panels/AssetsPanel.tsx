@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useRef,
   useState,
@@ -25,6 +24,7 @@ import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import { ConfirmDeleteDialog } from '../../home/Dialogs'
 import { LibraryWarnings } from './LibraryWarnings'
+import { useAssetThumbnails } from './useAssetThumbnails'
 import { useWebExitAction } from '../../useWebExitAction'
 import {
   isWebExitPending,
@@ -51,55 +51,20 @@ type AssetTagsIntent = 'edit' | 'draft' | 'none'
 function useLibraryAssetList() {
   const [assets, setAssets] = useState<LibraryAsset[]>([])
   const [error, setError] = useState<string | null>(null)
-  /** 缩略图 URL 缓存（懒加载：进入类别才取）。 */
-  const [urls, setUrls] = useState<Record<string, string>>({})
-  /** 缩略图读取失败（issue #142）：按资产记录可定位错误，重试成功后清除。 */
-  const [thumbErrors, setThumbErrors] = useState<Record<string, string>>({})
-  /** 在途请求去重：观察器重触发与显式重试不双发。 */
-  const inflightThumbs = useRef(new Set<string>())
+  const [loading, setLoading] = useState(true)
+  const thumbnails = useAssetThumbnails()
   useEffect(() => {
     let alive = true
     libraryStore
       .list()
       .then((list) => alive && setAssets(list))
       .catch((err) => alive && setError(String(err)))
+      .finally(() => alive && setLoading(false))
     return () => {
       alive = false
     }
   }, [])
-  // useCallback 稳定引用（issue #142）：父渲染不再让 AssetThumb 的观察器
-  // 因回调换引用而重建；失败态由错误记录承接（显示 + 显式重试）
-  const refreshUrl = useCallback((asset: LibraryAsset) => {
-    if (inflightThumbs.current.has(asset.id)) return
-    inflightThumbs.current.add(asset.id)
-    libraryStore
-      .mediaUrl(asset)
-      .then((url) => {
-        setUrls((u) => ({ ...u, [asset.id]: url }))
-        // 落定成功才清除错误（PR #226 评审：在途期间保留失败诊断与重试
-        // 入口——请求慢或永不落定时，行不得退化为无重试入口的惰性占位）
-        setThumbErrors((m) => {
-          if (!(asset.id in m)) return m
-          const next = { ...m }
-          delete next[asset.id]
-          return next
-        })
-      })
-      .catch((err) =>
-        setThumbErrors((m) => ({ ...m, [asset.id]: String(err) })),
-      )
-      .finally(() => inflightThumbs.current.delete(asset.id))
-  }, [])
-  return {
-    assets,
-    setAssets,
-    error,
-    setError,
-    urls,
-    setUrls,
-    thumbErrors,
-    refreshUrl,
-  }
+  return { assets, setAssets, error, setError, loading, ...thumbnails }
 }
 
 /** 确认后执行删除（AssetsPanel 拆分，issue #99）：移除列表项并回收缩
@@ -108,9 +73,8 @@ function useLibraryAssetList() {
  * 缩略 URL 仅在成功后回收，失败保留以供恢复行与显式重试。 */
 function removeLibraryAsset(
   asset: LibraryAsset,
-  urls: Record<string, string>,
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
-  setUrls: (fn: (u: Record<string, string>) => Record<string, string>) => void,
+  forgetUrl: (id: string) => void,
   setError: (err: string | null) => void,
 ): void {
   if (isWebExitPending()) {
@@ -121,13 +85,7 @@ function removeLibraryAsset(
   setAssets((list) => list.filter((a) => a.id !== asset.id))
   runWebOperation(async () => {
     await libraryStore.remove(asset.id)
-    const url = urls[asset.id]
-    if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
-    setUrls((u) => {
-      const next = { ...u }
-      delete next[asset.id]
-      return next
-    })
+    forgetUrl(asset.id)
   }).catch((err) => {
     const restored = libraryStore.persistedSnapshot(asset.id) ?? asset
     setAssets((list) =>
@@ -141,19 +99,23 @@ function removeLibraryAsset(
  * 执行移除并回收缩略 URL；落盘删除交给库门面（删除不可恢复）。 */
 function RemoveAssetDialog({
   asset,
-  onCancel,
+  onClose,
   onConfirm,
 }: {
-  readonly asset: LibraryAsset
-  readonly onCancel: () => void
+  readonly asset: LibraryAsset | null
+  readonly onClose: () => void
   readonly onConfirm: (asset: LibraryAsset) => void
 }) {
+  if (!asset) return null
   return (
     <ConfirmDeleteDialog
       title="删除资产"
       message={`删除「${asset.name}」？媒体文件将从资产库移除，此操作不可撤销。`}
-      onCancel={onCancel}
-      onConfirm={() => onConfirm(asset)}
+      onCancel={onClose}
+      onConfirm={() => {
+        onClose()
+        onConfirm(asset)
+      }}
     />
   )
 }
@@ -165,12 +127,18 @@ function useAssetImport(
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
   setError: (err: string | null) => void,
   refreshUrl: (asset: LibraryAsset) => void,
+  loading: boolean,
 ) {
   const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const importKind = useRef<LibraryKind>('other')
   const importFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return
+    if (loading) {
+      setError('资产库正在读取，请稍候再导入。')
+      if (fileRef.current) fileRef.current.value = ''
+      return
+    }
     setBusy(true)
     setError(null)
     const kind = importKind.current
@@ -197,7 +165,12 @@ function useAssetImport(
     importKind.current = kind
     fileRef.current?.click()
   }
-  return { busy, fileRef, importFiles: useWebExitAction(importFiles), onPick }
+  return {
+    busy: busy || loading,
+    fileRef,
+    importFiles: useWebExitAction(importFiles),
+    onPick,
+  }
 }
 
 /** 隐藏文件输入（AssetsPanel 拆分，issue #241）：useAssetImport 的视图
@@ -523,6 +496,36 @@ function joinAssetErrors(errors: Map<string, string>): string {
   return [...errors.values()].join('；')
 }
 
+/** Loading feedback explains import admission; each existing error domain retains its own visible row. */
+function AssetFeedback({
+  loading,
+  error,
+  renameError,
+  tagsError,
+}: {
+  readonly loading: boolean
+  readonly error: string | null
+  readonly renameError: string | null
+  readonly tagsError: string | null
+}) {
+  return (
+    <>
+      {loading && (
+        <div className="pw-assets-hint">
+          <output>正在读取资产库…</output>
+        </div>
+      )}
+      {error && <div className="pw-assets-hint pw-assets-error">{error}</div>}
+      {renameError && (
+        <div className="pw-assets-hint pw-assets-error">{renameError}</div>
+      )}
+      {tagsError && (
+        <div className="pw-assets-hint pw-assets-error">{tagsError}</div>
+      )}
+    </>
+  )
+}
+
 /** 资产库面板（§8.1）：分类筛选、导入/删除与缩略图懒加载；
  * 删除走应用内确认框（不可逆），状态由 useLibraryAssetList 持有。 */
 export function AssetsPanel() {
@@ -532,7 +535,8 @@ export function AssetsPanel() {
     error,
     setError,
     urls,
-    setUrls,
+    forgetUrl,
+    loading,
     thumbErrors,
     refreshUrl,
   } = useLibraryAssetList()
@@ -545,6 +549,7 @@ export function AssetsPanel() {
     setAssets,
     setError,
     refreshUrl,
+    loading,
   )
   const { commitTags, tagsError, forgetTags } = useAssetTagsCommit(setAssets)
   const { rename, renameError, forgetRename } = useAssetRename(setAssets)
@@ -552,7 +557,7 @@ export function AssetsPanel() {
   const remove = (asset: LibraryAsset) => {
     forgetTags(asset.id)
     forgetRename(asset.id)
-    removeLibraryAsset(asset, urls, setAssets, setUrls, setError)
+    removeLibraryAsset(asset, setAssets, forgetUrl, setError)
   }
 
   return (
@@ -584,24 +589,18 @@ export function AssetsPanel() {
           onRequestRemove={setPendingRemove}
         />
       )}
-      {busy && <div className="pw-assets-hint">导入中…</div>}
-      {error && <div className="pw-assets-hint pw-assets-error">{error}</div>}
-      {renameError && (
-        <div className="pw-assets-hint pw-assets-error">{renameError}</div>
-      )}
-      {tagsError && (
-        <div className="pw-assets-hint pw-assets-error">{tagsError}</div>
-      )}
-      {pendingRemove !== null && (
-        <RemoveAssetDialog
-          asset={pendingRemove}
-          onCancel={() => setPendingRemove(null)}
-          onConfirm={(target) => {
-            setPendingRemove(null)
-            remove(target)
-          }}
-        />
-      )}
+      {busy && !loading && <div className="pw-assets-hint">导入中…</div>}
+      <AssetFeedback
+        loading={loading}
+        error={error}
+        renameError={renameError}
+        tagsError={tagsError}
+      />
+      <RemoveAssetDialog
+        asset={pendingRemove}
+        onClose={() => setPendingRemove(null)}
+        onConfirm={remove}
+      />
     </div>
   )
 }

@@ -77,10 +77,15 @@ function decision() {
 }
 
 /** Storage changes only on acknowledged success; the first deletion is controlled and imports may reject by filename. */
-function mutationStorage() {
+function mutationStorage(
+  options: { holdList?: boolean; holdMedia?: boolean } = {},
+) {
   const original = storedAsset('原有.png')
   const assets = new Map([[original.id, original]])
   const deletion = decision()
+  const listing = decision()
+  const media = decision()
+  const mediaRequests: string[] = []
   const importGates = new Map<string, ReturnType<typeof decision>>()
   const imported: string[] = []
   let deletes = 0
@@ -92,9 +97,16 @@ function mutationStorage() {
       patch: Partial<LibraryAsset>
       assetId: string
     }
-    if (command === IPC_COMMANDS.listLibraryAssets)
-      return { assets: { byId: Object.fromEntries(assets) } }
-    if (command === IPC_COMMANDS.getAssetMediaUrl) return `blob:${args.assetId}`
+    if (command === IPC_COMMANDS.listLibraryAssets) {
+      const byId = structuredClone(Object.fromEntries(assets))
+      if (options.holdList) await listing.promise
+      return { assets: { byId } }
+    }
+    if (command === IPC_COMMANDS.getAssetMediaUrl) {
+      mediaRequests.push(args.assetId)
+      if (options.holdMedia) await media.promise
+      return `blob:${args.assetId}`
+    }
     if (command === IPC_COMMANDS.deleteLibraryAsset) {
       deletes += 1
       if (deletes === 1) await deletion.promise
@@ -124,6 +136,9 @@ function mutationStorage() {
   return {
     original,
     deletion,
+    listing,
+    media,
+    mediaRequests,
     imported,
     names: () => [...assets.values()].map((a) => a.name),
     pauseImport: (name: string) => {
@@ -135,10 +150,11 @@ function mutationStorage() {
 }
 
 /** Mount the real panel and wait for its initially persisted thumbnail before mutating it. */
-async function mountOtherAssets() {
+async function mountOtherAssets(withThumbnail = true) {
   render(<AssetsPanel />)
   fireEvent.click(await screen.findByText('其他'))
-  await screen.findByAltText('原有.png')
+  if (withThumbnail) await screen.findByAltText('原有.png')
+  else await screen.findByRole('button', { name: '原有.png' })
 }
 
 /** A real confirmation still owns admission; tests never call the deletion helper directly. */
@@ -246,4 +262,88 @@ it('restores the facade persisted baseline and preserves imports completed durin
     1,
   )
   expect(storage.names()).toEqual(['最近落盘.png', '并行导入.png'])
+})
+
+it('admits imports only after the initial list settles, including the hidden file entry', async () => {
+  const storage = mutationStorage({ holdList: true })
+  render(<AssetsPanel />)
+  fireEvent.click(screen.getByText('其他'))
+  try {
+    expect
+      .soft(
+        (screen.getByRole('button', { name: '＋ 导入' }) as HTMLButtonElement)
+          .disabled,
+      )
+      .toBe(true)
+    pickFiles(['等待.png'])
+    await act(async () => {})
+    expect.soft(storage.imported).toEqual([])
+  } finally {
+    await act(async () => storage.listing.resolve())
+  }
+  await screen.findByAltText('原有.png')
+  pickFiles(['就绪.png'])
+  expect(await screen.findByRole('button', { name: '就绪.png' })).toBeTruthy()
+  expect(storage.names()).toEqual(['原有.png', '就绪.png'])
+})
+
+it.each([true, false])(
+  'revokes the pending thumbnail beforeDeleteAck=%s without reviving a deleted cache',
+  async (beforeDeleteAck) => {
+    const storage = mutationStorage({ holdMedia: true })
+    const revoke = vi.spyOn(URL, 'revokeObjectURL')
+    await mountOtherAssets(false)
+    await waitFor(() =>
+      expect(storage.mediaRequests).toEqual([storage.original.id]),
+    )
+    await confirmRemoval()
+    if (beforeDeleteAck) await act(async () => storage.media.resolve())
+    await act(async () => storage.deletion.resolve())
+    if (!beforeDeleteAck) await act(async () => storage.media.resolve())
+    expect(storage.names()).toEqual([])
+    expect(screen.queryByRole('button', { name: '原有.png' })).toBeNull()
+    expect(revoke).toHaveBeenCalledExactlyOnceWith(
+      `blob:${storage.original.id}`,
+    )
+  },
+)
+
+it('keeps a pending thumbnail valid when deletion rejects', async () => {
+  const storage = mutationStorage({ holdMedia: true })
+  const revoke = vi.spyOn(URL, 'revokeObjectURL')
+  await mountOtherAssets(false)
+  await waitFor(() =>
+    expect(storage.mediaRequests).toEqual([storage.original.id]),
+  )
+  await confirmRemoval()
+  await act(async () => storage.deletion.reject(new Error('拒绝删除')))
+  expect(await screen.findByRole('button', { name: '原有.png' })).toBeTruthy()
+  await act(async () => storage.media.resolve())
+  expect(await screen.findByAltText('原有.png')).toBeTruthy()
+  expect(revoke).not.toHaveBeenCalled()
+  expect(storage.names()).toEqual(['原有.png'])
+})
+
+it('releases an unresolved thumbnail after its panel unmounts', async () => {
+  const storage = mutationStorage({ holdMedia: true })
+  const revoke = vi.spyOn(URL, 'revokeObjectURL')
+  await mountOtherAssets(false)
+  await waitFor(() =>
+    expect(storage.mediaRequests).toEqual([storage.original.id]),
+  )
+  cleanup()
+  await act(async () => storage.media.resolve())
+  expect(revoke).toHaveBeenCalledExactlyOnceWith(`blob:${storage.original.id}`)
+})
+
+it('does not start a new thumbnail for an import acknowledged after unmount', async () => {
+  const storage = mutationStorage()
+  const importGate = storage.pauseImport('迟到.png')
+  await mountOtherAssets()
+  pickFiles(['迟到.png'])
+  await waitFor(() => expect(storage.imported).toEqual(['迟到.png']))
+  cleanup()
+  await act(async () => importGate.resolve())
+  expect(storage.names()).toEqual(['原有.png', '迟到.png'])
+  expect(storage.mediaRequests).toEqual([storage.original.id])
 })
