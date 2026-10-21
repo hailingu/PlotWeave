@@ -1622,58 +1622,67 @@ it.each([
   ['src-tauri/src/scope.rs', 'rust'],
   ['native/macos/Scope.swift', 'native'],
   ['scripts/scope.sh', 'full'],
-])('共享提交合并所有远端范围：%s → %s，与 ref 顺序无关', (file, scope) => {
-  for (const reverse of [false, true]) {
-    const scenario = preparePushScenario()
-    const beforeCode = scenario.headSha()
-    commitScopeBranch(scenario, file, 'code')
-    const beforeDocs = scenario.headSha()
-    commitScopeBranch(scenario, 'docs/shared.md', 'shared')
+])(
+  '共享提交合并所有远端范围：%s → %s，与 ref 顺序无关',
+  { timeout: 30_000 },
+  (file, scope) => {
+    for (const reverse of [false, true]) {
+      const scenario = preparePushScenario()
+      const beforeCode = scenario.headSha()
+      commitScopeBranch(scenario, file, 'code')
+      const beforeDocs = scenario.headSha()
+      commitScopeBranch(scenario, 'docs/shared.md', 'shared')
+      const head = scenario.headSha()
+      const rows = [
+        `refs/heads/docs ${head} refs/heads/docs ${beforeDocs}\n`,
+        `refs/heads/code ${head} refs/heads/code ${beforeCode}\n`,
+      ]
+
+      const result = scenario.runHookWithStdin(
+        (reverse ? rows.reverse() : rows).join(''),
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(scenario.gateRuns()).toBe(1)
+      expect(
+        readFileSync(resolve(scenario.root, 'calls.log'), 'utf8'),
+      ).toContain(`gate-scope ${scope}\n`)
+    }
+  },
+)
+
+it(
+  '已有远端 tip 不在本地时走 full，不能回退到仅文档父提交',
+  { timeout: 30_000 },
+  () => {
+    const scenario = preparePushScenario({ fullGate: true })
+    scenario.env.PLOTWEAVE_GATE_FULL_NATIVE = '0'
+    commitScopeBranch(scenario, 'docs/missing-tip.md', 'missing-tip')
+    expect(scenario.git(['branch', 'dev', 'HEAD~1']).status).toBe(0)
+    const absent = '1234567890123456789012345678901234567890'
     const head = scenario.headSha()
-    const rows = [
-      `refs/heads/docs ${head} refs/heads/docs ${beforeDocs}\n`,
-      `refs/heads/code ${head} refs/heads/code ${beforeCode}\n`,
-    ]
 
     const result = scenario.runHookWithStdin(
-      (reverse ? rows.reverse() : rows).join(''),
+      `refs/heads/a ${head} refs/heads/a ${absent}\n`,
     )
 
     expect(result.status, result.stderr).toBe(0)
     expect(scenario.gateRuns()).toBe(1)
     expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
-      `gate-scope ${scope}\n`,
+      'xcodebuild -project native/macos/',
     )
-  }
-})
-
-it('已有远端 tip 不在本地时走 full，不能回退到仅文档父提交', () => {
-  const scenario = preparePushScenario({ fullGate: true })
-  scenario.env.PLOTWEAVE_GATE_FULL_NATIVE = '0'
-  commitScopeBranch(scenario, 'docs/missing-tip.md', 'missing-tip')
-  expect(scenario.git(['branch', 'dev', 'HEAD~1']).status).toBe(0)
-  const absent = '1234567890123456789012345678901234567890'
-  const head = scenario.headSha()
-
-  const result = scenario.runHookWithStdin(
-    `refs/heads/a ${head} refs/heads/a ${absent}\n`,
-  )
-
-  expect(result.status, result.stderr).toBe(0)
-  expect(scenario.gateRuns()).toBe(1)
-  expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
-    'xcodebuild -project native/macos/',
-  )
-  expect(JSON.parse(readFileSync(scenario.pendingPath, 'utf8')).scope).toBe(
-    'full',
-  )
-})
+    expect(JSON.parse(readFileSync(scenario.pendingPath, 'utf8')).scope).toBe(
+      'full',
+    )
+  },
+)
 
 it.each([
   ['src-tauri/src/scope.rs', 'rust-only'],
   ['native/macos/Scope.swift', 'native-only'],
 ])(
   '共享提交的 frontend 与 %s 独立范围合并为 full，仍跑原生回归',
+  { timeout: 30_000 },
   (file, branch) => {
     const scenario = preparePushScenario({ fullGate: true })
     const seed = scenario.headSha()
@@ -1698,40 +1707,45 @@ it.each([
   },
 )
 
-it.each(['src/mixed.ts', 'scripts/mixed.sh'])(
-  'native 与 %s 混合：快慢路径均刷新两侧覆盖率并跑原生回归',
-  (file) => {
-    for (const slow of [false, true]) {
-      const scenario = preparePushScenario({ fullGate: true })
-      const base = scenario.headSha()
-      commitScopeBranch(scenario, 'native/macos/Mixed.swift', 'native-mixed')
-      commitScopeBranch(scenario, file, 'mixed')
-      const head = scenario.headSha()
-      scenario.env.PLOTWEAVE_GATE_FULL_NATIVE = '0'
-      if (slow) expect(scenario.git(['checkout', '-q', 'main']).status).toBe(0)
+// #681：一个用例只执行一次真实推送，避免把快慢两条完整流水线的墙钟成本相加。
+it.each([
+  ['src/mixed.ts', false],
+  ['src/mixed.ts', true],
+  ['scripts/mixed.sh', false],
+  ['scripts/mixed.sh', true],
+] as const)(
+  'native 与 %s 混合（slow=%s）：刷新两侧覆盖率并跑原生回归',
+  { timeout: 30_000 },
+  (file, slow) => {
+    const scenario = preparePushScenario({ fullGate: true })
+    const base = scenario.headSha()
+    commitScopeBranch(scenario, 'native/macos/Mixed.swift', 'native-mixed')
+    commitScopeBranch(scenario, file, 'mixed')
+    const head = scenario.headSha()
+    scenario.env.PLOTWEAVE_GATE_FULL_NATIVE = '0'
+    if (slow) expect(scenario.git(['checkout', '-q', 'main']).status).toBe(0)
 
-      const result = scenario.runHookWithStdin(
-        `refs/heads/mixed ${head} refs/heads/mixed ${base}\n`,
-      )
+    const result = scenario.runHookWithStdin(
+      `refs/heads/mixed ${head} refs/heads/mixed ${base}\n`,
+    )
 
-      expect(result.status, result.stderr).toBe(0)
-      expect(scenario.gateRuns()).toBe(1)
-      expect(scenario.installRuns()).toBe(slow ? 1 : 0)
-      const log = readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')
-      expect(log).toContain('npm run test:coverage')
-      expect(log).toContain('cargo-llvm-cov llvm-cov')
-      expect(log).toContain('xcodebuild -project native/macos/')
-      expect(
-        JSON.parse(readFileSync(scenario.pendingPath, 'utf8')),
-      ).toMatchObject({
-        scope: 'full',
-        head,
-      })
-    }
+    expect(result.status, result.stderr).toBe(0)
+    expect(scenario.gateRuns()).toBe(1)
+    expect(scenario.installRuns()).toBe(slow ? 1 : 0)
+    const log = readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')
+    expect(log).toContain('npm run test:coverage')
+    expect(log).toContain('cargo-llvm-cov llvm-cov')
+    expect(log).toContain('xcodebuild -project native/macos/')
+    expect(
+      JSON.parse(readFileSync(scenario.pendingPath, 'utf8')),
+    ).toMatchObject({
+      scope: 'full',
+      head,
+    })
   },
 )
 
-it('混合范围的 native 失败阻断推送且不记录成功', () => {
+it('混合范围的 native 失败阻断推送且不记录成功', { timeout: 30_000 }, () => {
   const scenario = preparePushScenario({ fullGate: true })
   const base = scenario.headSha()
   commitScopeBranch(scenario, 'native/macos/Fail.swift', 'native-fail')
@@ -1747,29 +1761,33 @@ it('混合范围的 native 失败阻断推送且不记录成功', () => {
   expect(existsSync(scenario.pendingPath)).toBe(false)
 })
 
-it('共享 docs 提交检查每个基线，后续范围的空白错误仍阻断', () => {
-  const scenario = preparePushScenario()
-  const seed = scenario.headSha()
-  commitScopeBranch(scenario, 'docs/bad.md', 'bad-docs')
-  writeFileSync(resolve(scenario.root, 'docs/bad.md'), 'bad whitespace  \n')
-  expect(scenario.git(['add', 'docs/bad.md']).status).toBe(0)
-  expect(
-    scenario.git([
-      '-c',
-      'core.hooksPath=/dev/null',
-      'commit',
-      '-qm',
-      'bad whitespace',
-    ]).status,
-  ).toBe(0)
-  const bad = scenario.headSha()
-  commitScopeBranch(scenario, 'docs/good.md', 'good-docs')
-  const head = scenario.headSha()
+it(
+  '共享 docs 提交检查每个基线，后续范围的空白错误仍阻断',
+  { timeout: 30_000 },
+  () => {
+    const scenario = preparePushScenario()
+    const seed = scenario.headSha()
+    commitScopeBranch(scenario, 'docs/bad.md', 'bad-docs')
+    writeFileSync(resolve(scenario.root, 'docs/bad.md'), 'bad whitespace  \n')
+    expect(scenario.git(['add', 'docs/bad.md']).status).toBe(0)
+    expect(
+      scenario.git([
+        '-c',
+        'core.hooksPath=/dev/null',
+        'commit',
+        '-qm',
+        'bad whitespace',
+      ]).status,
+    ).toBe(0)
+    const bad = scenario.headSha()
+    commitScopeBranch(scenario, 'docs/good.md', 'good-docs')
+    const head = scenario.headSha()
 
-  const result = scenario.runHookWithStdin(
-    `refs/heads/a ${head} refs/heads/a ${bad}\nrefs/heads/b ${head} refs/heads/b ${seed}\n`,
-  )
+    const result = scenario.runHookWithStdin(
+      `refs/heads/a ${head} refs/heads/a ${bad}\nrefs/heads/b ${head} refs/heads/b ${seed}\n`,
+    )
 
-  expect(result.status).not.toBe(0)
-  expect(scenario.gateRuns()).toBe(0)
-})
+    expect(result.status).not.toBe(0)
+    expect(scenario.gateRuns()).toBe(0)
+  },
+)
