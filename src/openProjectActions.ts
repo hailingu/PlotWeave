@@ -19,6 +19,31 @@ import { useExitGuardedCallback } from './useExitGuardedCallback'
 import { displayIpcError } from './ipcError'
 import { projectStore, type ProjectContent } from './projectStore'
 import type { AiSession } from './ai/session'
+import { createDiagnostic } from './diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  aiSessionRecoveryFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::app',
+    'AI_SESSION_RECOVERY_FAILED',
+  ),
+  projectCreateFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::app',
+    'PROJECT_CREATE_FAILED',
+  ),
+  projectCreatedOpenFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::app',
+    'PROJECT_CREATED_OPEN_FAILED',
+  ),
+  projectOpenFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::app',
+    'PROJECT_OPEN_FAILED',
+  ),
+}
 
 /**
  * 打开/新建项目的协调域（自 App.tsx 拆出，issue #545）：持有打开态的
@@ -95,7 +120,10 @@ async function loadOpenProject(
       aiSessionRetryable: false,
     }
   } catch (err) {
-    console.warn('[App] AI 会话恢复失败，已以空历史打开项目', err)
+    logEvents.aiSessionRecoveryFailed(
+      '[App] AI 会话恢复失败，已以空历史打开项目',
+      err,
+    )
     return {
       id,
       doc,
@@ -243,7 +271,7 @@ function useCreateProjectAttempt(
     // 创建族从基线读取到失败对账完整串行；只有确认未创建才开放重试。
     const outcome = await createWithReconcile(attempts, '未命名短剧')
     if (outcome.kind === 'rejected') {
-      console.warn('[App] 新建项目失败', outcome.err)
+      logEvents.projectCreateFailed('[App] 新建项目失败', outcome.err)
       if (outcome.commitState !== 'present') {
         feedback.fail(
           fbSeq,
@@ -269,7 +297,7 @@ function useCreateProjectAttempt(
         startTransition(() => setOpenProject(open))
       }
     } catch (err) {
-      console.warn('[App] 新建后打开失败', err)
+      logEvents.projectCreatedOpenFailed('[App] 新建后打开失败', err)
       // 被取代的旧尝试拒绝晚到：不发布横幅（与 handleOpenProject 同款）
       if (seq === openAttemptSeqRef.current)
         setOpenFailure({ id: outcome.id, detail: openFailureDetail(err) })
@@ -334,7 +362,7 @@ function useProjectOpenAttempt(
         if (seq !== openAttemptSeqRef.current) return
         startTransition(() => setOpenProject(open))
       } catch (err) {
-        console.warn('[App] 打开项目失败', err)
+        logEvents.projectOpenFailed('[App] 打开项目失败', err)
         // 被取代的旧尝试拒绝晚到：不发布横幅，防止新尝试已清除/进入编辑器
         // 后旧错误复活或「后完成者」覆盖「后发起者」。
         if (seq !== openAttemptSeqRef.current) return

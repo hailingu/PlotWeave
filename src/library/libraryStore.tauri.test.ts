@@ -499,10 +499,23 @@ describe('libraryStore Tauri 路径：listGroups', () => {
     expect(warn).toHaveBeenCalledWith(
       '[Library] 索引条目隔离：',
       '条目 la-1 已隔离',
+      {
+        level: 'WARN',
+        target: 'plotweave::frontend::library',
+        code: 'LIBRARY_INDEX_ENTRY_QUARANTINED',
+        message: '[Library] 索引条目隔离：',
+      },
     )
-    expect(warn).toHaveBeenCalledWith('[Library] 删除隔离区待清理：', [
-      { kind: 'evidence', message: 'assets/.trash/t-1' },
-    ])
+    expect(warn).toHaveBeenCalledWith(
+      '[Library] 删除隔离区待清理：',
+      [{ kind: 'evidence', message: 'assets/.trash/t-1' }],
+      {
+        level: 'WARN',
+        target: 'plotweave::frontend::library',
+        code: 'LIBRARY_CLEANUP_PENDING',
+        message: '[Library] 删除隔离区待清理：',
+      },
+    )
   })
 })
 
@@ -525,9 +538,16 @@ describe('libraryStore Tauri 路径：upsertGroup', () => {
       name: '女主',
       kind: 'character',
     })
-    expect(warn).toHaveBeenCalledWith('[Library] 删除隔离区待清理：', [
-      { kind: 'evidence', message: 'assets/.trash/t-1' },
-    ])
+    expect(warn).toHaveBeenCalledWith(
+      '[Library] 删除隔离区待清理：',
+      [{ kind: 'evidence', message: 'assets/.trash/t-1' }],
+      {
+        level: 'WARN',
+        target: 'plotweave::frontend::library',
+        code: 'LIBRARY_CLEANUP_PENDING',
+        message: '[Library] 删除隔离区待清理：',
+      },
+    )
   })
 })
 

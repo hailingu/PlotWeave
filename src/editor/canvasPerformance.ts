@@ -4,6 +4,26 @@ import {
   createCanvasDragLatency,
   type CanvasDragLatencyReport,
 } from './canvasDragLatency'
+import { createDiagnostic } from '../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  longTaskObserverUnavailable: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::canvas',
+    'LONG_TASK_OBSERVER_UNAVAILABLE',
+  ),
+  performanceMeasureUnavailable: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::canvas',
+    'PERFORMANCE_MEASURE_UNAVAILABLE',
+  ),
+  performanceMeasureCleanupUnavailable: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::canvas',
+    'PERFORMANCE_MEASURE_CLEANUP_UNAVAILABLE',
+  ),
+}
 
 /** 时间样本的常量空间汇总，避免逐帧存储或排序。 */
 interface TimingSummary {
@@ -279,7 +299,9 @@ class CanvasPerformanceRecorder {
     } catch {
       session.observer?.disconnect()
       session.observer = null
-      console.warn('[CanvasPerf]', { code: 'LONG_TASK_OBSERVER_UNAVAILABLE' })
+      logEvents.longTaskObserverUnavailable('[CanvasPerf]', {
+        code: 'LONG_TASK_OBSERVER_UNAVAILABLE',
+      })
     }
   }
 
@@ -302,7 +324,9 @@ class CanvasPerformanceRecorder {
         duration: session.report.durationMs,
       })
     } catch {
-      console.warn('[CanvasPerf]', { code: 'PERFORMANCE_MEASURE_UNAVAILABLE' })
+      logEvents.performanceMeasureUnavailable('[CanvasPerf]', {
+        code: 'PERFORMANCE_MEASURE_UNAVAILABLE',
+      })
     }
   }
 
@@ -313,7 +337,7 @@ class CanvasPerformanceRecorder {
       performance.clearMeasures(this.measureName)
       return true
     } catch {
-      console.warn('[CanvasPerf]', {
+      logEvents.performanceMeasureCleanupUnavailable('[CanvasPerf]', {
         code: 'PERFORMANCE_MEASURE_CLEANUP_UNAVAILABLE',
       })
       return false

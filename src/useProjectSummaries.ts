@@ -2,6 +2,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { projectStore } from './projectStore'
 import type { ProjectSummary } from './home/projects'
+import { createDiagnostic } from './diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  projectListFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::app',
+    'PROJECT_LIST_FAILED',
+  ),
+}
 
 /** 项目列表状态与保存落定的刷新编排（issue #101，自 App 拆出以守 80 行
  * 组件上限）：返回首页的读取与保存落定触发的再刷新并发时按发起序收敛，
@@ -41,7 +51,7 @@ export function useProjectSummaries(isHomeVisible: () => boolean): {
       }
       return list
     } catch (err) {
-      console.warn('[App] 项目列表加载失败', err)
+      logEvents.projectListFailed('[App] 项目列表加载失败', err)
       // 读取失败 ≠ 空列表（#133）：保留已知列表供展示，只置错误态交由
       // HomePage 呈现诊断/重试；项目文件本身未受影响（整次枚举失败）
       if (seq === refreshSeqRef.current) setLoadError(String(err))

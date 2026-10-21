@@ -1,4 +1,14 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { createDiagnostic } from './diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  appRenderFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::app',
+    'APP_RENDER_FAILED',
+  ),
+}
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -23,7 +33,11 @@ export class ErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('[PlotWeave] 界面崩溃', error, info.componentStack)
+    logEvents.appRenderFailed(
+      '[PlotWeave] 界面崩溃',
+      error,
+      info.componentStack,
+    )
   }
 
   render() {

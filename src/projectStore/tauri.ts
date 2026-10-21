@@ -20,6 +20,61 @@ import {
 } from './saveChain'
 import { seedProjects } from './seeds'
 import type { ProjectSummary } from '../home/projects'
+import { createDiagnostic } from '../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  projectSeedExists: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_SEED_EXISTS',
+  ),
+  projectSeedUnreadable: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_SEED_UNREADABLE',
+  ),
+  projectSeedPendingWrite: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_SEED_PENDING_WRITE',
+  ),
+  projectSamplePendingRetry: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_SAMPLE_PENDING_RETRY',
+  ),
+  projectNormalizationWarning: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_NORMALIZATION_WARNING',
+  ),
+  projectSampleChanged: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_SAMPLE_CHANGED',
+  ),
+  projectSampleRepairWriteFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::project_store',
+    'PROJECT_SAMPLE_REPAIR_WRITE_FAILED',
+  ),
+  projectSampleUpgradeFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_SAMPLE_UPGRADE_FAILED',
+  ),
+  projectRepairWriteFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::project_store',
+    'PROJECT_REPAIR_WRITE_FAILED',
+  ),
+  projectAssetAliasFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_ASSET_ALIAS_FAILED',
+  ),
+}
 
 /** Rust ProjectMeta → 首页 ProjectSummary；updated_at 为 ISO 字符串。
  * 非法时间戳（空串/坏格式）回退 epoch，绝不让 new Date 抛错清空首页列表。
@@ -71,10 +126,13 @@ async function seedFirstRun(): Promise<boolean> {
     const chainBefore = saveChainTokenOf(seed.meta.id)
     try {
       await ipcInvoke<unknown>(IPC_COMMANDS.loadProject, { id: seed.meta.id })
-      console.warn('[projectStore] 播种跳过：项目已存在', seed.meta.id)
+      logEvents.projectSeedExists(
+        '[projectStore] 播种跳过：项目已存在',
+        seed.meta.id,
+      )
     } catch (err) {
       if (ipcErrorCode(err) !== 'project_not_found') {
-        console.warn(
+        logEvents.projectSeedUnreadable(
           '[projectStore] 播种跳过：项目文件不可读，不覆盖可能可恢复的内容',
           seed.meta.id,
           err,
@@ -85,7 +143,7 @@ async function seedFirstRun(): Promise<boolean> {
         pendingRetryDocOf(seed.meta.id) !== undefined ||
         saveChainTokenOf(seed.meta.id) !== chainBefore
       ) {
-        console.warn(
+        logEvents.projectSeedPendingWrite(
           '[projectStore] 播种跳过：存在待重试的更新保存或窗口内有新写入，不以种子覆盖',
           seed.meta.id,
         )
@@ -129,7 +187,7 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
   try {
     await waitForSaveChainIdle(id)
     if (pendingRetryDocOf(id) !== undefined) {
-      console.warn(
+      logEvents.projectSamplePendingRetry(
         '[projectStore] 示例存在待重试的更新保存，跳过本次升级回写',
         id,
       )
@@ -150,10 +208,11 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
     })
     // 归一化/判型警告逐条留痕（与 tauriLoad 同款）：形状判型等修复型回写
     // 不得静默改写版本号等内容（issue #338 评审二轮）
-    for (const w of warnings) console.warn(`[projectStore] ${w}`)
+    for (const w of warnings)
+      logEvents.projectNormalizationWarning(`[projectStore] ${w}`)
     if (!repaired) return false
     if (saveChainTokenOf(id) !== chainBefore) {
-      console.warn(
+      logEvents.projectSampleChanged(
         '[projectStore] 示例升级窗口内出现新的保存/删除排队，跳过本次回写（下次列表/打开重查）',
         id,
       )
@@ -163,7 +222,7 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
       await enqueueSave(id, content)
       return true
     } catch (err) {
-      console.error(
+      logEvents.projectSampleRepairWriteFailed(
         '[projectStore] 示例迁移/修复回写失败（已登记保存链重试）',
         id,
         err,
@@ -171,7 +230,11 @@ async function tryUpgradeSample(id: string): Promise<boolean> {
       return false
     }
   } catch (err) {
-    console.warn('[projectStore] 示例升级检查失败，保留该示例现状', id, err)
+    logEvents.projectSampleUpgradeFailed(
+      '[projectStore] 示例升级检查失败，保留该示例现状',
+      id,
+      err,
+    )
     return false
   }
 }
@@ -286,7 +349,8 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
       file,
       { projectId: id, invalidAssetKeys },
     )
-    for (const w of warnings) console.warn(`[projectStore] ${w}`)
+    for (const w of warnings)
+      logEvents.projectNormalizationWarning(`[projectStore] ${w}`)
     await registerAssetAliases(id, reissuedAssetAliases)
     // 别名登记的异步 IPC 期间可能又有新保存排队（如编辑器卸载冲刷）：
     // 顶部链身份检查已失效，此刻修复回写会把旧内容排在较新保存之后反向
@@ -302,7 +366,7 @@ export async function tauriLoad(id: string): Promise<ProjectContent> {
     // 重试登记接管——内存已交付修复结果，磁盘保持旧内容，下次打开会重新修复
     if (repaired) {
       await enqueueSave(id, content).catch((err: unknown) => {
-        console.error(
+        logEvents.projectRepairWriteFailed(
           '[projectStore] 迁移/修复回写失败，已登记后台重试（下次打开将重新修复）',
           err,
         )
@@ -328,7 +392,7 @@ async function registerAssetAliases(
         freshId,
       })
     } catch (err) {
-      console.warn(
+      logEvents.projectAssetAliasFailed(
         '[projectStore] 资产别名登记失败（媒体在修复回写落盘前暂不可见）',
         freshId,
         err,

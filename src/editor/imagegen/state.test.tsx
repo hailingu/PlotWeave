@@ -400,6 +400,11 @@ describe('生成调度：取消响应身份隔离（PR #200）', () => {
         expect.any(String),
         jobA,
         expect.any(Error),
+        expect.objectContaining({
+          level: 'ERROR',
+          target: 'plotweave::frontend::imagegen',
+          code: 'IMAGE_CANCEL_STALE_FAILED',
+        }),
       )
       await act(async () => settings.resolve(validSettings))
       await waitFor(() => expect(generateCount()).toBe(2))
@@ -509,6 +514,11 @@ describe('生成调度：取消诊断生命周期（PR #200）', () => {
         expect.any(String),
         jobId,
         expect.any(Error),
+        expect.objectContaining({
+          level: 'ERROR',
+          target: 'plotweave::frontend::imagegen',
+          code: 'IMAGE_CANCEL_STALE_FAILED',
+        }),
       )
       await act(async () => h.generations[0].resolve(generatedAsset('pa-a')))
       expect(h.assets.byId).toEqual({})
@@ -643,6 +653,11 @@ describe('生成调度：卸载/删除取消的失败留痕（issue #160）', ()
       expect.stringContaining('卸载取消请求失败'),
       jobId,
       expect.any(Error),
+      expect.objectContaining({
+        level: 'ERROR',
+        target: 'plotweave::frontend::imagegen',
+        code: 'IMAGE_CANCEL_UNMOUNT_FAILED',
+      }),
     )
     errSpy.mockRestore()
   })
@@ -667,6 +682,11 @@ describe('生成调度：卸载/删除取消的失败留痕（issue #160）', ()
       expect.stringContaining('取消请求失败'),
       jobId,
       expect.any(Error),
+      expect.objectContaining({
+        level: 'ERROR',
+        target: 'plotweave::frontend::imagegen',
+        code: 'IMAGE_CANCEL_DELETED_NODE_FAILED',
+      }),
     )
     errSpy.mockRestore()
   })

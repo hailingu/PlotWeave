@@ -151,6 +151,12 @@ it.each(['left', 'canvas', 'right', 'overlays'] as const)(
               ? 'LeftPanel'
               : 'RightPanel',
       ),
+      {
+        level: 'ERROR',
+        target: 'plotweave::frontend::editor',
+        code: 'EDITOR_REGION_RENDER_FAILED',
+        message: '[PlotWeave] 区域渲染失败',
+      },
     )
     faults[region] = null
     view.refresh()

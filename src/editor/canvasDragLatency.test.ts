@@ -80,7 +80,9 @@ describe('输入与主节点 DOM 延迟', () => {
     sampler.frame()
     expect(sampler.finish()).toEqual(report)
   })
+})
 
+describe('输入与主节点 DOM 延迟（待匹配与无效时间）', () => {
   it('松手前未匹配明确计入 pending，移除或无法解析的节点不计为跟上', () => {
     const { node, sampler } = setup()
     time = 2
@@ -132,7 +134,9 @@ describe('输入与主节点 DOM 延迟', () => {
       })
     },
   )
+})
 
+describe('输入与主节点 DOM 延迟（观察器降级与清理）', () => {
   it('观察器注册失败明确降级，卸载后的旧回调不能改变独立新段', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     vi.stubGlobal(
@@ -145,9 +149,18 @@ describe('输入与主节点 DOM 延迟', () => {
       },
     )
     const { sampler } = setup()
-    expect(warn).toHaveBeenCalledWith('[CanvasPerf]', {
-      code: 'DOM_LATENCY_OBSERVER_UNAVAILABLE',
-    })
+    expect(warn).toHaveBeenCalledWith(
+      '[CanvasPerf]',
+      {
+        code: 'DOM_LATENCY_OBSERVER_UNAVAILABLE',
+      },
+      {
+        level: 'WARN',
+        target: 'plotweave::frontend::canvas',
+        code: 'DOM_LATENCY_OBSERVER_UNAVAILABLE',
+        message: '[CanvasPerf]',
+      },
+    )
     sampler.dispose()
     sampler.move(event(1), { x: 1, y: 0 })
     expect(sampler.finish()).toEqual({ input: null, dom: null })

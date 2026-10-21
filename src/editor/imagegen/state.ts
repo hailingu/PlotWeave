@@ -35,6 +35,26 @@ import type { CanvasNode } from '../nodes/types'
 import type { ImageGenApi, ImageJobView } from './context'
 import { resolveImageGenPlan } from './plan'
 import { signatureMatches, type ImageGenInput } from './signature'
+import { createDiagnostic } from '../../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  imageCancelUnmountFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::imagegen',
+    'IMAGE_CANCEL_UNMOUNT_FAILED',
+  ),
+  imageCancelDeletedNodeFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::imagegen',
+    'IMAGE_CANCEL_DELETED_NODE_FAILED',
+  ),
+  imageCancelStaleFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::imagegen',
+    'IMAGE_CANCEL_STALE_FAILED',
+  ),
+}
 
 /** 非桌面环境的统一文案（浏览器预览无 IPC，无法代理生成）。 */
 const PREVIEW_UNSUPPORTED =
@@ -304,7 +324,7 @@ function useJobWriteGuard(
           }).catch((err: unknown) => {
             // 卸载后无 UI 宿主（issue #160）：控制台留痕即可定位——
             // 文案诚实：协作式取消未送达，不承诺已停止远端付费请求
-            console.error(
+            logEvents.imageCancelUnmountFailed(
               '[imagegen] 卸载取消请求失败（协作式取消未送达，远端生成可能继续并计费）',
               job.jobId,
               err,
@@ -348,7 +368,7 @@ function useNodeDeletionWatch(
         }).catch((err: unknown) => {
           // 宿主已删无节点级 UI 宿主（issue #160）：控制台留痕定位；
           // 结果到达时 jobAlive 已清，仍按取消语义丢弃
-          console.error(
+          logEvents.imageCancelDeletedNodeFailed(
             '[imagegen] 宿主节点已删除，取消请求失败（远端生成可能继续并计费，结果将被丢弃）',
             job.jobId,
             err,
@@ -505,7 +525,7 @@ function useImageCancel(
               `取消请求发送失败（协作式取消：远端生成可能继续并计费，结果到达时将被丢弃）：${errorText(err)}`,
             )
           } else {
-            console.error(
+            logEvents.imageCancelStaleFailed(
               '[imagegen] 取消请求失败（作业已更替或宿主已移除，远端生成可能继续并计费，结果将被丢弃）',
               jobId,
               err,

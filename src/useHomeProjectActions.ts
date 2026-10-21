@@ -12,6 +12,26 @@ import {
   type RefreshProjects,
   type UnsavedAiSessionsRef,
 } from './openProjectActions'
+import { createDiagnostic } from './diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  projectRenameFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::app',
+    'PROJECT_RENAME_FAILED',
+  ),
+  projectDuplicateFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::app',
+    'PROJECT_DUPLICATE_FAILED',
+  ),
+  projectDeleteFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::app',
+    'PROJECT_DELETE_FAILED',
+  ),
+}
 
 /**
  * 首页卡片变更动作族模块（自 App.tsx 拆出，issue #545）：仅服务首页的
@@ -36,7 +56,7 @@ function useRenameProject(
         feedback.succeed(seq)
         await refreshProjects()
       } catch (err) {
-        console.warn('[App] 重命名失败', err)
+        logEvents.projectRenameFailed('[App] 重命名失败', err)
         feedback.fail(
           seq,
           {
@@ -74,7 +94,7 @@ export function useHomeProjectActions(
       // 留下空副本），横幅提示手动处理
       const outcome = await duplicateWithReconcile(attempts, id)
       if (outcome.kind === 'rejected') {
-        console.warn('[App] 复制项目失败', outcome.err)
+        logEvents.projectDuplicateFailed('[App] 复制项目失败', outcome.err)
         const detail = createFamilyFailureDetail(outcome, 'duplicate')
         feedback.fail(
           seq,
@@ -100,7 +120,7 @@ export function useHomeProjectActions(
         feedback.succeed(seq)
         await refreshProjects()
       } catch (err) {
-        console.warn('[App] 删除项目失败', err)
+        logEvents.projectDeleteFailed('[App] 删除项目失败', err)
         feedback.fail(
           seq,
           { action: 'delete', targetId: id, detail: openFailureDetail(err) },

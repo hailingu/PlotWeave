@@ -1,6 +1,17 @@
 /** 只读主拖动节点的内联 transform；固定空间区分事件回调与 DOM 追赶，未测屏幕绘制。 */
 
 /** 常量空间的有效计时；无效事件时间单独计数，不伪装为零延迟。 */
+
+import { createDiagnostic } from '../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  domLatencyObserverUnavailable: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::canvas',
+    'DOM_LATENCY_OBSERVER_UNAVAILABLE',
+  ),
+}
 interface Timing {
   samples: number
   totalMs: number
@@ -115,7 +126,9 @@ class CanvasDragLatency {
     } catch {
       this.observer?.disconnect()
       this.observer = null
-      console.warn('[CanvasPerf]', { code: 'DOM_LATENCY_OBSERVER_UNAVAILABLE' })
+      logEvents.domLatencyObserverUnavailable('[CanvasPerf]', {
+        code: 'DOM_LATENCY_OBSERVER_UNAVAILABLE',
+      })
     }
   }
 

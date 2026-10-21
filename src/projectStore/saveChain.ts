@@ -17,6 +17,31 @@ import {
   notifyRetryPersisted,
   notifyProjectWriteReplayFailure,
 } from './saveNotifications'
+import { createDiagnostic } from '../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  projectAuxiliaryWriteDuringDelete: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_AUXILIARY_WRITE_DURING_DELETE',
+  ),
+  projectSaveDuringDelete: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_SAVE_DURING_DELETE',
+  ),
+  projectSaveFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::project_store',
+    'PROJECT_SAVE_FAILED',
+  ),
+  projectAuxiliaryReplayFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::project_store',
+    'PROJECT_AUXILIARY_REPLAY_FAILED',
+  ),
+}
 
 export {
   onProjectSaved,
@@ -45,7 +70,10 @@ export function enqueueProjectWrite(
 ): Promise<void> {
   if (deletions.isDeleting(id)) {
     deletions.absorbWrite(id, write)
-    console.warn('[projectStore] 项目删除中，吸收附属数据写入', id)
+    logEvents.projectAuxiliaryWriteDuringDelete(
+      '[projectStore] 项目删除中，吸收附属数据写入',
+      id,
+    )
     return Promise.resolve()
   }
   return queue.append(id, write)
@@ -94,7 +122,10 @@ export function enqueueSave(
       return Promise.reject(new Error(`项目删除中，拒绝写入副本：${id}`))
     }
     deletions.absorbSave(id, doc)
-    console.warn('[projectStore] 项目删除中，吸收本次保存排队', id)
+    logEvents.projectSaveDuringDelete(
+      '[projectStore] 项目删除中，吸收本次保存排队',
+      id,
+    )
     return Promise.resolve()
   }
   const generation = retries.begin(id)
@@ -105,7 +136,10 @@ export function enqueueSave(
       notifyProjectSaved(id)
     } catch (err) {
       if (retries.fail(id, doc, generation)) {
-        console.error('[projectStore] 保存失败，已登记后台重试', err)
+        logEvents.projectSaveFailed(
+          '[projectStore] 保存失败，已登记后台重试',
+          err,
+        )
       }
       throw err
     }
@@ -127,7 +161,11 @@ function replayDeleteFailure(
     void enqueueSave(id, absorbed.doc).catch(() => undefined)
   if (absorbed.write !== undefined) {
     void enqueueProjectWrite(id, absorbed.write).catch((err) => {
-      console.error('[projectStore] 回吐重排的附属写入失败', id, err)
+      logEvents.projectAuxiliaryReplayFailed(
+        '[projectStore] 回吐重排的附属写入失败',
+        id,
+        err,
+      )
       notifyProjectWriteReplayFailure(id, err)
     })
   }

@@ -38,6 +38,21 @@ import {
   saveAiSession,
 } from './aiSessionStore'
 import type { AiSession } from './ai/session'
+import { createDiagnostic } from './diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  projectDuplicateFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_DUPLICATE_FAILED',
+  ),
+  projectDuplicateCleanupFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::project_store',
+    'PROJECT_DUPLICATE_CLEANUP_FAILED',
+  ),
+}
 
 export type { ProjectContent }
 
@@ -139,12 +154,15 @@ export const projectStore = {
         await projectStore.save(meta.id, { ...doc, name, createdAt: undefined })
       }
     } catch (err) {
-      console.warn('[projectStore] 复制项目失败，清理已建副本', err)
+      logEvents.projectDuplicateFailed(
+        '[projectStore] 复制项目失败，清理已建副本',
+        err,
+      )
       // 清理完成后再抛：调用方看到失败时首页不会遗留空「副本」卡片；
       // 清理自身也失败时合并双错向前抛出并报告可能遗留的副本 id，
       // 绝不静默吞掉（否则空/半拷贝副本永留首页且无人知晓）
       await projectStore.delete(meta.id).catch((cleanupErr: unknown) => {
-        console.error(
+        logEvents.projectDuplicateCleanupFailed(
           '[projectStore] 副本清理失败，首页可能遗留空副本，可手动删除',
           meta.id,
           cleanupErr,

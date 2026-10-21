@@ -11,6 +11,16 @@ import { useEffect, useRef, useState } from 'react'
 import { settingsStore } from './settingsStore'
 import { listenNativeSettingsChanged } from './nativeSettingsChanges'
 import type { AppSettings } from './types'
+import { createDiagnostic } from '../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  settingsSnapshotLoadFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::settings',
+    'SETTINGS_SNAPSHOT_LOAD_FAILED',
+  ),
+}
 
 /** 当前设置快照；null = 未加载或加载失败（消费方按空态处理）。 */
 export function useSettingsSnapshot(): AppSettings | null {
@@ -28,7 +38,10 @@ export function useSettingsSnapshot(): AppSettings | null {
         },
         (err: unknown) => {
           if (active && gen === genRef.current)
-            console.warn('[settingsSnapshot] 读取设置失败', err)
+            logEvents.settingsSnapshotLoadFailed(
+              '[settingsSnapshot] 读取设置失败',
+              err,
+            )
         },
       )
     }

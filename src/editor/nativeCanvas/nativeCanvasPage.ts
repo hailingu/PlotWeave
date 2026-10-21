@@ -2,6 +2,21 @@ import type { ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { initializeLibraryDiagnostics } from '../../library/libraryDiagnosticTransport'
 import { invalidateHandleQueries } from '../nodes/handleQueryCache'
+import { createDiagnostic } from '../../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  pwCanvasInitializationFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::canvas',
+    'PW_CANVAS_INITIALIZATION_FAILED',
+  ),
+  pwCanvasDisposeFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::canvas',
+    'PW_CANVAS_DISPOSE_FAILED',
+  ),
+}
 
 /** Own one document's React root and asynchronous diagnostics until permanent navigation. */
 export function mountNativeCanvasPage(
@@ -46,7 +61,7 @@ export function mountNativeCanvasPage(
       root.render(page)
     } catch (error) {
       dispose()
-      console.error('[Canvas] 页面初始化失败', {
+      logEvents.pwCanvasInitializationFailed('[Canvas] 页面初始化失败', {
         code: 'PW_CANVAS_INITIALIZATION_FAILED',
         error,
       })
@@ -72,7 +87,7 @@ function attemptCleanup(cleanup: () => void): void {
   try {
     cleanup()
   } catch (error) {
-    console.error('[Canvas] 页面清理失败', {
+    logEvents.pwCanvasDisposeFailed('[Canvas] 页面清理失败', {
       code: 'PW_CANVAS_DISPOSE_FAILED',
       error,
     })
