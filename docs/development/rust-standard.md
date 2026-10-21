@@ -53,6 +53,15 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   `plotweave-ffi/src/lib.rs`).
   The current native application uses Swift services and does not link this
   crate; Tauri/core and ABI regressions remain in the Rust gate's scope.
+  Its retained purpose is the historical ABI contract regression baseline,
+  following the owner decision of 2026-10-04, rather than a pending Swift
+  integration slice. It does not track the current Swift command set; existing
+  ABI correctness and safety regressions remain maintained by the Rust gate.
+  Crate unit tests and the `tests/abi.rs` integration target execute in Rust
+  and call the `extern "C"` entries directly. They do not establish foreign
+  C/Swift host linkage, callback delivery on a host main thread, or production
+  native/Rust integration. New host linkage or retirement would be a separate
+  architecture task, not an inference from green ABI tests (issue #687).
 - `crates/` forms its own Cargo workspace; run its routed checks from the
   `crates` directory. The two workspaces resolve `plotweave-core`
   independently, so shared dependency versions can drift silently; the

@@ -2,7 +2,7 @@
 name = "plotweave-ffi"
 version = "0.1.0"
 edition = "2021"
-description = "PlotWeave 供 Swift 链接的 C ABI 边界（迁移计划 §2.3/§4.3）"
+description = "PlotWeave 历史 C ABI 与合同回归边界（当前 Swift 原生应用不链接）"
 
 [lib]
 name = "plotweave_ffi"
