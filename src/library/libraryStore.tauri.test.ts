@@ -229,7 +229,7 @@ describe('libraryStore Tauri 路径：写操作警告', () => {
   })
 })
 
-describe('libraryStore Tauri 路径：put', () => {
+describe('libraryStore 原生宿主路径：导入大小边界', () => {
   it.each(['tauri', 'swift'])('超限文件在%s宿主读取之前拒绝', async (host) => {
     if (host === 'swift') {
       vi.stubGlobal('window', { __pwNativeHost: { kind: 'swift' } })
@@ -288,7 +288,9 @@ describe('libraryStore Tauri 路径：put', () => {
       expand.mockRestore()
     }
   })
+})
 
+describe('libraryStore Tauri 路径：put', () => {
   it('字节数组序列化传参，返回条目经归一化', async () => {
     invoke.mockResolvedValue(entry({ id: 'la-9' }))
     const { libraryStore } = await load()
