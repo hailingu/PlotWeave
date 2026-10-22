@@ -19,7 +19,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 serde = { version = "1.0.229", features = ["derive"] }
 aes-gcm = "0.10"
 base64 = "0.22"
-sha2 = "0.10"
+sha2 = "0.11"
 # issue #392：keyEnc envelope v2 的密钥派生改用 PBKDF2-HMAC-SHA256
 #（迭代拉伸替代单次 SHA-256）；与既有 sha2 0.10 同 RustCrypto 家族。
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
