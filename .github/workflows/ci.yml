@@ -24,7 +24,7 @@ jobs:
     name: frontend（src/** 与 scripts 行）
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Bootstrap regression fixtures import the approved immutable history locally.
           fetch-depth: 0
@@ -59,7 +59,7 @@ jobs:
     name: rust（src-tauri/**）
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # 元守卫使用 Node 校验版本化 JSON 基线，复用仓库钉版工具链；
       # npm 缓存服务于 issue #551 链路用例输入的 npm ci。
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -133,7 +133,7 @@ jobs:
       # 使用镜像公开的版本别名，避免默认 Xcode 更新后静默切换工具链。
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
@@ -178,7 +178,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # #593：执行代码及 .nvmrc 取自事件 base 的不可变提交；PR 只提供 Git 对象。
           ref: ${{ github.event.pull_request.base.sha }}
