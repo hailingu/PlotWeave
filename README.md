@@ -31,7 +31,7 @@
 
 v0.3.0 源码已实现 SwiftUI 首页、编辑工具栏、大纲、检查器、设定、图库、AI、导出与设置界面，存储、素材、密钥和模型服务均由 Swift 承接。React Flow 保留画布与单一编辑会话。该原生实现最初在历史分支 `codex/swiftui-react-flow` 上开发，2026-10-13 经 [PR #526](https://github.com/hailingu/PlotWeave/pull/526) 合入 `dev`，该分支现已被删除。保留的 v0.2.0 源码以其[历史发布说明](docs/releases/v0.2.0.md)为准；原生开发数据与旧 Tauri 数据的隔离边界不变。
 
-原生构建需要 macOS 26.0+、[Node.js 24.18.0](.nvmrc) 与 Xcode 27.0／macOS SDK 27.0：
+原生构建需要 macOS 26.0+、[Node.js `>=24.18.0`](package.json) 与 Xcode 27.0／macOS SDK 27.0。满足该范围的更高 Node.js 版本也可使用；[`.nvmrc`](.nvmrc) 选择 `24.18.0` 作为本地与 CI 的可复现运行版本：
 
 ```bash
 nvm use

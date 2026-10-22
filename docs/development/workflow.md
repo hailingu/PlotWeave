@@ -30,6 +30,12 @@ Discover exact dependency versions and commands from `package.json`, `package-lo
 
 按所有者在 [issue #503](https://github.com/hailingu/PlotWeave/issues/503) 的处置决定，Windows 慢路径推送会被安装监督器拒绝。快路径即使未触发该拒绝，也不属于受支持的 Windows 工作流；贡献者须在 macOS 上执行完整门禁并推送。具体后果与依赖 lifecycle 的进程约束见[平台支持范围与依赖进程契约](quality-gate-push.md#平台支持范围与依赖进程契约issue-503)。
 
+### Node.js 最低版本与运行版本
+
+项目最低要求为 Node.js `>=24.18.0`，以 `package.json` 的 `engines.node` 为准，锁文件根包元数据保持一致；满足该范围的更高版本也可使用。`.nvmrc` 选择具体的 `24.18.0`，供 `nvm use` 和 CI 复现同一运行环境，不表示只允许这个版本。首次使用时可运行 `nvm install` 安装该版本，再运行 `nvm use`；使用其他满足最低要求的版本时，验证前用 `node --version` 记录实际版本。
+
+[Node.js 官方发布记录](https://nodejs.org/en/blog/release/v24.18.0)确认 `24.18.0` 已发布。四个 CI job 均使用 `actions/setup-node` 的 `node-version-file: .nvmrc` 选择项目运行时；`gate-evidence` 按既有信任边界读取事件 base 提交的 `.nvmrc`。Action 的提交 SHA／主版本与其自身执行环境是独立的工具配置，不是项目 Node.js 最低要求；本次澄清（[issue #745](https://github.com/hailingu/PlotWeave/issues/745)）不升级 Action 或依赖。
+
 ### Tauri 基线开发环境
 
 ```bash
@@ -60,7 +66,7 @@ Gate-workflow regression imports the explicitly approved historical Git objects 
 
 当前 `dev` 分支的原生应用已实现 SwiftUI 项目首页、工具栏、大纲、属性检查器、设定、图库、AI、导出与应用设置界面，以及 Swift 存储、素材、设置／密钥和模型服务。Swift 承接 25 条业务命令与两条退出命令，共 27 条既有 snake_case IPC 命令，另提供 `system.copyText` 与 `system.saveText` 两条系统交付命令。React 保留单一编辑会话、历史与画布；默认资源入口运行生产应用，只有显式 `#fixture` 加载不落盘的内存演示。当前行为及测试矩阵见[功能补齐记录](../swiftui-react-flow-feature-parity.md)，原 P1／P2 状态仅作为[历史证据](../swiftui-react-flow-p1-evidence.md)与[历史 Rust 抽离记录](../swiftui-react-flow-p2-evidence.md)保留。
 
-需要 macOS 26.0+、Node 24.18.0 与 Xcode 27.0／macOS SDK 27.0，不需要 Rust 来构建原生应用。Swift 6.4 编译器维持 Swift 6 语言模式；所有者升级决策、实测版本与构建／启动结果见[当前工具链记录](../swiftui-react-flow-toolchain.md)。依赖未安装时先运行 `npm install`，并按上节安装版本化 Git hooks。
+需要 macOS 26.0+、Node.js `>=24.18.0` 与 Xcode 27.0／macOS SDK 27.0，不需要 Rust 来构建原生应用；具体运行版本选择见上节。Swift 6.4 编译器维持 Swift 6 语言模式；所有者升级决策、实测版本与构建／启动结果见[当前工具链记录](../swiftui-react-flow-toolchain.md)。依赖未安装时先运行 `npm install`，并按上节安装版本化 Git hooks。
 
 当前构建工具链固定为 Xcode 27.0、macOS SDK 27.0，工程语言模式仍为 Swift 6，最低部署版本仍为 macOS 26.0。构建前用 `xcodebuild -version` 与 `xcrun --sdk macosx --show-sdk-version` 确认所选工具链；实际系统版本、编译器与验证边界见 [Xcode 27 工具链记录](../swiftui-react-flow-p1-evidence.md#xcode-27-工具链同步2026-10-07)。
 
