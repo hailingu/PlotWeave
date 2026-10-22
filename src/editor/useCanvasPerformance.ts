@@ -25,7 +25,7 @@ interface CanvasPerformanceInputs {
   onNodeDragStart?: OnNodeDrag<CanvasNode>
   onNodeDragStop?: OnNodeDrag<CanvasNode>
   onNodeDrag?: OnNodeDrag<CanvasNode>
-  canvasRef?: RefObject<HTMLDivElement>
+  canvasRef?: RefObject<HTMLDivElement | null>
 }
 
 /** 仅主节点的平移坐标可直接比较；不拼接选择器或保留节点标识。 */

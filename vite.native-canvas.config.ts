@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 /**
  * 本地文件入口使用经典 defer 脚本与普通样式表：WKWebView 的 file://
  * 页面无法执行 Vite 默认带 CORS 的模块入口。仅处理本配置生成的标签；
- * IIFE 与内联动态导入保证产物不再需要浏览器的 ES module 加载器。
+ * IIFE 与关闭代码分割保证产物不再需要浏览器的 ES module 加载器。
  */
 function fileCanvasEntry(): Plugin {
   return {
@@ -27,8 +27,9 @@ function fileCanvasEntry(): Plugin {
  * 打平进 app bundle，无 assets/ 子目录）。输出目录
  * native/macos/App/WebCanvas 为一次性构建产物（gitignore），构建命令见
  * package.json 的 build:native-canvas 脚本；主应用构建（vite.config.ts）
- * 不受影响。PLOTWEAVE_CANVAS_PROFILE=1 显式启用生产 Profiler；两种
- * React DOM 入口必须解析到同一 renderer，保证原生命令的 flushSync 一致。
+ * 不受影响。PLOTWEAVE_CANVAS_PROFILE=1 显式启用生产 Profiler；
+ * 只替换 React DOM client renderer；React 19 profiling 依赖根 react-dom
+ * 的共享内部状态，根入口必须保持原样，避免循环引用并保证 flushSync 一致。
  */
 export default defineConfig(() => ({
   plugins: [react(), fileCanvasEntry()],
@@ -37,7 +38,7 @@ export default defineConfig(() => ({
       process.env.PLOTWEAVE_CANVAS_PROFILE === '1'
         ? [
             {
-              find: /^react-dom(?:\/client)?$/,
+              find: /^react-dom\/client$/,
               replacement: 'react-dom/profiling',
             },
           ]
@@ -51,11 +52,11 @@ export default defineConfig(() => ({
     emptyOutDir: true,
     modulePreload: false,
     cssCodeSplit: false,
-    rollupOptions: {
+    rolldownOptions: {
       input: 'native-canvas.html',
       output: {
         format: 'iife',
-        inlineDynamicImports: true,
+        codeSplitting: false,
         /* 单一脚本入口保持稳定名，样式资源带哈希；全部平铺，
          * 适配 Xcode 文件夹同步成员的资源打平。 */
         entryFileNames: '[name].js',

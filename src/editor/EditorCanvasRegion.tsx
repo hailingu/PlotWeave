@@ -49,7 +49,7 @@ export interface EditorCanvasRegionProps {
   /** 打开时的视口种子；项目名等无关元数据不进入画布 memo 边界。 */
   readonly viewport: EditorDocument['viewport']
   /** 画布容器：ReactFlow 挂载点。 */
-  readonly canvasRef: RefObject<HTMLDivElement>
+  readonly canvasRef: RefObject<HTMLDivElement | null>
   /** 会话文档：节点/连线状态与写通道（useEditorDocument 按字段 memo）。 */
   readonly doc: EditorDocument
   /** 集聚焦投影后的展示节点（useCanvasView 按文档状态 memo）。 */

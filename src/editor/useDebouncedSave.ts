@@ -14,7 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type MutableRefObject,
+  type RefObject,
 } from 'react'
 import { graphSignature } from './graphSignature'
 import type { SaveStatus } from './saveStatus'
@@ -90,7 +90,7 @@ function usePersistSignature(doc: ProjectContent): string {
  * 失败时重新置脏、按防抖节律自动重试并经 onSaveResult 上报（null 表示
  * 本次成功）。返回 markDirty(doc)：供无重渲染的 transient 变更（如视口
  * ref 更新）显式标脏并换入最新文档。 */
-type SaveTimerRef = MutableRefObject<ReturnType<typeof setTimeout> | null>
+type SaveTimerRef = RefObject<ReturnType<typeof setTimeout> | null>
 
 /** 保存闸 refs（useDebouncedSave 拆分，issue #99）。卸载后终止失败重试：
  * 后台循环持有旧文档持续落盘，重开同一项目会出现第二个保存循环，存储恢
@@ -183,8 +183,8 @@ function scheduleFlush(
  * 档）——补交一次，其成败与重试登记由存储层接管（§3.1 flushPersist 导航
  * 契约：离开不丢编辑）。 */
 function deliverLatestAfterUnmount(
-  latestRef: MutableRefObject<ProjectContent>,
-  dirtyRef: MutableRefObject<boolean>,
+  latestRef: RefObject<ProjectContent>,
+  dirtyRef: RefObject<boolean>,
   onSave: (doc: ProjectContent) => void | Promise<void>,
   onSaveResult?: (err: unknown) => void,
 ): void {
@@ -249,7 +249,7 @@ function useSignatureSaveWatch(
 /** 卸载冲刷（#699）：生命周期只绑定稳定 refs；回调在 commit 后更新，
  * 父级渲染不会清计时器或冒充卸载，未提交渲染也不能替换卸载动作。 */
 function useUnmountFlush(
-  unmountedRef: MutableRefObject<boolean>,
+  unmountedRef: RefObject<boolean>,
   saveTimer: SaveTimerRef,
   onUnmount: () => void,
 ) {
@@ -275,7 +275,7 @@ function useUnmountFlush(
  * 仍发生在 flushSave 入口检查之后的同一同步段，并发触发照旧被挡回。 */
 function startTrackedSaveRun(
   run: Promise<void>,
-  inFlightPromiseRef: MutableRefObject<Promise<void> | null>,
+  inFlightPromiseRef: RefObject<Promise<void> | null>,
 ): Promise<void> {
   inFlightPromiseRef.current = run
   const settle = () => {
@@ -291,7 +291,7 @@ function startTrackedSaveRun(
  * 循环。 */
 function useExitFlushAction(
   flushSave: () => Promise<void>,
-  inFlightPromiseRef: MutableRefObject<Promise<void> | null>,
+  inFlightPromiseRef: RefObject<Promise<void> | null>,
 ): () => Promise<void> {
   return useCallback(async () => {
     while (inFlightPromiseRef.current !== null) {

@@ -324,7 +324,7 @@ describe('vite 覆盖率下限契约（issue #393）', () => {
   })
 })
 
-// Each exact-path glob is one coverage group on the pinned Vitest4 provider.
+// Each exact-path glob is one coverage group on the pinned Vitest5 provider.
 describe('native canvas per-file line floor (#616)', () => {
   it('keeps aggregate80 and assigns80 to every maintained native canvas source', () => {
     const thresholds = config.test?.coverage?.thresholds as

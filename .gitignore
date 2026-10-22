@@ -4,6 +4,7 @@ dist/
 dist-ssr/
 *.local
 .vite/
+.vitest/
 coverage/
 .scannerwork/
 .sonar-gate.lock/
