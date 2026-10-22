@@ -7,6 +7,27 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct WebHostBridgeTests {
+    /// A retained view must revoke the old document's readiness before any new-page native intent.
+    @Test func reloadingReadyCanvasWaitsForFreshHandshake() async throws {
+        let fixture = try WebFixture()
+        defer { fixture.close() }
+        try await fixture.waitUntilReady()
+        let token = fixture.state.reloadToken
+        fixture.coordinator.loadCanvas(into: fixture.webView)
+        try #require(fixture.state.phase == .loading)
+        #expect(fixture.state.reloadToken == token)
+        do {
+            _ = try await fixture.coordinator.sendNativeIntent(request: ["command": "fixture.beforeReady"])
+            Issue.record("Reload accepted a native intent before the fresh handshake")
+        } catch let error as HostFailure {
+            #expect(error.code == "PW_CANVAS_NOT_READY")
+        }
+        try await fixture.waitForCurrentDocument()
+        try await fixture.waitUntilReady()
+        _ = try await fixture.coordinator.sendNativeIntent(request: ["command": "fixture.afterReady"])
+        #expect(try await fixture.webView.evaluateJavaScript("window.intentCalls") as? Int == 1)
+    }
+
     /// Native identities belong to the retained page, survive application-state reconnects, and reset only on real reload.
     @Test func nativeIntentIdentityUsesCurrentPageOrdinal() async throws {
         let fixture = try WebFixture()
@@ -271,7 +292,7 @@ struct WebHostBridgeTests {
             let deadline = ContinuousClock.now.advanced(by: .seconds(5))
             while ContinuousClock.now < deadline {
                 let session = try await webView.evaluateJavaScript("window.__pwNativeHost?.sessionId") as? String
-                if session == coordinator.sessionId,
+                if session == coordinator.sessionId, state.phase == .ready,
                    try await webView.evaluateJavaScript("typeof window.__pwNativeIntent") as? String == "function" { return }
                 try await Task.sleep(for: .milliseconds(20))
             }
