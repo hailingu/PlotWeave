@@ -219,13 +219,23 @@ function diagnosticSubscription() {
 it('production entry mounts the actual application and completes its host lifecycle', async () => {
   window.location.hash = ''
   const ready = vi.fn()
+  vi.stubGlobal('__pwNativeHost', {
+    protocolVersion: 1,
+    sessionId: 'entry-ready',
+  })
   vi.stubGlobal('webkit', {
     messageHandlers: { canvasHost: { postMessage: ready } },
   })
   await boot()
   expect(await screen.findByRole('button', { name: /新建项目/ })).toBeTruthy()
   expect(document.getElementsByClassName('react-flow__node')).toHaveLength(0)
-  await waitFor(() => expect(ready).toHaveBeenCalledWith({ event: 'ready' }))
+  await waitFor(() =>
+    expect(ready).toHaveBeenCalledWith({
+      event: 'ready',
+      protocolVersion: 1,
+      sessionId: 'entry-ready',
+    }),
+  )
   await act(async () => hide())
   expect(document.getElementById('root')?.childElementCount).toBe(0)
   expect('__pwApplyHostAppearance' in window).toBe(false)

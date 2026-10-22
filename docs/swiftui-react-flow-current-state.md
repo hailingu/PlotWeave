@@ -55,15 +55,16 @@
 
 ## 同视图重载的就绪边界（issue #764）
 
-依赖协同迁移后的 [dev CI 39817850250](https://github.com/hailingu/PlotWeave/actions/runs/39817850250) 暴露了既有窗口：同一 WKWebView 开始新加载后沿用旧页面的 ready，命令可能在新页安装入口前进入 JavaScript。此窗口在迁移前的生产实现已存在，未将 React 19 或 runner 环境认定为最初引入原因。[加载入口](../native/macos/App/WebCanvasHostView.swift)现在通过 [beginLoad](../native/macos/App/WebCanvasState.swift) 立即撤销旧就绪状态，只有新文档握手才能恢复命令。
+依赖协同迁移后的 [dev CI 39817850250](https://github.com/hailingu/PlotWeave/actions/runs/39817850250) 暴露了既有窗口：同一 WKWebView 开始新加载后沿用旧页面的 ready，命令可能在新页安装入口前进入 JavaScript。此窗口在迁移前的生产实现已存在，未将 React 19 或 runner 环境认定为最初引入原因。[加载入口](../native/macos/App/WebCanvasHostView.swift)通过 [beginLoad](../native/macos/App/WebCanvasState.swift) 立即撤销旧就绪状态；握手与期限绑定当前注入的协议和 session，导航失败绑定当前 WKNavigation，旧加载回调不能修改新加载。
 
 | 前置状态与动作 | 不变量与可观察结果 | 验证 |
 | --- | --- | --- |
 | 已 ready 的同一视图开始新 load | 立即 loading；新握手前返回 PW_CANVAS_NOT_READY，不进入 JS | [真实 WK 回归](../native/macos/Tests/WebHostBridgeTests.swift) `reloadingReadyCanvasWaitsForFreshHandshake` 在旧实现确定性失败，修复后通过 |
+| 连续重试后旧 ready 或导航失败迟到 | 当前加载保持自身状态与期限；旧消息不能放行命令或失效新页 | 真实 WK 手动握手／旧导航身份回归；当前失败与新会话恢复分别验证 |
 | 新文档完成导航、安装入口并报告 ready | 当前文档握手后命令恢复有效回执 | 同一真实 WK fixture 检查当前会话、ready 和一次真实入口调用；既有生产动态端口／pagehide／重载／磁盘回读回归保留 |
 | 初次加载、显式 retry、失败后 late ready | beginLoad 不递增 reloadToken；显式 retry 仍递增；未开始新 load 时 late ready 不覆盖失败诊断 | [状态回归](../native/macos/Tests/WebCanvasStateTests.swift)、[加载回归](../native/macos/Tests/WebCanvasLoadingTests.swift)及真实桥回归 |
 
-本次本地完整公开入口 `sh scripts/test-native.sh` 的红测为 369 项中仅新增就绪用例失败；修复后 369 项／82 套件通过，原生覆盖率 8709/9890 行、73/73 文件，仍为 report-only。未增加视觉、中文输入法、VoiceOver、公网模型或压力验收。
+PR #766 的第一轮本地完整公开入口 `sh scripts/test-native.sh` 的红测为 369 项中仅新增就绪用例失败；修复后 369 项／82 套件通过，原生覆盖率 8709/9890 行、73/73 文件。后续审查补充连续重试的会话归属：真实 WK 红测为新增三个测试族的 15 处预期失败、原 369 项通过；修复后完整 372 项／82 套件通过，8723/9901 行、73/73 文件，仍为 report-only。Web 侧 7 项新增协议回归先红，修复后的桥与真实 React 入口三个文件 27 项通过；托管结果由对应后续 PR 记录。未增加视觉、中文输入法、VoiceOver、公网模型或压力验收。
 
 ## 可核对的验证快照与维护
 
