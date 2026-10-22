@@ -183,8 +183,9 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         )
     }
 
-    /// Loads the canvas entry page and (re)starts the ready timeout.
+    /// Starts a fresh page load, revoking earlier readiness before restarting its timeout.
     func loadCanvas(into webView: WKWebView) {
+        state.beginLoad()
         if self.webView !== webView {
             webView.configuration.userContentController.addScriptMessageHandler(
                 self, contentWorld: .page, name: "plotweaveHost"

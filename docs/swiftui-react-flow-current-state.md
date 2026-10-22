@@ -53,6 +53,18 @@
 | 保留边界／条件性证据 | 已有简化特效、15 节点／15 连线用户跟手反馈；#688 加载准备后，18 节点保存图的十组未预选目标首／二拖未出现 >33ms 间隔；有限 Debug 合成输入不替代真实触控板、标准特效、大图或高刷新率验收 | [画布性能诊断](development/canvas-performance-diagnostics.md)；性能诊断已实现，常规功能回归照跑 |
 | 保留边界／显式 opt-in | 昂贵的原生压力、长循环及首拖测量仅显式请求时运行；CPU 默认固定 4。Native 覆盖率默认 report-only、minimum null；前端／Rust 整体地板仍为 80% | [功能／压力路由](development/quality-gate-push.md#native-regression-and-stress)、[CPU 预算](development/quality-gate-cost.md#gate-cpu-budget-2026-10-16-owner-direction)、[Native 覆盖率](development/native-coverage.md)、[Rust 口径](development/rust-standard.md#test-coverage) |
 
+## 同视图重载的就绪边界（issue #764）
+
+依赖协同迁移后的 [dev CI 39817850250](https://github.com/hailingu/PlotWeave/actions/runs/39817850250) 暴露了既有窗口：同一 WKWebView 开始新加载后沿用旧页面的 ready，命令可能在新页安装入口前进入 JavaScript。此窗口在迁移前的生产实现已存在，未将 React 19 或 runner 环境认定为最初引入原因。[加载入口](../native/macos/App/WebCanvasHostView.swift)现在通过 [beginLoad](../native/macos/App/WebCanvasState.swift) 立即撤销旧就绪状态，只有新文档握手才能恢复命令。
+
+| 前置状态与动作 | 不变量与可观察结果 | 验证 |
+| --- | --- | --- |
+| 已 ready 的同一视图开始新 load | 立即 loading；新握手前返回 PW_CANVAS_NOT_READY，不进入 JS | [真实 WK 回归](../native/macos/Tests/WebHostBridgeTests.swift) `reloadingReadyCanvasWaitsForFreshHandshake` 在旧实现确定性失败，修复后通过 |
+| 新文档完成导航、安装入口并报告 ready | 当前文档握手后命令恢复有效回执 | 同一真实 WK fixture 检查当前会话、ready 和一次真实入口调用；既有生产动态端口／pagehide／重载／磁盘回读回归保留 |
+| 初次加载、显式 retry、失败后 late ready | beginLoad 不递增 reloadToken；显式 retry 仍递增；未开始新 load 时 late ready 不覆盖失败诊断 | [状态回归](../native/macos/Tests/WebCanvasStateTests.swift)、[加载回归](../native/macos/Tests/WebCanvasLoadingTests.swift)及真实桥回归 |
+
+本次本地完整公开入口 `sh scripts/test-native.sh` 的红测为 369 项中仅新增就绪用例失败；修复后 369 项／82 套件通过，原生覆盖率 8709/9890 行、73/73 文件，仍为 report-only。未增加视觉、中文输入法、VoiceOver、公网模型或压力验收。
+
 ## 可核对的验证快照与维护
 
 基线的[自动 dev CI 39535403860](https://github.com/hailingu/PlotWeave/actions/runs/39535403860) 已通过 frontend、rust、native；gate-evidence 在 dev push 按规则 skipped。原生功能测试为 353 项／79 套件，覆盖率工件为 8398/9559 行、71/71 文件、report-only。该次同源本地完整门禁的前端为 3468 项、97.49% 行覆盖率，Rust 为 6790/7954 行；这是明确版本的验证快照，不是永久不变的计数或覆盖所有人工验收的保证。后续变更仍按[当前门禁](development/quality-gate-enforcement.md)取得自己的实际证据。
