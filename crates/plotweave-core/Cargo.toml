@@ -7,7 +7,7 @@ description = "PlotWeave 宿主无关的项目存储内核（数据模型 v1 §1
 [dependencies]
 cap-std = "4.0.3"
 # 从既有 Tauri 存储内核随耐久备份迁入的摘要依赖。
-sha2 = "0.10"
+sha2 = "0.11"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 log = "0.4"

@@ -55,11 +55,11 @@ impl Fixture {
     }
 
     fn expected_name(bytes: &[u8]) -> String {
-        format!(
-            "{}{:x}.bak",
-            TEST_BACKUP.backup_prefix,
-            Sha256::digest(bytes)
-        )
+        let digest: String = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        format!("{}{digest}.bak", TEST_BACKUP.backup_prefix)
     }
 
     /// 唯一备份的路径（已断言恰有一份时使用）。
@@ -109,7 +109,12 @@ fn damaged_json_backed_up_byte_exact_with_digest_name() {
     backup_damaged_file(&fixture.dir, &TEST_BACKUP).unwrap();
     assert_eq!(
         fixture.backups(),
-        vec![(Fixture::expected_name(raw), raw.to_vec())]
+        // Frozen with Node crypto.createHash("sha256"), independent of Rust sha2.
+        vec![(
+            "control-corrupt-0228f717792ffbc02f7fa058c934c10d7e91d0de743e365ebd78bfebf019254e.bak"
+                .to_string(),
+            raw.to_vec()
+        )]
     );
 }
 

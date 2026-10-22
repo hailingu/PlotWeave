@@ -7,6 +7,7 @@
 //! 这条已成功加载之后的覆盖路径。
 
 use super::*;
+use crate::hex_codec::encode as hex_encode;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -136,8 +137,8 @@ fn private_settings_backup_reuse_tightens_existing_file() {
     let damaged = b"{ broken keyEnc";
     fs::write(dir.settings_path(), damaged).unwrap();
     let backup = dir.0.join(format!(
-        "settings-corrupt-{:x}.bak",
-        Sha256::digest(damaged)
+        "settings-corrupt-{}.bak",
+        hex_encode(&Sha256::digest(damaged))
     ));
     fs::write(&backup, damaged).unwrap();
     fs::set_permissions(&backup, fs::Permissions::from_mode(0o644)).unwrap();
@@ -161,8 +162,8 @@ fn private_settings_backup_permission_failure_blocks_save_then_recovers() {
     let damaged = b"{ broken keyEnc";
     fs::write(dir.settings_path(), damaged).unwrap();
     let backup = dir.0.join(format!(
-        "settings-corrupt-{:x}.bak",
-        Sha256::digest(damaged)
+        "settings-corrupt-{}.bak",
+        hex_encode(&Sha256::digest(damaged))
     ));
     fs::write(&backup, damaged).unwrap();
     fs::set_permissions(&backup, fs::Permissions::from_mode(0o644)).unwrap();
@@ -202,7 +203,10 @@ fn externally_corrupted_settings_backed_up_byte_exact_before_overwrite() {
         json!({"defaultChat": "anthropic:claude"})
     );
     // 损坏原件按字节摘要命名留存，内容与原损坏字节逐字节一致
-    let expected_name = format!("settings-corrupt-{:x}.bak", Sha256::digest(corrupted));
+    let expected_name = format!(
+        "settings-corrupt-{}.bak",
+        hex_encode(&Sha256::digest(corrupted))
+    );
     assert_eq!(
         dir.backups(),
         vec![(expected_name, corrupted.to_vec())],
@@ -237,7 +241,10 @@ fn invalid_utf8_corruption_backed_up_as_raw_bytes() {
     let corrupted: &[u8] = &[0xff, 0xfe, b'{', 0x00];
     fs::write(dir.settings_path(), corrupted).unwrap();
     save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
-    let expected_name = format!("settings-corrupt-{:x}.bak", Sha256::digest(corrupted));
+    let expected_name = format!(
+        "settings-corrupt-{}.bak",
+        hex_encode(&Sha256::digest(corrupted))
+    );
     assert_eq!(dir.backups(), vec![(expected_name, corrupted.to_vec())]);
 }
 
@@ -249,7 +256,7 @@ fn valid_non_object_settings_backed_up_before_overwrite() {
     let raw: &[u8] = b"[1,2,3]";
     fs::write(dir.settings_path(), raw).unwrap();
     save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
-    let expected_name = format!("settings-corrupt-{:x}.bak", Sha256::digest(raw));
+    let expected_name = format!("settings-corrupt-{}.bak", hex_encode(&Sha256::digest(raw)));
     assert_eq!(dir.backups(), vec![(expected_name, raw.to_vec())]);
 }
 
@@ -262,7 +269,10 @@ fn resave_same_corruption_reuses_single_backup() {
         fs::write(dir.settings_path(), corrupted).unwrap();
         save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
     }
-    let expected_name = format!("settings-corrupt-{:x}.bak", Sha256::digest(corrupted));
+    let expected_name = format!(
+        "settings-corrupt-{}.bak",
+        hex_encode(&Sha256::digest(corrupted))
+    );
     assert_eq!(dir.backups(), vec![(expected_name, corrupted.to_vec())]);
 }
 
@@ -279,11 +289,17 @@ fn resave_changed_corruption_keeps_distinct_backups() {
     let mut backups = dir.backups();
     let mut expected = vec![
         (
-            format!("settings-corrupt-{:x}.bak", Sha256::digest(first)),
+            format!(
+                "settings-corrupt-{}.bak",
+                hex_encode(&Sha256::digest(first))
+            ),
             first.to_vec(),
         ),
         (
-            format!("settings-corrupt-{:x}.bak", Sha256::digest(second)),
+            format!(
+                "settings-corrupt-{}.bak",
+                hex_encode(&Sha256::digest(second))
+            ),
             second.to_vec(),
         ),
     ];
@@ -310,7 +326,10 @@ fn backup_failure_blocks_overwrite_and_retry_recovers() {
     // 重试可完成：耐久备份 + 新设置覆盖
     save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap();
     assert_eq!(dir.read(), json!({"defaultChat": "new"}));
-    let expected_name = format!("settings-corrupt-{:x}.bak", Sha256::digest(corrupted));
+    let expected_name = format!(
+        "settings-corrupt-{}.bak",
+        hex_encode(&Sha256::digest(corrupted))
+    );
     assert_eq!(dir.backups(), vec![(expected_name, corrupted.to_vec())]);
 }
 
@@ -321,7 +340,10 @@ fn mismatched_existing_backup_blocks_save() {
     let dir = PrefsBackupDir::new();
     let corrupted: &[u8] = b"{ not json";
     fs::write(dir.settings_path(), corrupted).unwrap();
-    let name = format!("settings-corrupt-{:x}.bak", Sha256::digest(corrupted));
+    let name = format!(
+        "settings-corrupt-{}.bak",
+        hex_encode(&Sha256::digest(corrupted))
+    );
     fs::write(dir.0.join(&name), b"tampered evidence").unwrap();
     let error = save_prefs_in(&dir.0, json!({"defaultChat": "new"})).unwrap_err();
     assert!(error.contains("内容不符"), "实际错误：{error}");
