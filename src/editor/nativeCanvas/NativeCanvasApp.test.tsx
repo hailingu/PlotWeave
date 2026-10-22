@@ -40,12 +40,20 @@ describe('NativeCanvasApp 隔离演示夹具', () => {
   it('挂载后向 WKWebView 宿主发送 ready 握手（浏览器环境静默跳过）', async () => {
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
     const postMessage = vi.fn()
+    vi.stubGlobal('__pwNativeHost', {
+      protocolVersion: 1,
+      sessionId: 'demo-ready',
+    })
     vi.stubGlobal('webkit', {
       messageHandlers: { canvasHost: { postMessage } },
     })
     const { unmount } = render(<NativeCanvasApp />)
     await waitFor(() =>
-      expect(postMessage).toHaveBeenCalledWith({ event: 'ready' }),
+      expect(postMessage).toHaveBeenCalledWith({
+        event: 'ready',
+        protocolVersion: 1,
+        sessionId: 'demo-ready',
+      }),
     )
     unmount()
     vi.unstubAllGlobals()

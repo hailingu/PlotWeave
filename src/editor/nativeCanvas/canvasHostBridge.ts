@@ -18,6 +18,7 @@ interface CanvasHostBridge {
 /** 携带 webkit 桥的宿主窗口（WKWebView 环境；浏览器环境无此字段）。 */
 type CanvasHostWindow = Window & {
   webkit?: { messageHandlers?: { canvasHost?: CanvasHostBridge } }
+  __pwNativeHost?: { protocolVersion?: unknown; sessionId?: unknown }
 }
 
 /** 宿主同步的外观语义状态：浅深外观与三项辅助显示偏好。 */
@@ -78,8 +79,19 @@ export function setHostAppearanceHandler(
   }
 }
 
-/** 向原生宿主发送画布就绪握手；无宿主桥时为安全 no-op。 */
+/** 报告当前注入会话的就绪；无有效会话或宿主桥时为安全 no-op（§4.1）。 */
 export function notifyCanvasHostReady(): void {
-  const host = (window as CanvasHostWindow).webkit?.messageHandlers?.canvasHost
-  host?.postMessage({ event: 'ready' })
+  const hostWindow = window as CanvasHostWindow
+  const marker = hostWindow.__pwNativeHost
+  if (
+    marker?.protocolVersion !== 1 ||
+    typeof marker.sessionId !== 'string' ||
+    marker.sessionId === ''
+  )
+    return
+  hostWindow.webkit?.messageHandlers?.canvasHost?.postMessage({
+    event: 'ready',
+    protocolVersion: 1,
+    sessionId: marker.sessionId,
+  })
 }

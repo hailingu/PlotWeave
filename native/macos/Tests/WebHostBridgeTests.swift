@@ -7,6 +7,79 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct WebHostBridgeTests {
+    /// Same-URL messages must prove the current document identity before cancelling its deadline.
+    @Test func readyHandshakeRequiresCurrentProtocolSession() async throws {
+        let fixture = try WebFixture(automaticallyReady: false)
+        defer { fixture.close() }
+        try await fixture.waitForCurrentDocument(requiresReady: false)
+        let oldSession = fixture.coordinator.sessionId
+        fixture.state.retry()
+        fixture.coordinator.reloadIfNeeded(into: fixture.webView)
+        try await fixture.waitForCurrentDocument(requiresReady: false)
+        let session = fixture.coordinator.sessionId
+        let invalid: [[String: Any]] = [
+            ["event": "ready"],
+            ["event": "ready", "protocolVersion": 2, "sessionId": session],
+            ["event": "ready", "protocolVersion": 1],
+            ["event": "ready", "protocolVersion": 1, "sessionId": oldSession]
+        ]
+        for (index, body) in invalid.enumerated() {
+            try await fixture.sendReady(body, sequence: index)
+            #expect(fixture.state.phase == .loading)
+        }
+        do {
+            _ = try await fixture.coordinator.sendNativeIntent(request: ["command": "fixture.beforeReady"])
+            Issue.record("Invalid readiness authorized a native intent")
+        } catch let error as HostFailure { #expect(error.code == "PW_CANVAS_NOT_READY") }
+        try await fixture.sendReady(["event": "ready", "protocolVersion": 1, "sessionId": session], sequence: 10)
+        #expect(fixture.state.phase == .ready)
+        _ = try await fixture.coordinator.sendNativeIntent(request: ["command": "fixture.afterReady"])
+        #expect(try await fixture.webView.evaluateJavaScript("window.intentCalls") as? Int == 1)
+    }
+
+    /// An earlier replacement cannot suppress the final retry's real ready timeout.
+    @Test func staleReadyPreservesReplacementDeadline() async throws {
+        let fixture = try WebFixture(automaticallyReady: false)
+        defer { fixture.close() }
+        try await fixture.waitForCurrentDocument(requiresReady: false)
+        fixture.state.fail("isolated initial failure")
+        fixture.state.retry()
+        fixture.coordinator.reloadIfNeeded(into: fixture.webView)
+        try await fixture.waitForCurrentDocument(requiresReady: false)
+        let replaced = fixture.coordinator.sessionId
+        fixture.state.retry()
+        fixture.coordinator.reloadIfNeeded(into: fixture.webView)
+        try await fixture.waitForCurrentDocument(requiresReady: false)
+        try await fixture.sendReady(["event": "ready", "protocolVersion": 1, "sessionId": replaced], sequence: 20)
+        try #require(fixture.state.phase == .loading)
+        try await fixture.wait(timeout: .seconds(17)) { fixture.state.phase != .loading }
+        if case .failed = fixture.state.phase { } else { Issue.record("Replacement deadline was cancelled by stale ready") }
+        #expect(fixture.quit.canvasUnavailable)
+    }
+
+    /// A superseded WebKit navigation cannot invalidate the selected document, before or after its handshake.
+    @Test(arguments: ["load", "provisional"], [false, true])
+    func staleNavigationFailurePreservesCurrentDocument(kind: String, ready: Bool) async throws {
+        let fixture = try WebFixture(automaticallyReady: false)
+        defer { fixture.close() }
+        try await fixture.waitForCurrentDocument(requiresReady: false)
+        let entry = fixture.root.appendingPathComponent("bridge.html")
+        let replaced = try #require(fixture.webView.loadFileURL(entry, allowingReadAccessTo: fixture.root))
+        fixture.coordinator.loadCanvas(into: fixture.webView)
+        try await fixture.waitForCurrentDocument(requiresReady: false)
+        if ready {
+            try await fixture.sendReady(["event": "ready", "protocolVersion": 1,
+                                         "sessionId": fixture.coordinator.sessionId], sequence: 30)
+        }
+        if kind == "load" {
+            fixture.coordinator.webView(fixture.webView, didFail: replaced, withError: URLError(.networkConnectionLost))
+        } else {
+            fixture.coordinator.webView(fixture.webView, didFailProvisionalNavigation: replaced, withError: URLError(.cancelled))
+        }
+        #expect(fixture.state.phase == (ready ? .ready : .loading))
+        #expect(!fixture.quit.canvasUnavailable)
+    }
+
     /// A retained view must revoke the old document's readiness before any new-page native intent.
     @Test func reloadingReadyCanvasWaitsForFreshHandshake() async throws {
         let fixture = try WebFixture()
@@ -180,8 +253,8 @@ struct WebHostBridgeTests {
         if listenerReady { try await fixture.waitForQuitEvent() }
         switch failure {
         case "process": fixture.coordinator.webViewWebContentProcessDidTerminate(fixture.webView)
-        case "load": fixture.coordinator.webView(fixture.webView, didFail: nil, withError: URLError(.networkConnectionLost))
-        case "provisional": fixture.coordinator.webView(fixture.webView, didFailProvisionalNavigation: nil, withError: URLError(.cannotFindHost))
+        case "load": fixture.coordinator.webView(fixture.webView, didFail: fixture.navigation, withError: URLError(.networkConnectionLost))
+        case "provisional": fixture.coordinator.webView(fixture.webView, didFailProvisionalNavigation: fixture.navigation, withError: URLError(.cannotFindHost))
         default: fixture.coordinator.invalidateSession(canvasFailed: true)
         }
         // The visible degraded prompt refuses the exit; an already-deferred system decision receives its false reply.
@@ -232,6 +305,7 @@ struct WebHostBridgeTests {
         let root: URL
         let webView: WKWebView
         let coordinator: WebCanvasCoordinator
+        let navigation: WKNavigation?
         /// Replacement pages share a service only when a test explicitly selects that lifecycle boundary.
         let services: NativeHostServices
         /// Quit authority stays with the service's one controller, independent of fixture page identity.
@@ -246,7 +320,7 @@ struct WebHostBridgeTests {
         }
 
         /// Installs a real reply-capable bridge on a page containing only the versioned test contracts.
-        init(services: NativeHostServices? = nil) throws {
+        init(services: NativeHostServices? = nil, automaticallyReady: Bool = true) throws {
             self.services = services ?? NativeHostServices(dataRoot: nil, quit: HostQuitController())
             root = FileManager.default.temporaryDirectory.appendingPathComponent("pw-web-host-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -257,7 +331,9 @@ struct WebHostBridgeTests {
                 window.quitEvents = 0;
                 window.__pwDispatchHostEvent = name => { if (name === 'app-quit-requested') window.quitEvents++; };
                 window.__pwNativeIntent = async () => { window.intentCalls++; return {ok: null}; };
-                window.webkit.messageHandlers.canvasHost.postMessage({event: 'ready'});
+                if (\(automaticallyReady)) window.webkit.messageHandlers.canvasHost.postMessage({
+                    event: 'ready', protocolVersion: 1, sessionId: window.__pwNativeHost.sessionId
+                });
                 </script>
                 """.utf8).write(to: entry)
             let configuration = WKWebViewConfiguration()
@@ -271,7 +347,7 @@ struct WebHostBridgeTests {
             )
             configuration.userContentController.add(coordinator, name: WebCanvasCoordinator.bridgeName)
             webView.navigationDelegate = coordinator
-            coordinator.loadCanvas(into: webView)
+            navigation = coordinator.loadCanvas(into: webView)
         }
 
         /// Observes production native IDs through the actual page handler, without invoking any business service.
@@ -288,11 +364,11 @@ struct WebHostBridgeTests {
         }
 
         /// A direct coordinator reload must await the new document marker, rather than reuse the previous ready state.
-        func waitForCurrentDocument() async throws {
+        func waitForCurrentDocument(requiresReady: Bool = true) async throws {
             let deadline = ContinuousClock.now.advanced(by: .seconds(5))
             while ContinuousClock.now < deadline {
                 let session = try await webView.evaluateJavaScript("window.__pwNativeHost?.sessionId") as? String
-                if session == coordinator.sessionId, state.phase == .ready,
+                if session == coordinator.sessionId, !webView.isLoading, (!requiresReady || state.phase == .ready),
                    try await webView.evaluateJavaScript("typeof window.__pwNativeIntent") as? String == "function" { return }
                 try await Task.sleep(for: .milliseconds(20))
             }
@@ -317,8 +393,8 @@ struct WebHostBridgeTests {
         }
 
         /// Bounded native-state waits observe entry and completion of the actual owned delivery task.
-        func wait(_ predicate: () -> Bool) async throws {
-            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        func wait(timeout: Duration = .seconds(5), _ predicate: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: timeout)
             while !predicate() && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
             try #require(predicate())
         }
@@ -352,6 +428,18 @@ struct WebHostBridgeTests {
                 ]], in: nil, contentWorld: .page
             )
             try await Task.sleep(for: .milliseconds(20))
+        }
+
+        /// A projection on the same channel acknowledges delivery after the synthetic ready envelope.
+        func sendReady(_ body: [String: Any], sequence: Int) async throws {
+            _ = try await webView.callAsyncJavaScript("""
+                window.webkit.messageHandlers.canvasHost.postMessage(body);
+                window.webkit.messageHandlers.canvasHost.postMessage(barrier);
+                """, arguments: ["body": body, "barrier": [
+                    "event": "projection", "protocolVersion": 1, "sessionId": coordinator.sessionId,
+                    "sequence": sequence, "projection": ["route": "fixture"]
+                ]], in: nil, contentWorld: .page)
+            try await wait { self.projections.last?["sequence"] as? Int == sequence }
         }
 
         /// Releases both handler ownerships before removing the disposable trusted page.
