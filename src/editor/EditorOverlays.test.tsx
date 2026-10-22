@@ -161,6 +161,7 @@ function structuredExportInput() {
     ...PROJECT,
     description: '剧本简介',
     createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-27T12:00:00.000Z',
     graphExtensions: { custom: { retained: true } },
     settingsExtensions: { custom: ['设定扩展'] },
     assetsExtensions: { custom: '资产扩展' },
@@ -235,8 +236,39 @@ describe('EditorOverlays JSON 图契约', () => {
   })
 })
 
-describe('EditorOverlays JSON 元数据与实时预览', () => {
-  it('保留项目与扩展元数据、当前资产和视口，并使用显式导出时刻', () => {
+describe('EditorOverlays 跨日可复现导出（#501）', () => {
+  // 导出时钟盖戳或 Markdown 注入当前日期会使跨日重开产出不同字节。
+  it.each(['md', 'json'])(
+    '同一文档跨日重开 %s 导出仍逐字节一致（#501）',
+    (format) => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      const { view, props } = setup({ exportOpen: true })
+      const { project, doc } = structuredExportInput()
+      const input = { ...props, project, doc }
+      view.rerender(<EditorOverlays {...input} />)
+      fireEvent.change(screen.getByRole('combobox', { name: '导出格式' }), {
+        target: { value: format },
+      })
+      const first = document.querySelector('.pw-export-pre')!.textContent
+      view.rerender(
+        <EditorOverlays
+          {...input}
+          panels={{ ...input.panels, exportOpen: false }}
+        />,
+      )
+      vi.setSystemTime(new Date('2026-08-29T12:00:00.000Z'))
+      view.rerender(<EditorOverlays {...input} />)
+      fireEvent.change(screen.getByRole('combobox', { name: '导出格式' }), {
+        target: { value: format },
+      })
+      expect(document.querySelector('.pw-export-pre')!.textContent).toBe(first)
+    },
+  )
+})
+
+describe('EditorOverlays JSON 元数据', () => {
+  it('保留项目与扩展元数据、当前资产和视口，保留文档修改时间', () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
     const { view, props } = setup({ exportOpen: true })
@@ -248,7 +280,7 @@ describe('EditorOverlays JSON 元数据与实时预览', () => {
       name: '浮层边界',
       description: '剧本简介',
       createdAt: '2026-08-01T00:00:00.000Z',
-      updatedAt: '2026-08-28T12:00:00.000Z',
+      updatedAt: '2026-08-27T12:00:00.000Z',
     })
     expect(exported.graph.viewport).toEqual({ x: 12, y: 34, zoom: 1.5 })
     expect(exported.graph.aiRevision).toBe(3)
@@ -258,7 +290,49 @@ describe('EditorOverlays JSON 元数据与实时预览', () => {
     expect(restored.settingsExtensions).toEqual({ custom: ['设定扩展'] })
     expect(restored.assetsExtensions).toEqual({ custom: '资产扩展' })
   })
+})
 
+describe('EditorOverlays JSON 时间往返与兼容（#501）', () => {
+  // 回读若漏掉 updatedAt，再导出会改写元数据；当前图与扩展也必须保持不动点。
+  it('JSON → parseProject → 再导出逐字节不变（#501）', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    const { view, props } = setup({ exportOpen: true })
+    const { project, doc } = structuredExportInput()
+    view.rerender(<EditorOverlays {...props} project={project} doc={doc} />)
+    const exported = jsonPreview()
+    const first = document.querySelector('.pw-export-pre')!.textContent
+    const restored = parseProject(exported)
+    expect(restored.warnings).toEqual([])
+    vi.setSystemTime(new Date('2026-08-29T12:00:00.000Z'))
+    view.rerender(
+      <EditorOverlays
+        {...props}
+        project={{ id: project.id, ...restored.content }}
+        doc={{ ...DOC, ...restored.content } as EditorDocument}
+      />,
+    )
+    expect(document.querySelector('.pw-export-pre')!.textContent).toBe(first)
+  })
+
+  // 兼容输入缺少修改时间时也不能把导出时刻伪装成文档修改时间。
+  it.each([
+    {
+      createdAt: '2026-08-01T00:00:00.000Z',
+      expected: '2026-08-01T00:00:00.000Z',
+    },
+    { createdAt: undefined, expected: '1970-01-01T00:00:00.000Z' },
+  ])('缺修改时间时固定回退为 $expected（#501）', ({ createdAt, expected }) => {
+    const { view, props } = setup({ exportOpen: true })
+    view.rerender(
+      <EditorOverlays {...props} project={{ ...PROJECT, createdAt }} />,
+    )
+    expect(jsonPreview().project.updatedAt).toBe(expected)
+    expect(jsonPreview().project.createdAt).toBe(createdAt ?? expected)
+  })
+})
+
+describe('EditorOverlays JSON 实时预览', () => {
   it('空图有效，实时内容变更替换 JSON，无关重渲染保持文本', () => {
     const { view, props } = setup({ exportOpen: true })
     expect(jsonPreview().graph.nodes).toEqual([])

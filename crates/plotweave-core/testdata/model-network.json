@@ -1,0 +1,432 @@
+{
+  "version": 1,
+  "policy": "NativeNetworkPolicy frozen IANA 2025-10-10 allocation snapshot; owner-approved Rust alignment #655",
+  "addresses": [
+    {
+      "input": "8.8.8.8",
+      "accepted": true
+    },
+    {
+      "input": "1.1.1.1",
+      "accepted": true
+    },
+    {
+      "input": "100.63.255.255",
+      "accepted": true
+    },
+    {
+      "input": "100.128.0.1",
+      "accepted": true
+    },
+    {
+      "input": "172.15.255.255",
+      "accepted": true
+    },
+    {
+      "input": "172.32.0.1",
+      "accepted": true
+    },
+    {
+      "input": "192.0.0.9",
+      "accepted": true
+    },
+    {
+      "input": "192.0.0.10",
+      "accepted": true
+    },
+    {
+      "input": "198.17.255.255",
+      "accepted": true
+    },
+    {
+      "input": "198.20.0.0",
+      "accepted": true
+    },
+    {
+      "input": "223.255.255.255",
+      "accepted": true
+    },
+    {
+      "input": "::8.8.8.8",
+      "accepted": true
+    },
+    {
+      "input": "::ffff:8.8.8.8",
+      "accepted": true
+    },
+    {
+      "input": "64:ff9b::808:808",
+      "accepted": true
+    },
+    {
+      "input": "2002:808:808::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:1::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:1::2",
+      "accepted": true
+    },
+    {
+      "input": "2001:1::3",
+      "accepted": true
+    },
+    {
+      "input": "2001:3::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:4:112::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:20::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:3f:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:200::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:3ff:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:c00::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:dff:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:2000::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:3fff:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2001:bfff:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2003:3fff:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "240f:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "241f:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2606:4700::1111",
+      "accepted": true
+    },
+    {
+      "input": "2611:ffff::1",
+      "accepted": false
+    },
+    {
+      "input": "2621:ffff::1",
+      "accepted": false
+    },
+    {
+      "input": "263f:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "280f:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2a1f:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2c0f:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2606:4700::200:5efe:8.8.8.8",
+      "accepted": true
+    },
+    {
+      "input": "240f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+      "accepted": true
+    },
+    {
+      "input": "0.1.2.3",
+      "accepted": false
+    },
+    {
+      "input": "10.0.0.1",
+      "accepted": false
+    },
+    {
+      "input": "127.0.0.1",
+      "accepted": false
+    },
+    {
+      "input": "100.64.0.0",
+      "accepted": false
+    },
+    {
+      "input": "100.127.255.255",
+      "accepted": false
+    },
+    {
+      "input": "169.254.169.254",
+      "accepted": false
+    },
+    {
+      "input": "172.16.0.0",
+      "accepted": false
+    },
+    {
+      "input": "172.31.255.255",
+      "accepted": false
+    },
+    {
+      "input": "192.168.0.1",
+      "accepted": false
+    },
+    {
+      "input": "192.0.0.8",
+      "accepted": false
+    },
+    {
+      "input": "192.0.0.11",
+      "accepted": false
+    },
+    {
+      "input": "192.0.2.1",
+      "accepted": false
+    },
+    {
+      "input": "192.88.99.1",
+      "accepted": false
+    },
+    {
+      "input": "198.18.0.0",
+      "accepted": false
+    },
+    {
+      "input": "198.19.255.255",
+      "accepted": false
+    },
+    {
+      "input": "198.51.100.1",
+      "accepted": false
+    },
+    {
+      "input": "203.0.113.1",
+      "accepted": false
+    },
+    {
+      "input": "224.0.0.0",
+      "accepted": false
+    },
+    {
+      "input": "255.255.255.255",
+      "accepted": false
+    },
+    {
+      "input": "::",
+      "accepted": false
+    },
+    {
+      "input": "::1",
+      "accepted": false
+    },
+    {
+      "input": "::ffff:10.0.0.1",
+      "accepted": false
+    },
+    {
+      "input": "::192.0.2.1",
+      "accepted": false
+    },
+    {
+      "input": "64:ff9b::a00:1",
+      "accepted": false
+    },
+    {
+      "input": "64:ff9b:1::808:808",
+      "accepted": false
+    },
+    {
+      "input": "2002:7f00:1::1",
+      "accepted": false
+    },
+    {
+      "input": "2002:c000:201::1",
+      "accepted": false
+    },
+    {
+      "input": "fc00::1",
+      "accepted": false
+    },
+    {
+      "input": "fe80::1",
+      "accepted": false
+    },
+    {
+      "input": "fec0::1",
+      "accepted": false
+    },
+    {
+      "input": "ff02::1",
+      "accepted": false
+    },
+    {
+      "input": "2001::1",
+      "accepted": false
+    },
+    {
+      "input": "2001:1::4",
+      "accepted": false
+    },
+    {
+      "input": "2001:2::1",
+      "accepted": false
+    },
+    {
+      "input": "2001:4:113::1",
+      "accepted": false
+    },
+    {
+      "input": "2001:1ff:ffff::1",
+      "accepted": false
+    },
+    {
+      "input": "2001:db8::1",
+      "accepted": false
+    },
+    {
+      "input": "2001:1000::1",
+      "accepted": false
+    },
+    {
+      "input": "2001:c000::1",
+      "accepted": false
+    },
+    {
+      "input": "2003:4000::1",
+      "accepted": false
+    },
+    {
+      "input": "2420::1",
+      "accepted": false
+    },
+    {
+      "input": "2612::1",
+      "accepted": false
+    },
+    {
+      "input": "2622::1",
+      "accepted": false
+    },
+    {
+      "input": "2d00::1",
+      "accepted": false
+    },
+    {
+      "input": "2e00::1",
+      "accepted": false
+    },
+    {
+      "input": "3ffe::1",
+      "accepted": false
+    },
+    {
+      "input": "2606:4700::200:5efe:10.0.0.1",
+      "accepted": false
+    },
+    {
+      "input": "2606:4700::200:5efe:192.0.2.1",
+      "accepted": false
+    },
+    {
+      "input": "2610:1ff:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2610:200::1",
+      "accepted": false
+    },
+    {
+      "input": "2620:1ff:ffff::1",
+      "accepted": true
+    },
+    {
+      "input": "2620:200::1",
+      "accepted": false
+    }
+  ],
+  "urls": [
+    {
+      "input": "https://cdn.fixture.invalid/image.png",
+      "accepted": true
+    },
+    {
+      "input": "https://8.8.8.8/image.png",
+      "accepted": true
+    },
+    {
+      "input": "https://[2606:4700::1111]:443/image.png",
+      "accepted": true
+    },
+    {
+      "input": "http://8.8.8.8/image.png",
+      "accepted": false
+    },
+    {
+      "input": "http://localhost/image.png",
+      "accepted": false
+    },
+    {
+      "input": "https://user:pass@8.8.8.8/image.png",
+      "accepted": false
+    },
+    {
+      "input": "https://:pass@8.8.8.8/image.png",
+      "accepted": false
+    },
+    {
+      "input": "https://8.8.8.8:0/image.png",
+      "accepted": false
+    },
+    {
+      "input": "https://127.0.0.1/image.png",
+      "accepted": false
+    },
+    {
+      "input": "https://192.0.2.1/image.png",
+      "accepted": false
+    },
+    {
+      "input": "https://[2001:db8::1]/image.png",
+      "accepted": false
+    },
+    {
+      "input": "ftp://8.8.8.8/image.png",
+      "accepted": false
+    },
+    {
+      "input": "file:///image.png",
+      "accepted": false
+    }
+  ]
+}

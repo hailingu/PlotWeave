@@ -1,5 +1,10 @@
 import {
+  writeNativeCoverageSource,
+  writeXccovStub,
+} from './native-coverage-fixture'
+import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -11,10 +16,45 @@ import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  gitFixtureEnvironment,
+  gitScenarioFixture,
+} from './git-scenario-fixture'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
+const repositories = gitScenarioFixture((root) => {
+  writeNativeCoverageSource(root)
+  const commands = [
+    ['init', '-q', '-b', 'main'],
+    ['add', 'native'],
+    [
+      '-c',
+      'core.hooksPath=/dev/null',
+      '-c',
+      'user.name=gate-test',
+      '-c',
+      'user.email=gate@test',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'seed',
+    ],
+  ]
+  for (const args of commands) {
+    const result = spawnSync('git', args, {
+      cwd: root,
+      encoding: 'utf8',
+      env: gitFixtureEnvironment(),
+    })
+    if (result.status !== 0)
+      throw new Error(`门禁测试仓库初始化失败：${result.stderr}`)
+  }
+})
+
+afterAll(() => repositories.dispose())
 
 type GateOptions = {
   coverageMode?:
@@ -26,14 +66,11 @@ type GateOptions = {
     | 'partial'
     | 'uncovered'
     | 'valid'
+  cpuBudget?: number | string
   formatExit?: number
   lintExit?: number
   lockName?: string
   lockOccupied?: boolean
-  /** 模块图守卫元检查（issue #471）：cargo 替身退出码，非零模拟列举失败。 */
-  metaGuardExit?: number
-  /** 模块图守卫元检查（issue #471）：替身输出的 module_graph:: 用例行数。 */
-  metaGuardTests?: number
   npmExit?: number
   pendingBlocked?: boolean
   pendingSeed?: string
@@ -51,6 +88,14 @@ type GateOptions = {
   scannerExit?: number
   strictIndexExit?: number
   qualityGateStatus?: string
+  /** 推送范围（owner 指示 2026-10-18）；缺省 full 保持既有完整门禁用例。 */
+  scope?: 'frontend' | 'rust' | 'native' | 'full'
+  /** full 推送附加原生回归；提交入口必须覆盖继承的推送上下文。 */
+  fullNative?: string
+  /** 未变更栈的复用 LCOV 内容；缺省不预置，用于缺报告失败用例。 */
+  reusedFrontendCoverage?: string
+  reusedRustCoverage?: string
+  xcodebuildExit?: number
   sonarHostUrl?: string | null
   sonarToken?: string
   unresolvedIssues?: number
@@ -88,6 +133,7 @@ function readTextFileBestEffort(path: string): string {
 
 /** runGate 的命令替身路径集（sandbox 内固定布局）。 */
 interface GateStubPaths {
+  readonly root: string
   readonly logPath: string
   readonly curlStdinPath: string
   readonly scannerTokenPath: string
@@ -102,7 +148,9 @@ interface GateStubPaths {
   readonly scannerPath: string
   readonly curlPath: string
   readonly llvmCovPath: string
-  readonly cargoPath: string
+  readonly xcodebuildPath: string
+  readonly reusedFrontendPath: string
+  readonly reusedRustPath: string
 }
 
 /** npm 替身（writeCommandStubs 拆分，PR #415 评审 5339054039）：记录
@@ -128,12 +176,14 @@ fi
 if [ "$PLOTWEAVE_TEST_NPM_EXIT" -ne 0 ]; then
   exit "$PLOTWEAVE_TEST_NPM_EXIT"
 fi
-if [ "$*" != "run test:coverage" ]; then
-  exit 0
-fi
+# 门禁下发 CPU 预算（test:coverage -- --maxWorkers N）：按前缀匹配分发，
+# 数值由「门禁 CPU 预算」用例断言
+case "$*" in
+  "run test:coverage"*) ;;
+  *) exit 0 ;;
+esac
 case "$PLOTWEAVE_TEST_COVERAGE_MODE" in
   valid)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   # partial（9/10 = 90.00%）与 atFloor（4/5 = 80.00%）均高于/恰在下限：
@@ -141,27 +191,21 @@ case "$PLOTWEAVE_TEST_COVERAGE_MODE" in
   #（issue #393）；belowFloor（1/2 = 50.00%）通过非空与已覆盖校验、
   # 只跌破产线复核。
   partial)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,1' 'DA:3,1' 'DA:4,1' 'DA:5,1' 'DA:6,1' 'DA:7,1' 'DA:8,1' 'DA:9,1' 'DA:10,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   atFloor)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,1' 'DA:3,1' 'DA:4,1' 'DA:5,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   belowFloor)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'DA:2,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   empty)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     : > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   malformed)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
   uncovered)
-    mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
     printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,0' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
     ;;
 esac`,
@@ -175,7 +219,15 @@ function writeRustCoverageStub(paths: GateStubPaths): void {
   writeExecutable(
     paths.llvmCovPath,
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+[ -n "$RUST_TEST_THREADS" ] && printf 'rust-test-threads %s\n' "$RUST_TEST_THREADS" >> "$PLOTWEAVE_TEST_LOG"
 [ -z "$SONAR_TOKEN$PLOTWEAVE_SONAR_TOKEN$sonar_token" ] || printf 'rust-token-present\n' >> "$PLOTWEAVE_TEST_LOG"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--output-path' ]; then
+    PLOTWEAVE_RUST_COVERAGE_REPORT_PATH=$2
+    break
+  fi
+  shift
+done
 case "$PLOTWEAVE_TEST_RUST_COVERAGE_MODE" in
   valid)
     printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"
@@ -211,16 +263,16 @@ esac`,
 }
 
 /** sonar-scanner 替身（writeCommandStubs 拆分）：记录调用与令牌接收形
- * 态，受控退出，并写出 report-task.txt 供门禁读取。 */
-function writeScannerStub(paths: GateStubPaths): void {
+ * 态，受控退出，并写出 report-task.txt；默认根用例另记录实际工作目录。 */
+function writeScannerStub(paths: GateStubPaths, recordRoot = false): void {
   writeExecutable(
     paths.scannerPath,
     String.raw`printf 'sonar-scanner %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+${recordRoot ? String.raw`printf 'scanner-root %s\n' "$PWD" >> "$PLOTWEAVE_TEST_LOG"` : ''}
 printf '%s' "$SONAR_TOKEN" > "$PLOTWEAVE_TEST_SCANNER_TOKEN"
 if [ "$PLOTWEAVE_TEST_SCANNER_EXIT" -ne 0 ]; then
   exit "$PLOTWEAVE_TEST_SCANNER_EXIT"
 fi
-mkdir -p "$(dirname "$PLOTWEAVE_SONAR_REPORT_PATH")"
 printf '%s\n' \
   'projectKey=PlotWeave' \
   'serverUrl=http://sonar.test' \
@@ -250,36 +302,23 @@ esac`,
   )
 }
 
-/** cargo 替身（issue #471 元守卫）：记录调用并按环境选项输出受控数量的
- * module_graph:: 用例行——门禁经 PLOTWEAVE_CARGO_BIN 调用
- * scripts/check-rust-module-graph-guard.sh，本替身即其 cargo 枚举语义的
- * 受控源（默认 95 例，高于存活下限 90；形态见
- * PLOTWEAVE_TEST_META_GUARD_* 注入）。 */
-function writeCargoStub(paths: GateStubPaths): void {
+/** 外部命令替身总装（runGate 拆分，issue #99）：npm / cargo-llvm-cov /
+ * sonar-scanner / curl 的记录-并-受控返回替身，按选项预置锁形态。 */
+function writeXcodebuildStub(paths: GateStubPaths): void {
   writeExecutable(
-    paths.cargoPath,
-    String.raw`printf 'cargo %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-if [ "$PLOTWEAVE_TEST_META_GUARD_EXIT" -ne 0 ]; then
-  printf '%s\n' 'error: injected cargo failure (boom-diagnostic)' >&2
-  exit "$PLOTWEAVE_TEST_META_GUARD_EXIT"
-fi
-i=0
-while [ "$i" -lt "$PLOTWEAVE_TEST_META_GUARD_TESTS" ]; do
-  printf 'module_graph::case_%s: test\n' "$i"
-  i=$((i + 1))
-done
-printf '%s tests, 0 benchmarks\n' "$PLOTWEAVE_TEST_META_GUARD_TESTS"`,
+    paths.xcodebuildPath,
+    String.raw`printf 'xcodebuild %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+exit "$PLOTWEAVE_TEST_XCODEBUILD_EXIT"`,
   )
 }
 
-/** 外部命令替身总装（runGate 拆分，issue #99）：npm / cargo-llvm-cov /
- * sonar-scanner / curl 的记录-并-受控返回替身，按选项预置锁形态。 */
 function writeCommandStubs(paths: GateStubPaths, options: GateOptions): void {
   writeNpmStub(paths)
   writeRustCoverageStub(paths)
   writeScannerStub(paths)
   writeCurlStub(paths)
-  writeCargoStub(paths)
+  writeXcodebuildStub(paths)
+  writeXccovStub(resolve(paths.root, 'bin/xcrun'))
 
   if (options.lockOccupied) {
     mkdirSync(paths.lockPath)
@@ -293,9 +332,10 @@ function gateEnvironment(
   options: GateOptions,
 ): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...gitFixtureEnvironment(),
+    PLOTWEAVE_GATE_REPOSITORY_ROOT: paths.root,
+    PLOTWEAVE_GATE_FULL_NATIVE: options.fullNative ?? '0',
     PLOTWEAVE_CARGO_LLVM_COV_BIN: paths.llvmCovPath,
-    PLOTWEAVE_CARGO_BIN: paths.cargoPath,
     PLOTWEAVE_CURL_BIN: paths.curlPath,
     PLOTWEAVE_COVERAGE_REPORT_PATH: paths.coveragePath,
     PLOTWEAVE_GATE_HISTORY_PATH: paths.historyPath,
@@ -313,15 +353,33 @@ function gateEnvironment(
     PLOTWEAVE_TEST_COVERAGE_MODE: options.coverageMode ?? 'valid',
     PLOTWEAVE_TEST_FORMAT_EXIT: String(options.formatExit ?? 0),
     PLOTWEAVE_TEST_LINT_EXIT: String(options.lintExit ?? 0),
-    PLOTWEAVE_TEST_META_GUARD_EXIT: String(options.metaGuardExit ?? 0),
-    PLOTWEAVE_TEST_META_GUARD_TESTS: String(options.metaGuardTests ?? 95),
     PLOTWEAVE_TEST_RUST_COVERAGE_MODE: options.rustCoverageMode ?? 'valid',
     PLOTWEAVE_TEST_NPM_EXIT: String(options.npmExit ?? 0),
     PLOTWEAVE_TEST_QUALITY_GATE_STATUS: options.qualityGateStatus ?? 'OK',
     PLOTWEAVE_TEST_SCANNER_EXIT: String(options.scannerExit ?? 0),
     PLOTWEAVE_TEST_STRICT_INDEX_EXIT: String(options.strictIndexExit ?? 0),
     PLOTWEAVE_TEST_UNRESOLVED_ISSUES: String(options.unresolvedIssues ?? 0),
+    PLOTWEAVE_TEST_XCODEBUILD_EXIT: String(options.xcodebuildExit ?? 0),
+    PLOTWEAVE_XCODEBUILD_BIN: paths.xcodebuildPath,
+    PLOTWEAVE_XCRUN_BIN: resolve(paths.root, 'bin/xcrun'),
+    PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE: '',
+    GITHUB_STEP_SUMMARY: resolve(
+      paths.root,
+      'native/macos/build/coverage/step-summary.md',
+    ),
+    PLOTWEAVE_REUSED_FRONTEND_LCOV: paths.reusedFrontendPath,
+    PLOTWEAVE_REUSED_RUST_LCOV: paths.reusedRustPath,
     SONAR_HOST_URL: options.sonarHostUrl ?? 'http://sonar.test',
+  }
+  // 范围变量与令牌同口径不继承宿主环境：pre-push 单栈分流导出的
+  // PLOTWEAVE_GATE_SCOPE 会随 ...process.env 泄入夹具门禁，使未指定范围的
+  // 用例走单栈分流而非被测的完整流程；默认删除，按用例显式注入。
+  delete environment.PLOTWEAVE_GATE_SCOPE
+  if (options.scope !== undefined) {
+    environment.PLOTWEAVE_GATE_SCOPE = options.scope
+  }
+  if (options.cpuBudget !== undefined) {
+    environment.PLOTWEAVE_GATE_CPU_BUDGET = String(options.cpuBudget)
   }
   if (options.sonarHostUrl === null) {
     delete environment.SONAR_HOST_URL
@@ -340,10 +398,11 @@ function gateEnvironment(
 
 /** 为同步运行与强杀恢复场景分配同一个隔离门禁沙箱。 */
 function prepareGatePaths(options: GateOptions = {}): GateStubPaths {
-  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-sonar-gate-'))
+  const sandbox = repositories.create()
   temporaryDirectories.push(sandbox)
 
   const paths: GateStubPaths = {
+    root: sandbox,
     logPath: resolve(sandbox, 'calls.log'),
     curlStdinPath: resolve(sandbox, 'curl-stdin.txt'),
     scannerTokenPath: resolve(sandbox, 'scanner-token.txt'),
@@ -358,9 +417,23 @@ function prepareGatePaths(options: GateOptions = {}): GateStubPaths {
     scannerPath: resolve(sandbox, 'bin', 'sonar-scanner'),
     curlPath: resolve(sandbox, 'bin', 'curl'),
     llvmCovPath: resolve(sandbox, 'bin', 'cargo-llvm-cov'),
-    cargoPath: resolve(sandbox, 'bin', 'cargo'),
+    xcodebuildPath: resolve(sandbox, 'bin', 'xcodebuild'),
+    reusedFrontendPath: resolve(sandbox, 'reused', 'frontend.info'),
+    reusedRustPath: resolve(sandbox, 'reused', 'rust.info'),
   }
 
+  mkdirSync(dirname(paths.coveragePath))
+  mkdirSync(dirname(paths.reportPath))
+  mkdirSync(dirname(paths.reusedFrontendPath))
+  if (options.reusedFrontendCoverage !== undefined) {
+    writeFileSync(paths.reusedFrontendPath, options.reusedFrontendCoverage)
+  }
+  if (options.reusedRustCoverage !== undefined) {
+    writeFileSync(paths.reusedRustPath, options.reusedRustCoverage)
+  }
+  // 合并后的树包含两个 workspace；旧树的单 workspace 回归见 rust-coverage.test.ts。
+  mkdirSync(resolve(sandbox, 'crates'))
+  writeFileSync(resolve(sandbox, 'crates/Cargo.toml'), '')
   writeCommandStubs(paths, options)
 
   // 版本化与待物化文件预置：待物化默认为空（失败路径不追加时读到空
@@ -387,7 +460,7 @@ function runPreparedGate(
   options: GateOptions = {},
 ): GateRun {
   const result = spawnSync('sh', [resolve(repositoryRoot, target)], {
-    cwd: repositoryRoot,
+    cwd: paths.root,
     encoding: 'utf8',
     env: gateEnvironment(paths, options),
   })
@@ -415,6 +488,27 @@ function runPreparedGate(
 /** 在隔离的外部依赖边界下执行真实门禁脚本或 Git hook。 */
 function runGate(target: string, options: GateOptions = {}): GateRun {
   return runPreparedGate(target, prepareGatePaths(options), options)
+}
+
+/** 默认根回归使用夹具内的真实脚本链，避免根覆盖变量掩盖脚本目录推导。 */
+function copyFixtureGateScripts(root: string): string {
+  const scripts = resolve(root, 'scripts')
+  mkdirSync(scripts, { recursive: true })
+  for (const file of [
+    'check-file-size.ts',
+    'check-static.sh',
+    'file-size-baseline.json',
+    'rust-coverage.sh',
+    'sonar-quality-gate.sh',
+    'test-native.sh',
+    'native-coverage.ts',
+  ]) {
+    copyFileSync(
+      resolve(repositoryRoot, 'scripts', file),
+      resolve(scripts, file),
+    )
+  }
+  return resolve(scripts, 'sonar-quality-gate.sh')
 }
 
 /** 等待测试门禁在持锁后的首个检查命令中暂停，超时或提前退出均报错。 */
@@ -472,7 +566,7 @@ afterEach(() => {
 // 用例逐个 spawnSync 真实门禁脚本（多级 shell 替身），全量套件并发负载下
 // 单用例常超 vitest 默认 5s（实测 3.4–4.9s 贴边抖动，钩子内必超）——放宽
 // describe 级超时上限，不放宽断言。
-describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
+describe('SonarQube 完整提交流水线', { timeout: 30_000 }, () => {
   it('先生成前端与 Rust 覆盖率，再等待 Quality Gate，并确认新增代码未解决问题为零', () => {
     const result = runGate('scripts/sonar-quality-gate.sh')
 
@@ -480,7 +574,8 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(
       result.log
         .split('\n')
-        .filter(Boolean)
+        // rust-test-threads 是 llvm-cov 桩的预算注释行，不是外部命令调用
+        .filter((line) => line && !line.startsWith('rust-test-threads'))
         .map((line) => line.split(' ')[0]),
     ).toEqual([
       'npm',
@@ -488,7 +583,7 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
       'npm',
       'npm',
       'cargo-llvm-cov',
-      'cargo',
+      'cargo-llvm-cov',
       'sonar-scanner',
       'curl',
       'curl',
@@ -500,11 +595,6 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(result.log).toContain(
       'cargo-llvm-cov llvm-cov --lib --test media_format_leaf --lcov',
     )
-    // 模块图守卫元检查（issue #471）：串行 Rust 阶段末位、扫描之前，
-    // 以 cargo 实际枚举复核守卫存活下限
-    expect(result.log).toContain(
-      'cargo test --lib --manifest-path src-tauri/Cargo.toml -- --list',
-    )
     expect(result.log).toContain('-Dsonar.qualitygate.wait=true')
     expect(result.log).toContain('-Dsonar.host.url=http://sonar.test')
     expect(result.log).toContain('-Dsonar.javascript.lcov.reportPaths=')
@@ -515,31 +605,176 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     // 增量清零：issues 查询按 sinceLeakPeriod（New Code 周期）过滤
     expect(result.log).toContain('sinceLeakPeriod=true')
   })
+})
 
-  it('守卫用例跌破存活下限：门禁在扫描前失败（issue #471）', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', {
-      metaGuardTests: 3,
+const VALID_FRONTEND_LCOV = 'TN:\nSF:src/example.ts\nDA:1,1\nend_of_record\n'
+const VALID_RUST_LCOV =
+  'TN:\nSF:src-tauri/src/example.rs\nDA:1,1\nend_of_record\n'
+
+describe(
+  '推送范围分流（owner 指示 2026-10-18：单栈只跑该栈全量覆盖率）',
+  { timeout: 30_000 },
+  () => {
+    it('frontend：跑前端覆盖率、复用 Rust LCOV，不调用 cargo-llvm-cov', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'frontend',
+        reusedRustCoverage: VALID_RUST_LCOV,
+      })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain('npm run test:coverage')
+      expect(result.log).not.toContain('cargo-llvm-cov')
+      expect(result.log).toContain('/reused/rust.info')
+      expect(JSON.parse(result.pending.trim())).toMatchObject({
+        scope: 'frontend',
+        qualityGate: 'OK',
+        newCodeUnresolvedIssues: 0,
+      })
     })
 
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain('守卫用例数 3 跌破存活下限 90')
-    expect(result.stderr).toContain('#[cfg(test)] mod module_graph 被移除')
-    // 挂载点被删（归零）是同一断言路径的极端形态，行为契约由
-    // scripts/rust-module-graph-guard.test.ts 的归零用例覆盖。
-    expect(result.log).not.toContain('sonar-scanner')
-  })
+    it('rust：跑 Rust 覆盖率、复用前端 LCOV，不跑前端 test:coverage', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'rust',
+        reusedFrontendCoverage: VALID_FRONTEND_LCOV,
+      })
 
-  it('cargo 列举失败：门禁 fail-closed 且不启动扫描（issue #471）', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', {
-      metaGuardExit: 101,
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain('cargo-llvm-cov llvm-cov')
+      expect(result.log).not.toContain('npm run test:coverage')
+      expect(result.log).toContain('/reused/frontend.info')
+      expect(JSON.parse(result.pending.trim())).toMatchObject({ scope: 'rust' })
     })
 
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain('cargo test --lib -- --list 失败')
-    expect(result.stderr).toContain('boom-diagnostic')
-    expect(result.log).not.toContain('sonar-scanner')
-  })
+    it('native：跑原生测试，复用两侧 LCOV，不跑前端/ Rust 覆盖率', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'native',
+        reusedFrontendCoverage: VALID_FRONTEND_LCOV,
+        reusedRustCoverage: VALID_RUST_LCOV,
+      })
 
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain('npm run build:native-canvas')
+      expect(result.log).toContain('xcodebuild -project native/macos/')
+      expect(result.log).not.toContain('npm run test:coverage')
+      expect(result.log).not.toContain('cargo-llvm-cov')
+      expect(JSON.parse(result.pending.trim())).toMatchObject({
+        scope: 'native',
+      })
+    })
+
+    it('单栈缺另一侧复用 LCOV 时 fail-closed，不启动扫描', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'frontend',
+      })
+
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain('Rust（复用）覆盖率报告缺失或为空')
+      expect(result.log).not.toContain('sonar-scanner')
+    })
+
+    it('native 测试失败阻断门禁，不写记录', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'native',
+        reusedFrontendCoverage: VALID_FRONTEND_LCOV,
+        reusedRustCoverage: VALID_RUST_LCOV,
+        xcodebuildExit: 65,
+      })
+
+      expect(result.status).not.toBe(0)
+      expect(result.pending).toBe('')
+    })
+
+    it('full 推送刷新两侧覆盖率并执行 native 功能回归', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        fullNative: '1',
+      })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain('npm run test:coverage')
+      expect(result.log).toContain('cargo-llvm-cov llvm-cov')
+      expect(result.log).toContain('xcodebuild -project native/macos/')
+      expect(JSON.parse(result.pending.trim())).toMatchObject({ scope: 'full' })
+    })
+
+    it('full 推送 native 失败不扫描、不写成功记录', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        fullNative: '1',
+        xcodebuildExit: 65,
+      })
+
+      expect(result.status).not.toBe(0)
+      expect(result.log).toContain('xcodebuild -project native/macos/')
+      expect(result.log).not.toContain('sonar-scanner')
+      expect(result.pending).toBe('')
+    })
+
+    it('非法 full native 开关在检查前 fail-closed', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        fullNative: 'invalid',
+      })
+
+      // GATE_FULL_NATIVE_INVALID 是推送上下文配置的稳定诊断契约。
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain('[GATE_FULL_NATIVE_INVALID]')
+      expect(result.log).toBe('')
+      expect(result.pending).toBe('')
+    })
+
+    it('docs 范围由 pre-push 分流，脚本 fail-closed', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', {
+        scope: 'docs',
+      })
+
+      expect(result.status).not.toBe(0)
+      expect(result.stderr).toContain('[GATE_SCOPE_DOCS]')
+      expect(result.log).toBe('')
+    })
+  },
+)
+
+describe(
+  '门禁 CPU 预算（未设置时默认 4，评审 5545658713 owner 指示）',
+  { timeout: 30_000 },
+  () => {
+    it('两个覆盖率阶段按默认预算 4 限核：--maxWorkers / --jobs / RUST_TEST_THREADS 同值', () => {
+      const budget = 4
+      const result = runGate('scripts/sonar-quality-gate.sh')
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain(
+        `npm run test:coverage -- --maxWorkers ${budget}`,
+      )
+      // 两个 Cargo workspace 的 llvm-cov 调用各自带上 --jobs 预算
+      expect(result.log.split(`--jobs ${budget}`).length - 1).toBe(2)
+      expect(result.log).toContain(`rust-test-threads ${budget}`)
+    })
+
+    it('PLOTWEAVE_GATE_CPU_BUDGET 覆盖默认预算并下发到两个覆盖率阶段', () => {
+      const result = runGate('scripts/sonar-quality-gate.sh', { cpuBudget: 2 })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.log).toContain('--maxWorkers 2')
+      expect(result.log).toContain('--jobs 2')
+      expect(result.log).toContain('rust-test-threads 2')
+    })
+
+    it.each(['0', 'x', '2.5', '-1'] as const)(
+      'PLOTWEAVE_GATE_CPU_BUDGET=%s 以稳定诊断码阻断且不启动任何检查',
+      (value) => {
+        const result = runGate('scripts/sonar-quality-gate.sh', {
+          cpuBudget: value,
+        })
+
+        expect(result.status).not.toBe(0)
+        // 稳定诊断代码契约：quality-gate-cost.md「Gate CPU Budget」
+        expect(result.stderr).toContain('[GATE_CPU_BUDGET_INVALID]')
+        expect(result.log).toBe('')
+      },
+    )
+  },
+)
+
+describe('Rust 覆盖率报告与两侧覆盖率下限', { timeout: 30_000 }, () => {
   it('Rust 覆盖率生成缺失或没有任何已覆盖行时停止，不启动扫描（issue #169）', () => {
     for (const rustCoverageMode of [
       'missing',
@@ -605,7 +840,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(record.frontendLineCoveragePercent).toBe(80)
     expect(record.rustLineCoveragePercent).toBe(80)
   })
+})
 
+describe('静态检查失败时阻断门禁', { timeout: 30_000 }, () => {
   it('格式检查失败时阻止操作，不生成覆盖率也不扫描（issue #227）', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', { formatExit: 1 })
 
@@ -633,7 +870,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(result.log).not.toContain('test:coverage')
     expect(result.log).not.toContain('sonar-scanner')
   })
+})
 
+describe('Sonar 地址与前端覆盖率报告边界', { timeout: 30_000 }, () => {
   it('未显式配置 SonarQube 地址时阻止操作，避免误扫 SonarQube Cloud', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       sonarHostUrl: null,
@@ -663,7 +902,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
       expect(`${result.stdout}${result.stderr}`).toContain('覆盖率报告')
     },
   )
+})
 
+describe('扫描与服务门禁失败时阻断提交', { timeout: 30_000 }, () => {
   it('另一个门禁正在运行时停止，避免共享扫描目录互相覆盖', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       lockOccupied: true,
@@ -699,7 +940,9 @@ describe('SonarQube 提交门禁', { timeout: 30_000 }, () => {
     expect(result.status).not.toBe(0)
     expect(`${result.stdout}${result.stderr}`).toContain('3')
   })
+})
 
+describe('Sonar 凭据传递与优先级', { timeout: 30_000 }, () => {
   it('SONAR_TOKEN 经 curl 标准输入传 Authorization 头并以环境变量供扫描器，不进入命令参数或调用日志', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       sonarToken: 'sqp_token-a.1',
@@ -763,6 +1006,94 @@ it('统一门禁执行检查与覆盖率时不向被分析代码下发 Sonar 令
   expect(result.curlStdin).toContain('Authorization: Bearer test_primary')
 })
 
+it('门禁检查与记录绑定最小测试仓库，不扫描完整工作区（issue #498）', () => {
+  vi.stubEnv('PLOTWEAVE_GATE_REPOSITORY_ROOT', repositoryRoot)
+  const paths = prepareGatePaths()
+  const root = paths.root
+  vi.stubEnv('GIT_DIR', resolve(root, 'absent-git-dir'))
+  vi.stubEnv('GIT_INDEX_FILE', resolve(root, 'absent-index'))
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, {
+      cwd: root,
+      encoding: 'utf8',
+      env: gitFixtureEnvironment(),
+    })
+    expect(result.status, result.stderr).toBe(0)
+    return result.stdout.trim()
+  }
+  const result = runPreparedGate('scripts/sonar-quality-gate.sh', paths)
+  expect(result.status, result.stderr).toBe(0)
+  const record = JSON.parse(result.pending)
+  expect(record.head).toBe(git(['rev-parse', 'HEAD']))
+  expect(record.tree).toBe(git(['write-tree']))
+  mkdirSync(resolve(root, 'src'))
+  writeFileSync(resolve(root, 'src/oversized.ts'), '\n'.repeat(801))
+  writeFileSync(paths.logPath, '')
+  const blocked = runPreparedGate('scripts/sonar-quality-gate.sh', paths)
+  expect(blocked.status).toBe(1)
+  // 稳定诊断代码契约：docs/development/file-size-guard.md。
+  expect(blocked.stderr).toContain('SIZE_LIMIT_EXCEEDED')
+  expect(blocked.log).not.toContain('test:coverage')
+  expect(blocked.log).not.toContain('sonar-scanner')
+  expect(blocked.pending).toBe(result.pending)
+})
+
+it.each(['OK', 'ERROR'])(
+  '不覆盖根变量时，夹具内完整门禁从脚本目录推导根并处理 %s（PR #513）',
+  (qualityGateStatus) => {
+    const options = { qualityGateStatus }
+    const paths = prepareGatePaths(options)
+    const script = copyFixtureGateScripts(paths.root)
+    writeScannerStub(paths, true)
+    const caller = repositories.create()
+    mkdirSync(resolve(caller, 'src'))
+    writeFileSync(resolve(caller, 'src/oversized.ts'), '\n'.repeat(801))
+    const git = (args: string[]) => {
+      const output = spawnSync('git', args, {
+        cwd: paths.root,
+        encoding: 'utf8',
+        env: gitFixtureEnvironment(),
+      })
+      expect(output.status, output.stderr).toBe(0)
+      return output.stdout.trim()
+    }
+    writeFileSync(resolve(paths.root, 'story.txt'), 'script-local root')
+    git(['add', 'story.txt'])
+    const env = gateEnvironment(paths, options)
+    delete env.PLOTWEAVE_GATE_REPOSITORY_ROOT
+
+    const result = spawnSync('sh', [script], {
+      cwd: caller,
+      encoding: 'utf8',
+      env,
+    })
+    expect(result.status, result.stderr).toBe(
+      qualityGateStatus === 'OK' ? 0 : 1,
+    )
+    const log = readTextFileBestEffort(paths.logPath)
+    expect(log).toContain('npm run test:coverage')
+    expect(log).toContain('cargo-llvm-cov llvm-cov')
+    expect(log).toContain('sonar-scanner')
+    expect(log).toContain(`scanner-root ${paths.root}\n`)
+    // 稳定诊断代码契约：docs/development/file-size-guard.md。
+    expect(result.stdout).toContain('SIZE_CHECK_COMPLETE')
+    expect(result.stderr).not.toContain('SIZE_LIMIT_EXCEEDED')
+    if (qualityGateStatus === 'OK') {
+      expect(
+        JSON.parse(readTextFileBestEffort(paths.pendingPath)),
+      ).toMatchObject({
+        tree: git(['write-tree']),
+        head: git(['rev-parse', 'HEAD']),
+        qualityGate: 'OK',
+      })
+    } else {
+      expect(readTextFileBestEffort(paths.pendingPath)).toBe('')
+    }
+    expect(existsSync(paths.lockPath)).toBe(false)
+  },
+  30_000,
+)
+
 it.each(['primary', 'fallback'] as const)(
   '继承已导出的 sonar_token 时仍隔离 %s 凭据（评审 4162846722）',
   (selection) => {
@@ -780,6 +1111,18 @@ it.each(['primary', 'fallback'] as const)(
     expect(result.curlStdin).toContain(`Authorization: Bearer ${expectedToken}`)
   },
 )
+
+it('宿主 pre-push 导出的范围变量不泄入夹具：未指定 scope 的用例仍走完整门禁（PR #599 推送阻断）', () => {
+  // 复现：pre-push 单栈分流导出 PLOTWEAVE_GATE_SCOPE，随 ...process.env
+  // 进入 npm test 的本套件；未显式指定 scope 的用例若继承它，夹具门禁
+  // 走单栈分流（跳过 Rust 覆盖率真实生成）而非被测的完整流程。
+  vi.stubEnv('PLOTWEAVE_GATE_SCOPE', 'frontend')
+  const result = runGate('scripts/sonar-quality-gate.sh')
+
+  expect(result.status).toBe(0)
+  expect(result.log).toContain('npm run test:coverage')
+  expect(result.log).toContain('cargo-llvm-cov')
+})
 
 describe('门禁锁恢复命令（issue #430）', { timeout: 30_000 }, () => {
   it.each(['sonar-gate.lock', "sonar lock's $(touch injected).lock"])(
@@ -868,7 +1211,8 @@ describe('强杀门禁后的人工恢复（issue #430）', { timeout: 30_000 }, 
       expect(
         retried.log
           .split('\n')
-          .filter(Boolean)
+          // rust-test-threads 是 llvm-cov 桩的预算注释行，不是外部命令调用
+          .filter((line) => line && !line.startsWith('rust-test-threads'))
           .map((line) => line.split(' ')[0]),
       ).toEqual([
         'npm',
@@ -876,7 +1220,7 @@ describe('强杀门禁后的人工恢复（issue #430）', { timeout: 30_000 }, 
         'npm',
         'npm',
         'cargo-llvm-cov',
-        'cargo',
+        'cargo-llvm-cov',
         'sonar-scanner',
         'curl',
         'curl',
@@ -931,6 +1275,28 @@ while :; do sleep 1; done`,
 // #405：钩子读取 stdin，空 stdin 不再触发门禁）；此处只覆盖 pre-commit
 // 的接线与失败透传。
 describe('.githooks/pre-commit', () => {
+  it.each(['pre-commit', 'pre-merge-commit', 'prepare-commit-msg'])(
+    '%s 覆盖外部范围，始终刷新两侧覆盖率',
+    (hook) => {
+      for (const scope of ['frontend', 'rust', 'native'] as const) {
+        const result = runGate(`.githooks/${hook}`, {
+          scope,
+          fullNative: '1',
+          reusedFrontendCoverage: VALID_FRONTEND_LCOV,
+          reusedRustCoverage: VALID_RUST_LCOV,
+        })
+
+        expect(result.status, result.stderr).toBe(0)
+        expect(result.log).toContain('npm run test:coverage')
+        expect(result.log).toContain('cargo-llvm-cov llvm-cov')
+        expect(result.log).not.toContain('xcodebuild')
+        expect(JSON.parse(result.pending.trim())).toMatchObject({
+          scope: 'full',
+        })
+      }
+    },
+  )
+
   it('执行同一个增量清零门禁并透传失败状态', () => {
     const result = runGate('.githooks/pre-commit', { unresolvedIssues: 1 })
 
@@ -970,7 +1336,7 @@ describe('门禁测试标记隔离（issue #428）', { timeout: 30_000 }, () => 
 })
 
 describe(
-  '门禁结论摘要记录（issue #355：完整通过后写入待物化文件，推送时并入版本化凭据）',
+  '门禁结论摘要记录（issue #355：完整通过后写入待物化文件，由下一次普通提交折并暂存；推送保留待物化文件，PR #581 评审 5537970549）',
   { timeout: 30_000 },
   () => {
     it('完整通过后向待物化文件追加一行合法 JSON，且绝不直接触碰版本化文件（PR #415 评审 5338815626）', () => {
@@ -1063,7 +1429,8 @@ describe(
       expect(result.history).toBe('')
     })
 
-    // pre-push 侧「门禁通过后物化」由 scripts/gate-tree-marker.test.ts 的
+    // 推送不物化（PR #581 评审 5537970549）：记录留在待物化文件、由下
+    // 一次普通提交折并暂存，该行为由 scripts/gate-tree-marker.test.ts 的
     // 真实推送 e2e 与 scripts/pre-push-refs.test.ts 的快路径用例覆盖（issue
     // #405 起 pre-push 读取 stdin，空 stdin 不触发门禁）
   },

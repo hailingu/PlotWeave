@@ -1,12 +1,13 @@
 /**
  * 编辑器文档状态（EditorView 拆出的状态域）：节点/连线/设定集/集标题/资产
  * 索引/集聚焦六个会话状态，外加命令栈与拖放读取「当前值」所需的镜像 ref
- * 与已完成视口（数据模型 §3 视口随文档持久化）。内容镜像在渲染期赋值：undo/redo
- * 闭包必须在 setState updater 之外读到最新状态（StrictMode 下 updater 双调）。
+ * 与已完成视口（数据模型 §3 视口随文档持久化）。内容镜像在提交时同步：undo/redo
+ * 闭包在 setState updater 之外读取，避免 StrictMode 双调副作用与未提交渲染泄漏。
  * 返回对象按字段 memo：状态不变时保持引用稳定，下游 useMemo/useCallback 有效。
  */
 import {
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -25,6 +26,7 @@ import {
 import type { ProjectSettings } from './settings'
 import type { CanvasNode } from './nodes/types'
 import type { ProjectContent } from '../model/content'
+import { useExitGuardedCallback } from '../useExitGuardedCallback'
 
 /** 编辑器打开的项目：项目 id + 已加载的会话内容（App 经 EditorView 传入）。 */
 export type EditorProjectContent = { id: string } & ProjectContent
@@ -99,20 +101,22 @@ function sameNodeContent(a: CanvasNode, b: CanvasNode): boolean {
 }
 
 /** 内容稳定投影（issue #157）：数组引用仅在内容差异时更换，条目保持
- * 当时的原节点对象（消费方不读会话态键）。 */
+ * 当时的原节点对象（消费方不读会话态键）。缓存归 React 管理：条件式更新
+ * 只调整本组件的派生状态，被丢弃的渲染不会替换已提交的内容引用。 */
 function useContentNodes(nodes: CanvasNode[]): CanvasNode[] {
-  const ref = useRef(nodes)
+  const [content, setContent] = useState(nodes)
   if (
-    ref.current.length !== nodes.length ||
+    content.length !== nodes.length ||
     // 长度相等已由首条件保证；undefined 守卫消解下标读取的缺失分支
-    ref.current.some((n, i) => {
+    content.some((n, i) => {
       const next = nodes[i]
       return next !== undefined && !sameNodeContent(n, next)
     })
   ) {
-    ref.current = nodes
+    setContent(nodes)
+    return nodes
   }
-  return ref.current
+  return content
 }
 
 /** 状态镜像 refs（useEditorDocument 拆分，issue #99）：命令的 undo/redo
@@ -126,15 +130,17 @@ function useDocumentMirrorRefs(
   episodeTitles: Record<number, string>,
 ) {
   const nodesRef = useRef(nodes)
-  nodesRef.current = nodes
   const edgesRef = useRef(edges)
-  edgesRef.current = edges
   const settingsRef = useRef(settings)
-  settingsRef.current = settings
   const assetsRef = useRef(assets)
-  assetsRef.current = assets
   const episodeTitlesRef = useRef(episodeTitles)
-  episodeTitlesRef.current = episodeTitles
+  useLayoutEffect(() => {
+    nodesRef.current = nodes
+    edgesRef.current = edges
+    settingsRef.current = settings
+    assetsRef.current = assets
+    episodeTitlesRef.current = episodeTitles
+  }, [nodes, edges, settings, assets, episodeTitles])
   return { nodesRef, edgesRef, settingsRef, assetsRef, episodeTitlesRef }
 }
 
@@ -142,41 +148,78 @@ function useDocumentMirrorRefs(
 function useDocumentViewport(initialViewport: Viewport | undefined) {
   const [viewport, setViewport] = useState(initialViewport)
   const viewportRef = useRef(initialViewport)
-  const updateViewport = useCallback((next: Viewport) => {
-    const current = viewportRef.current
-    if (
-      current?.x === next.x &&
-      current.y === next.y &&
-      current.zoom === next.zoom
-    )
-      return
-    viewportRef.current = next
-    setViewport(next)
-  }, [])
+  const updateViewport = useExitGuardedCallback(
+    useCallback((next: Viewport) => {
+      const current = viewportRef.current
+      if (
+        current?.x === next.x &&
+        current.y === next.y &&
+        current.zoom === next.zoom
+      )
+        return
+      viewportRef.current = next
+      setViewport(next)
+    }, []),
+  )
   return useMemo(
     () => ({ viewport, viewportRef, updateViewport }),
     [viewport, updateViewport],
   )
 }
 
+/** 图状态写入与退出守卫；测量／选中只更新会话态，不构成新持久化写入。 */
+function useDocumentGraph(project: EditorProjectContent) {
+  const [nodes, writeNodes, changeNodes] = useNodesState<CanvasNode>(
+    project.nodes,
+  )
+  const setNodes = useExitGuardedCallback(writeNodes)
+  const guardedNodesChange = useExitGuardedCallback(changeNodes)
+  const onNodesChange = useCallback<OnNodesChange<CanvasNode>>(
+    (changes) => {
+      if (
+        changes.every(
+          (change) => change.type === 'dimensions' || change.type === 'select',
+        )
+      )
+        changeNodes(changes)
+      else guardedNodesChange(changes)
+    },
+    [changeNodes, guardedNodesChange],
+  )
+  const [edges, writeEdges, changeEdges] = useEdgesState(project.edges)
+  const setEdges = useExitGuardedCallback(writeEdges)
+  const guardedEdgesChange = useExitGuardedCallback(changeEdges)
+  const onEdgesChange = useCallback<OnEdgesChange<Edge>>(
+    (changes) => {
+      if (changes.every((change) => change.type === 'select'))
+        changeEdges(changes)
+      else guardedEdgesChange(changes)
+    },
+    [changeEdges, guardedEdgesChange],
+  )
+  return { nodes, setNodes, onNodesChange, edges, setEdges, onEdgesChange }
+}
+
 /** 从项目会话内容初始化文档状态，建立内容镜像与已完成视口。 */
 export function useEditorDocument(
   project: EditorProjectContent,
 ): EditorDocument {
-  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(
-    project.nodes,
-  )
-  const [edges, setEdges, onEdgesChange] = useEdgesState(project.edges)
+  const { nodes, setNodes, onNodesChange, edges, setEdges, onEdgesChange } =
+    useDocumentGraph(project)
   const [settings, setSettings] = useState<ProjectSettings>(project.settings)
+  const guardedSetSettings = useExitGuardedCallback(setSettings)
   /** 大纲集标题（§3.5）与集聚焦态：聚焦时该集节点提亮、其余降透明度。 */
   const [episodeTitles, setEpisodeTitles] = useState<Record<number, string>>(
     project.episodeTitles ?? {},
   )
+  const guardedSetEpisodeTitles = useExitGuardedCallback(setEpisodeTitles)
   /** AI 批次计数（§12.2）：缺省 0 = 该文档未应用过 AI 批次。 */
   const [aiRevision, setAiRevision] = useState(project.aiRevision ?? 0)
+  const guardedSetAiRevision = useExitGuardedCallback(setAiRevision)
   /** 项目资产索引（§7.1/§7.3）：会话内可新增（库资产拖上画布拷贝导入），
    * 入 SessionDocPart 随防抖落盘；assetsRef 镜像供 AI 快照/剧本导出消费。 */
   const [assets, setAssets] = useState(project.assets)
+  const guardedSetAssets = useExitGuardedCallback(setAssets)
   const [focusedEpisode, setFocusedEpisode] = useState<number | null>(null)
 
   const { nodesRef, edgesRef, settingsRef, assetsRef, episodeTitlesRef } =
@@ -194,13 +237,13 @@ export function useEditorDocument(
       setEdges,
       onEdgesChange,
       settings,
-      setSettings,
+      setSettings: guardedSetSettings,
       episodeTitles,
-      setEpisodeTitles,
+      setEpisodeTitles: guardedSetEpisodeTitles,
       aiRevision,
-      setAiRevision,
+      setAiRevision: guardedSetAiRevision,
       assets,
-      setAssets,
+      setAssets: guardedSetAssets,
       focusedEpisode,
       setFocusedEpisode,
       nodesRef,
@@ -219,12 +262,13 @@ export function useEditorDocument(
       setEdges,
       onEdgesChange,
       settings,
-      setSettings,
+      guardedSetSettings,
       episodeTitles,
-      setEpisodeTitles,
+      guardedSetEpisodeTitles,
       aiRevision,
+      guardedSetAiRevision,
       assets,
-      setAssets,
+      guardedSetAssets,
       focusedEpisode,
       setFocusedEpisode,
       // 镜像 ref 由 useDocumentMirrorRefs 持有，实例内恒稳定；列入依赖

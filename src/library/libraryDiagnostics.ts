@@ -1,4 +1,15 @@
 /** 图库操作诊断的会话存储：读取和写入共享提示，跨面板挂载保留至用户关闭。 */
+
+import { createDiagnostic } from '../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  libraryDiagnosticsSnapshotInvalid: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::library',
+    'LIBRARY_DIAGNOSTICS_SNAPSHOT_INVALID',
+  ),
+}
 let warnings: readonly string[] = []
 /** 清理保护独立于提示可见性：警告可能是仅存原媒体的唯一冲突信号。
  * 会话内收到有效警告即保守暂停目录级指引；关闭提示、干净或迟到响应
@@ -101,7 +112,7 @@ export function publishCleanupPending(
 ): void {
   const revision = parseCleanupRevision(rawRevision)
   if (revision === null || !Array.isArray(input)) {
-    console.warn('[Library] 无效待清理快照', {
+    logEvents.libraryDiagnosticsSnapshotInvalid('[Library] 无效待清理快照', {
       code: 'LIBRARY_DIAGNOSTICS_SNAPSHOT_INVALID',
     })
     return

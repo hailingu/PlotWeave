@@ -6,9 +6,9 @@
  * 键盘改名、应用级 Delete 删除选中节点与 ⌘Z 撤销（仓库已禁用库内建
  * deleteKeyCode，删除走 useEditorHotkeys）、导出弹窗 Escape 关闭。
  * 发现①（弹窗打开后焦点不移入弹窗）已由 issue #263 修复并翻转断言：
- * 打开即移入焦点、Escape 关闭后归还触发按钮。发现②仍固化现状：
- * 键盘单选节点无方向键移动——xyflow 12.11.3 的方向键移动仅绑定在
- * 框选手势挂载的选择框（nodesSelectionActive），单选不产生该框。
+ * 打开即移入焦点、Escape 关闭后归还触发按钮。单选不产生框选选择框；
+ * 节点自身仍可方向键移动，位置历史由 EditorCanvasRegion.keyboard.test.tsx
+ * 的真实画布回归守护（issue #496）。
  */
 import {
   act,
@@ -98,8 +98,7 @@ describe('编辑器键盘流程（issue #238）', () => {
     expect(node.className).toContain('selected')
     // 焦点保持在节点上（单选不产生接管焦点的框选选择框）
     expect(document.activeElement).toBe(node)
-    // 现状固化（发现②，见模块头）：单选无方向键移动——框选选择框
-    // （方向键载体）不因键盘单选挂载，修复时翻转此断言
+    // 单选时键盘事件由节点自身处理，不依赖框选选择框。
     expect(selectionRect()).toBeNull()
   })
 

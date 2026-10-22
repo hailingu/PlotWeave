@@ -1,9 +1,16 @@
 #!/bin/sh
 # 每次创建提交前执行仓库统一的 SonarQube 零问题门禁；通过后记录树标记，
 # 供同一 Git 进程后触发的 prepare-commit-msg 去重（issues #404/#429）。
+# 门禁前执行 materialize --stage-for-commit（issue #548）：把待物化门禁
+# 记录并入版本化 gate-history.jsonl，并仅在工作树台账恰为「索引内容 +
+# 本次折并行」时自动暂存进本提交（PR #581 评审 5537970549 的字节精确
+# 归因；多出的未归因改动只警告、保留原暂存状态）——服务端证据核验读到
+# 「滞后一次提交」的账本。暂存尽力而为，失败只警告、不阻塞提交。
 
 set -eu
 
 hook_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-"$hook_directory/../scripts/sonar-quality-gate.sh"
+"$hook_directory/../scripts/gate-history.sh" materialize --stage-for-commit
+PLOTWEAVE_GATE_SCOPE=full PLOTWEAVE_GATE_FULL_NATIVE=0 \
+  "$hook_directory/../scripts/sonar-quality-gate.sh"
 "$hook_directory/../scripts/gate-tree-marker.sh" write "${PPID:-}"

@@ -30,13 +30,13 @@ function mkSampleNodes(): SessionNode[] {
         characterIds: ['ch-1'],
         episodeNo: 2,
       },
-    } as unknown as SessionNode,
+    },
     {
       id: 'b1',
       type: 'beat',
       position: { x: 0, y: 0 },
       data: { name: '转折', tone: '压抑', episodeNo: 2 },
-    } as unknown as SessionNode,
+    },
     {
       id: 'd1',
       type: 'dialogue',
@@ -54,7 +54,7 @@ function mkSampleNodes(): SessionNode[] {
           },
         ],
       },
-    } as unknown as SessionNode,
+    },
     {
       id: 'br1',
       type: 'branch',
@@ -67,7 +67,7 @@ function mkSampleNodes(): SessionNode[] {
         ],
         episodeNo: 2,
       },
-    } as unknown as SessionNode,
+    },
     {
       id: 'sh1',
       type: 'shot',
@@ -79,7 +79,7 @@ function mkSampleNodes(): SessionNode[] {
         prompt: ' cinematic rain ',
         refs: [{ id: 'ref-1', kind: 'character', label: '林晚' }],
       },
-    } as unknown as SessionNode,
+    },
   ]
 }
 

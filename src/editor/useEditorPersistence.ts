@@ -4,11 +4,12 @@
  * onMoveEnd 发布响应式视口与同步 ref，再经 markDirty 换入最新文档——纯平移/缩放也
  * 落盘，卸载冲刷与后续内容保存拿到的都是最新视口（不落 stale 值）。
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import type { Viewport } from '@xyflow/react'
 import { errorBannerMessage } from './errorBannerMessage'
 import { sessionDoc } from './sessionDoc'
 import { useDebouncedSave } from './useDebouncedSave'
+import type { SaveStatus } from './saveStatus'
 import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
 import type { ProjectContent } from '../model/content'
 
@@ -17,6 +18,8 @@ const SAVE_DEBOUNCE_MS = 600
 
 /** 落盘诊断、标脏入口与画布持久化确认。 */
 export interface EditorPersistence {
+  /** 仅在最新画布实际保存后为 saved；初始载入不冒充保存完成。 */
+  saveStatus: SaveStatus
   /** 保存失败的用户可见诊断；null = 无失败（成功后清除）。 */
   saveError: string | null
   /** 显式标脏：供无重渲染的 transient 变更换入最新文档。 */
@@ -119,7 +122,7 @@ export function useEditorPersistence(
     handleSaveResult(null)
   }, [markExternallyPersisted, handleSaveResult])
 
-  const markDirty = useDebouncedSave(
+  const { markDirty, saveStatus } = useDebouncedSave(
     buildSessionDoc(project, doc, doc.viewportRef.current),
     wrappedOnSave,
     SAVE_DEBOUNCE_MS,
@@ -127,13 +130,16 @@ export function useEditorPersistence(
     handleRetryPersistedSuccess,
   )
 
-  const onMoveEnd = useCallback(
-    (_event: unknown, viewport: Viewport) => {
-      doc.updateViewport(viewport)
-      markDirty(buildSessionDoc(project, doc, viewport))
-    },
-    [doc, markDirty, project],
-  )
+  // 项目和保存回调变化不改变画布事件身份；只发布已提交的文档与写通道。
+  const moveContext = useRef({ project, doc, markDirty })
+  useLayoutEffect(() => {
+    moveContext.current = { project, doc, markDirty }
+  }, [project, doc, markDirty])
+  const onMoveEnd = useCallback((_event: unknown, viewport: Viewport) => {
+    const current = moveContext.current
+    current.doc.updateViewport(viewport)
+    current.markDirty(buildSessionDoc(current.project, current.doc, viewport))
+  }, [])
 
-  return { saveError, markDirty, onMoveEnd, whenCanvasCommitted }
+  return { saveStatus, saveError, markDirty, onMoveEnd, whenCanvasCommitted }
 }

@@ -17,21 +17,28 @@
 //! - `imagegen`：画布内 AI 图像生成代理（文生图，docs/data-model.md §13 首片）。
 //! - `media_format`：导入/生成媒体扩展名的无 IO 叶子策略。
 //! - `http_util`：出站 HTTP 代理共享助手（响应体流式限读内核）。
-//! - `lock`：共享 Mutex 的中毒后领域策略（统一可验证恢复内核，issue #145）。
+//! - `lock`：共享 Mutex 的中毒后领域策略（统一可验证恢复内核，issue
+//!   #145；单一来源在 `plotweave_core::lock`，本 crate 复用，issue #549）。
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use tauri::Manager;
 
 mod assets;
 mod blocking;
+/// Byte representation shared by seal and media, with unchanged per-domain input policies.
+mod hex_codec;
 mod http_util;
 mod imagegen;
-mod isotime;
+/// Host-owned filtering and best-effort stderr sink for the shared logging facade.
+mod logging;
+use plotweave_core::isotime;
 mod library;
 mod library_fs;
 mod library_index;
 mod library_journal;
-mod lock;
+// 中毒恢复内核复用 plotweave-core 单一来源（issue #549）：原 src/lock.rs
+// 逐字节拷贝已删除，各模块继续经 `crate::lock::recover_guard` 调用。
+use plotweave_core::lock;
 mod media_format;
 mod media_protocol;
 #[cfg(target_os = "macos")]
@@ -45,9 +52,9 @@ mod store;
 #[cfg(test)]
 mod conf;
 
-/// Rust 模块依赖图无环守卫（issue #399；仅测试构建参与编译，见模块文档）。
+/// 图库、恢复与媒体协议共享磁盘夹具（issue #504；仅测试构建）。
 #[cfg(test)]
-mod module_graph;
+mod library_fixture;
 
 /// 本地 HTTP 环回夹具（仅测试构建参与编译，见模块文档）。
 #[cfg(test)]
@@ -170,13 +177,17 @@ fn acknowledge_quit_listener(app: tauri::AppHandle) {
     }
     use tauri::Emitter;
     if let Err(error) = app.emit("app-quit-requested", ()) {
-        eprintln!("重放退出请求事件失败：{error}");
+        log::warn!(target: "plotweave::native_quit", "重放退出请求事件失败：{error}");
     }
 }
 
 /// 组合桌面命令、托管状态和媒体协议；原生集成测试复用相同的命令注册边界。
 pub fn app_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
+        .setup(|_| {
+            logging::init();
+            Ok(())
+        })
         // 会话新增项目资产登记表（pwmedia 项目 scope 的防抖落盘窗口，
         // issue #31 评审修复）：应用显式拥有的状态，非进程级可变全局单例
         .manage(assets::project_media::PendingProjectAssets::new())
@@ -256,7 +267,7 @@ pub fn run() {
                 return;
             }
             if let Err(error) = handle.emit("app-quit-requested", ()) {
-                eprintln!("发出退出请求事件失败：{error}");
+                log::warn!(target: "plotweave::native_quit", "发出退出请求事件失败：{error}");
             }
         })
         .expect("安装原生退出保存屏障失败")

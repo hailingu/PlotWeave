@@ -12,6 +12,7 @@ import {
   type SetStateAction,
 } from 'react'
 import type { RightTab } from './panels/RightPanel'
+import { isSwiftHost } from '../platform/hostEnvironment'
 
 /** 左右栏初始宽度（§3.4 可调区间 220–320pt 的居中默认值）。 */
 const DEFAULT_LEFT_WIDTH = 248
@@ -38,6 +39,8 @@ export interface EditorPanels {
   rightTab: RightTab
   setRightTab: Dispatch<SetStateAction<RightTab>>
   openSettingsId: string | null
+  /** 原生属性栏展开请求序号；仅会话展示状态，不写入文档或历史。 */
+  nodeSettingsRequest: number
   toggleSettings: (id: string) => void
   closeSettings: () => void
   plusOpen: boolean
@@ -70,12 +73,21 @@ export function useEditorPanels(): EditorPanels {
   const [rightTab, setRightTab] = useState<RightTab>('inspector')
   // ⚙️ 设置面板、＋节点下拉、右键菜单与导出对话框（§4.3：失焦收起）
   const [openSettingsId, setOpenSettingsId] = useState<string | null>(null)
+  const [nodeSettingsRequest, setNodeSettingsRequest] = useState(0)
   const [plusOpen, setPlusOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null)
 
+  /** Swift 每次显式打开目标属性；Web/Tauri 沿用卡片内面板开关。 */
   const toggleSettings = useCallback((id: string) => {
-    setOpenSettingsId((cur) => (cur === id ? null : id))
+    if (isSwiftHost()) {
+      setOpenSettingsId(id)
+      setRightTab('inspector')
+      setRightOpen(true)
+      setNodeSettingsRequest((request) => request + 1)
+    } else {
+      setOpenSettingsId((cur) => (cur === id ? null : id))
+    }
   }, [])
   const closeSettings = useCallback(() => setOpenSettingsId(null), [])
 
@@ -118,6 +130,7 @@ export function useEditorPanels(): EditorPanels {
     rightTab,
     setRightTab,
     openSettingsId,
+    nodeSettingsRequest,
     toggleSettings,
     closeSettings,
     plusOpen,

@@ -157,7 +157,9 @@ type Specificity = readonly [ids: number, classes: number, types: number]
 /** 评估的交互状态：rest = 静止态；hover = 悬停态；focus = 键盘聚焦态。 */
 type State = 'rest' | 'hover' | 'focus'
 
-/** 选择器特异性（id, 类/伪类, 元素）；仓库样式表无属性选择器。 */
+/** 选择器特异性（id, 类/伪类, 元素）。链内样式表存在属性选择器，但仅
+ * `:root[data-host-reduce-motion='true']` 动效退化（issue #568），不绑定
+ * 按钮的 background/color/outline 声明道，近似计数不影响本断言。 */
 function specificity(selector: string): Specificity {
   let ids = 0
   let classes = 0

@@ -3,7 +3,7 @@
  * 纯 TS 类型，无框架依赖：React Flow 运行态与本格式之间的互转见 convert.ts。
  */
 
-/** 当前文档版本；旧扁平存储格式视为 0，由 §11 迁移链升级。 */
+/** 当前文档版本；旧扁平 v0 格式已随 #519 处置退役，判型即拒绝。 */
 export const CURRENT_SCHEMA_VERSION = 1
 
 /** 当前文档格式的版本字面量类型（issue #312）：随 CURRENT_SCHEMA_VERSION
@@ -116,7 +116,9 @@ export interface ImageSpec {
   outputs: { primary?: GeneratedOutput }
 }
 
-/** 节点 spec 的判别联合：形状由 StoryNode.type 决定。 */
+/** 数据模型 §4.2/命令契约公开的规格形状联合（issue #664 保留理由）。
+ * 本联合不含判别字段；当前生产读写使用 StoryNode 的 type/spec 对应关系，
+ * 不用它替代判别节点或运行时校验。保留领域说明与类型组合的现有公开名称。 */
 export type NodeSpec =
   SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec | ImageSpec
 

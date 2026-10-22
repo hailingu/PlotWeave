@@ -193,20 +193,21 @@ const LAYOUT_EDGES: EditorProjectContent['edges'] = [
   { id: 'e2', source: 's2', target: 's3', className: 'pw-edge-sequence' },
 ]
 
-describe('画布工具栏自动排布（issue #94 装配）', () => {
-  const LAYOUT_PROJECT: EditorProjectContent = {
-    id: 'p-layout',
-    name: '排布装配',
-    nodes: [
-      layoutNode('s1', 0, 0),
-      layoutNode('s2', 900, 700),
-      layoutNode('s3', -500, 1000),
-    ],
-    edges: LAYOUT_EDGES,
-    settings: { characters: [], locations: [] },
-  }
+/** 散乱但有尺寸的整图验证排布入口与共享位置历史，不依赖多选。 */
+const LAYOUT_PROJECT: EditorProjectContent = {
+  id: 'p-layout',
+  name: '排布装配',
+  nodes: [
+    layoutNode('s1', 0, 0),
+    layoutNode('s2', 900, 700),
+    layoutNode('s3', -500, 1000),
+  ],
+  edges: LAYOUT_EDGES,
+  settings: { characters: [], locations: [] },
+}
 
-  it('左下角工具栏出现「自动排布」按钮，可通过键盘/可访问名称触发', () => {
+describe('画布工具栏自动排布（issue #94 装配）', () => {
+  it('画布排布组独立提供整图排布，不依赖节点多选', () => {
     render(
       <EditorView
         project={LAYOUT_PROJECT}
@@ -215,9 +216,19 @@ describe('画布工具栏自动排布（issue #94 装配）', () => {
         onSave={vi.fn()}
       />,
     )
-    const button = screen.getByLabelText('自动排布') as HTMLButtonElement
+    const group = screen.getByRole('group', { name: '画布排布' })
+    const button = within(group).getByRole('button', {
+      name: '自动排布',
+    }) as HTMLButtonElement
     expect(button.tagName).toBe('BUTTON')
     expect(button.disabled).toBe(false)
+    expect(
+      (
+        within(group).getByRole('button', {
+          name: '左对齐',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true)
   })
 
   it('空画布时按钮禁用', () => {
@@ -253,7 +264,12 @@ describe('画布工具栏自动排布（issue #94 装配）', () => {
         .sort()
     const before = transformsOf()
 
-    fireEvent.click(screen.getByLabelText('自动排布'))
+    fireEvent.click(
+      within(screen.getByRole('group', { name: '画布排布' })).getByRole(
+        'button',
+        { name: '自动排布' },
+      ),
+    )
     expect(undoButton().disabled).toBe(false)
     expect(transformsOf()).not.toEqual(before)
 

@@ -5,61 +5,11 @@
 //! 以符合源文件 800 行上限，评审修复）。
 
 use super::*;
+use crate::library_fixture::*;
 use crate::store::new_id;
-use cap_std::ambient_authority;
-use cap_std::fs::Dir as CapDir;
 use serde_json::json;
 use std::fs;
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
-
-/// 测试内核的受信句柄：对临时目录做环境打开（等价生产端锚定句柄）。
-fn cap(p: &Path) -> CapDir {
-    CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
-}
-
-/// 唯一临时根：`{tmp}/pw-library-test-{new_id}/` 下含 `library/assets/`；
-/// 返回 (library, root)——root 供库外受害者文件与清理。
-fn temp_fixture() -> (PathBuf, PathBuf) {
-    let root = std::env::temp_dir().join(format!("pw-library-test-{}", new_id()));
-    fs::create_dir_all(root.join("library").join("assets")).expect("创建临时库目录");
-    (root.join("library"), root)
-}
-
-fn cleanup(root: &Path) {
-    let _ = fs::remove_dir_all(root);
-}
-
-/// 直接按字节写脏索引（绕过写入内核，模拟手工修改/损坏的 library.json）。
-fn write_index_raw(library: &Path, index: &Value) {
-    let mut f = fs::File::create(library.join("library.json")).expect("创建索引文件");
-    f.write_all(serde_json::to_string(index).expect("序列化").as_bytes())
-        .expect("写入索引");
-}
-
-/// 最小合法索引条目（目标 Record 形状，含 §7.2 必填 source/ISO createdAt；
-/// relPath 按需投毒）。
-fn entry(id: &str, rel: &str) -> Value {
-    json!({
-        "id": id,
-        "name": "x",
-        "kind": "other",
-        "mime": "image/png",
-        "relPath": rel,
-        "source": "upload",
-        "createdAt": "2026-01-01T00:00:00.000Z",
-        "tags": [],
-    })
-}
-
-/// 把最小条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
-fn by_id(entries: impl IntoIterator<Item = Value>) -> Value {
-    let mut m = serde_json::Map::new();
-    for e in entries {
-        m.insert(e["id"].as_str().unwrap().to_string(), e);
-    }
-    json!({ "byId": m })
-}
+use std::path::Path;
 
 #[test]
 fn asset_id_rules() {
@@ -703,6 +653,26 @@ fn migration_suspended_blocks_mutations_preserving_disk() {
     let after = fs::read(library.join("library.json")).expect("读落盘索引字节");
     assert_eq!(before, after, "挂起态变更不得写盘（防隔离条目被抹）");
     cleanup(&root);
+}
+
+/// [issue #521](https://github.com/hailingu/PlotWeave/issues/521)：
+/// `apply_group_id` 对异型条目（非对象）返回结构化错误而非 panic——正常
+/// 路径的「条目必为对象」由读取归一化保证（异型条目进入写路径前已被
+/// 隔离），此处钉住内核防御路径，并复验清除/设置两条正常路径不变。
+#[test]
+fn group_id_patch_rejects_non_object_entry_instead_of_panicking() {
+    for patch in [Value::Null, json!("  ")] {
+        let mut entry = json!("not-an-object");
+        let err = apply_group_id(&mut entry, &patch).expect_err("异型条目应拒绝而非 panic");
+        assert!(err.contains("对象"), "错误应指明条目形状：{err}");
+        assert_eq!(entry, json!("not-an-object"), "被拒条目不得被改动");
+    }
+    let mut cleared = json!({ "groupId": "la-18f-1024", "name": "n" });
+    apply_group_id(&mut cleared, &Value::Null).expect("清除 groupId 正常路径");
+    assert!(cleared.get("groupId").is_none());
+    let mut assigned = json!({ "name": "n" });
+    apply_group_id(&mut assigned, &json!("la-18f-1024")).expect("设置 groupId 正常路径");
+    assert_eq!(assigned["groupId"], json!("la-18f-1024"));
 }
 
 /// 库 id 查重重试（评审修复，PR #33 第十七轮）：生成器产出与当前 byId 冲突

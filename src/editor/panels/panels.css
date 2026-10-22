@@ -497,6 +497,37 @@
   opacity: 0.5;
 }
 
+/* 输入行内联排布（issue #599）：输入框吸收宽度、发送按钮不收缩——窄栏
+ * 下按钮不被挤出视野。 */
+.pw-ai-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.pw-ai-input-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 发送按钮（issue #599）：Enter 之外的可见发送入口；关键操作配对令牌
+ * （--control-primary-fg/bg 的对比度契约见 sheetTokens.test.ts）。 */
+.pw-ai-send {
+  border: none;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  background: var(--control-primary-bg);
+  color: var(--control-primary-fg);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.pw-ai-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* 在途回合取消按钮（issue #154）：busy 时替代输入框；danger 语义 */
 .pw-ai-cancel {
   border: none;
@@ -518,7 +549,11 @@
   text-align: center;
 }
 
-/* 减弱动态：折叠改为瞬时宽度切换 */
+/* 减弱动态：折叠改为瞬时宽度切换；宿主直推属性与媒体查询同口径（issue #568）。 */
+:root[data-host-reduce-motion='true'] .pw-panel {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pw-panel {
     transition: none;
@@ -540,8 +575,17 @@
   transition: opacity 0.15s;
 }
 
-.pw-settings-item:hover .pw-settings-x {
+.pw-settings-item:hover .pw-settings-x,
+.pw-settings-item:focus-within .pw-settings-x {
   opacity: 1;
+}
+
+/* Tab 进入删除按钮时立即显示，不能等待淡入或只依赖指针悬停（#596）。 */
+.pw-settings-x:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  transition: none;
 }
 
 .pw-settings-x:hover {

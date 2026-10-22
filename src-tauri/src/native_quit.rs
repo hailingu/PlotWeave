@@ -1,6 +1,8 @@
 //! AppKit 正常退出适配：取消原生 terminate:，交由既有前端保存屏障放行。
 //! 回调和关联指针仅在主线程使用，guard 由 run 持有至事件循环结束；无全局应用状态。
+//! 回调 panic 遏制在 Rust 侧并保守拒绝退出（issue #547）。
 use std::ffi::{c_char, c_void};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[link(name = "objc")]
 unsafe extern "C" {
@@ -89,6 +91,9 @@ pub fn install(request: impl Fn() + 'static) -> Result<NativeQuit, String> {
 }
 
 /// AppKit 主线程回调：先通知前端，再返回 NSTerminateCancel；受控 app_exit 不走 terminate:。
+/// 回调 panic 不跨 extern "C" 边界（issue #547）：遏制后按未知冲刷状态保守
+/// 拒绝本次终止——批准终止只能发生在保存冲刷完成的受控路径上，panic 后
+/// 是否已通知前端不可知，就地放行可能中断在途保存。
 extern "C" fn should_terminate(delegate: *mut c_void, _: *mut c_void, _: *mut c_void) -> usize {
     // SAFETY: 关联由 install 建立且由同一主线程的 guard 管理；未安装时允许正常退出。
     unsafe {
@@ -96,7 +101,24 @@ extern "C" fn should_terminate(delegate: *mut c_void, _: *mut c_void, _: *mut c_
         if pointer.is_null() {
             return 1; // NSTerminateNow
         }
-        (*pointer)();
+        // AssertUnwindSafe：回调可能持有共享应用状态（QuitGate 等），panic 后
+        // 其不变量或已受损；本层只承诺不再调用并拒绝退出，不负责恢复其状态。
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| (*pointer)())) {
+            // 与 blocking.rs 同口径（issue #400）：不落 panic 载荷，仅稳定诊断码。
+            // Diagnostic sinks remain best-effort. Even an embedding logger that panics
+            // must not unwind across this C callback; forget its potentially panicking payload.
+            if let Err(logging_panic) = catch_unwind(|| {
+                log::error!(target: "plotweave::native_quit", "code=quit-callback-panicked");
+            }) {
+                std::mem::forget(logging_panic);
+            }
+            // 载荷自身的 Drop 也可能 panic（panic_any 自定义载荷，PR #580 第二轮
+            // 评审）：显式绑定并在边界内二次遏制其析构；若析构再次 panic，其
+            // 嵌套载荷直接遗忘、不再递归展开——该失败路径至多泄漏一枚载荷。
+            if let Err(nested) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+                std::mem::forget(nested);
+            }
+        }
         0 // NSTerminateCancel
     }
 }

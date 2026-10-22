@@ -13,12 +13,12 @@ will be added.
 ## Contract
 
 `npm run check:size` classifies every Git-enumerated path under `src/`,
-`src-tauri/`, and `scripts/` (issue #466). A maintained source suffix —
-`.ts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.css`, `.rs`, `.sh` — is measured
+`src-tauri/`, `crates/`, `native/`, and `scripts/` (issue #466; native-shell merge preserves caps after extraction). A maintained source suffix —
+`.ts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.css`, `.rs`, `.swift`, `.sh` — is measured
 against its cap; new languages must extend this inventory together with
 their Scope Routing row. A suffix explicitly registered in the checker's
-exclusion inventory — `.png`, `.icns`, `.ico`, `.xml`, `.json`, `.toml`,
-`.lock` (image/icon assets, platform manifests and policy configuration
+exclusion inventory — `.png`, `.icns`, `.ico`, `.xml`, `.plist`, `.json`, `.toml`,
+`.lock`, `.pbxproj`, `.xcscheme` (image/icon assets, native project and scheme files, platform manifests and policy configuration
 including the guard's own baseline, lockfiles) — is not measured but is
 counted in the completion record's `excluded`. Every other suffix,
 including no suffix at all, fails closed with one `SIZE_UNCLASSIFIED_FILE`
@@ -51,7 +51,7 @@ still applies.
 
 The measurement is the number of LF bytes (`wc -l`), including blank and
 comment lines; CRLF counts once, and an unterminated last line does not add
-a newline. Limits are 1800 for `*.test.ts` / `*.test.tsx` and 800 otherwise,
+a newline. Limits are 1800 for `*.test.ts` / `*.test.tsx` and Swift sources under `native/**/Tests/`, and 800 otherwise,
 including Rust test modules and compile-time `*.test-d.ts` probes.
 
 `scripts/file-size-baseline.json` records grandfathered paths and their
@@ -103,6 +103,50 @@ and byte framing before measuring content, including binary bytes and embedded
 newlines. The batch buffer is sized from the object lengths rather than a new
 aggregate content ceiling; this reduces subprocess overhead without skipping
 source, weakening policy, or removing any complete-gate stage.
+
+## Native-Shell Merge State And Invariant Matrix
+
+Historical merge note (2026-10-04): the `dev` integration into
+`codex/swiftui-react-flow` — a work branch whose content merged back into
+`dev` via PR #526 on 2026-10-13 and which no longer exists on the remote —
+retained the same caps when Rust source moved to `crates/` and added the
+native tree's existing Swift caps to the checker; those caps apply on `dev`
+today. The checker owns the following invariants at
+both `npm run check:size` and `scripts/check-static.sh` entry points.
+
+| State / precondition | Action / ordering | Observable outcome | Invariant | Verification |
+| --- | --- | --- | --- | --- |
+| Crate Rust, native app Swift, or native `Tests/` Swift at its cap | Add one LF, check, then restore the cap | Reject growth, then pass | Source relocation cannot create an unchecked path; Rust remains 800, Swift app 800, Swift test-target sources 1800 | Parameterized cap cases; Red: skipped new roots incorrectly passed; Green: all selected cases pass in the 90-test checker suite |
+| Indexed crate or app Swift is 801 lines; working copy is repaired to 800 | Check, then stage the repair and recheck | Reject the indexed version until the repair is staged | Each retained source version must satisfy its own cap | `迁出源码 … 的工作树修复不能掩盖超限索引`; Red: skipped new roots incorrectly passed; Green: all selected cases pass in the 90-test checker suite |
+| Unknown suffix under either new root | Check, then remove it and recheck | Fail with `SIZE_UNCLASSIFIED_FILE`, then pass | Every enumerated path is measured or a registered exclusion | Unknown-path cases; Red: skipped new roots incorrectly passed; Green: all selected cases pass in the 90-test checker suite |
+| Crate lockfile and native Xcode project / scheme files | Check their oversized generated fixtures | Pass with exclusions counted | Configuration exclusions remain explicit and observable | `crates 锁文件与 native 工程配置作为已登记排除计数`; Red: skipped new roots incorrectly passed; Green: all selected cases pass in the 90-test checker suite |
+| Native application property list (`.plist`, 2026-10-07 icon fix) | Enumerate a manifest fixture and run the checker | Pass and count the manifest in `excluded` | The checker explicitly classifies platform configuration; source caps and unknown-suffix rejection remain unchanged | Red: `.plist` case exited 1; Green: both `登记的排除类别 …` cases passed with the counted exclusion; all 91 checker cases passed in the full script routing |
+
+Property-list registration verification (2026-10-07, repository root,
+Node 24.18.0): `npm test -- scripts/check-file-size.test.ts -t
+'登记的排除类别'` first failed the `.plist` case, then passed both cases
+after registering the suffix. `npm run check:size && npm test -- scripts`
+passed 682 source paths, 65 counted exclusions and 314 tests in 15 files.
+The first sandboxed script run failed 17 tests involving process identity
+or subprocess supervision; repeating the same route outside that sandbox
+passed every test. `sh scripts/check-static.sh` and `git diff --check`
+passed. The native icon regression and build checks are recorded in
+[Feature Parity](../swiftui-react-flow-feature-parity.md#原生应用图标修复状态与不变量2026-10-07).
+
+Retries are represented by repair and recheck; this stateless command has
+no asynchronous completion or persistent retry owner. Existing tests own
+the effective-index, grandfathering, Git-ignore, non-regular file and path
+encoding transitions; this change does not alter those contracts.
+
+Verification (2026-10-04, repository root, Node 24.18.0): before the
+implementation, `npm test -- scripts/check-file-size.test.ts -t
+'crates|native|迁出'` failed all 10 selected cases for the expected missing
+enumeration. After implementation, `npm test --
+scripts/check-file-size.test.ts` passed 90 tests; focused Prettier and ESLint
+checks passed with zero warnings. Full `check:size` and script routing are
+recorded with the integrated merge verification after conflict resolution.
+This command tests generated files in isolated Git repositories; it does
+not assert prose or physical sizes of versioned repository files.
 
 The initial baseline is empty. At rule adoption, commit
 `0633f92315942aae4230d039112b7aa0c25f7077`, four source files were over limit:

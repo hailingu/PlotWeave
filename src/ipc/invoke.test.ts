@@ -7,7 +7,7 @@
  * 行为，编排型集成测试（projectStore.tauri、useHomeActionFeedback）因此
  * 改在 ipcInvoke 入口拦截，见各测试文件。
  */
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import { IPC_COMMANDS } from './commands'
 import { ipcInvoke } from './invoke'
@@ -15,6 +15,8 @@ import { ipcInvoke } from './invoke'
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (cmd: string, args?: unknown) => ({ cmd, args })),
 }))
+
+afterEach(() => vi.unstubAllGlobals())
 
 describe('ipcInvoke 转发契约', () => {
   it('命令名与参数原样转发', async () => {
@@ -25,5 +27,32 @@ describe('ipcInvoke 转发契约', () => {
   it('args 省略时以单参转发，不显式传 undefined', async () => {
     await ipcInvoke(IPC_COMMANDS.loadPrefs)
     expect(invoke).toHaveBeenCalledWith('load_prefs')
+  })
+})
+
+/** Swift 宿主直达 typed IPC 时仍须保持原生能力不可用的可见失败。 */
+describe('ipcInvoke 宿主边界', () => {
+  it('Swift 有效桥执行生产命令，返回原生结果且不触及 Tauri', async () => {
+    const postMessage = vi.fn().mockResolvedValue({ ok: { native: true } })
+    vi.stubGlobal(
+      'window',
+      Object.assign(new EventTarget(), {
+        __pwNativeHost: { kind: 'swift', protocolVersion: 1, sessionId: 's1' },
+        webkit: { messageHandlers: { plotweaveHost: { postMessage } } },
+      }),
+    )
+    vi.mocked(invoke).mockClear()
+    await expect(ipcInvoke(IPC_COMMANDS.loadPrefs)).resolves.toEqual({
+      native: true,
+    })
+    expect(postMessage).toHaveBeenCalledOnce()
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('Swift 的直接 IPC 调用拒绝，携带稳定错误码，不加载 Tauri 传输', async () => {
+    vi.stubGlobal('window', { __pwNativeHost: { kind: 'swift' } })
+    await expect(ipcInvoke(IPC_COMMANDS.loadPrefs)).rejects.toMatchObject({
+      code: 'PW_HOST_COMMAND_UNAVAILABLE',
+    })
   })
 })

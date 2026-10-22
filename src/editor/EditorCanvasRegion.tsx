@@ -6,43 +6,34 @@
  * 布局层下传的这些成员引用保持稳定，整个 ReactFlow 子树跳过执行；节点/
  * 连线/选中变化仍经 doc 与 displayNodes 正常触发改区。
  */
-import { memo, useState, type RefObject } from 'react'
+import {
+  memo,
+  Profiler,
+  useCallback,
+  useState,
+  type MouseEvent,
+  type RefObject,
+} from 'react'
+import { isSwiftHost } from '../platform/hostEnvironment'
 import {
   Background,
   BackgroundVariant,
   Controls,
   ReactFlow,
-  type EdgeTypes,
-  type NodeTypes,
 } from '@xyflow/react'
-import { SceneNode } from './nodes/SceneNode'
-import { DialogueNode } from './nodes/DialogueNode'
-import { BeatNode } from './nodes/BeatNode'
-import { BranchNode } from './nodes/BranchNode'
-import { ShotNode } from './nodes/ShotNode'
-import { ImageNode } from './nodes/ImageNode'
-import { BranchEdge } from './edges/BranchEdge'
+import { canvasNodeTypes, canvasEdgeTypes } from './canvasRegistry'
 import { CanvasAlignmentControls } from './CanvasAlignmentControls'
 import { CANVAS_GRID_SIZE } from './canvasAlignment'
 import type { EditorGraphActions } from './useEditorGraphActions'
 import type { EditorPersistence } from './useEditorPersistence'
 import type { CanvasView } from './useCanvasView'
-import type { EditorDocument, EditorProjectContent } from './useEditorDocument'
-
-/** 画布节点类型注册：索引卡 / 对白 / 节奏卡 / 分支 / 分镜卡 / 图片节点（docs/ui-design.md §4.2/§13）。 */
-const nodeTypes: NodeTypes = {
-  scene: SceneNode,
-  dialogue: DialogueNode,
-  beat: BeatNode,
-  branch: BranchNode,
-  shot: ShotNode,
-  image: ImageNode,
-}
-
-/** 连线类型注册：branch = 品牌渐变 + 选项胶囊；sequence 用默认贝塞尔加样式类。 */
-const edgeTypes: EdgeTypes = {
-  branch: BranchEdge,
-}
+import type { EditorDocument } from './useEditorDocument'
+import { useCanvasPerformance } from './useCanvasPerformance'
+import {
+  CanvasPerformancePanel,
+  CanvasPerformanceToggle,
+} from './CanvasPerformancePanel'
+import './canvasControls.css'
 
 /** 横纵轴吸附间距与背景点阵共用画布单位，缩放时保持同一网格。 */
 const CANVAS_SNAP_GRID: [number, number] = [CANVAS_GRID_SIZE, CANVAS_GRID_SIZE]
@@ -55,8 +46,8 @@ const CANVAS_SNAP_GRID: [number, number] = [CANVAS_GRID_SIZE, CANVAS_GRID_SIZE]
  * 函数同步登记。
  */
 export interface EditorCanvasRegionProps {
-  /** 打开的项目：视口决定首开 fitView 与 defaultViewport。 */
-  readonly project: EditorProjectContent
+  /** 打开时的视口种子；项目名等无关元数据不进入画布 memo 边界。 */
+  readonly viewport: EditorDocument['viewport']
   /** 画布容器：ReactFlow 挂载点。 */
   readonly canvasRef: RefObject<HTMLDivElement>
   /** 会话文档：节点/连线状态与写通道（useEditorDocument 按字段 memo）。 */
@@ -69,6 +60,8 @@ export interface EditorCanvasRegionProps {
   /** 连线实时校验与落线（useConnectionRules）。 */
   readonly isValidConnection: EditorGraphActions['connection']['isValidConnection']
   readonly onConnect: EditorGraphActions['connection']['onConnect']
+  /** 框架节点变更统一经过位置历史入口，键盘移动每批一步。 */
+  readonly onNodesChange: EditorGraphActions['drag']['onNodesChange']
   /** 节点拖拽历史（useNodeDragHistory）：整段拖拽记一步撤销。 */
   readonly onNodeDragStart: EditorGraphActions['drag']['onNodeDragStart']
   readonly onNodeDragStop: EditorGraphActions['drag']['onNodeDragStop']
@@ -82,64 +75,223 @@ export interface EditorCanvasRegionProps {
   readonly onAlignNodes: EditorGraphActions['alignment']['onAlignNodes']
   /** 视口落定持久化（useEditorPersistence，§3 视口随文档落盘）。 */
   readonly onMoveEnd: EditorPersistence['onMoveEnd']
+  /** 原生版普通节点点击：请求对应属性，不接管框架选择或视口。 */
+  readonly onInspectNode: (id: string) => void
+  /** 原生版空白点击：清理属性目标，不展开或切换右栏。 */
+  readonly onClearNodeInspector: () => void
 }
 
 /** 画布容器与 ReactFlow 装配；文档变化经 doc/displayNodes 穿透 memo 边界。 */
 function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
-  const { project, doc } = props
   const [snapToGrid, setSnapToGrid] = useState(true)
+  const swiftHost = isSwiftHost()
+  const perf = useCanvasPerformance({
+    canvas: 'editor',
+    nodeCount: props.displayNodes.length,
+    edgeCount: props.doc.edges.length,
+    onNodesChange: props.onNodesChange,
+    onNodeDragStart: props.onNodeDragStart,
+    onNodeDragStop: props.onNodeDragStop,
+    canvasRef: props.canvasRef,
+  })
+  const inspection = useCanvasInspectionHandlers(
+    props.onInspectNode,
+    props.onClearNodeInspector,
+  )
   return (
     <div
-      className="canvas-root"
+      className={swiftHost ? 'canvas-root is-swift' : 'canvas-root'}
+      data-canvas-effects={perf.renderingMode}
       ref={props.canvasRef}
       onDragOver={props.onCanvasDragOver}
       onDrop={props.onCanvasDrop}
     >
-      <ReactFlow
-        nodes={props.displayNodes}
-        snapToGrid={snapToGrid}
-        snapGrid={CANVAS_SNAP_GRID}
-        edges={doc.edges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        proOptions={{ hideAttribution: true }}
-        onNodesChange={doc.onNodesChange}
-        onEdgesChange={doc.onEdgesChange}
-        onConnect={props.onConnect}
-        onNodeDragStart={props.onNodeDragStart}
-        onNodeDragStop={props.onNodeDragStop}
-        onNodeContextMenu={props.onNodeContextMenu}
-        onEdgeContextMenu={props.onEdgeContextMenu}
-        onPaneContextMenu={props.onPaneContextMenu}
-        isValidConnection={props.isValidConnection}
-        /* 删除统一走命令栈（含连线清理），禁用内置 Delete 行为 */
-        deleteKeyCode={null}
-        /* 有持久化视口则恢复，否则首开 fitView（§3 视口随文档持久化） */
-        {...(project.viewport !== undefined && {
-          defaultViewport: project.viewport,
-        })}
-        fitView={!project.viewport}
-        onMoveEnd={props.onMoveEnd}
-      >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={CANVAS_GRID_SIZE}
-          size={1}
-          color="var(--canvas-dot)"
-        />
-        <CanvasAlignmentControls
-          selectedCount={doc.nodes.filter((node) => node.selected).length}
-          onAlignNodes={props.onAlignNodes}
-        />
-        <CanvasLayoutControl
-          disabled={doc.nodes.length === 0}
+      <Profiler id="canvas" onRender={perf.onRender}>
+        <CanvasFlow
+          viewport={props.viewport}
+          doc={props.doc}
+          displayNodes={props.displayNodes}
+          inspection={inspection}
+          onConnect={props.onConnect}
+          onNodeContextMenu={props.onNodeContextMenu}
+          onEdgeContextMenu={props.onEdgeContextMenu}
+          onPaneContextMenu={props.onPaneContextMenu}
+          isValidConnection={props.isValidConnection}
+          onMoveEnd={props.onMoveEnd}
           onAutoLayout={props.onAutoLayout}
+          onAlignNodes={props.onAlignNodes}
           snapToGrid={snapToGrid}
+          swiftHost={swiftHost}
           onToggleSnap={() => setSnapToGrid((enabled) => !enabled)}
+          perf={perf}
         />
-      </ReactFlow>
+      </Profiler>
     </div>
   )
+}
+
+/** ReactFlow 实际消费的输入；类型声明独立于组件执行体。 */
+type CanvasFlowProps = Pick<
+  EditorCanvasRegionProps,
+  | 'viewport'
+  | 'doc'
+  | 'displayNodes'
+  | 'onConnect'
+  | 'onNodeContextMenu'
+  | 'onEdgeContextMenu'
+  | 'onPaneContextMenu'
+  | 'isValidConnection'
+  | 'onMoveEnd'
+  | 'onAutoLayout'
+  | 'onAlignNodes'
+> & {
+  readonly inspection: ReturnType<typeof useCanvasInspectionHandlers>
+  readonly snapToGrid: boolean
+  readonly swiftHost: boolean
+  readonly onToggleSnap: () => void
+  readonly perf: ReturnType<typeof useCanvasPerformance>
+}
+
+/** 框架接线与装饰分开，采样开关不会改变 React Flow 的挂载身份。 */
+function CanvasFlow({
+  viewport,
+  doc,
+  displayNodes,
+  inspection,
+  onConnect,
+  onNodeContextMenu,
+  onEdgeContextMenu,
+  onPaneContextMenu,
+  isValidConnection,
+  onMoveEnd,
+  onAutoLayout,
+  onAlignNodes,
+  snapToGrid,
+  swiftHost,
+  onToggleSnap,
+  perf,
+}: CanvasFlowProps) {
+  return (
+    <ReactFlow
+      nodes={displayNodes}
+      snapToGrid={snapToGrid}
+      snapGrid={CANVAS_SNAP_GRID}
+      edges={doc.edges}
+      nodeTypes={canvasNodeTypes}
+      edgeTypes={canvasEdgeTypes}
+      proOptions={{ hideAttribution: true }}
+      onNodeClick={inspection.onNodeClick}
+      onPaneClick={inspection.onPaneClick}
+      onNodesChange={perf.onNodesChange}
+      onEdgesChange={doc.onEdgesChange}
+      onConnect={onConnect}
+      {...(perf.onNodeDragStart && { onNodeDragStart: perf.onNodeDragStart })}
+      {...(perf.onNodeDragStop && { onNodeDragStop: perf.onNodeDragStop })}
+      {...(perf.onNodeDrag && { onNodeDrag: perf.onNodeDrag })}
+      onNodeContextMenu={onNodeContextMenu}
+      onEdgeContextMenu={onEdgeContextMenu}
+      onPaneContextMenu={onPaneContextMenu}
+      isValidConnection={isValidConnection}
+      /* 删除统一走命令栈（含连线清理），禁用内置 Delete 行为 */
+      deleteKeyCode={null}
+      /* 有持久化视口则恢复，否则首开 fitView（§3 视口随文档持久化） */
+      {...(viewport !== undefined && {
+        defaultViewport: viewport,
+      })}
+      fitView={!viewport}
+      onMoveEnd={onMoveEnd}
+    >
+      <CanvasDecorations
+        doc={doc}
+        onAutoLayout={onAutoLayout}
+        onAlignNodes={onAlignNodes}
+        snapToGrid={snapToGrid}
+        swiftHost={swiftHost}
+        onToggleSnap={onToggleSnap}
+        perf={perf}
+      />
+    </ReactFlow>
+  )
+}
+
+/** 控件与诊断面板只消费展示所需值，不接管文档或持久化。 */
+function CanvasDecorations({
+  doc,
+  onAutoLayout,
+  onAlignNodes,
+  snapToGrid,
+  swiftHost,
+  onToggleSnap,
+  perf,
+}: Pick<EditorCanvasRegionProps, 'doc' | 'onAutoLayout' | 'onAlignNodes'> & {
+  readonly snapToGrid: boolean
+  readonly swiftHost: boolean
+  readonly onToggleSnap: () => void
+  readonly perf: ReturnType<typeof useCanvasPerformance>
+}) {
+  return (
+    <>
+      <Background
+        variant={BackgroundVariant.Dots}
+        gap={CANVAS_GRID_SIZE}
+        size={1}
+        color="var(--canvas-dot)"
+      />
+      <CanvasAlignmentControls
+        selectedCount={doc.nodes.filter((node) => node.selected).length}
+        autoLayoutDisabled={doc.nodes.length === 0}
+        onAutoLayout={onAutoLayout}
+        onAlignNodes={onAlignNodes}
+      />
+      <CanvasLayoutControl
+        nativeZoom={swiftHost}
+        snapToGrid={snapToGrid}
+        onToggleSnap={onToggleSnap}
+        performanceEnabled={perf.enabled}
+        onTogglePerformance={perf.toggle}
+      />
+      <CanvasPerformancePanel
+        enabled={perf.enabled}
+        report={perf.report}
+        renderingMode={perf.renderingMode}
+        onToggleEffects={perf.toggleEffects}
+      />
+    </>
+  )
+}
+
+/** 点击接线不随位置帧换引用，避免 React Flow 重渲染全部节点；动作变化仍更新闭包。 */
+function useCanvasInspectionHandlers(
+  inspect: EditorCanvasRegionProps['onInspectNode'],
+  clear: EditorCanvasRegionProps['onClearNodeInspector'],
+) {
+  const onNodeClick = useCallback(
+    (event: MouseEvent, node: { readonly id: string }) =>
+      requestNodeInspector(event, node.id, inspect),
+    [inspect],
+  )
+  const onPaneClick = useCallback(() => {
+    if (isSwiftHost()) clear()
+  }, [clear])
+  return { onNodeClick, onPaneClick }
+}
+
+/** 普通原生主体点击打开属性；多选、文本编辑和连接端口仍由原交互所有者处理。 */
+function requestNodeInspector(
+  event: MouseEvent,
+  id: string,
+  inspect: (id: string) => void,
+): void {
+  if (!isSwiftHost() || event.metaKey || event.ctrlKey || event.shiftKey) return
+  const target = event.target
+  if (
+    target instanceof Element &&
+    target.closest(
+      'input,textarea,select,[contenteditable="true"],.react-flow__handle,button:not(.pw-editable)',
+    )
+  )
+    return
+  inspect(id)
 }
 
 /** memo 隔离边界（issue #103）：与画布输入无关的状态变化不重执行本区域。
@@ -147,25 +299,35 @@ function EditorCanvasRegionImpl(props: EditorCanvasRegionProps) {
  * EditorCanvasRegion 引用。 */
 export const EditorCanvasRegion = memo(EditorCanvasRegionImpl)
 
-/** 自动排布入口独立于对齐工具条；空画布禁用。 */
+/** 原生底栏拥有缩放与适配；锁定和吸附仍复用 React Flow 的会话交互。 */
 function CanvasLayoutControl({
-  disabled,
-  onAutoLayout,
+  nativeZoom,
   snapToGrid,
   onToggleSnap,
+  performanceEnabled,
+  onTogglePerformance,
 }: {
-  readonly disabled: boolean
-  readonly onAutoLayout: () => void
+  /** 仅 Swift 底栏提供缩放，其他宿主保留 Web 入口。 */
+  readonly nativeZoom: boolean
   readonly snapToGrid: boolean
   readonly onToggleSnap: () => void
+  readonly performanceEnabled: boolean
+  readonly onTogglePerformance: () => void
 }) {
+  const snapLabel = `网格吸附：${snapToGrid ? '开' : '关'}`
   return (
-    <Controls>
+    /* Controls 不转发 role；清空其无 role 容器的默认标签，保留各按钮名称。 */
+    <Controls
+      aria-label=""
+      showZoom={!nativeZoom}
+      showFitView={!nativeZoom}
+      orientation={nativeZoom ? 'horizontal' : 'vertical'}
+    >
       <button
         type="button"
         className="react-flow__controls-button"
-        title="网格吸附"
-        aria-label="网格吸附"
+        title={snapLabel}
+        aria-label={snapLabel}
         aria-pressed={snapToGrid}
         onClick={onToggleSnap}
       >
@@ -181,36 +343,10 @@ function CanvasLayoutControl({
           <path d="M8 3v18M16 3v18M3 8h18M3 16h18" />
         </svg>
       </button>
-      <button
-        type="button"
-        className="react-flow__controls-button"
-        title="自动排布"
-        aria-label="自动排布"
-        disabled={disabled}
-        onClick={onAutoLayout}
-      >
-        <AutoLayoutIcon />
-      </button>
+      <CanvasPerformanceToggle
+        enabled={performanceEnabled}
+        onToggle={onTogglePerformance}
+      />
     </Controls>
-  )
-}
-
-/** 自动排布按钮图标：三卡对齐 + 归位箭头，表达「整理布局」。 */
-function AutoLayoutIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      aria-hidden="true"
-    >
-      <rect x="3" y="3" width="7" height="6" rx="1.2" />
-      <rect x="3" y="12" width="7" height="6" rx="1.2" />
-      <path d="M14 5h7M14 9h4" strokeLinecap="round" />
-      <path d="M14 14h7M14 18h4" strokeLinecap="round" />
-    </svg>
   )
 }

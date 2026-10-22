@@ -18,6 +18,9 @@ export interface ProjectContent {
   /** ISO 8601；新建项目缺省时首次落盘补盖（副本显式 undefined =
    * 不继承创建时间，落盘补盖）。 */
   createdAt?: string | undefined
+  /** 已加载文档的规范化修改时间，供只读导出保真；保存仍由序列化器盖戳。
+   * 缺省/显式 undefined = 尚无文档时间元数据（兼容旧会话调用）。 */
+  updatedAt?: string | undefined
   nodes: SessionNode[]
   edges: SessionEdge[]
   settings: ProjectSettings

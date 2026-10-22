@@ -3,11 +3,14 @@
  * 双击进入编辑（节点名称），或单击进入（工具栏项目名，singleClick）；
  * Enter/失焦提交、Esc 取消；空值不提交。非编辑态是原生 button：
  * Tab 可聚焦，Enter/Space 进入编辑（S1082/S6848）。
- * 组合输入天然安全：编辑值只落本地 draft，提交在失焦/Enter（issue #42）。
+ * 组合输入安全：编辑值只落本地 draft，提交在失焦/Enter（issue #42）；
+ * 组合在途的 Enter/Esc 归输入法（确认候选/取消合成），不提交也不退出
+ * 编辑，含 WebKit 晚于 compositionend 到达的 keyCode 229（issue #570）。
  * 自 NodeSettingsPanel.tsx 外置（issue #39）：改名是卡片/工具栏通用交互，
  * 不属设置面板域；NodeSettingsPanel 经 re-export 保持既有导入路径。
  */
 import { useState } from 'react'
+import { isCompositionKey } from '../../../platform/compositionKey'
 
 /** 内联改名组件（交互语义见模块头）：双击（节点名）或单击（工具栏项目名）
  * 进入编辑，Enter/失焦提交、Esc 取消，空值不提交。 */
@@ -66,6 +69,7 @@ export function EditableName({
         if (next && next !== value) onChange(next)
       }}
       onKeyDown={(e) => {
+        if (isCompositionKey(e.nativeEvent)) return
         if (e.key === 'Enter') e.currentTarget.blur()
         if (e.key === 'Escape') {
           setDraft(value)

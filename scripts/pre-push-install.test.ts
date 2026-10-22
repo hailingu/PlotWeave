@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import {
   existsSync,
+  copyFileSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -21,6 +22,7 @@ function writeSurvivingDescendant(root: string, exitCode: number): void {
     resolve(root, 'ci'),
     String.raw`
 require('node:fs').writeFileSync('install.pid', String(process.pid))
+require('node:fs').writeFileSync('install.group', String(process.ppid))
 const descendant = require('node:child_process').spawn(process.execPath, ['-e', [
   "process.on('SIGTERM', () => require('node:fs').writeFileSync('cleanup.started', 'ready'))",
   "require('node:fs').writeFileSync('descendant.pid', String(process.pid))",
@@ -83,6 +85,11 @@ syncBuiltinESMExports()`,
 
 /** 失败的回归也只清理自己创建的安装组，防止后台夹具泄漏。 */
 function killInstallFixture(root: string): void {
+  const groupPath = resolve(root, 'install.group')
+  if (existsSync(groupPath)) {
+    signalFixtureProcess(-Number(readFileSync(groupPath, 'utf8')), 'SIGKILL')
+    return
+  }
   const pidPath = resolve(root, 'install.pid')
   if (existsSync(pidPath)) {
     signalFixtureProcess(-Number(readFileSync(pidPath, 'utf8')), 'SIGKILL')
@@ -137,6 +144,7 @@ it.each(['SIGINT', 'SIGTERM', 'SIGHUP'] as const)(
       resolve(root, 'ci'),
       String.raw`
 require('node:fs').writeFileSync('install.pid', String(process.pid))
+require('node:fs').writeFileSync('install.group', String(process.ppid))
 process.on('SIGTERM', () => {})
 const descendant = require('node:child_process').spawn(process.execPath, ['-e', [
   "process.on('SIGTERM', () => {})",
@@ -170,10 +178,7 @@ setTimeout(() => process.exit(0), 5000)`,
         .toBe(false)
     } finally {
       child.kill('SIGTERM')
-      const pidPath = resolve(root, 'install.pid')
-      if (existsSync(pidPath)) {
-        signalFixtureProcess(-Number(readFileSync(pidPath, 'utf8')), 'SIGKILL')
-      }
+      killInstallFixture(root)
       await completion
     }
   },
@@ -194,6 +199,81 @@ it('npm 无法启动时立即失败且不伪装为安装超时（issue #462）',
   expect(result.stderr).toContain('[PRE_PUSH_INSTALL_START_FAILED] ENOENT')
   expect(result.stderr).not.toContain('[PRE_PUSH_INSTALL_TIMEOUT]')
 })
+
+it('watchdog 缺失时不启动 npm 并失败关闭（issue #497）', () => {
+  const { root, env } = prepareInstallEnvironment()
+  copyFileSync(runner, resolve(root, 'pre-push-install.mjs'))
+  copyFileSync(
+    resolve(import.meta.dirname, 'pre-push-install-launcher.mjs'),
+    resolve(root, 'pre-push-install-launcher.mjs'),
+  )
+  writeFileSync(
+    resolve(root, 'ci'),
+    "require('node:fs').writeFileSync('started', 'yes')",
+  )
+  const result = spawnSync(
+    process.execPath,
+    [resolve(root, 'pre-push-install.mjs')],
+    {
+      cwd: root,
+      env,
+      encoding: 'utf8',
+      timeout: 3000,
+    },
+  )
+  expect(result.error).toBeUndefined()
+  expect(result.status).toBe(1)
+  // Stable diagnostic contract: quality-gate-push.md, issue #497.
+  expect(result.stderr).toContain('[PRE_PUSH_INSTALL_WATCHDOG_FAILED]')
+  expect(existsSync(resolve(root, 'started'))).toBe(false)
+})
+
+it(
+  '监督器被 SIGSTOP 后期限仍终止安装组（issue #497）',
+  { timeout: 15_000 },
+  async () => {
+    const { root, env } = prepareInstallEnvironment()
+    env.PLOTWEAVE_NPM_INSTALL_TIMEOUT = '2'
+    writeFileSync(
+      resolve(root, 'ci'),
+      String.raw`
+require('node:fs').writeFileSync('install.pid', String(process.pid))
+require('node:fs').writeFileSync('install.group', String(process.ppid))
+process.on('SIGTERM', () => {})
+process.stdout.write('ready')
+setInterval(() => {}, 1000)`,
+    )
+    const child = spawn(process.execPath, [runner], { cwd: root, env })
+    const completion = once(child, 'close')
+    let stderr = ''
+    child.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString()
+    })
+    try {
+      await once(child.stdout, 'data', { signal: AbortSignal.timeout(5000) })
+      child.kill('SIGSTOP')
+      const completed = await Promise.race([
+        completion.then(() => true),
+        new Promise<boolean>((resolve) =>
+          setTimeout(() => resolve(false), 5000),
+        ),
+      ])
+      expect(
+        completed,
+        '独立期限必须在 2 秒期限和 1 秒清理宽限后结束监督器',
+      ).toBe(true)
+      expect(child.exitCode === 0 && child.signalCode === null).toBe(false)
+      // Stable diagnostic contract: quality-gate-push.md, issue #497.
+      expect(stderr).toContain('[PRE_PUSH_INSTALL_TIMEOUT]')
+      const pid = Number(readFileSync(resolve(root, 'install.pid'), 'utf8'))
+      await expect.poll(() => signalFixtureProcess(pid, 0)).toBe(false)
+    } finally {
+      child.kill('SIGKILL')
+      killInstallFixture(root)
+      await completion
+    }
+  },
+)
 
 it.each([0, 7])(
   'npm 退出码 %s 必须在同组后台后代结束后才返回（评审 4162621737）',

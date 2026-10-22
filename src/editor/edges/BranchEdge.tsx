@@ -1,4 +1,3 @@
-import { useId } from 'react'
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -23,10 +22,9 @@ export interface BranchEdgeData extends Record<string, unknown> {
 export type BranchFlowEdge = Edge<BranchEdgeData, 'branch'>
 
 /**
- * 分支连线（docs/ui-design.md §4.4）：品牌渐变描边的贝塞尔曲线 +
+ * 分支连线（docs/ui-design.md §4.4）：中性／选中蓝色的贝塞尔曲线 +
  * 线中点选项胶囊。文案经 useInternalNode 订阅源分支节点实时派生——
  * 源缺失/非分支/悬空句柄（指向已删选项）回退空串，胶囊隐藏。
- * 渐变以各边独立 id 的 linearGradient 定义，引用品牌色语义令牌。
  */
 export function BranchEdge({
   id,
@@ -38,8 +36,8 @@ export function BranchEdge({
   sourcePosition,
   targetPosition,
   markerEnd,
+  selected,
 }: EdgeProps<BranchFlowEdge>) {
-  const gradientId = `pw-branch-g-${useId().replace(/:/g, '')}`
   const [path, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
@@ -59,24 +57,21 @@ export function BranchEdge({
 
   return (
     <>
-      <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stopColor="var(--accent-alt)" />
-          <stop offset="1" stopColor="var(--accent)" />
-        </linearGradient>
-      </defs>
       {/* xyflow 库 props（issue #231）：markerEnd 可显式 undefined（无端点
           标记 = 缺省），条件展开而非传入以匹配库类型 */}
       <BaseEdge
         id={id}
         path={path}
         {...(markerEnd !== undefined && { markerEnd })}
-        style={{ stroke: `url(#${gradientId})`, strokeWidth: 1.5 }}
+        style={{
+          stroke: selected ? 'var(--node-accent)' : 'var(--edge-sequence)',
+          strokeWidth: selected ? 2 : 1.5,
+        }}
       />
       {optionLabel && (
         <EdgeLabelRenderer>
           <div
-            className="pw-edge-label"
+            className={`pw-edge-label${selected ? ' pw-edge-label-active' : ''}`}
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
             }}

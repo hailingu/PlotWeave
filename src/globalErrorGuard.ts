@@ -12,7 +12,10 @@
  * 调用不会触发 unhandledrejection（引擎语义），因此正常路径零新增噪声。
  */
 
+import { reportDiagnostic } from './diagnostics'
+
 /** 诊断机器码（UPPER_SNAKE）：区分三类全局失败通道。 */
+
 export type GlobalErrorCode =
   'UNHANDLED_REJECTION' | 'UNCAUGHT_ERROR' | 'BOOTSTRAP_LOAD_FAILED'
 
@@ -40,12 +43,15 @@ function describe(value: unknown): string {
 
 /** 结构化诊断输出（集中一处便于测试与后续通道演进）。 */
 function report(label: string, diagnostic: GlobalErrorDiagnostic): void {
-  console.error(`[GlobalError] ${label}`, diagnostic)
-}
-
-/** unhandledrejection 事件的最小结构形状（真实事件 + 测试桩共用）。 */
-export interface UnhandledRejectionEventLike {
-  reason: unknown
+  reportDiagnostic(
+    {
+      level: 'ERROR',
+      target: 'plotweave::frontend::global',
+      code: diagnostic.code,
+      message: `[GlobalError] ${label}`,
+    },
+    diagnostic,
+  )
 }
 
 /** 未处理 Promise 拒绝 → 结构化诊断并输出。 */

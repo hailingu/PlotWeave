@@ -4,6 +4,16 @@
 
 ### 10.3 Provider 与模型配置
 
+**最终退出写入资格（[PR #526 R37](../swiftui-react-flow-pr526-fixes.md#反向宿主请求退役与-web-最终退出协调)）**：Swift 开始退出即暂停新 Web 业务及输入，既有密钥加密／状态交付和设置保存仍由原 saver 等待；四源保存与业务／React 提交都空闲才封口，最终批准在途时 `update` 不接纳新设置状态。失败恢复输入、保留已有待存快照并明确重试，不增加配置副本、明文日志或新的密钥草稿持久化。
+
+**编辑期间的保存诊断**（[#594](https://github.com/hailingu/PlotWeave/issues/594)）：500ms 防抖落盘失败立即进入设置 owner 的 `saveError`，Web 与原生只读错误投影同步展示。失败回填仍受最新提交序号守护，保留最新待存快照；Web 的「重试保存」和原生「完成」沿用同一固定点冲刷，分别在当前页恢复或成功后关闭。最新保存成功且无更新待存编辑才清除保存与关闭诊断，旧请求成功/失败不覆盖更新状态。磁盘 schema、串行写入、密钥等待与退出注册不变。
+
+**原生字段提交与投影确认**（[PR #526 R33–R34](../swiftui-react-flow-pr526-fixes.md#设置字段与投影回执)）：原生 `settings.setDefaults` 只携带改动的 `defaultChat` 或 `defaultImage`，也兼容旧式双字段提交；至少一个字段，值仅为字符串或 null，未知字段及空补丁拒绝。缺席字段保留 Web settings owner 当前同步快照的值，null 只清指定项；配置仍由既有保存固定点写入，不改变磁盘 schema。
+
+名称、地址及模型清单是短期普通表单草稿。原生每次编辑在 `settings.patchProvider` 补丁旁携带可选 `edit` 元数据——每字段一个有界正整数编辑身份；Web owner 在同一同步步骤把该身份与被应用的设置快照配对，并在只读投影的对应 provider 上回显 `edits`（仅保留当前 provider 各字段最新身份，provider 删除或 owner 卸载即清理；不携带密钥、不写 `settings.json`）。投影回执替换某字段须同时满足两个条件：值意义上干净（草稿等于前一权威值；模型按逐行去空白语义比较）且该快照的确认严格新于该字段全部待定编辑身份；快照确认达到或超越某字段最新待定身份时清除该待定身份，此后干净字段继续接收外部权威更新。回改原值（A→B→A）后新稿再次等于旧权威值，但旧 B 投影携带的确认落后于待定身份，不能再覆盖新稿；模型的最新确认保留光标所在的原始多行文字与空白。失败保留普通草稿，不自动重放；卡片删除／页面重挂按当前权威值播种；未携带 `edit` 的旧式补丁仍被接受（应用但不记录确认）。密钥保持下述独立保密生命周期。
+
+**字段回改缺陷的修复**（[issue #527](https://github.com/hailingu/PlotWeave/issues/527)、[PR #526 R39](../swiftui-react-flow-pr526-fixes.md#服务文字回改缺陷的后续修复r39)→修复记录）：`39089f7`（R34）引入的值比较保护未覆盖 A→B→A 回改时序，已于 2026-10-14 按上述编辑身份设计修复。最小真实名称／地址 A→B→A 旧投影回归在生产 WK owner 与隔离 Swift `settings.json` 上先红（4 处：字段被旧 B 投影覆盖、磁盘保存非预期文字）后绿；规范化模型列表回改、同值合并确认、三字段交叉与非法元数据拒绝在 Web 与原生边界均有语义回归。磁盘 schema 与密钥生命周期不变；真实中文 IME／VoiceOver 仍属 P5 人工缺口。
+
 BYOK 下 provider 分两层：**内置适配器在代码里，用户配置（含加密后的 API key）在 `settings.json`**。
 
 代码层（不进配置文件的静态定义）：
@@ -54,7 +64,13 @@ interface ProviderSettings {
 > 落地状态（2026-09-04）：已发布的实现收敛为扁平 `AppSettings { providers: ProviderConfig[]; defaultChat: string | null; defaultImage: string | null }`（"providerId:modelId"，§13 图像生成首版随 `defaultImage` 落地）；`ProviderDef`/`ModelDef` 的能力目录与 `selectedModels` 三段结构为目录化演进预留，引入时按下表 §10.5 命令边界对齐。
 ### 10.4 密钥管理
 
+**原生未提交密钥的生命周期**（[PR #526 R28](../swiftui-react-flow-pr526-fixes.md#设置滚动与密钥草稿)）：设置页按 provider ID 持有短期内存草稿；供应商卡片滚动离屏或同页加载区域重建不清稿。整页离开、就绪投影确认供应商删除，以及提交前均清除对应草稿；删除后重现相同 ID 不恢复旧输入，提交失败需重新录入。明文不进入普通字段 patch、只读投影、持久设置或日志；已有密钥只显示配置状态，不回显明文。此处清除指应用状态不再保留该字符串，不承诺 Swift 字符串内存的物理零化。
+
+**原生 Swift 设置根边界**（[PR #526](https://github.com/hailingu/PlotWeave/pull/526)，[修复矩阵 R9](../swiftui-react-flow-pr526-fixes.md)）：只有文件缺失返回空对象；合法 JSON 的数组、null 和标量根与语法损坏同样返回 `PW_PREFS_CORRUPT`，不归一化成默认设置。`load_prefs`、模型凭据读取和旧密文迁移共用 `NativePreferences.load`；未知对象字段仍透传。`save_prefs` 在任何磁盘变更前拒绝非对象载荷（`PW_PREFS_INVALID`）；显式保存有效对象恢复损坏设置时，先将原始字节耐久保存为内容寻址的 `0600` 备份，再原子替换。沿用单 actor 的读改写顺序，不扩展磁盘 schema。
+
 provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal` 模块 AES-256-GCM 加密，明文只在加密/请求的进程内存中出现；历史钥匙串数据保留只读回退，不再写入。**envelope v2**（`pw2:<迭代数>:<provider>:<盐>:<密文>`，[issue #392](https://github.com/hailingu/PlotWeave/issues/392)，已实现）：密钥 = PBKDF2-HMAC-SHA256(应用常数 pepper ‖ IOPlatformUUID, 随机盐, envelope 自述迭代数；封装取 600,000，对齐 OWASP 量级)，并以 provider id 作 AES-GCM AAD 把密文绑定到所属条目——密文原样搬到其它 provider 名下解密失败；解密按 envelope 自述迭代数派生，超上界（5,000,000）按格式损坏拒绝以防伪造密文的计算 DoS。旧版 `pw1:`（单次 SHA-256 派生、无 AAD）保持可解以兼容存量密文；读取成功后**就地重封装**为 v2 并原子写回——写回与 `save_prefs` 共用进程内设置写互斥并在锁内重读、只改写本次成功解开的那个密文（磁盘值已变即跳过），不覆盖并发保存，迁移 best-effort（失败仅留诊断，不影响请求）；前端归一化对 `pw1:`/`pw2:` 两个前缀均透传。**机器标识不可用即硬失败**（[issue #260](https://github.com/hailingu/PlotWeave/issues/260)，已实现）：ioreg 执行失败、非零退出（先于 stdout 解析拒绝——被终止进程的截断输出在历史宽松提取语义下仍可能产出无意义材料，PR #283 评审）或输出不可解析时 `machine_material` 返回可诊断错误，`seal_for`/`open_for` 直接拒绝——不得静默回退用户名等可猜材料充当机器绑定；仅成功结果进入进程内缓存，失败不缓存、下次调用重新探测即可恢复；诊断不含用户名、机器标识、密钥或密文。历史弱材料密文兼容策略：修复前在 ioreg 失败窗口以用户名回退封装的 `pw1:` 密文不提供弱材料恢复通道，正常环境下解密按「密文被篡改或非本机数据」同款拒绝，用户在设置页重新录入 API key；成功路径的 IOPlatformUUID 提取语义保持不变，存量机器绑定密文不受影响。
+
+**封装密钥的威胁模型边界**（[issue #520](https://github.com/hailingu/PlotWeave/issues/520)，已知边界）：`pw1:`/`pw2:` envelope 的密钥派生材料是应用常数 pepper（随二进制分发，单独存在不构成密钥）与 IOPlatformUUID（同用户进程经 `ioreg` 同样可读），防的是 `settings.json` 离线泄露、云同步拷贝与他机解密；对以同一用户身份运行的恶意软件无防御——它与 `docs/ui-design.md` §8.2 凭据条目的声明一致，Swift 侧 `NativeSeal.swift` 对齐同一合同（同一 pepper、envelope 格式与机器标识探测语义）。迭代拉伸与 AAD 绑定是该模型内的纵深防御，不改变边界。若将来需要防御同用户恶意软件，须改用系统钥匙串或用户口令派生，作为新功能 issue 另行立项，不在本边界内修补。
 
 **带凭据请求的传输策略**（[issue #136](https://github.com/hailingu/PlotWeave/issues/136)，已实现）：聊天与生图的 provider POST 共用 Rust `provider_transport`，发送前校验最终端点。远程服务（含局域网）必须使用 HTTPS；HTTP 仅允许 URL 解析后明确为 `localhost`、IPv4 `127.0.0.0/8` 或 IPv6 `::1` 的回环目标，不通过 DNS 为其他域名授予例外。自定义 HTTPS 域名不绑定 provider id，沿用客户端的证书校验。每跳重定向重新执行相同检查，且任何 HTTPS → HTTP 降级均拒绝（包括回环目标）；保留 reqwest 的默认 10 跳限制及跨 host/port 敏感头剥离，不恢复已移除的 Bearer。拒绝通过既有请求错误展示，策略诊断不含原始 URL 或凭据。存量 HTTP 配置保留，用户可在设置页改为 HTTPS 或回环网关后重试；不改变 `settings.json` 格式，也不在加载/保存时替换地址。模型返回的图片下载 URL 仍执行 §13 的独立公网目标策略，不采用回环例外。
 
@@ -86,3 +102,9 @@ provider 的 API key 以**密文 `keyEnc`** 存于 provider 配置：Rust `seal`
 验证记录（2026-10-01）：7 项新增权限回归与旧密文迁移的权限断言先红后绿；红相文件 mode 为 `0644`，预期为 `0600`，且注入复用备份收权失败时保存未拒绝。绿相完整 Rust 检查通过：在 `src-tauri` 执行 `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，607 项单元测试及全部集成目标通过，包含共用备份、模块图、迁移失败和并发保存回归。初次沙箱内 `cargo test --lib prefs::` 的 5 项 HTTP 夹具因禁止绑定环回端口失败，允许本地端口后完整测试通过。文档未配置自动行为检查；按创建／复用权限、备份顺序、两条写入口及历史／平台边界作结构化复核。
 
 维护性复核：受影响文件均低于 800 行，新增／修改执行单元均低于 80 代码行。`store/persist.rs` 为 612 行，越过 600 行讨论阈值：本次仅参数化已有原子写协议，权限策略独立为 27 行叶子模块；保留原协议在同一文件避免拆开目标复核、失败清理与屏障的审阅上下文，没有新增 I/O 协议副本。`library_fs.rs` 610 行仅增加备份默认权限字段，不扩展既有行为。圈复杂度 `N/A — no configured complexity tool`，人工检查执行跨度与嵌套深度。
+
+### 首跳凭据目的地绑定（#653）
+
+聊天与生图均从同一持久化 provider 快照取得目标和密文，调用方 `baseUrl` 只作等价性核对；缺失、损坏、重复或地址不一致的配置在解密／发送前拒绝。已配置的自建 HTTPS 与显式回环 HTTP 保留；Rust 历史 Keychain 只读回退也须先确认已保存目标。设置仍在保存中时，调用方可在保存成功后重新发起请求。
+
+图片下载独立采用 HTTPS、公网地址及每跳固定 DNS 答案的边界（#655），不继承 provider 的本地 HTTP 例外。完整策略、不变量矩阵、验证方法与限制见[模型网络边界](../development/model-network-boundaries.md)。

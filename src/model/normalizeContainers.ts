@@ -19,7 +19,7 @@ import {
   type StoryNode,
   type Viewport,
 } from './document'
-import { normalizeEpisodeTitles } from './legacy'
+import { trimTitleWhitespace } from './titleWhitespace'
 import {
   type BlankKeyRemaps,
   type SettingsBuckets,
@@ -44,6 +44,43 @@ import {
   renumberSeqFields,
 } from './normalizeNodes'
 import { reissueDuplicateNodeIds } from './normalizeEdges'
+
+/** 集标题表归一化（§11.1 键值域，对所有版本统一执行）：JSON 键是字符串，
+ * 只保留「规范十进制正整数键（安全整数范围内）→ 非空白标题」映射——
+ * "01"/"1e0"/" 1" 等非规范书写与规范键折叠到同一集号、转换时按遍历序
+ * 静默覆盖其一，删除并警告；零/负/小数/超安全整数键同论。值为非字符串
+ * 或去空白后为空串的删除并警告（与 set_episode_title 落盘口径一致）。
+ * 数组形态不是 Record：数组下标不参与转换，整体重置为空并警告。 */
+export function normalizeEpisodeTitles(
+  v: unknown,
+  warnings?: string[],
+): Record<number, string> {
+  const out: Record<number, string> = {}
+  if (v === undefined || v === null) return out
+  if (typeof v !== 'object' || Array.isArray(v)) {
+    warnings?.push('episodeTitles 不是普通键值对象，已重置为空 Record')
+    return out
+  }
+  for (const [k, title] of Object.entries(v as Record<string, unknown>)) {
+    if (!/^[1-9]\d*$/.test(k) || !Number.isSafeInteger(Number(k))) {
+      warnings?.push(
+        `episodeTitles 键 "${k}" 不是规范十进制正整数（或超出安全整数范围），已删除`,
+      )
+      continue
+    }
+    if (typeof title !== 'string') {
+      warnings?.push(`episodeTitles["${k}"] 的值不是字符串，已删除`)
+      continue
+    }
+    const trimmed = trimTitleWhitespace(title)
+    if (!trimmed) {
+      warnings?.push(`episodeTitles["${k}"] 的标题去空白后为空，已删除`)
+      continue
+    }
+    out[Number(k)] = trimmed
+  }
+  return out
+}
 
 /** 归一化环境（§11.1 第 2 步元数据修复的外部事实来源）。 */
 export interface NormalizeEnv {
@@ -614,12 +651,7 @@ export function normalizeContainers(
     { viewport, aiRevision, extensions },
     settings,
     assetIndex,
-    // 边界（issue 16）：normalizeEpisodeTitles 返回「正整数键 → 非空标题」
-    // 的普通 Record（键值域已按 §11.1 收口），绑定回文档契约字段
-    normalizeEpisodeTitles(
-      titlesRaw,
-      warnings,
-    ) as unknown as ProjectDocument['episodeTitles'],
+    normalizeEpisodeTitles(titlesRaw, warnings),
   )
   return {
     doc,

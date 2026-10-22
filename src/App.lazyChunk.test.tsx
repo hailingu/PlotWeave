@@ -98,12 +98,9 @@ describe('App（惰性 chunk 加载保留当前界面）', () => {
         'p1',
       )
     })
-    // 越过 React 对已显示边界的 fallback 防闪白节流（~300ms）再观察中间态
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 700))
-    })
-    // chunk 加载中：窗口不得整片空白（fallback null 卸载首页即为回归）
-    expect(screen.getByTestId('home')).toBeTruthy()
+    // act 已排空本次打开操作的 React 工作，chunk 阀门仍保持 pending。
+    // chunk 加载中：窗口不得整片空白（fallback null 隐藏首页即为回归）
+    expect(screen.getByTestId('home').style.display).not.toBe('none')
     expect(screen.queryByTestId('editor')).toBeNull()
 
     // ⌘, 打开设置（设置 mock 即时就绪），视图切到设置
@@ -112,10 +109,7 @@ describe('App（惰性 chunk 加载保留当前界面）', () => {
 
     // 关闭设置：编辑器 chunk 就绪前保留设置界面，不得整窗空白
     fireEvent.click(screen.getByTestId('settings'))
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 700))
-    })
-    expect(screen.getByTestId('settings')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '设置' })).toBeTruthy()
     expect(screen.queryByTestId('editor')).toBeNull()
 
     // chunk 就绪：放行动态导入，关闭生效并切换到编辑器

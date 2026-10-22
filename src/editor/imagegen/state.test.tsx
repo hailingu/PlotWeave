@@ -298,19 +298,22 @@ describe('生成调度：用户取消的失败反馈（issue #160）', () => {
     expect(applyDataPatch).not.toHaveBeenCalled()
   })
 
-  it('取消 IPC 成功：作业清空且无错误条目（正常路径零噪音）', async () => {
-    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
-    vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
-      if (cmd === 'llm_image_generate') return new Promise(() => {})
-      return Promise.resolve({})
-    })
-    setupHarness()
-    void apiRef!.start('img1')
-    await waitFor(() => expect(generateCount()).toBe(1))
-    apiRef!.cancel('img1')
-    await new Promise((r) => setTimeout(r, 0))
-    expect(apiRef!.jobOf('img1')).toBeNull()
-  })
+  it.each([true, false])(
+    '取消 IPC 成功（cancelled=%s）：作业清空且无错误条目',
+    async (cancelled) => {
+      ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+      vi.mocked(tauriInvoke).mockImplementation((cmd: string) => {
+        if (cmd === 'llm_image_generate') return new Promise(() => {})
+        return Promise.resolve({ cancelled })
+      })
+      setupHarness()
+      void apiRef!.start('img1')
+      await waitFor(() => expect(generateCount()).toBe(1))
+      apiRef!.cancel('img1')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(apiRef!.jobOf('img1')).toBeNull()
+    },
+  )
 })
 
 /** 可控 IPC 响应：显式安排生成与取消完成顺序，避免计时器竞态。 */
@@ -397,6 +400,11 @@ describe('生成调度：取消响应身份隔离（PR #200）', () => {
         expect.any(String),
         jobA,
         expect.any(Error),
+        expect.objectContaining({
+          level: 'ERROR',
+          target: 'plotweave::frontend::imagegen',
+          code: 'IMAGE_CANCEL_STALE_FAILED',
+        }),
       )
       await act(async () => settings.resolve(validSettings))
       await waitFor(() => expect(generateCount()).toBe(2))
@@ -506,6 +514,11 @@ describe('生成调度：取消诊断生命周期（PR #200）', () => {
         expect.any(String),
         jobId,
         expect.any(Error),
+        expect.objectContaining({
+          level: 'ERROR',
+          target: 'plotweave::frontend::imagegen',
+          code: 'IMAGE_CANCEL_STALE_FAILED',
+        }),
       )
       await act(async () => h.generations[0].resolve(generatedAsset('pa-a')))
       expect(h.assets.byId).toEqual({})
@@ -640,6 +653,11 @@ describe('生成调度：卸载/删除取消的失败留痕（issue #160）', ()
       expect.stringContaining('卸载取消请求失败'),
       jobId,
       expect.any(Error),
+      expect.objectContaining({
+        level: 'ERROR',
+        target: 'plotweave::frontend::imagegen',
+        code: 'IMAGE_CANCEL_UNMOUNT_FAILED',
+      }),
     )
     errSpy.mockRestore()
   })
@@ -664,6 +682,11 @@ describe('生成调度：卸载/删除取消的失败留痕（issue #160）', ()
       expect.stringContaining('取消请求失败'),
       jobId,
       expect.any(Error),
+      expect.objectContaining({
+        level: 'ERROR',
+        target: 'plotweave::frontend::imagegen',
+        code: 'IMAGE_CANCEL_DELETED_NODE_FAILED',
+      }),
     )
     errSpy.mockRestore()
   })

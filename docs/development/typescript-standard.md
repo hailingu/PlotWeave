@@ -36,6 +36,30 @@ written in English for agent interoperability.
   settings (`npm run build`); do not suppress errors with
   `@ts-ignore`/`@ts-expect-error` without an explanatory comment.
 
+### Structured Diagnostics
+
+Frontend warnings and errors use `src/diagnostics.ts` (issue #686). Callers
+bind an explicit `WARN`/`ERROR` level, domain `target`, and stable machine
+`code` with `createDiagnostic`; dynamic codes use `reportDiagnostic`.
+The common record uses the same `level`, `target`, and `message` field names
+and uppercase level values as the Rust host sink, with an additional `code`.
+
+The console keeps the original prefix as its first argument and every
+original context argument in its original position. The final argument is
+the common record, whose `message` equals that prefix. Existing structured
+payloads keep their own `message`, `code`, `region`, source and stack fields;
+Error objects and other context retain their references. Do not stringify,
+copy, inspect or flatten arbitrary context to build a record. The sink uses
+the matching console level at emission time; creating a reporter is silent.
+The browser object channel preserves rich context while the Rust host writes
+JSON to stderr; this does not add a frontend file transport or filter setting.
+
+Production code must not call `console.warn` or `console.error` directly
+outside the shared sink. `src/diagnostics.contract.test.ts` checks direct
+named console calls through the TypeScript AST. Diagnostics do not replace
+visible failure feedback or change the owner's retry, cancellation or
+rethrow behavior.
+
 ### Strict Type Check Entry
 
 (Issues [#230](https://github.com/hailingu/PlotWeave/issues/230) and
@@ -156,8 +180,31 @@ strict entry), and modules that exist only for tests — `src/moduleGraph.ts`
 (architecture guard), `src/styles/cssColorContract.ts`,
 `src/styles/cssValueSyntax.ts`, `src/styles/sheetRuleQuery.ts`, and
 `src/styles/sheetTokensEngine.ts` (CSS contract engine; `sheetRuleQuery.ts`
-added by issue #343 after the engine split), `src/model/convertFixtures.ts`
-and `src/editor/ai/testGraphs.ts` (shared test fixtures). The same list is
+added by issue #343 after the engine split), plus
+`src/styles/sheetTokenCaseMatrix.ts` (shared case-data tables that
+single-source the sheetToken contract fixture matrices previously duplicated
+across four test files, added by issue
+[#538](https://github.com/hailingu/PlotWeave/issues/538)),
+`src/model/convertFixtures.ts`
+and `src/editor/ai/testGraphs.ts` (shared test fixtures),
+`src/editor/nodes/testScaffolding.tsx` (shared scaffolding for the node
+component tests: Handle stub factory and `NodeEditApi` builder, added by
+issue [#534](https://github.com/hailingu/PlotWeave/issues/534)),
+`src/editor/panels/testDomStubs.ts` (shared happy-dom DOM stubs for panel
+tests, added by issue
+[#539](https://github.com/hailingu/PlotWeave/issues/539)), and
+`src/appShellTestScaffolding.tsx` (shared stub modules, fixtures, and
+open/settings-roundtrip helpers for the App shell test files split out of
+the former `App.test.tsx`, added by issue
+[#525](https://github.com/hailingu/PlotWeave/issues/525), plus the shared
+`console.warn` lifecycle those files use — expected warnings are declared
+per case and undeclared warnings fail the test with the captured output,
+issue [#542](https://github.com/hailingu/PlotWeave/issues/542)).
+
+`src/projectStoreTestHarness.ts` adds the shared typed IPC interception, owned
+fake clock, and cleanup for projectStore Tauri tests (issue
+[#600](https://github.com/hailingu/PlotWeave/issues/600)). The same
+list is
 mirrored into `sonar.exclusions` — moving these files out of
 product-source statistics while they remain analyzed as test code, not a
 blanket exclusion that hides findings — and into the vitest coverage
@@ -193,8 +240,7 @@ product statistics.
 
 (Issue [#393](https://github.com/hailingu/PlotWeave/issues/393), implemented.)
 The frontend coverage floor is versioned and failable. `vite.config.ts` sets
-vitest `coverage.thresholds` to **80% overall line coverage** (global, not
-per-file), so `npm run test:coverage` exits non-zero the moment coverage
+vitest `coverage.thresholds` to **80% overall line coverage** (global), so `npm run test:coverage` exits non-zero the moment coverage
 drops below the floor — before any Sonar analysis runs. The value
 deliberately matches the local SonarQube server's Quality Gate coverage
 condition (80%, owner decision 2026-09-29) instead of tracking the measured
@@ -208,11 +254,12 @@ just below the floor that would round to a displayed `80.00%` is still
 rejected, and rounded percentages remain display- and ledger-only —
 mirroring the server's "below the condition fails" semantics.
 
-Measured baseline, recorded for reference (2026-09-29): **98.1% line
-coverage** — vitest v8 metric 98.12%, and the gate ledger's LCOV `DA` metric
-98.13 for the same tree. The gap to the floor is headroom, not a commitment
-to maintain the baseline value; per-run values stay visible in
-`docs/development/gate-history.jsonl`.
+Measured coverage varies with the inspected tree and is not a fixed baseline.
+Assess headroom using the LCOV report (`coverage/lcov.info`) from the run being
+assessed and the per-run summaries in [gate-history.jsonl](gate-history.jsonl).
+The ledger contains executor-reported summaries, not independent proof of
+execution; its boundaries and verification procedure are documented in
+[Gate Run Evidence Record](quality-gate-evidence.md#gate-run-evidence-record-issue-355).
 
 Boundaries: only **line** coverage has a floor — branch metrics have none on
 either side of the stack (the Rust report has no branch metric on the pinned
@@ -222,6 +269,18 @@ the 80% floor shared by both reports, and that boundary). The floor must not
 be met by widening `coverage.exclude`: `scripts/sonar-test-scope.test.ts`
 guards the exclusion list bidirectionally and pins the threshold value, so
 removing the floor or changing its value without review fails `npm test`.
+
+#### Native Canvas Per-File Lines (Issue #616)
+
+Every production `.ts`/`.tsx` module under `src/editor/nativeCanvas/` also requires **80% line coverage independently**, while the aggregate floor remains 80%. `scripts/native-canvas-coverage.ts` discovers the actual tree at configuration resolution, including new modules, and emits one exact-path threshold group per source. Test files and declaration-only files are outside product runtime coverage; there are no historical low-floor exceptions or new product exclusions.
+
+The pinned Vitest 4.1.11 applies its top-level `perFile` to all groups, so enabling that option would extend the scope to all `src/`. Instead, each exact-path group contains one source, using the provider's existing glob thresholds. Do not replace these groups with a directory aggregate that can absorb one low file. `scripts/sonar-test-scope.test.ts` guards the complete maintained-source inventory and the unchanged global floor; the discovery tests cover new files and literal glob paths.
+
+`npm run test:coverage -- --maxWorkers=4` and the mandatory fresh frontend coverage in local Git gates enforce these file floors. CI retains its existing `npm test` entry: it executes the configuration guard and behavior tests, without collecting coverage itself. Sonar's LCOV re-check and reused-report paths still enforce the overall 80% condition; they do not independently recompute the new per-file policy. Other frontend directories retain their existing aggregate-only policy.
+
+The initial full V8 run after adding this policy passed all behavior tests and measured 96.95% aggregate lines, yet correctly failed `NativeHostApp` (0%), `main` (77.77%), `nativeEditorActions` (71.42%), and `useNativeEditorShell` (66.66%). Behavior tests cover real entry lifetime, native graph/settings/episode commands, undo and rejected arguments to bring those files above the floor. No production runtime behavior changes or coverage exclusion changes are required.
+
+The complete follow-up run passed 246 files / 3416 tests at 97.47% aggregate lines. The four files measured 100% (`NativeHostApp`), 100% (`main`), 92.86% (`nativeEditorActions`), and 88.46% (`useNativeEditorShell`). An isolated real-provider boundary probe used the same global floor and source-inventory policy: one file at 80% with 98.18% aggregate passed; at 60% with 96.36% aggregate it failed. This probe tests the threshold contract, not physical host behavior; the entry/controller cases use browser DOM, and no new visual, VoiceOver, or real IME acceptance is claimed.
 
 ## TypeScript Engineering Practices
 

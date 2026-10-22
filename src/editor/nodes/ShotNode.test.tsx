@@ -1,15 +1,21 @@
 // @vitest-environment happy-dom
 /**
  * 分镜卡（监视器卡）渲染测试：SHOT 编号/景别标题行、画面描述、
- * 镜头 Prompt、引用位 chip（角色垫图/场景底图/音频图标）、⚙️ 面板开关。
- * Handle 依赖 React Flow 仓库上下文，隔离渲染时以锚点桩替代。
+ * 镜头 Prompt、引用位 chip（角色垫图/场景底图/音频图标）、资产引用
+ * 读取边界（issue #130）与缩略图失败占位接线（issue #131）。
+ * ⚙️ 面板开关与端口布局等外壳共享行为收敛至 nodeChrome.test.tsx
+ * 参数化维护（issue #534）；Handle 桩与 NodeEditApi 夹具见
+ * testScaffolding.tsx。换绑在途清空/乱序隔离/重挂载恢复自 issue #541
+ * 起仅在 useAssetMedia.test.tsx 断言；此处保留改绑失败接线集成用例
+ * 与 onError 解码接线的 DOM 级断言（PR #561 评审 5512852009）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { NodeProps } from '@xyflow/react'
-import { NodeEditContext, type NodeEditApi } from '../nodeEdit'
+import { cleanup, render, screen } from '@testing-library/react'
+import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
+import { NodeEditContext } from '../nodeEdit'
 import { projectAssets } from '../projectAssets'
 import type { AssetRef } from '../../model/document'
+import { makeNodeEditApi } from './testScaffolding'
 import { ShotNode } from './ShotNode'
 import type { ShotFlowNode } from './types'
 
@@ -20,36 +26,16 @@ vi.mock('../projectAssets', () => ({
   },
 }))
 
-vi.mock('@xyflow/react', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@xyflow/react')>()
-  return {
-    ...orig,
-    /** Handle 桩：脱离 ReactFlow 画布后仅保留锚点语义（type/id）供断言。 */
-    Handle: (props: { readonly id?: string; readonly type: string }) => (
-      <div
-        data-testid={`handle-${props.type}${props.id ? `-${props.id}` : ''}`}
-      />
-    ),
-  }
-})
+vi.mock('@xyflow/react', async (importOriginal) =>
+  (await import('./testScaffolding')).stubReactFlowHandleModule(
+    await importOriginal<typeof import('@xyflow/react')>(),
+  ),
+)
 
 afterEach(cleanup)
 
-function setup(
-  openSettingsId: string | null = null,
-  refs?: ShotFlowNode['data']['refs'],
-) {
-  const api: NodeEditApi = {
-    projectId: 'p-1',
-    openSettingsId,
-    toggleSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    patchNode: vi.fn(),
-    duplicateNode: vi.fn(),
-    deleteNode: vi.fn(),
-    shotCountOf: () => 0,
-    beatFulfillmentOf: () => null,
-    settings: { characters: [], locations: [] },
+function setup(refs?: ShotFlowNode['data']['refs']) {
+  const api = makeNodeEditApi({
     assets: {
       byId: {
         'pa-1': {
@@ -61,7 +47,7 @@ function setup(
         },
       },
     },
-  }
+  })
   const props = {
     id: 'sh1',
     data: {
@@ -78,9 +64,11 @@ function setup(
     selected: false,
   } as unknown as NodeProps<ShotFlowNode>
   const { container } = render(
-    <NodeEditContext.Provider value={api}>
-      <ShotNode {...props} />
-    </NodeEditContext.Provider>,
+    <ReactFlowProvider>
+      <NodeEditContext.Provider value={api}>
+        <ShotNode {...props} />
+      </NodeEditContext.Provider>
+    </ReactFlowProvider>,
   )
   return { api, container }
 }
@@ -96,39 +84,31 @@ describe('ShotNode（监视器卡）', () => {
 
   it('引用位 chip：三类引用各带图标，另含「＋ 引用」占位', () => {
     setup()
-    expect(screen.getByText('👤 林晚垫图')).toBeTruthy()
-    expect(screen.getByText('🏞 天台底图')).toBeTruthy()
-    expect(screen.getByText('🎵 雨声')).toBeTruthy()
+    for (const name of [
+      '角色垫图：林晚垫图',
+      '场景底图：天台底图',
+      '音频：雨声',
+    ]) {
+      const tag = screen.getByRole('group', { name })
+      expect(tag.querySelector('svg')?.getAttribute('stroke')).toBe(
+        'currentColor',
+      )
+      expect(tag.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+    }
     expect(screen.getByText('＋ 引用')).toBeTruthy()
-  })
-
-  it('⚙️ 点击 toggleSettings；openSettingsId 命中时展开设置面板（含添加引用）', () => {
-    const { api } = setup()
-    fireEvent.click(screen.getByRole('button', { name: '分镜设置' }))
-    expect(api.toggleSettings).toHaveBeenCalledWith('sh1')
-    cleanup()
-
-    setup('sh1')
-    expect(screen.getByRole('button', { name: '＋ 添加引用' })).toBeTruthy()
-  })
-
-  it('端口：顶部入口（宿主下挂）+ 右侧出口', () => {
-    setup()
-    expect(screen.getByTestId('handle-target')).toBeTruthy()
-    expect(screen.getByTestId('handle-source')).toBeTruthy()
   })
 
   it('资产引用位：image/* 资产经 mediaUrl 解析渲染缩略图；解析失败回退纯文本', async () => {
     const { projectAssets } = await import('../projectAssets')
     vi.mocked(projectAssets.mediaUrl).mockResolvedValue('asset://media/pa-1')
-    const { container } = setup(null, [
+    const { container } = setup([
       { id: 'r4', kind: 'character', assetId: 'pa-1' },
     ])
     const img = (await screen.findAllByRole('img'))[0]
     expect(img.getAttribute('src')).toBe('asset://media/pa-1')
     expect(vi.mocked(projectAssets.mediaUrl).mock.calls[0][0]).toBe('p-1')
     // chip 仍带 kind 图标与可辨认文本
-    expect(container.textContent).toContain('👤')
+    expect(screen.getByRole('group', { name: '角色垫图：pa-1' })).toBeTruthy()
     expect(container.textContent).toContain('pa-1')
   })
 })
@@ -149,19 +129,7 @@ function renderShotWithRef(
   byId: Record<string, AssetRef> = { 'pa-1': refAsset('pa-1') },
   kind: ShotFlowNode['data']['refs'][number]['kind'] = 'character',
 ) {
-  const api: NodeEditApi = {
-    projectId: 'p-1',
-    openSettingsId: null,
-    toggleSettings: vi.fn(),
-    closeSettings: vi.fn(),
-    patchNode: vi.fn(),
-    duplicateNode: vi.fn(),
-    deleteNode: vi.fn(),
-    shotCountOf: () => 0,
-    beatFulfillmentOf: () => null,
-    settings: { characters: [], locations: [] },
-    assets: { byId },
-  }
+  const api = makeNodeEditApi({ assets: { byId } })
   const props = (id: string) =>
     ({
       id: 'sh1',
@@ -175,17 +143,21 @@ function renderShotWithRef(
       selected: false,
     }) as unknown as NodeProps<ShotFlowNode>
   const view = render(
-    <NodeEditContext.Provider value={api}>
-      <ShotNode {...props(assetId)} />
-    </NodeEditContext.Provider>,
+    <ReactFlowProvider>
+      <NodeEditContext.Provider value={api}>
+        <ShotNode {...props(assetId)} />
+      </NodeEditContext.Provider>
+    </ReactFlowProvider>,
   )
   return {
     rerender: (id: string, nextById?: Record<string, AssetRef>) => {
       if (nextById !== undefined) api.assets = { byId: nextById }
       view.rerender(
-        <NodeEditContext.Provider value={api}>
-          <ShotNode {...props(id)} />
-        </NodeEditContext.Provider>,
+        <ReactFlowProvider>
+          <NodeEditContext.Provider value={api}>
+            <ShotNode {...props(id)} />
+          </NodeEditContext.Provider>
+        </ReactFlowProvider>,
       )
     },
   }
@@ -204,7 +176,7 @@ describe('分镜引用资产读取边界（issue #130）', () => {
     (assetId) => {
       renderShotWithRef(assetId, {})
       expect(screen.getByTitle(`引用资产缺失（${assetId}）`)).toBeTruthy()
-      expect(screen.getByText(`👤 ${assetId}`, { exact: false })).toBeTruthy()
+      expect(screen.getByText(assetId)).toBeTruthy()
       expect(screen.getByText('SHOT 03')).toBeTruthy()
       expect(screen.queryByRole('img')).toBeNull()
     },
@@ -242,7 +214,7 @@ describe('分镜引用资产读取边界（issue #130）', () => {
       { audio: { ...refAsset('audio'), mime: 'audio/mpeg' } },
       'audio',
     )
-    expect(screen.getByText('🎵 audio')).toBeTruthy()
+    expect(screen.getByRole('group', { name: '音频：audio' })).toBeTruthy()
     expect(screen.queryByRole('img')).toBeNull()
     expect(screen.queryByTitle(/引用资产/)).toBeNull()
   })
@@ -256,7 +228,7 @@ describe('分镜坏引用的隔离与恢复（issue #130）', () => {
   })
 
   it('坏引用不会阻断同卡片的合法图片引用', async () => {
-    setup(null, [
+    setup([
       { id: 'bad', kind: 'character', assetId: 'constructor' },
       { id: 'good', kind: 'location', assetId: 'pa-1' },
     ])
@@ -279,7 +251,7 @@ describe('分镜坏引用的隔离与恢复（issue #130）', () => {
     rerender('pa-1', byId as unknown as Record<string, AssetRef>)
     expect(screen.queryByRole('img')).toBeNull()
     expect(screen.getByTitle(title)).toBeTruthy()
-    expect(screen.getByText(/👤 pa-1/)).toBeTruthy()
+    expect(screen.getByRole('group', { name: '角色垫图：pa-1' })).toBeTruthy()
 
     rerender('pa-1', { 'pa-1': refAsset('pa-1') })
     expect((await screen.findByRole('img')).getAttribute('src')).toBe(
@@ -289,11 +261,16 @@ describe('分镜坏引用的隔离与恢复（issue #130）', () => {
   })
 })
 
-describe('RefThumb 引用位缩略图生命周期（issue #131）', () => {
+describe('RefThumb 引用位缩略图接线（issue #131）', () => {
   beforeEach(() => {
     vi.mocked(projectAssets.mediaUrl).mockReset()
   })
 
+  // 媒体生命周期接线（issue #541）：三条生命周期规则在
+  // useAssetMedia.test.tsx 断言，此处以改绑失败集成用例证明换绑后 ⚠
+  // 占位可观察且旧图不冒充新引用（缺陷溯源 issue #131：旧实现残留 A
+  // 的 url 冒充 B）；onError 是组件自有的 DOM 事件接线，不随生命周期
+  // 收敛，保留组件级断言（PR #561 评审 5512852009）。
   it('改绑不可读资产：旧缩略图清除，失败 ⚠ 可定位，不以旧图冒充新引用', async () => {
     vi.mocked(projectAssets.mediaUrl)
       .mockResolvedValueOnce('asset://a')
@@ -311,51 +288,6 @@ describe('RefThumb 引用位缩略图生命周期（issue #131）', () => {
     expect(screen.queryByRole('img')).toBeNull()
   })
 
-  it('换绑过渡窗口：新解析在途时清空旧图，不得以 A 占位等待 B', async () => {
-    let resolveB: (u: string) => void = () => {}
-    vi.mocked(projectAssets.mediaUrl)
-      .mockResolvedValueOnce('asset://a')
-      .mockImplementationOnce(
-        () =>
-          new Promise((r) => {
-            resolveB = r
-          }),
-      )
-    const byId = { 'pa-1': refAsset('pa-1'), 'pa-2': refAsset('pa-2') }
-    const { rerender } = renderShotWithRef('pa-1', byId)
-    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
-      'asset://a',
-    )
-    rerender('pa-2')
-    // 过渡窗口无图（旧实现残留 asset://a 冒充 B）
-    expect(screen.queryByRole('img')).toBeNull()
-    resolveB('asset://b')
-    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
-      'asset://b',
-    )
-  })
-
-  it('换绑乱序：迟到的旧解析不得覆盖新引用', async () => {
-    let resolveA: (u: string) => void = () => {}
-    vi.mocked(projectAssets.mediaUrl)
-      .mockImplementationOnce(
-        () =>
-          new Promise((r) => {
-            resolveA = r
-          }),
-      )
-      .mockResolvedValueOnce('asset://b')
-    const byId = { 'pa-1': refAsset('pa-1'), 'pa-2': refAsset('pa-2') }
-    const { rerender } = renderShotWithRef('pa-1', byId)
-    rerender('pa-2')
-    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
-      'asset://b',
-    )
-    resolveA('asset://a-late')
-    await Promise.resolve()
-    expect(screen.getByRole('img').getAttribute('src')).toBe('asset://b')
-  })
-
   it('URL 解析成功但图像加载失败：onError 转 ⚠ 失败标记，无半图残留', async () => {
     vi.mocked(projectAssets.mediaUrl).mockResolvedValueOnce('asset://broken')
     renderShotWithRef('pa-1')
@@ -365,26 +297,5 @@ describe('RefThumb 引用位缩略图生命周期（issue #131）', () => {
       await screen.findByTitle('媒体不可读（assets/pa-1.png）'),
     ).toBeTruthy()
     expect(screen.queryByRole('img')).toBeNull()
-  })
-
-  it('读取失败后重挂载（应用重载）且媒体恢复：正常显示', async () => {
-    vi.mocked(projectAssets.mediaUrl)
-      .mockRejectedValueOnce(new Error('媒体不可读'))
-      .mockResolvedValue('asset://fresh')
-    renderShotWithRef('pa-1')
-    expect(await screen.findByTitle(/媒体不可读/)).toBeTruthy()
-    cleanup()
-    renderShotWithRef('pa-1')
-    expect((await screen.findByRole('img')).getAttribute('src')).toBe(
-      'asset://fresh',
-    )
-  })
-
-  it('同 id 的资产对象身份变化（无关编辑致索引重建）不重取缩略图', async () => {
-    vi.mocked(projectAssets.mediaUrl).mockResolvedValue('asset://a')
-    const { rerender } = renderShotWithRef('pa-1')
-    await screen.findByRole('img')
-    rerender('pa-1', { 'pa-1': refAsset('pa-1') })
-    expect(vi.mocked(projectAssets.mediaUrl)).toHaveBeenCalledTimes(1)
   })
 })

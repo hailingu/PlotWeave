@@ -1,0 +1,3 @@
+[workspace]
+members = ["plotweave-core", "plotweave-ffi"]
+resolver = "2"

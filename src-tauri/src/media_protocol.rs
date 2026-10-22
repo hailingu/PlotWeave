@@ -9,6 +9,8 @@
 use std::sync::{Condvar, Mutex, OnceLock};
 
 use serde_json::Value;
+
+use crate::hex_codec::{decode as hex_decode, encode as hex_encode, HexCase};
 use tauri::{AppHandle, Manager};
 
 use crate::assets::project_media::{
@@ -37,43 +39,7 @@ pub(crate) const MEDIA_SCHEME: &str = "pwmedia";
 /// 4×单文件上限（库 20 MiB / 项目 256 MiB）。
 pub(crate) const PROJECT_MEDIA_MAX_BYTES: usize = 256 * 1024 * 1024;
 
-/// 项目资产 id 的不透明契约（评审修复）：保存边界只要求非空白字符串 +
-/// Record 键/id 一致，normalizeAssetRecords 仅重发空白键——任意不透明 id
-/// （`bad]`/Unicode/超长/`%`/`..`/反斜杠）此前经 project_asset_path 可显示，
-/// 迁移后不得被库 id 白名单或百分号边界拒绝。URL 段以 hex 编码承载：输出
-/// 恒为 `[0-9a-f]`，URI 解析器无路径段歧义，任意字节序列无损往返。
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
-}
-
-/// hex 解码（[`hex_encode`] 的逆）：非法十六进制序列返回 None（调用方
-/// 按路径非法拒绝）。
-fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    let nibbles: Vec<u8> = s
-        .bytes()
-        .map(|b| match b {
-            b'0'..=b'9' => Some(b - b'0'),
-            b'a'..=b'f' => Some(b - b'a' + 10),
-            _ => None,
-        })
-        .collect::<Option<Vec<u8>>>()?;
-    Some(
-        nibbles
-            .chunks_exact(2)
-            .map(|pair| (pair[0] << 4) | pair[1])
-            .collect(),
-    )
-}
-
+// Opaque project IDs keep lowercase hex URL segments; parser policy remains lowercase-only.
 /// 项目资产 id 值域（命令面与协议解析同域）：非空白不透明字符串。长度
 /// 不另设限——文档 id 长度归索引大小上限治理。
 fn validate_project_media_id(id: &str) -> Result<(), String> {
@@ -158,8 +124,10 @@ pub(crate) fn parse_media_uri(uri: &tauri::http::Uri) -> Result<(MediaScope, Str
             return Err(invalid());
         }
         validate_id(project_id)?;
-        let asset_id = String::from_utf8(hex_decode(encoded_asset_id).ok_or_else(invalid)?)
-            .map_err(|_| invalid())?;
+        let asset_id = String::from_utf8(
+            hex_decode(encoded_asset_id, HexCase::Lowercase).ok_or_else(invalid)?,
+        )
+        .map_err(|_| invalid())?;
         validate_project_media_id(&asset_id)?;
         return Ok((
             MediaScope::Project {
@@ -206,7 +174,7 @@ pub(crate) fn resolve_media_entry_with(
     // 丢弃，后续 list 读到的是已干净文件，诊断永久丢失——不落盘规则「失败
     // 不得隐匿」同样适用于修复可见性
     for w in &recovery.warnings {
-        eprintln!("[library] 库媒体请求伴随迁移/恢复诊断：{w}");
+        log::warn!(target: "plotweave::library", "库媒体请求伴随迁移/恢复诊断：{w}");
     }
     let entry = index["assets"]["byId"]
         .get(id)
@@ -373,27 +341,47 @@ pub(crate) fn read_project_media_capped(
     )
 }
 
-/// 404 的后端诊断文本（评审修复，复用 store 的 eprintln 结构化诊断约定，
+/// 404 的后端诊断文本（评审修复，使用统一分级诊断（issue #633），
 /// 见 store/commands.rs）：webview 只收非敏感 404 固定文案，原始原因带
-/// `[media]` 标签进本机诊断日志——脏数据/文件缺失与普通失败可区分，
+/// `plotweave::media` target 进本机诊断日志——脏数据/文件缺失与普通失败可区分，
 /// 失败不得隐匿（AGENTS.md 不得隐匿失败硬性规则）。
 fn media_failure_diagnostic(err: &str) -> String {
-    format!("[media] 媒体请求失败：{err}")
+    format!("媒体请求失败：{err}")
 }
 
-/// 响应映射（句柄域测试与协议处理器共用）：命中 → 200 + 索引 mime；
+/// Only response headers are narrowed; stored MIME, immutable bytes and media authorization stay unchanged.
+/// SVG remains an image, with document scripting independently disabled by the response CSP.
+fn media_response_mime(mime: &str) -> &str {
+    if is_canonical_mime(mime)
+        && ["image/", "audio/", "video/"]
+            .iter()
+            .any(|family| mime.starts_with(family))
+    {
+        mime
+    } else {
+        "application/octet-stream"
+    }
+}
+
+/// 响应映射（句柄域测试与协议处理器共用）：命中 → 200 + 安全媒体类型；
 /// 任何失败 → 404 纯文本——不区分错误种类，避免向 webview 泄露盘面细节。
 fn media_http_response(
     result: Result<(String, Vec<u8>), String>,
 ) -> tauri::http::Response<Vec<u8>> {
     const NOT_FOUND: &str = "媒体不可用";
+    let response = tauri::http::Response::builder()
+        .header("Content-Security-Policy", "sandbox; script-src 'none'")
+        .header("X-Content-Type-Options", "nosniff");
     match result {
-        Ok((mime, bytes)) => tauri::http::Response::builder()
+        Ok((mime, bytes)) => response
             .status(tauri::http::StatusCode::OK)
-            .header(tauri::http::header::CONTENT_TYPE, mime)
+            .header(
+                tauri::http::header::CONTENT_TYPE,
+                media_response_mime(&mime),
+            )
             .body(bytes)
             .expect("固定形状的媒体响应构造不可能失败"),
-        Err(_) => tauri::http::Response::builder()
+        Err(_) => response
             .status(tauri::http::StatusCode::NOT_FOUND)
             .header(
                 tauri::http::header::CONTENT_TYPE,
@@ -462,7 +450,7 @@ pub(crate) fn handle_media_request(app: &AppHandle, uri: &tauri::http::Uri) -> M
         }
     });
     if let Err(e) = &result {
-        eprintln!("{}", media_failure_diagnostic(e));
+        log::warn!(target: "plotweave::media", "{}", media_failure_diagnostic(e));
     }
     match result {
         Ok((mime, bytes, permit)) => MediaDelivery {

@@ -14,7 +14,7 @@ import {
   type StoryEdge,
   type StoryNode,
 } from './document'
-import { normalizeEpisodeTitles } from './legacy'
+import { normalizeEpisodeTitles } from './normalizeContainers'
 
 /** meta 时间戳透传（§4.1 演进占位）：会话带上才写回，缺失即省略；非字符串
  * 值不带（下游不落盘即剥离）。 */
@@ -367,6 +367,7 @@ export function fromDocument(
     name: doc.project.name,
     description: doc.project.description,
     createdAt: doc.project.createdAt || undefined,
+    updatedAt: doc.project.updatedAt,
     nodes: nodes.map(fromStoryNode),
     edges: edges.map(fromStoryEdge),
     settings: fromDocSettings({ characters, locations, props, documents }),

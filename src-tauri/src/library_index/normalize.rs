@@ -189,13 +189,18 @@ fn apply_blank_group_map(
         return;
     }
     for (key, a) in assets.iter_mut() {
-        let matched = a
+        // 键化后的桶值此阶段尚未逐条归一化，可能仍为异型；非对象条目没有
+        // groupId 字段即无匹配，跳过（issue #521：类型化访问替代 unwrap）
+        let Some(obj) = a.as_object_mut() else {
+            continue;
+        };
+        let matched = obj
             .get("groupId")
             .and_then(Value::as_str)
             .and_then(|s| blank_group_map.get(s))
             .cloned();
         if let Some(new_gid) = matched {
-            a.as_object_mut().unwrap()["groupId"] = json!(new_gid);
+            obj.insert("groupId".into(), json!(new_gid));
             warnings.push(format!(
                 "条目 {key} 的空白 groupId 已改写为重发组 id {new_gid}"
             ));
@@ -509,10 +514,19 @@ fn resolve_group_ids(
     warnings: &mut Vec<String>,
 ) {
     for (key, a) in assets.iter_mut() {
-        let Some(gid) = a.get("groupId").and_then(Value::as_str).map(str::to_string) else {
+        // 进入跨条目复核的条目均已过逐条归一化（必为对象）；类型化访问替代
+        // unwrap，非对象条目无 groupId 可剥离即跳过（issue #521）
+        let Some(obj) = a.as_object_mut() else {
             continue;
         };
-        let asset_kind = a.get("kind").and_then(Value::as_str).unwrap_or("");
+        let Some(gid) = obj
+            .get("groupId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let asset_kind = obj.get("kind").and_then(Value::as_str).unwrap_or("");
         let group_kind = groups
             .get(&gid)
             .and_then(|g| g.get("kind"))
@@ -521,11 +535,11 @@ fn resolve_group_ids(
             Some(gk) if gk == asset_kind => {}
             Some(_) => {
                 warnings.push(format!("条目 {key} 的 groupId 与组 kind 不一致，已剥离"));
-                a.as_object_mut().unwrap().remove("groupId");
+                obj.remove("groupId");
             }
             None => {
                 warnings.push(format!("条目 {key} 的 groupId 指向不存在的组，已剥离"));
-                a.as_object_mut().unwrap().remove("groupId");
+                obj.remove("groupId");
             }
         }
     }

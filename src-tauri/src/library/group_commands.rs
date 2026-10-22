@@ -21,11 +21,22 @@ pub(crate) fn upsert_group_with(
 ) -> Result<Value, LibraryError> {
     let normalized_group =
         crate::library_index::validate_group_for_write(group).map_err(LibraryError::invalid)?;
-    let gid = normalized_group["id"]
-        .as_str()
-        .expect("校验后 id 必在")
+    // 不变量（issue #521）：校验产物契约——validate_group_for_write 只会构造
+    // `{"id","name","kind"}` 且三值均为已校验字符串。此处按类型化访问取值，
+    // 契约万一被破坏时返回 Corrupt 而非 panic。
+    let gid = normalized_group
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| LibraryError::Corrupt {
+            detail: "组写入校验产物缺 id 字符串".into(),
+        })?
         .to_string();
-    let gkind = normalized_group["kind"].as_str().expect("校验后 kind 必在");
+    let gkind = normalized_group
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| LibraryError::Corrupt {
+            detail: "组写入校验产物缺 kind 字符串".into(),
+        })?;
     let recovery = crate::library_journal::recover(library)?;
     report(&recovery);
     if recovery.read_only {
@@ -116,11 +127,16 @@ pub(crate) fn delete_group_with(
     if groups.remove(id).is_none() {
         return Err(LibraryError::missing(format!("组不存在：{id}")));
     }
-    // 同次原子写剥离成员 groupId（§7.2：不留悬空编组引用）
+    // 同次原子写剥离成员 groupId（§7.2：不留悬空编组引用）；非对象条目没有
+    // groupId 字段（读取归一化亦不产出异型条目），跳过（issue #521：类型化
+    // 访问替代 unwrap）
     if let Some(assets) = index["assets"]["byId"].as_object_mut() {
         for a in assets.values_mut() {
-            if a.get("groupId").and_then(Value::as_str) == Some(id) {
-                a.as_object_mut().unwrap().remove("groupId");
+            let Some(obj) = a.as_object_mut() else {
+                continue;
+            };
+            if obj.get("groupId").and_then(Value::as_str) == Some(id) {
+                obj.remove("groupId");
             }
         }
     }

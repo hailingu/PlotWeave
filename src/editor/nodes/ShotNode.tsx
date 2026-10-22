@@ -1,19 +1,25 @@
-import { useEffect, useState } from 'react'
-import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
-import { projectAssets } from '../projectAssets'
+import { useAssetMedia } from './useAssetMedia'
 import { NodeSettingsPanel } from './settings/NodeSettingsPanel'
 import { NodeSettingsGear } from './settings/NodeSettingsGear'
 import type { AssetRef } from '../../model/document'
 import type { ShotFlowNode } from './types'
+import { NodePort } from './NodePort'
+import { NodeKind } from './NodeKind'
+import { NodeGlyph } from './NodeGlyph'
 
-/** 引用位 chip 的图标：角色垫图 / 场景底图 / 音频。 */
-const REF_ICONS = { character: '👤', location: '🏞', audio: '🎵' } as const
+/** 引用位名称独立于装饰图标，保留辅助技术可读的引用类型。 */
+const REF_LABELS = {
+  character: '角色垫图',
+  location: '场景底图',
+  audio: '音频',
+} as const
 
 /** 引用位缩略图（§8.1）：image/* 资产经项目资产门面解析媒体 URL 懒渲染；
  * 解析失败/非图片不渲染图，chip 回退纯文本。生命周期（issue #131）：
  * 换绑即清旧预览——读取在途或失败都不得以旧资产的图冒充当前引用
- *（alt 已是新资产，图文错配即「A 冒充 B」）；失败以 ⚠ 标记可定位
+ *（alt 已是新资产，图文错配即「A 冒充 B」）；失败以线条警告标记可定位
  *（title 带 relPath），img 加载/解码失败同款转失败态。
  * 换绑的清理时点（PR #197 评审）：调用方以 asset.id 作 key 重挂载本
  * 组件——初始态（无图）随首帧提交，不依赖 passive effect（其晚于
@@ -26,32 +32,14 @@ function RefThumb({
   readonly projectId: string
   readonly asset: AssetRef
 }) {
-  const [url, setUrl] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
-  const assetId = asset.id
-  useEffect(() => {
-    let alive = true
-    setUrl(null)
-    setFailed(false)
-    projectAssets
-      .mediaUrl(projectId, assetId)
-      .then((u) => {
-        if (alive) setUrl(u)
-      })
-      .catch(() => {
-        if (alive) setFailed(true)
-      })
-    return () => {
-      alive = false
-    }
-  }, [projectId, assetId])
+  const { url, failed, reportFailure } = useAssetMedia(projectId, asset.id)
   if (failed)
     return (
       <span
         className="pw-shot-ref-broken"
         title={`媒体不可读（${asset.relPath}）`}
       >
-        ⚠
+        <NodeGlyph name="warning" />
       </span>
     )
   if (!url) return null
@@ -60,7 +48,7 @@ function RefThumb({
       className="pw-shot-ref-thumb"
       src={url}
       alt={asset.relPath}
-      onError={() => setFailed(true)}
+      onError={reportFailure}
     />
   )
 }
@@ -81,15 +69,19 @@ function RefChip({
       : undefined
   const usableAsset = typeof asset?.mime === 'string' ? asset : undefined
   const unavailableReason = asset === undefined ? '缺失' : '不可用'
+  const label = reference.label ?? reference.assetId ?? ''
 
   return (
-    <span className="pw-shot-ref">
+    <fieldset
+      className="pw-shot-ref"
+      aria-label={`${REF_LABELS[reference.kind]}：${label}`}
+    >
       {reference.assetId !== undefined && usableAsset === undefined && (
         <span
           className="pw-shot-ref-broken"
           title={`引用资产${unavailableReason}（${reference.assetId}）`}
         >
-          ⚠
+          <NodeGlyph name="warning" />
         </span>
       )}
       {usableAsset?.mime.startsWith('image/') && (
@@ -99,13 +91,14 @@ function RefChip({
           asset={usableAsset}
         />
       )}
-      {REF_ICONS[reference.kind]} {reference.label ?? reference.assetId ?? ''}
-    </span>
+      <NodeGlyph name={reference.kind} />
+      {label}
+    </fieldset>
   )
 }
 
 /**
- * 分镜卡 = 监视器卡（docs/ui-design.md §4.2，生成侧深色石板，双外观恒定）。
+ * 分镜内容卡（docs/ui-design.md §4.2）：与其他节点共享随外观适配的中性面。
  * 一张卡 = 一个镜头及其 AI 燃料：镜号 + 景别标题行（常驻 ⚙️）、
  * 画面描述、镜头 Prompt、垫图/底图/音频引用位。
  * 从属关系走顶部入口：宿主索引卡底部端口垂直下挂（§4.4 attach 边）。
@@ -116,18 +109,19 @@ export function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>) {
   const settingsOpen = openSettingsId === id
 
   return (
-    <div className={`pw-shot${selected ? ' pw-on' : ''}`}>
-      <div className="pw-shot-tb">
-        <span className="pw-shot-no">
-          SHOT {String(data.shotNo).padStart(2, '0')}
-        </span>
-        <span className="pw-shot-size">{data.size}</span>
-        <span className="pw-sp" />
+    <div className={`pw-card pw-shot${selected ? ' pw-on' : ''}`}>
+      <NodeKind kind="shot">
         <NodeSettingsGear
           ariaLabel="分镜设置"
           open={settingsOpen}
           onToggle={() => toggleSettings(id)}
         />
+      </NodeKind>
+      <div className="pw-shot-tb pw-node-title">
+        <span className="pw-shot-no">
+          SHOT {String(data.shotNo).padStart(2, '0')}
+        </span>
+        <span className="pw-shot-size">{data.size}</span>
       </div>
       <p className="pw-shot-picture">{data.picture}</p>
       <div className="pw-shot-prompt">
@@ -143,8 +137,18 @@ export function ShotNode({ id, data, selected }: NodeProps<ShotFlowNode>) {
         </span>
       </div>
       {settingsOpen && <NodeSettingsPanel node={{ id, type: 'shot', data }} />}
-      <Handle type="target" position={Position.Top} className="pw-port" />
-      <Handle type="source" position={Position.Right} className="pw-port" />
+      <NodePort
+        nodeId={id}
+        type="target"
+        position={Position.Top}
+        label="分镜入口"
+      />
+      <NodePort
+        nodeId={id}
+        type="source"
+        position={Position.Right}
+        label="分镜出口"
+      />
     </div>
   )
 }

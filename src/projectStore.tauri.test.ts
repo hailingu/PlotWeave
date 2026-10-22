@@ -1,39 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { setupProjectStoreHarness } from './projectStoreTestHarness'
+import { describe, expect, it, vi } from 'vitest'
 import type { ProjectContent } from './projectStore'
 
 /** projectStore 的 Tauri 路径：mock IPC，isTauri 判真后动态 import。
  * invoke 按命令名路由，行为由各用例编排。
- * load_project 返回的是 ProjectDocument 信封（Rust 侧已把旧扁平格式包装为 v0）。 */
+ * load_project 返回的是 ProjectDocument 信封（旧扁平 v0 格式已退役，#519）。 */
 
-const handlers = new Map<string, (args: unknown) => unknown>()
-const calls: Array<{ cmd: string; args: unknown }> = []
-
-beforeEach(() => {
-  vi.resetModules()
-  vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
-  handlers.clear()
-  calls.length = 0
-  // tauriLoad 固定先做加载侧资产复验：默认无不可验证键，专项用例自行覆盖
-  handlers.set('verify_project_assets', () => [])
-  // duplicate 命名先查现存名（§7.3）：默认返回非空列表——空表会触发
-  // tauriList 的空库播种递归，mock 恒空即无限循环
-  handlers.set('list_projects', () => [meta('p1')])
-  // 拦截点在类型化入口（issue #394 评审 5339899090）：本文件编排的保存
-  // 重试级联下，vitest 4 对 invoke.ts 集中式动态导入的 core mock 会失稳
-  // （部分调用落到真实模块）；在 ipcInvoke 入口拦截后行为与迁移前逐调用
-  // 点动态导入时完全一致，包装转发语义另由 src/ipc/invoke.test.ts 覆盖
-  vi.doMock('./ipc/invoke', () => ({
-    ipcInvoke: async (cmd: string, args?: unknown) => {
-      calls.push({ cmd, args })
-      const h = handlers.get(cmd)
-      if (!h) throw new Error(`未编排的命令：${cmd}`)
-      return h(args)
-    },
-  }))
-})
-
-const load = async (): Promise<typeof import('./projectStore')> =>
-  import('./projectStore')
+const { handlers, calls, load, checkpoint, waitForCommand, waitForIdle } =
+  setupProjectStoreHarness(
+    () => [meta('p1')],
+    () => ({ __TAURI_INTERNALS__: {} }),
+  )
 
 const UPDATED_ISO = new Date(1_700_000_000_000).toISOString()
 
@@ -81,36 +58,14 @@ const modernFile = () => ({
   assets: { byId: {} },
 })
 
-/** v0 信封：旧扁平格式的节点字段（头像对象、地点字符串）经 Rust 包装。 */
-const legacyFile = () => ({
-  schemaVersion: 0,
-  project: { id: 'p1', name: '旧剧', createdAt: '', updatedAt: UPDATED_ISO },
-  graph: {
-    nodes: [
-      {
-        id: 's1',
-        type: 'scene',
-        position: { x: 0, y: 0 },
-        data: {
-          name: '场一',
-          sceneNo: 1,
-          interior: true,
-          time: '🌙 夜',
-          synopsis: '',
-          characters: [{ label: '林', gradient: 'g' }],
-          location: '天台',
-        },
-      },
-    ],
-    edges: [],
-    viewport: { x: 0, y: 0, zoom: 1 },
-  },
-  settings: { characters: [], locations: [] },
-  episodeTitles: {},
-  assets: { byId: {} },
+/** v1 信封（Rust 形状判型产物）：缺有效版本号按 v1 形状交付并打
+ * versionless 标记——修复回写补盖显式版本号（issue #338）。 */
+const versionlessFile = () => ({
+  ...modernFile(),
+  versionless: true,
 })
 
-describe('tauriLoad：归一化与迁移回写', () => {
+describe('tauriLoad：归一化与修复回写', () => {
   it('episodeTitles 只保留「正整数键 → 非空标题」，标题去空白', async () => {
     handlers.set('load_project', () => ({
       ...modernFile(),
@@ -284,7 +239,7 @@ describe('tauriLoad：归一化与迁移回写', () => {
     await vi.waitFor(() => expect(releaseA).not.toBeNull())
     // load 先捕获 A 的链（单次等待只能看到 A）
     const loading = projectStore.load('p1')
-    await new Promise((r) => setTimeout(r, 0))
+    await checkpoint()
     // A 在途期间旧编辑器卸载冲刷把 B 排进链；随后 A 落定
     const savingB = projectStore.save('p1', docOf('B'))
     ;(releaseA as unknown as () => void)()
@@ -628,17 +583,12 @@ describe('tauriLoad：归一化与迁移回写', () => {
     })
   })
 
-  it('旧格式（v0）触发迁移并回写 save_project（下次打开不再迁移）', async () => {
-    handlers.set('load_project', () => legacyFile())
+  it('versionless v1 触发修复回写 save_project：补盖显式版本号（下次打开不再修复）', async () => {
+    handlers.set('load_project', () => versionlessFile())
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
     const doc: ProjectContent = await projectStore.load('p1')
-    const scene = doc.nodes[0].data as {
-      characterIds: string[]
-      locationId?: string
-    }
-    expect(scene.characterIds).toHaveLength(1)
-    expect(doc.settings.locations.map((l) => l.name)).toEqual(['天台'])
+    expect(doc.name).toBe('现代剧')
     // 回写是 fire-and-forget（void tauriSave）：轮询等到 save_project 落盘调用
     await vi.waitFor(() => {
       expect(calls.some((c) => c.cmd === 'save_project')).toBe(true)
@@ -646,23 +596,23 @@ describe('tauriLoad：归一化与迁移回写', () => {
     const save = calls.find((c) => c.cmd === 'save_project')
     expect(save).toBeDefined()
     expect((save?.args as { id: string }).id).toBe('p1')
-    // 回写内容为 v1 信封
-    const savedDoc = (
-      save?.args as { doc: { schemaVersion: number; episodeTitles: unknown } }
-    ).doc
-    expect(savedDoc.schemaVersion).toBe(1)
-    expect(savedDoc.episodeTitles).toEqual({})
+    // 回写内容为显式 v1 信封（versionless 标记消失）
+    const savedDoc = save?.args as {
+      doc: { schemaVersion: number; versionless?: boolean }
+    }
+    expect(savedDoc.doc.schemaVersion).toBe(1)
+    expect(savedDoc.doc.versionless).toBeUndefined()
   })
 
-  it('迁移回写先于返回：慢回写在途时 load 不得返回（后续改名保存不被旧内容覆盖）', async () => {
+  it('修复回写先于返回：慢回写在途时 load 不得返回（后续改名保存不被旧内容覆盖）', async () => {
     let releaseWriteback: (() => void) | null = null
-    handlers.set('load_project', () => legacyFile())
+    handlers.set('load_project', () => versionlessFile())
     handlers.set(
       'save_project',
       () =>
         new Promise<void>((resolve) => {
           if (releaseWriteback === null) {
-            // 首个调用 = 迁移回写：挂起模拟慢盘
+            // 首个调用 = 修复回写：挂起模拟慢盘
             releaseWriteback = resolve
             return
           }
@@ -675,7 +625,7 @@ describe('tauriLoad：归一化与迁移回写', () => {
     void loaded.then(() => {
       returned = true
     })
-    // 等到迁移回写已发起并挂起（慢盘）
+    // 等到修复回写已发起并挂起（慢盘）
     await vi.waitFor(() => {
       expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
     })
@@ -694,7 +644,7 @@ describe('tauriLoad：归一化与迁移回写', () => {
   })
 
   it('回写失败：内存副本照常交付，显式诊断且不留未处理拒绝', async () => {
-    handlers.set('load_project', () => legacyFile())
+    handlers.set('load_project', () => versionlessFile())
     handlers.set('save_project', () => {
       throw new Error('目录只读')
     })
@@ -702,7 +652,7 @@ describe('tauriLoad：归一化与迁移回写', () => {
     try {
       const { projectStore } = await load()
       const doc = await projectStore.load('p1')
-      expect(doc.name).toBe('旧剧')
+      expect(doc.name).toBe('现代剧')
       await vi.waitFor(() => {
         expect(
           errSpy.mock.calls.some((c) => String(c[0]).includes('回写失败')),
@@ -954,7 +904,7 @@ describe('tauriList：空库播种与示例升级', () => {
     expect(calls.filter((c) => c.cmd === 'save_project')).toHaveLength(1)
   })
 
-  it('示例项目仍是旧格式但已被编辑：迁移回写用户内容，不用新种子覆盖', async () => {
+  it('示例项目带可修复脏数据但已被编辑：修复回写用户内容，不用新种子覆盖', async () => {
     handlers.set('list_projects', () => [
       meta('sample-wu-ye-chu-zu-che'),
       meta('user-p1'),
@@ -965,13 +915,13 @@ describe('tauriList：空库播种与示例升级', () => {
       if (id !== 'sample-wu-ye-chu-zu-che') throw new Error('不应读取用户项目')
       loadCalls += 1
       if (loadCalls === 1) {
-        // 用户编辑过的示例（已改名，仍是 v0 旧扁平格式）
+        // 用户编辑过的示例（已改名，版本主张缺失经 Rust 判型交付）
         return {
-          ...legacyFile(),
-          project: { ...legacyFile().project, id, name: '我的修改版' },
+          ...versionlessFile(),
+          project: { ...versionlessFile().project, id, name: '我的修改版' },
         }
       }
-      // 回写后的净本（重列的升级检查读到迁移产物，不再触发写）
+      // 回写后的净本（重列的升级检查读到补盖版本后的产物，不再触发写）
       return {
         ...modernFile(),
         project: { ...modernFile().project, id, name: '我的修改版' },
@@ -980,11 +930,11 @@ describe('tauriList：空库播种与示例升级', () => {
     handlers.set('save_project', () => undefined)
     const { projectStore } = await load()
     const list = await projectStore.list()
-    // 迁移回写触发重列：示例被读取两次（初检 + 重列复检）、只写一次
+    // 修复回写触发重列：示例被读取两次（初检 + 重列复检）、只写一次
     expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(2)
     const saves = calls.filter((c) => c.cmd === 'save_project')
     expect(saves).toHaveLength(1)
-    // 写回的是迁移后的用户内容，不是硬编码种子的「午夜出租车」
+    // 写回的是修复后的用户内容，不是硬编码种子的「午夜出租车」
     const saved = (
       saves[0].args as {
         doc: { schemaVersion: number; project: { name: string } }
@@ -1124,43 +1074,38 @@ describe('tauriCreate / delete / duplicate', () => {
 
   it('重叠删除混合成败：成功笔已移除项目时，失败笔不得回吐重建（PR #224 第十轮评审）', async () => {
     const savedIds: string[] = []
-    handlers.set('save_project', (args) => {
-      savedIds.push((args as { id: string }).id)
-    })
-    const releasers: Array<() => void> = []
-    const failSecond = { value: false }
-    handlers.set(
-      'delete_project',
-      () =>
-        new Promise<void>((resolve, reject) => {
-          if (failSecond.value) reject(new Error('瞬态删除失败'))
-          else releasers.push(resolve)
-        }),
+    handlers.set('save_project', (args) =>
+      savedIds.push((args as { id: string }).id),
     )
+    let releaseFirst!: () => void
+    let deleteCount = 0
+    handlers.set('delete_project', () => {
+      deleteCount += 1
+      if (deleteCount === 2) throw new Error('瞬态删除失败')
+      return new Promise<void>((resolve) => {
+        releaseFirst = resolve
+      })
+    })
     const { projectStore } = await load()
-    // 首笔删除（将成功）；重叠的第二笔（将失败）
     const first = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    failSecond.value = true
+    await waitForCommand('delete_project')
     const second = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 放行首笔（成功移除项目）；第二笔随后失败——其回吐分支不得重放
-    // 任何吸收写入（组级已成功）
-    releasers.shift()?.()
-    await expect(Promise.all([first, second])).rejects.toThrow(/瞬态删除失败/)
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    // 重放会用 create-if-missing 复活已删项目：save_project 不得为 p-x 落盘
+    const verdict = Promise.allSettled([first, second])
+    releaseFirst()
+    const outcomes = await verdict
+    expect(outcomes[0].status).toBe('fulfilled')
+    expect(outcomes[1].status).toBe('rejected')
+    await waitForIdle('p-x')
     expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
   })
 
   it('重叠删除收尾失败：组级成功须活到拒绝处理器判完（PR #224 第十一轮评审）', async () => {
     const savedIds: string[] = []
-    handlers.set('save_project', (args) => {
-      savedIds.push((args as { id: string }).id)
-    })
-    // 首笔成功、第二笔挂起后失败（收尾失败序）
+    handlers.set('save_project', (args) =>
+      savedIds.push((args as { id: string }).id),
+    )
     let resolveFirst!: () => void
-    let rejectSecond!: (e: Error) => void
+    let rejectSecond!: (error: Error) => void
     let deleteCount = 0
     handlers.set(
       'delete_project',
@@ -1173,63 +1118,54 @@ describe('tauriCreate / delete / duplicate', () => {
     )
     const { projectStore } = await load()
     const first = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await waitForCommand('delete_project')
     const second = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 第二笔在途期间：普通保存被吸收（墓碑仍在）
+    const verdict = Promise.allSettled([first, second])
     await projectStore.save('p-x', {
       name: '吸收稿',
       nodes: [],
       edges: [],
       settings: { characters: [], locations: [] },
     })
-    // 首笔成功落定 → 组级成功置位；第二笔失败 → 失败处理器判 group
-    //（红态：标记已被 finally/成功分支提前清除 → 误重放复活）
     resolveFirst()
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await first
+    await waitForCommand('delete_project', 2)
     rejectSecond(new Error('瞬态失败'))
-    await expect(Promise.allSettled([first, second])).resolves.toBeDefined()
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    // 吸收的文档不得被重放复活（save_project 零落盘）
+    const outcomes = await verdict
+    expect(outcomes[0].status).toBe('fulfilled')
+    expect(outcomes[1].status).toBe('rejected')
+    await waitForIdle('p-x')
     expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
   })
 
   it('重叠删除共享墓碑至最后一笔落定：间隙内的迟到普通保存仍被吸收（PR #224 第八轮评审）', async () => {
     const savedIds: string[] = []
-    handlers.set('save_project', (args) => {
-      savedIds.push((args as { id: string }).id)
-    })
+    handlers.set('save_project', (args) =>
+      savedIds.push((args as { id: string }).id),
+    )
     const releasers: Array<() => void> = []
     handlers.set(
       'delete_project',
-      () =>
-        new Promise<void>((resolve) => {
-          releasers.push(resolve)
-        }),
+      () => new Promise<void>((resolve) => releasers.push(resolve)),
     )
     const { projectStore } = await load()
-    // 首笔删除挂起（墓碑计数=1）
     const first = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 重叠的第二笔删除（如 duplicate 清理分支）：同链排队，计数=2
+    await waitForCommand('delete_project')
     const second = projectStore.delete('p-x')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 放行首笔：墓碑不得随之解除（第二笔仍在途）
-    releasers.shift()?.()
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    // 首笔落定后的间隙：迟到普通保存必须被吸收（不得越顶重建）
-    const lateDoc = {
+    releasers.shift()!()
+    await first
+    await waitForCommand('delete_project', 2)
+    const lateSave = projectStore.save('p-x', {
       name: '迟到保存',
       nodes: [],
       edges: [],
       settings: { characters: [], locations: [] },
-    }
-    const lateSave = projectStore.save('p-x', lateDoc)
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    // 放行第二笔并等待全部落定
-    releasers.shift()?.()
-    await Promise.all([first, second, lateSave])
-    // 保存被吸收（删除成功即丢弃）：save_project 不得为 p-x 落盘
+    })
+    await lateSave
+    expect(savedIds).toEqual([])
+    releasers.shift()!()
+    await Promise.all([first, second])
+    await waitForIdle('p-x')
     expect(savedIds.filter((id) => id === 'p-x')).toEqual([])
   })
 
@@ -1242,45 +1178,33 @@ describe('tauriCreate / delete / duplicate', () => {
     }))
     handlers.set('copy_project_assets', () => undefined)
     let saveReached = false
-    handlers.set('save_project', (args) => {
-      if ((args as { id: string }).id === 'copy-t') saveReached = true
+    handlers.set('save_project', () => {
+      saveReached = true
     })
-    const deletedIds: string[] = []
     const releasers: Array<() => void> = []
-    handlers.set('delete_project', (args) => {
-      deletedIds.push((args as { id: string }).id)
-      return new Promise<void>((resolve) => {
-        releasers.push(resolve)
-      })
-    })
+    handlers.set(
+      'delete_project',
+      () => new Promise<void>((resolve) => releasers.push(resolve)),
+    )
     const { projectStore } = await load()
-    // 首个删除挂起：copy-t 的删除墓碑活跃
     const deleting = projectStore.delete('copy-t')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    // 墓碑窗口内发起 duplicate：load/create/copy 可进行，后续保存被拒绝
-    //（不得吸收报成功）→ catch 清理分支再排队一笔删除
-    // 立即挂 rejection 观察者（避免 50ms 窗口内的未处理拒绝）
+    await waitForCommand('delete_project')
     const duplicating = projectStore.duplicate('p1')
     const verdict = duplicating.then(
       () => 'resolved',
-      (err: unknown) => `rejected:${String(err)}`,
+      (error: unknown) => `rejected:${String(error)}`,
     )
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await waitForCommand('copy_project_assets')
+    await checkpoint()
     expect(saveReached).toBe(false)
-    // 放行全部挂起/后续入队的删除，两笔删除与 duplicate 全部落定
-    for (
-      let i = 0;
-      i < 50 && (deletedIds.length < 2 || releasers.length > 0);
-      i += 1
-    ) {
-      for (const release of releasers.splice(0)) release()
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    for (const release of releasers.splice(0)) release()
+    releasers.shift()!()
+    await deleting
+    await waitForCommand('delete_project', 2)
+    releasers.shift()!()
     await expect(verdict).resolves.toMatch(/^rejected:/)
     await expect(duplicating).rejects.toThrow(/删除中|不存在/)
-    await deleting
-    expect(deletedIds).toContain('copy-t')
+    await waitForIdle('copy-t')
+    expect(saveReached).toBe(false)
   })
 
   it('duplicate 的后续保存带 expectExisting=true（PR #224 评审：copy 后目标被排队的删除移走时不复活）', async () => {

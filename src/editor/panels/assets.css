@@ -83,7 +83,8 @@
   background: var(--fill-quaternary);
 }
 
-.pw-asset:hover .pw-settings-x {
+.pw-asset:hover .pw-settings-x,
+.pw-asset:focus-within .pw-settings-x {
   opacity: 1;
 }
 

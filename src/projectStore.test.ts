@@ -4,6 +4,23 @@ import type { CanvasNode } from './editor/nodes/types'
 
 const node = (n: CanvasNode): CanvasNode => n
 
+describe('projectStore 内存新建时间元数据（#501）', () => {
+  // 内存新建若漏掉修改时间，加载后导出就会丢失原始文档元数据。
+  it('新建项目加载时携带初始修改时间（#501）', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-28T12:00:00.000Z'))
+    const meta = await projectStore.create('初始时间')
+    try {
+      const loaded = await projectStore.load(meta.id)
+      expect(loaded).toHaveProperty('updatedAt', '2026-08-28T12:00:00.000Z')
+      expect(loaded.createdAt).toBe('2026-08-28T12:00:00.000Z')
+    } finally {
+      await projectStore.delete(meta.id)
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('projectStore 内存门面（浏览器回退）', () => {
   it('list 首次返回两个种子项目，按更新时间倒序', async () => {
     const list = await projectStore.list()

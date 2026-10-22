@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { setupProjectStoreHarness } from './projectStoreTestHarness'
+import { describe, expect, it, vi } from 'vitest'
 import { parseProject } from './model/convert'
 
 /**
@@ -10,31 +11,11 @@ import { parseProject } from './model/convert'
  * 评审：源文件已达 1800 行测试上限）。
  */
 
-const handlers = new Map<string, (args: unknown) => unknown>()
-const calls: Array<{ cmd: string; args: unknown }> = []
-
-beforeEach(() => {
-  vi.resetModules()
-  vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
-  handlers.clear()
-  calls.length = 0
-  // tauriLoad 固定先做加载侧资产复验：默认无不可验证键，专项用例自行覆盖
-  handlers.set('verify_project_assets', () => [])
-  // duplicate 命名先查现存名（§7.3）：默认返回非空列表——空表会触发
-  // tauriList 的空库播种递归，mock 恒空即无限循环
-  handlers.set('list_projects', () => [meta('p1')])
-  vi.doMock('@tauri-apps/api/core', () => ({
-    invoke: async (cmd: string, args: unknown) => {
-      calls.push({ cmd, args })
-      const h = handlers.get(cmd)
-      if (!h) throw new Error(`未编排的命令：${cmd}`)
-      return h(args)
-    },
-  }))
-})
-
-const load = async (): Promise<typeof import('./projectStore')> =>
-  import('./projectStore')
+const { handlers, calls, load, checkpoint, waitForCommand } =
+  setupProjectStoreHarness(
+    () => [meta('p1')],
+    () => ({ __TAURI_INTERNALS__: {} }),
+  )
 
 const UPDATED_ISO = new Date(1_700_000_000_000).toISOString()
 
@@ -82,33 +63,12 @@ const modernFile = () => ({
   assets: { byId: {} },
 })
 
-/** v0 信封：旧扁平格式的节点字段（头像对象、地点字符串）经 Rust 包装。 */
-const legacyFile = () => ({
-  schemaVersion: 0,
-  project: { id: 'p1', name: '旧剧', createdAt: '', updatedAt: UPDATED_ISO },
-  graph: {
-    nodes: [
-      {
-        id: 's1',
-        type: 'scene',
-        position: { x: 0, y: 0 },
-        data: {
-          name: '场一',
-          sceneNo: 1,
-          interior: true,
-          time: '🌙 夜',
-          synopsis: '',
-          characters: [{ label: '林', gradient: 'g' }],
-          location: '天台',
-        },
-      },
-    ],
-    edges: [],
-    viewport: { x: 0, y: 0, zoom: 1 },
-  },
-  settings: { characters: [], locations: [] },
-  episodeTitles: {},
-  assets: { byId: {} },
+/** v1 信封（Rust 形状判型产物）：缺有效版本号按 v1 形状交付并打
+ * versionless 标记——升级回写补盖显式版本号后收敛为净本。 */
+const dirtyOf = (id: string) => ({
+  ...modernFile(),
+  versionless: true,
+  project: { ...modernFile().project, id },
 })
 
 /** issue #134/PR #198 评审共用夹具：列表维护写（示例升级回写/空库播种）
@@ -116,10 +76,6 @@ const legacyFile = () => ({
  * 失败登记、删除墓碑），迟到修复不得覆盖较新内容、清除更新的重试登记
  * 或复活已删对象。 */
 const SID = 'sample-wu-ye-chu-zu-che'
-const legacyOf = () => ({
-  ...legacyFile(),
-  project: { ...legacyFile().project, id: SID },
-})
 const cleanOf = () => ({
   ...modernFile(),
   project: { ...modernFile().project, id: SID },
@@ -132,15 +88,15 @@ const userDocOf = (id: string) =>
     },
     { projectId: id },
   ).content
-/** 一次性栅栏：首次调用挂起至放行并返回待迁移旧格式；此后返回迁移
- * 净本——旧实现回写后重列的升级检查读到净本，不再触发写也不再挂起。 */
+/** 一次性栅栏：首次调用挂起至放行并返回待修复的无版本号 v1；此后返回
+ * 补盖净本——旧实现回写后重列的升级检查读到净本，不再触发写也不再挂起。 */
 const gatedThenCleanLoad = (gate: { fn: (() => void) | null }) => {
   let gated = true
   return () => {
     if (!gated) return cleanOf()
     gated = false
     return new Promise<unknown>((res) => {
-      gate.fn = () => res(legacyOf())
+      gate.fn = () => res(dirtyOf(SID))
     })
   }
 }
@@ -212,7 +168,8 @@ describe('tauriList 维护写：升级窗口与保存链交错（issue #134）',
     const saving = projectStore.save(SID, userDocOf(SID))
     await vi.waitFor(() => expect(releaseSave).not.toBeNull())
     const listing = projectStore.list()
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForCommand('list_projects')
+    await checkpoint()
     // 红（旧实现）：不等链静止即读盘——读到保存前的旧内容，随后的修复
     // 回写以旧内容参与排序竞争
     expect(calls.filter((c) => c.cmd === 'load_project')).toHaveLength(0)
@@ -228,7 +185,7 @@ describe('tauriList 维护写：成功维护写不得清除更新的重试登记
     handlers.set('list_projects', () => [meta(SID)])
     handlers.set('load_project', () => {
       loadCalls += 1
-      return loadCalls === 1 ? legacyOf() : cleanOf()
+      return loadCalls === 1 ? dirtyOf(SID) : cleanOf()
     })
     let saveCalls = 0
     handlers.set('save_project', () => {
@@ -321,7 +278,8 @@ describe('tauriList 维护写：播种与在途保存定序（PR #198 评审）'
     await vi.waitFor(() => expect(savesOf(DSID).length).toBeGreaterThan(0))
     const listing = projectStore.list()
     // 留出旧实现「不等链」探测的时序窗（新实现阻塞在等链落定，不受影响）
-    await new Promise((r) => setTimeout(r, 20))
+    await waitForCommand('list_projects')
+    await checkpoint()
     releaseSave!()
     await Promise.all([saving, listing])
     // 红（旧实现）：不等链落定即探测 not-found，链身份未变守卫放行，

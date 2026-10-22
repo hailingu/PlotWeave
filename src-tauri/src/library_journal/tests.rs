@@ -1,7 +1,7 @@
 //! 库删除事务回归测试（issue #25）：事务四步、平台能力分支的 cleanupPending/日志收敛。
 
-use super::recover_tests::*;
 use super::*;
+use crate::library_fixture::*;
 use serde_json::json;
 use std::fs;
 

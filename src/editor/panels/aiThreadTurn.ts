@@ -1,8 +1,10 @@
+import type { ForwardedAiThreadCallbacks } from './aiThreadCallbacks'
 /**
  * ✦AI 会话回合域（issue #99 自 AiThread.tsx 按域拆出）：在途回合的
  * 登记/认领/持有（issue #63 跨卸载交付）、单轮发送与认领条目重定映射。
  * 盒子语义见 ../ai/pendingTurns；纯函数在 aiThreadModel.ts。
  */
+import { useWebExitAction } from '../../useWebExitAction'
 import {
   useEffect,
   useRef,
@@ -222,7 +224,10 @@ function usePendingTurnClaim(
 }
 
 /** useAiTurn 的选项契约（AiThread 容器透传）。 */
-export interface UseAiTurnOpts {
+export interface UseAiTurnOpts extends Omit<
+  ForwardedAiThreadCallbacks,
+  'onApplyAiBatch'
+> {
   readonly projectId: string
   readonly activeOption: ChatModelOption | null
   readonly activeProvider: AppSettings['providers'][number] | null
@@ -232,14 +237,6 @@ export interface UseAiTurnOpts {
   readonly setArmedIdx: (idx: number | null) => void
   // 可选接线允许显式 undefined（undefined = 未接线，issue #231）
   readonly canvasDigest?: string | undefined
-  readonly onValidateAi?: ((text: string) => BatchValidation | null) | undefined
-  readonly onValidateCommands?:
-    ((commands: AiCommand[]) => BatchValidation | null) | undefined
-  readonly onReadNode?: ((nodeId: string) => string | null) | undefined
-  readonly onReadSettings?: (() => string) | undefined
-  readonly onReadDocument?: ((documentId: string) => string | null) | undefined
-  readonly onFindNodes?:
-    ((query: string, offset?: number, cursor?: string) => string) | undefined
 }
 
 /** 认领落定结果的交付（useAiTurn 拆分，issue #99）：条目映射见
@@ -301,8 +298,8 @@ export function useAiTurn(opts: UseAiTurnOpts) {
   /** 认领盒子的 canceller（issue #154）：claim 存入、cancel 调用以停止旧轮。 */
   const claimBoxRef = useRef<TurnBox | null>(null)
   useTurnClaimDelivery(opts, heldBox, setBusy, setError, claimBoxRef)
-  const send = async () => {
-    const text = draft.trim()
+  const send = async (submittedDraft?: string) => {
+    const text = (submittedDraft ?? draft).trim()
     if (!text || busy || !opts.activeOption || !opts.activeProvider) return
     // 新一轮：世代 +1、重置取消标志（旧轮迟到的 signal 引用不影响本轮）
     const { generation, signal } = turn.begin()
@@ -356,7 +353,7 @@ export function useAiTurn(opts: UseAiTurnOpts) {
     clearError,
     knowsCanvas,
     setKnowsCanvas,
-    send,
+    send: useWebExitAction(send),
     cancel,
     appendCancelReceipt,
   }

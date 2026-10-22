@@ -1,8 +1,36 @@
 // @vitest-environment happy-dom
-import { renderHook } from '@testing-library/react'
+import { cleanup, renderHook } from '@testing-library/react'
 import { fireEvent } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useEditorHotkeys, type EditorHotkeyActions } from './useEditorHotkeys'
+
+/** Each case must dispose every document listener it registered. */
+function captureListeners() {
+  return {
+    added: vi.spyOn(document, 'addEventListener'),
+    removed: vi.spyOn(document, 'removeEventListener'),
+  }
+}
+let listeners: ReturnType<typeof captureListeners>
+beforeEach(() => {
+  listeners = captureListeners()
+})
+afterEach(() => {
+  cleanup()
+  try {
+    for (const [type, listener] of listeners.added.mock.calls) {
+      if (type !== 'keydown' && type !== 'pointerdown') continue
+      expect(
+        listeners.removed.mock.calls.some(
+          ([removedType, removedListener]) =>
+            removedType === type && removedListener === listener,
+        ),
+      ).toBe(true)
+    }
+  } finally {
+    vi.restoreAllMocks()
+  }
+})
 
 function mkActions(
   overrides: Partial<EditorHotkeyActions> = {},
@@ -48,6 +76,23 @@ describe('useEditorHotkeys（全局快捷键 + 失焦收起）', () => {
     expect(a.onUndo).not.toHaveBeenCalled()
     expect(a.onDeleteNodes).not.toHaveBeenCalled()
     fireEvent.keyDown(input, { key: 'Escape' })
+    expect(a.onEscape).toHaveBeenCalledTimes(1)
+    input.remove()
+  })
+
+  it('组合中的 Escape 归输入法（issue #570）：isComposing 与 WebKit 晚到的 keyCode 229 均不收起浮层', () => {
+    const a = mkActions()
+    renderHook(() => useEditorHotkeys(a))
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    fireEvent.keyDown(input, {
+      key: 'Escape',
+      isComposing: true,
+      keyCode: 229,
+    })
+    fireEvent.keyDown(input, { key: 'Escape', keyCode: 229 })
+    expect(a.onEscape).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Escape', keyCode: 27 })
     expect(a.onEscape).toHaveBeenCalledTimes(1)
     input.remove()
   })

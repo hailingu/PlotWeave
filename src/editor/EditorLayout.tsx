@@ -4,8 +4,11 @@
  * 本组件只做 props 解构与布局，不含状态与业务语义。
  */
 import { useMemo } from 'react'
+import { isSwiftHost } from '../platform/hostEnvironment'
+import { EditorRegionBoundary } from './EditorRegionBoundary'
 import { EditorTitlebar } from './EditorTitlebar'
 import { ErrorBanner } from './ErrorBanner'
+import { saveStatusLabel, type SaveStatus } from './saveStatus'
 import { LeftPanel } from './panels/LeftPanel'
 import { RightPanel, type RightPanelAiProps } from './panels/RightPanel'
 import {
@@ -17,14 +20,19 @@ import type { EditorLayoutProps } from './editorLayoutProps'
 
 /** 布局横幅区（EditorLayout 拆分，issue #99）：自动保存失败与动作错误。 */
 function LayoutBanners({
+  saveStatus,
   saveError,
   actionError,
 }: {
+  readonly saveStatus: SaveStatus
   readonly saveError: string | null
   readonly actionError: string | null
 }) {
   return (
     <>
+      <output className="editor-save-status" aria-label="画布保存状态">
+        {saveStatusLabel(saveStatus)}
+      </output>
       {saveError !== null && (
         <ErrorBanner
           message={`自动保存失败：${saveError}（修改已保留，正在自动重试；可检查磁盘后继续编辑）`}
@@ -51,7 +59,7 @@ function toCanvasRegionProps(
   props: EditorLayoutProps,
 ): EditorCanvasRegionProps {
   return {
-    project: props.project,
+    viewport: props.project.viewport,
     canvasRef: props.canvasRef,
     doc: props.doc,
     displayNodes: props.view.displayNodes,
@@ -59,6 +67,7 @@ function toCanvasRegionProps(
     onCanvasDrop: props.graph.drop.onCanvasDrop,
     isValidConnection: props.graph.connection.isValidConnection,
     onConnect: props.graph.connection.onConnect,
+    onNodesChange: props.graph.drag.onNodesChange,
     onNodeDragStart: props.graph.drag.onNodeDragStart,
     onNodeDragStop: props.graph.drag.onNodeDragStop,
     onNodeContextMenu: props.graph.menu.onNodeContextMenu,
@@ -67,6 +76,8 @@ function toCanvasRegionProps(
     onAutoLayout: props.graph.layout.onAutoLayout,
     onAlignNodes: props.graph.alignment.onAlignNodes,
     onMoveEnd: props.persistence.onMoveEnd,
+    onInspectNode: props.panels.toggleSettings,
+    onClearNodeInspector: props.panels.closeSettings,
   }
 }
 
@@ -142,39 +153,46 @@ function useRightAi(props: EditorLayoutProps): RightPanelAiProps {
   )
 }
 
-/** 编辑器整体布局：顶部工具栏（§3.3）+ 三栏主体（§3.4）+ 浮层。 */
-export function EditorLayout(props: EditorLayoutProps) {
-  const { project, doc, panels, persistence, history, view, graph } = props
+/** Native chrome owns titlebar controls; other hosts retain their existing Web controls. */
+function LayoutTitlebar({ props }: { readonly props: EditorLayoutProps }) {
+  const { project, panels, history, graph } = props
+  if (isSwiftHost()) return null
+  return (
+    <EditorTitlebar
+      projectName={project.name}
+      onRenameProject={props.onRenameProject}
+      leftOpen={panels.leftOpen}
+      onToggleLeft={() => panels.setLeftOpen((v) => !v)}
+      canUndo={history.canUndo}
+      canRedo={history.canRedo}
+      onUndo={history.undo}
+      onRedo={history.onRedo}
+      onBackHome={props.onBackHome}
+      plusOpen={panels.plusOpen}
+      onTogglePlus={() => panels.setPlusOpen((v) => !v)}
+      onCreateNode={graph.creation.createNode}
+      onOpenExport={() => panels.setExportOpen(true)}
+      inspectorOn={panels.rightOpen && panels.rightTab === 'inspector'}
+      aiOn={panels.rightTab === 'ai' && panels.rightOpen}
+      onToggleRight={panels.toggleRight}
+    />
+  )
+}
+
+/** 三栏展示域各自隔离；文档、保存、历史和原生注册仍由上层持有。 */
+function LayoutBody(props: EditorLayoutProps) {
+  const { doc, panels, view, graph } = props
   const rightAi = useRightAi(props)
   return (
-    <div className="editor-root">
-      {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
-      <EditorTitlebar
-        projectName={project.name}
-        onRenameProject={props.onRenameProject}
-        leftOpen={panels.leftOpen}
-        onToggleLeft={() => panels.setLeftOpen((v) => !v)}
-        canUndo={history.canUndo}
-        canRedo={history.canRedo}
-        onUndo={history.undo}
-        onRedo={history.onRedo}
-        onBackHome={props.onBackHome}
-        plusOpen={panels.plusOpen}
-        onTogglePlus={() => panels.setPlusOpen((v) => !v)}
-        onCreateNode={graph.creation.createNode}
-        onOpenExport={() => panels.setExportOpen(true)}
-        inspectorOn={panels.rightOpen && panels.rightTab === 'inspector'}
-        aiOn={panels.rightTab === 'ai' && panels.rightOpen}
-        onToggleRight={panels.toggleRight}
-      />
-      <LayoutBanners
-        saveError={persistence.saveError}
-        actionError={props.actionError}
-      />
-      <div className="editor-body">
+    <div className="editor-body">
+      <EditorRegionBoundary
+        projectId={props.project.id}
+        region="left"
+        beforeRetry={panels.closeDocument}
+      >
         <LeftPanel
           {...toDocDialogProps(panels)}
-          open={panels.leftOpen}
+          open={panels.leftOpen && !isSwiftHost()}
           width={panels.leftWidth}
           onResize={panels.setLeftWidth}
           nodes={doc.nodes}
@@ -190,9 +208,21 @@ export function EditorLayout(props: EditorLayoutProps) {
           onRenameEpisode={graph.episodes.renameEpisode}
           onOutlineDrop={graph.outlineDrop}
         />
+      </EditorRegionBoundary>
+      <EditorRegionBoundary projectId={props.project.id} region="canvas">
         <EditorCanvasRegion {...toCanvasRegionProps(props)} />
+      </EditorRegionBoundary>
+      <EditorRegionBoundary
+        projectId={props.project.id}
+        region="right"
+        persistentError={
+          props.aiSessionError === null
+            ? null
+            : `AI 会话：${props.aiSessionError}`
+        }
+      >
         <RightPanel
-          open={panels.rightOpen}
+          open={panels.rightOpen && !isSwiftHost()}
           width={panels.rightWidth}
           onResize={panels.setRightWidth}
           tab={panels.rightTab}
@@ -204,8 +234,34 @@ export function EditorLayout(props: EditorLayoutProps) {
           settings={doc.settings}
           ai={rightAi}
         />
-      </div>
-      <EditorOverlays {...toOverlaysProps(props)} />
+      </EditorRegionBoundary>
+    </div>
+  )
+}
+
+/** 编辑器整体布局：顶部工具栏（§3.3）+ 三栏主体（§3.4）+ 浮层。 */
+export function EditorLayout(props: EditorLayoutProps) {
+  const { panels, persistence } = props
+  return (
+    <div className="editor-root">
+      {/* Overlay 标题栏下整行作为窗口拖拽区；按钮可点击（§3.3）。 */}
+      <LayoutTitlebar props={props} />
+      <LayoutBanners
+        saveStatus={persistence.saveStatus}
+        saveError={persistence.saveError}
+        actionError={props.actionError}
+      />
+      <LayoutBody {...props} />
+      <EditorRegionBoundary
+        projectId={props.project.id}
+        region="overlays"
+        onDismiss={() => {
+          panels.setExportOpen(false)
+          panels.setCtxMenu(null)
+        }}
+      >
+        <EditorOverlays {...toOverlaysProps(props)} />
+      </EditorRegionBoundary>
     </div>
   )
 }

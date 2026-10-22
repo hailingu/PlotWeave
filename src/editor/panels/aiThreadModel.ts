@@ -1,3 +1,4 @@
+import type { AiThreadCallbacks } from './aiThreadCallbacks'
 import {
   runAgentLoop,
   TurnCancelledError,
@@ -274,10 +275,10 @@ function findNodeQueryArgs(args: Record<string, unknown>): {
  * 设定集清单（issue 44）与文档全文（issue 56）来自常驻读取器。 */
 export function readToolOf(
   canvasDigest: string | undefined,
-  onReadNode: ((nodeId: string) => string | null) | undefined,
-  onReadSettings?: () => string,
-  onReadDocument?: (documentId: string) => string | null,
-  onFindNodes?: (query: string, offset?: number, cursor?: string) => string,
+  onReadNode: AiThreadCallbacks['onReadNode'],
+  onReadSettings?: AiThreadCallbacks['onReadSettings'],
+  onReadDocument?: AiThreadCallbacks['onReadDocument'],
+  onFindNodes?: AiThreadCallbacks['onFindNodes'],
 ): ReadToolExecutor {
   return (name, args) => {
     if (name === 'get_graph_snapshot') return canvasDigest ?? '（画布为空）'

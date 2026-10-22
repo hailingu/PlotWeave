@@ -1,0 +1,102 @@
+/* 外置端口（§4.3）：14pt 图形、28pt 命中区；卡片边界外留 8pt 间隙。
+ * 不覆写 React Flow 的事件与句柄身份，只有显示体接收状态颜色。
+ */
+.react-flow__handle.pw-port {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+/* 命中区扩展不参与句柄几何：连线端点紧贴显示体，不在图形外留空隙。 */
+.react-flow__handle.pw-port::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+}
+
+.react-flow__handle.pw-port.react-flow__handle-left {
+  left: -16px;
+}
+.react-flow__handle.pw-port.react-flow__handle-right {
+  right: -16px;
+}
+.react-flow__handle.pw-port.react-flow__handle-top {
+  top: -16px;
+}
+.react-flow__handle.pw-port.react-flow__handle-bottom {
+  bottom: -16px;
+}
+
+.pw-port-mark {
+  position: relative;
+  display: block;
+  pointer-events: none;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--node-port-ring);
+  border-radius: 50%;
+  background: var(--surface-canvas);
+  color: var(--node-port-ring);
+  transition:
+    border-color 140ms,
+    background 140ms,
+    color 140ms;
+}
+.pw-port[data-pw-port='out'] .pw-port-mark {
+  border-radius: 4px;
+}
+.pw-port-mark svg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  margin: 0;
+  width: 10px;
+  height: 10px;
+  max-width: 10px;
+  max-height: 10px;
+  transform: translate(-50%, -50%);
+}
+.pw-port.react-flow__handle-bottom .pw-port-mark {
+  transform: rotate(90deg);
+}
+
+.pw-card.pw-on .pw-port-mark,
+.pw-port-active .pw-port-mark,
+.pw-port.connectable:hover .pw-port-mark,
+.pw-port.valid .pw-port-mark {
+  color: var(--node-accent);
+  border-color: var(--node-accent);
+  background: var(--node-accent-soft);
+}
+.pw-port.connectingto:not(.valid) .pw-port-mark {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* 选项行在卡片内缩 14pt，端口仍对齐整张卡片的外侧。 */
+.react-flow__handle.pw-port.pw-branch-port {
+  right: -30px;
+}
+
+/* 宿主直推的 reduce-motion 属性同等退化（媒体查询分叉场景，issue #568）。 */
+:root[data-host-reduce-motion='true'] .pw-port-mark {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pw-port-mark {
+    transition: none;
+  }
+}

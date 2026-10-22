@@ -267,7 +267,15 @@
   background: var(--fill-quaternary);
 }
 
-/* 动效降级：prefers-reduced-motion 时取消位移与过渡（§2.6）。 */
+/* 动效降级：prefers-reduced-motion 时取消位移与过渡（§2.6）；
+ * 宿主直推的 reduce-motion 属性同口径退化（issue #568）。 */
+:root[data-host-reduce-motion='true'] .project-poster {
+  transition: none;
+}
+:root[data-host-reduce-motion='true'] .project-poster:hover {
+  transform: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .project-poster {
     transition: none;

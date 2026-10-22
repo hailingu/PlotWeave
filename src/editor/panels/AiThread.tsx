@@ -1,3 +1,7 @@
+import type {
+  AiThreadCallbacks,
+  ForwardedAiThreadCallbacks,
+} from './aiThreadCallbacks'
 import {
   memo,
   useEffect,
@@ -6,11 +10,6 @@ import {
   type Dispatch,
   type SetStateAction,
 } from 'react'
-import {
-  type AiCommand,
-  type BatchValidation,
-  type ValidatedCommand,
-} from '../ai/commands'
 import { useSettingsSnapshot } from '../../settings/useSettingsSnapshot'
 import { listChatModels, type ChatModelOption } from '../../settings/types'
 import { cardResultEntry } from './aiThreadModel'
@@ -25,13 +24,17 @@ import type { AiCommitIdentity } from '../ai/commitIdentity'
 import { useAiSessionPersistence } from '../ai/useAiSessionPersistence'
 import { revalidatePendingCard, useAiTurn } from './aiThreadTurn'
 import { AiTopbar } from './AiThreadTopbar'
+import { useNativeAiShell } from '../nativeCanvas/useNativeAiShell'
+import { isSwiftHost } from '../../platform/hostEnvironment'
+import { isCompositionKey } from '../../platform/compositionKey'
+import { useExitGuardedCallback } from '../../useExitGuardedCallback'
 
 export { AiSettingsButton } from './AiThreadTopbar'
 
 /** 模型选择域（逻辑 hook，issue #39 拆分）：应用设置加载、面板内模型
  * 选择与三层派生（可用模型 → 生效模型 → provider key 就绪）。 */
 function useAiModels() {
-  // 挂载时读一次设置快照（切回 AI 分段即重挂重读，从设置页回来能刷新）；
+  // 首次挂载读取设置；Swift 常驻会话在成功保存后本页重读，保留线程与模型选择。
   // 读取失败保持 null → 空选项走引导（issue #120）；key 状态直接从
   // provider 配置派生（keyEnc 密文存在即已配置）
   const appSettings = useSettingsSnapshot()
@@ -107,8 +110,7 @@ function trimStaleUndoClaim(text: string): string {
  * MAX_SAFE_INTEGER 产生重复 key 与下次加载被归一化丢弃的条目。 */
 function restoreThreadEntries(
   initialSession: AiSession | undefined,
-  validateCommands:
-    ((commands: AiCommand[]) => BatchValidation | null) | undefined,
+  validateCommands: AiThreadCallbacks['onValidateCommands'],
   aiRevision: number | undefined,
 ): ThreadEntry[] {
   return (initialSession?.entries ?? []).map((entry, index) => {
@@ -181,17 +183,17 @@ function cardAfterExecution(
  * 等待器时标注 uncommitted 并记录执行后批次计数——持久化层据此降级为
  * pending，画布落盘确认后再写 executed。回执关联卡片 id（可能追加在
  * 会话尾部）：未确认落盘的执行按关联剔除回执。 */
-function applyCardExecution(args: {
-  readonly thread: ThreadEntry[]
-  readonly setThread: Dispatch<SetStateAction<ThreadEntry[]>>
-  readonly setArmedIdx: Dispatch<SetStateAction<number | null>>
-  readonly entry: ThreadEntry
-  readonly idx: number
-  readonly nextId: () => number
-  readonly onApplyAiBatch?:
-    ((commands: ValidatedCommand[]) => string | null) | undefined
-  readonly identity?: AiCommitIdentity | undefined
-}): void {
+function applyCardExecution(
+  args: Pick<ForwardedAiThreadCallbacks, 'onApplyAiBatch'> & {
+    readonly thread: ThreadEntry[]
+    readonly setThread: Dispatch<SetStateAction<ThreadEntry[]>>
+    readonly setArmedIdx: Dispatch<SetStateAction<number | null>>
+    readonly entry: ThreadEntry
+    readonly idx: number
+    readonly nextId: () => number
+    readonly identity?: AiCommitIdentity | undefined
+  },
+): void {
   const { setThread, setArmedIdx, entry, idx, nextId } = args
   if (entry.card?.status !== 'pending' || !args.onApplyAiBatch) return
   const err = args.onApplyAiBatch(entry.card.v.commands)
@@ -212,16 +214,17 @@ function applyCardExecution(args: {
 
 /** 会话线程域（逻辑 hook，issue #39 拆分）：条目追加、预览卡执行/忽略
  * 与危险批次的两步确认武装态；threadRef 供容器做滚动跟随。 */
-function useAiThreadMessages(opts: {
-  // 可选接线全链允许显式 undefined（undefined = 未接线，issue #231）
-  readonly onApplyAiBatch?:
-    ((commands: ValidatedCommand[]) => string | null) | undefined
-  readonly initialSession?: AiSession | undefined
-  readonly onValidateCommands?:
-    ((commands: AiCommand[]) => BatchValidation | null) | undefined
-  /** 提交身份（issue #139）：计数供恢复对账，等待器决定 executed 落盘推迟。 */
-  readonly identity?: AiCommitIdentity | undefined
-}) {
+function useAiThreadMessages(
+  opts: Pick<
+    ForwardedAiThreadCallbacks,
+    'onApplyAiBatch' | 'onValidateCommands'
+  > & {
+    // 可选接线全链允许显式 undefined（undefined = 未接线，issue #231）
+    readonly initialSession?: AiSession | undefined
+    /** 提交身份（issue #139）：计数供恢复对账，等待器决定 executed 落盘推迟。 */
+    readonly identity?: AiCommitIdentity | undefined
+  },
+) {
   const [thread, setThread] = useState<ThreadEntry[]>(() =>
     restoreThreadEntries(
       opts.initialSession,
@@ -229,6 +232,7 @@ function useAiThreadMessages(opts: {
       opts.identity?.aiRevision,
     ),
   )
+  const guardedSetThread = useExitGuardedCallback(setThread)
   /** 危险批次的两步确认：处于武装态的会话条目下标，null = 无。 */
   const [armedIdx, setArmedIdx] = useState<number | null>(null)
   /** 会话条目自增 id（组件内稳定 key）：恢复条目已重定基为 1..n，从这里继续。 */
@@ -238,7 +242,7 @@ function useAiThreadMessages(opts: {
 
   /** 会话尾部追加（send 与预览卡回执共用）。 */
   const append = (entries: ThreadEntry[]) =>
-    setThread((t) => [...t, ...entries])
+    guardedSetThread((t) => [...t, ...entries])
 
   /** 执行预览卡：成功 → 置状态并追加回执；失败 → 错误回执（批次未动）。
    * 提交身份带画布确认等待器时标注 uncommitted 并记录执行后批次计数——
@@ -246,7 +250,7 @@ function useAiThreadMessages(opts: {
   const executeCard = (idx: number) =>
     applyCardExecution({
       thread,
-      setThread,
+      setThread: guardedSetThread,
       setArmedIdx,
       entry: thread[idx]!,
       idx,
@@ -256,7 +260,7 @@ function useAiThreadMessages(opts: {
     })
 
   const markDismissed = (idx: number) => {
-    setThread((t) =>
+    guardedSetThread((t) =>
       t.map((e, i) => {
         if (i !== idx || !e.card) return e
         const card = { ...e.card, status: 'dismissed' as const }
@@ -271,13 +275,13 @@ function useAiThreadMessages(opts: {
    * 落盘空会话（重开不复活）。条目 id 计数器继续自增——id 只需实例内
    * 唯一作渲染 key，恢复时本就按位置重定基，无重置必要。 */
   const resetSession = () => {
-    setThread([])
+    guardedSetThread([])
     setArmedIdx(null)
   }
 
   useCanvasCommitConfirmation(
     thread,
-    setThread,
+    guardedSetThread,
     opts.identity?.whenCanvasCommitted,
   )
 
@@ -381,7 +385,10 @@ function AiGuide({
 }
 
 /** 输入行（issue #154）：busy 时切换为取消按钮——在途回合可停止（协作式：
- * agentLoop 停止后续循环，在途 llm_chat 不被中止）；画布感知开关常驻。 */
+ * agentLoop 停止后续循环，在途 llm_chat 不被中止）；画布感知开关常驻。
+ * 非 busy 态输入框右侧常驻「发送」按钮（issue #599）：鼠标/触控板与读屏
+ * 可发现的发送入口，与原生壳对齐；禁用条件与 Enter 路径的 send() 守卫
+ * 同口径（未配置或空白草稿不发），Enter 发送保留，两入口共用 onSend。 */
 function AiComposer({
   draft,
   setDraft,
@@ -413,17 +420,29 @@ function AiComposer({
           取消
         </button>
       ) : (
-        <input
-          type="text"
-          value={draft}
-          placeholder={ready ? '输入消息，Enter 发送…' : '配置后可输入…'}
-          aria-label="AI 对话输入"
-          disabled={!ready}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') onSend()
-          }}
-        />
+        <div className="pw-ai-input-row">
+          <input
+            type="text"
+            value={draft}
+            placeholder={ready ? '输入消息，Enter 发送…' : '配置后可输入…'}
+            aria-label="AI 对话输入"
+            disabled={!ready}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // 组合在途的 Enter 归输入法（确认候选），不发送（issue #570）
+              if (e.key === 'Enter' && !isCompositionKey(e.nativeEvent))
+                onSend()
+            }}
+          />
+          <button
+            type="button"
+            className="pw-ai-send"
+            disabled={!ready || draft.trim() === ''}
+            onClick={onSend}
+          >
+            发送
+          </button>
+        </div>
       )}
       <button
         type="button"
@@ -491,24 +510,12 @@ function AiEntryBody({
  * 逻辑在 useAiModels/useAiThreadMessages/useAiTurn，纯函数在 aiThreadModel.ts。
  */
 /** ✦AI 会话面板的对外契约：校验/读工具/执行回调、恢复会话及其持久化通道。 */
-interface AiThreadProps {
+interface AiThreadProps extends ForwardedAiThreadCallbacks {
   /** 项目 id：在途回合跨卸载归属的键（issue #63，见 ai/pendingTurns）。 */
   readonly projectId: string
   // 可选接线允许显式 undefined（undefined = 未接线，issue #231）
   readonly onOpenSettings?: (() => void) | undefined
   readonly canvasDigest?: string | undefined
-  readonly onValidateAi?: ((text: string) => BatchValidation | null) | undefined
-  readonly onValidateCommands?:
-    ((commands: AiCommand[]) => BatchValidation | null) | undefined
-  readonly onReadNode?: ((nodeId: string) => string | null) | undefined
-  readonly onReadSettings?: (() => string) | undefined
-  /** 读工具 get_document（issue 56）：按 id 返回文档全文 JSON。 */
-  readonly onReadDocument?: ((documentId: string) => string | null) | undefined
-  /** 读工具 find_nodes（issue #275 评审）：按名称检索全部节点与关联连线。 */
-  readonly onFindNodes?:
-    ((query: string, offset?: number, cursor?: string) => string) | undefined
-  readonly onApplyAiBatch?:
-    ((commands: ValidatedCommand[]) => string | null) | undefined
   /** 执行卡的提交身份（issue #139）：计数必带、等待器可选；见 AiCommitIdentity。 */
   readonly commitIdentity?: AiCommitIdentity | undefined
   /** 打开项目时恢复的独立会话快照。 */
@@ -561,7 +568,15 @@ function useAiThreadAssembly(props: AiThreadProps) {
  * EditorView）；会话内交互照常驱动自身状态更新。 */
 export const AiThread = memo(function AiThread(props: AiThreadProps) {
   const { m, msg, saveError, turn } = useAiThreadAssembly(props)
+  useNativeAiShell({
+    projectId: props.projectId,
+    models: m,
+    messages: msg,
+    turn,
+    saveError,
+  })
   const onOpenSettings = props.onOpenSettings
+  if (isSwiftHost()) return null
   return (
     <div className="pw-ai">
       <AiTopbar

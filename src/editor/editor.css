@@ -339,3 +339,14 @@
   background-clip: border-box;
   color: var(--on-brand);
 }
+
+/* 画布保存状态独占稳定高度；防抖、在途、成功与失败切换不改变画布几何。 */
+.editor-save-status {
+  flex: none;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  font-size: 11px;
+  color: var(--text-primary);
+}

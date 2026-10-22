@@ -2,6 +2,11 @@
 # 为本地提交与推送生成最新覆盖率，并强制 SonarQube Quality Gate 通过且新增代码
 # 未解决问题为零（增量清零：sinceLeakPeriod 过滤 New Code 周期内的问题；全项目
 # 历史问题另行治理，不阻塞提交）。
+#
+# 推送范围（owner 指示 2026-10-18）：PLOTWEAVE_GATE_SCOPE=full 时执行完整前端+
+# Rust 覆盖率；full 推送额外执行 native 功能回归；frontend/rust 只跑该栈全量覆盖率、另一栈复用
+# PLOTWEAVE_REUSED_*_LCOV；native 跑原生测试并复用两侧 LCOV；docs 由 pre-push
+# 直接分流，不得进入本脚本。缺复用报告或未知范围 fail-closed。
 
 set -eu
 
@@ -19,6 +24,7 @@ node_bin=${PLOTWEAVE_NODE_BIN:-node}
 coverage_report_path=${PLOTWEAVE_COVERAGE_REPORT_PATH:-$repository_root/coverage/lcov.info}
 rust_coverage_report_path=${PLOTWEAVE_RUST_COVERAGE_REPORT_PATH:-$repository_root/src-tauri/target/coverage/lcov-rust.info}
 llvm_cov_bin=${PLOTWEAVE_CARGO_LLVM_COV_BIN:-cargo-llvm-cov}
+xcodebuild_bin=${PLOTWEAVE_XCODEBUILD_BIN:-xcodebuild}
 lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$repository_root/.sonar-gate.lock}
 report_path=${PLOTWEAVE_SONAR_REPORT_PATH:-$repository_root/.scannerwork/report-task.txt}
 quality_gate_timeout=${SONAR_QUALITY_GATE_TIMEOUT:-300}
@@ -45,6 +51,36 @@ fail() {
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "缺少命令：$1"
 }
+
+# 推送门禁的变更范围（owner 指示 2026-10-18）：full = 当前完整门禁；
+# frontend/rust = 只跑该栈全量测试与覆盖率，另一栈复用最近 LCOV；
+# native = 跑原生测试，前端/Rust 复用最近 LCOV；docs 由 pre-push 直接
+# 分派、不进入本脚本。默认 full 保持 pre-commit/直接调用行为不变。
+gate_scope=${PLOTWEAVE_GATE_SCOPE:-full}
+case $gate_scope in
+  docs)
+    fail '[GATE_SCOPE_DOCS] docs-only 由 pre-push 的文档检查直接分流，不进入代码门禁'
+    ;;
+  frontend | rust | native | full) ;;
+  *)
+    fail "[GATE_SCOPE_INVALID] 未知的推送门禁范围：$gate_scope"
+    ;;
+esac
+
+# full 推送保守覆盖全部实现栈（PR #604 评审 5560989008）；pre-push 强制为 1，
+# 三个提交入口强制为 0，保留既定提交成本。非法值不能静默跳过检查。
+full_native=${PLOTWEAVE_GATE_FULL_NATIVE:-0}
+case $full_native in
+  0 | 1) ;;
+  *) fail "[GATE_FULL_NATIVE_INVALID] full native 开关只能为 0 或 1：$full_native" ;;
+esac
+
+# 未变更栈的最近 LCOV：由 pre-push 指向主工作树产物；缺文件时 fail-closed，
+# 不允许 Sonar 在缺少一侧报告的情况下静默降级。
+reused_frontend_coverage=${PLOTWEAVE_REUSED_FRONTEND_LCOV:-}
+reused_rust_coverage=${PLOTWEAVE_REUSED_RUST_LCOV:-}
+frontend_coverage_report=$coverage_report_path
+rust_coverage_report=$rust_coverage_report_path
 
 # 从本次扫描生成的 report-task.txt 中读取指定属性。
 read_report_value() {
@@ -100,29 +136,44 @@ enforce_line_coverage_floor() {
   esac
 }
 
+# 覆盖率报告存在性/可解析性检查（issue #169/#393）：非空、至少一条源文件
+# 记录、至少一条已覆盖行。单个坏报告不能掩盖另一侧缺失。
+require_coverage_report() {
+  label=$1
+  path=$2
+  [ -s "$path" ] || fail "${label}覆盖率报告缺失或为空：$path"
+  grep -q '^SF:' "$path" ||
+    fail "${label}覆盖率报告没有任何源文件记录：$path"
+  grep -Eq '^DA:[0-9]+,[1-9][0-9]*' "$path" ||
+    fail "${label}覆盖率报告没有任何已覆盖代码行：$path"
+}
+
 # 门禁结论摘要记录（issue #355）：完整通过后把关键结论——UTC 时间、被检
 # 索引树（与 gate-tree-marker 同键）、运行时 HEAD、Quality Gate 状态、新
 # 增代码未解决问题数、前端与 Rust 行覆盖率——追加为 .git 内待物化文件的
-# 一行 JSON。只记结论：令牌与原始扫描产物均不入库。提交创建路径绝不直
-# 接改动被跟踪的版本化 gate-history.jsonl（PR #415 评审 5338815626：那样
-# 会给重放/检出/合并留下未暂存改动而中止操作）；待物化行由 pre-push 门禁
-# 通过后的 scripts/gate-history.sh materialize 并入版本化文件。写入尽力而
-# 为：任一步失败只向标准错误警告、不阻塞已通过的门禁（与树标记同哲学）。
+# 一行 JSON。只记结论：令牌与原始扫描产物均不入库。门禁运行绝不直接改动
+# 被跟踪的版本化 gate-history.jsonl（PR #415 评审 5338815626：那样会给
+# 重放/检出/合并留下未暂存改动而中止操作）；待物化行由下一次提交创建钩
+# 子的 scripts/gate-history.sh materialize --stage-for-commit 按内容字节
+# 精确归因后并入并暂存（issue #548；PR #581 评审 5537970549：推送不再
+# 物化）。写入尽力而为：任一步失败只向标准错误警告、不阻塞已通过的门禁
+# （与树标记同哲学）。
 append_gate_history_record() {
   gate_tree=$(git write-tree 2>/dev/null) || gate_tree=
   gate_head=$(git rev-parse HEAD 2>/dev/null) || gate_head=
-  frontend_percent=$(lcov_line_coverage_percent "$coverage_report_path")
-  rust_percent=$(lcov_line_coverage_percent "$rust_coverage_report_path")
-  if printf '{"timestamp":"%s","tree":"%s","head":"%s","qualityGate":"%s","newCodeUnresolvedIssues":%s,"frontendLineCoveragePercent":%s,"rustLineCoveragePercent":%s}\n' \
+  frontend_percent=$(lcov_line_coverage_percent "$frontend_coverage_report")
+  rust_percent=$(lcov_line_coverage_percent "$rust_coverage_report")
+  if printf '{"timestamp":"%s","tree":"%s","head":"%s","scope":"%s","qualityGate":"%s","newCodeUnresolvedIssues":%s,"frontendLineCoveragePercent":%s,"rustLineCoveragePercent":%s}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     "$gate_tree" \
     "$gate_head" \
+    "$gate_scope" \
     "$quality_gate_status" \
     "$new_issues" \
     "$frontend_percent" \
     "$rust_percent" \
     >> "$gate_pending_path" 2>/dev/null; then
-    printf '[SonarQube] 门禁结论已记录，待推送时并入版本化 gate-history.jsonl。\n'
+    printf '[SonarQube] 门禁结论已记录，待下一次提交的物化并入版本化 gate-history.jsonl。\n'
   else
     printf 'SonarQube 警告：无法写入门禁记录 %s；本次结论未入库，不阻塞已通过的操作。\n' \
       "$gate_pending_path" >&2
@@ -190,7 +241,28 @@ require_command "$npm_bin"
 require_command "$scanner_bin"
 require_command "$curl_bin"
 require_command "$node_bin"
-require_command "$llvm_cov_bin"
+
+# 门禁并行度预算（owner 指示 2026-10-16；默认值改固定 4 为 owner 于
+# 2026-10-16 评审 5545658713 的再次指示）：PLOTWEAVE_GATE_CPU_BUDGET
+# 未设置时默认 4——固定默认不随机器核数浮动，检查集与阈值不变，同样
+# 的工作量摊到更少核上执行，降低门禁期间的峰值功耗与发热。显式覆盖
+# 须为正整数，非法值以稳定诊断码阻断、不静默回退；解析结果导出，
+# rust-coverage.sh 与测试替身读取同一数值。决策与实测基线见
+# docs/development/quality-gate-cost.md「Gate CPU Budget」。
+gate_cpu_budget=${PLOTWEAVE_GATE_CPU_BUDGET:-}
+case $gate_cpu_budget in
+  '')
+    gate_cpu_budget=4
+    ;;
+  *[!0-9]*)
+    fail '[GATE_CPU_BUDGET_INVALID] PLOTWEAVE_GATE_CPU_BUDGET 须为正整数；已拒绝，不做静默回退'
+    ;;
+  *)
+    [ "$gate_cpu_budget" -ge 1 ] ||
+      fail '[GATE_CPU_BUDGET_INVALID] PLOTWEAVE_GATE_CPU_BUDGET 须为正整数；已拒绝，不做静默回退'
+    ;;
+esac
+export PLOTWEAVE_GATE_CPU_BUDGET=$gate_cpu_budget
 
 mkdir "$lock_directory" 2>/dev/null || fail_lock_acquisition
 trap release_lock 0
@@ -212,45 +284,78 @@ run_step() {
 run_scanner() {
   SONAR_TOKEN=$sonar_token "$scanner_bin" \
     "-Dsonar.host.url=$sonar_host_url" \
-    "-Dsonar.javascript.lcov.reportPaths=$coverage_report_path" \
-    "-Dsonar.rust.lcov.reportPaths=$rust_coverage_report_path" \
+    "-Dsonar.javascript.lcov.reportPaths=$frontend_coverage_report" \
+    "-Dsonar.rust.lcov.reportPaths=$rust_coverage_report" \
     -Dsonar.qualitygate.wait=true \
     "-Dsonar.qualitygate.timeout=$quality_gate_timeout"
 }
 
-printf '%s\n' '[SonarQube] 生成最新前端覆盖率……'
+# 原生范围回归入口（owner 指示 2026-10-18）：构建当前 Web 画布资源后跑
+# 串行原生测试；native 范围复用两侧 LCOV，full 推送刷新两侧覆盖率。测试
+# 失败即门禁失败；输出留在临时 worktree 或主工作树的忽略目录。
+run_native_tests() {
+  sh "$script_directory/test-native.sh"
+}
+
+printf '[SonarQube] 变更范围：%s（frontend/rust 单栈只跑该栈全量覆盖率，另一栈复用最近 LCOV；native 跑原生测试）\n' "$gate_scope"
 # 静态检查先行（issue #227）：格式 + lint 零警告——fail-fast 在覆盖率与
 # 扫描之前；与手动检查同一入口（scripts/check-static.sh），不分叉
 printf '%s\n' '[SonarQube] 静态检查（格式 + lint 零警告）……'
 run_step "$script_directory/check-static.sh"
 
-run_step "$npm_bin" run test:coverage
+printf '[SonarQube] 门禁并行度预算：%s（未设置时默认 4，PLOTWEAVE_GATE_CPU_BUDGET 可覆盖）\n' "$gate_cpu_budget"
 
-[ -s "$coverage_report_path" ] ||
-  fail "覆盖率报告缺失或为空：$coverage_report_path"
-grep -q '^SF:' "$coverage_report_path" ||
-  fail "覆盖率报告没有任何源文件记录：$coverage_report_path"
-grep -Eq '^DA:[0-9]+,[1-9][0-9]*' "$coverage_report_path" ||
-  fail "覆盖率报告没有任何已覆盖代码行：$coverage_report_path"
+case $gate_scope in
+  frontend)
+    printf '%s\n' '[SonarQube] 生成最新前端覆盖率（全量），Rust 复用最近 LCOV……'
+    run_step "$npm_bin" run test:coverage -- --maxWorkers "$gate_cpu_budget"
+    require_coverage_report '前端' "$frontend_coverage_report"
+    enforce_line_coverage_floor '前端' "$frontend_coverage_report"
+    rust_coverage_report=${reused_rust_coverage:-$rust_coverage_report_path}
+    printf '[SonarQube] 复用最近 Rust 覆盖率：%s\n' "$rust_coverage_report"
+    require_coverage_report 'Rust（复用）' "$rust_coverage_report"
+    enforce_line_coverage_floor 'Rust（复用）' "$rust_coverage_report"
+    ;;
+  rust)
+    frontend_coverage_report=${reused_frontend_coverage:-$coverage_report_path}
+    printf '[SonarQube] 复用最近前端覆盖率：%s\n' "$frontend_coverage_report"
+    require_coverage_report '前端（复用）' "$frontend_coverage_report"
+    enforce_line_coverage_floor '前端（复用）' "$frontend_coverage_report"
+    require_command "$llvm_cov_bin"
+    printf '%s\n' '[SonarQube] 生成最新 Rust 覆盖率（全量），前端复用最近 LCOV……'
+    run_step "$script_directory/rust-coverage.sh"
+    require_coverage_report 'Rust' "$rust_coverage_report"
+    enforce_line_coverage_floor 'Rust' "$rust_coverage_report"
+    ;;
+  native)
+    frontend_coverage_report=${reused_frontend_coverage:-$coverage_report_path}
+    rust_coverage_report=${reused_rust_coverage:-$rust_coverage_report_path}
+    printf '[SonarQube] 复用最近前端覆盖率：%s\n' "$frontend_coverage_report"
+    printf '[SonarQube] 复用最近 Rust 覆盖率：%s\n' "$rust_coverage_report"
+    require_coverage_report '前端（复用）' "$frontend_coverage_report"
+    require_coverage_report 'Rust（复用）' "$rust_coverage_report"
+    enforce_line_coverage_floor '前端（复用）' "$frontend_coverage_report"
+    enforce_line_coverage_floor 'Rust（复用）' "$rust_coverage_report"
+    ;;
+  full)
+    printf '%s\n' '[SonarQube] 生成最新前端覆盖率……'
+    run_step "$npm_bin" run test:coverage -- --maxWorkers "$gate_cpu_budget"
+    require_coverage_report '前端' "$frontend_coverage_report"
+    enforce_line_coverage_floor '前端' "$frontend_coverage_report"
 
-# 前端行覆盖率下限（issue #393）：fail-fast 在 Rust 覆盖率生成与扫描之前
-enforce_line_coverage_floor '前端' "$coverage_report_path"
+    require_command "$llvm_cov_bin"
+    printf '%s\n' '[SonarQube] 生成最新 Rust 覆盖率……'
+    run_step "$script_directory/rust-coverage.sh"
+    require_coverage_report 'Rust' "$rust_coverage_report"
+    enforce_line_coverage_floor 'Rust' "$rust_coverage_report"
+    ;;
+esac
 
-# Rust 覆盖率（issue #169）：经 rust-coverage.sh 生成并校验（非空、有
-# 源文件记录、有已覆盖行），与前端 LCOV 一并导入质量报告——「存在 Rust
-# 测试」不等于「已度量覆盖率」，未度量与未覆盖由此可区分。
-printf '%s\n' '[SonarQube] 生成最新 Rust 覆盖率……'
-run_step "$script_directory/rust-coverage.sh"
-
-# Rust 行覆盖率下限（issue #393）：与前端同一口径，扫描发布前复核
-enforce_line_coverage_floor 'Rust' "$rust_coverage_report_path"
-
-# 模块图守卫元守卫（issue #471）：Rust 模块图守卫的唯一挂载点被删（或
-# 用例被清空）时 cargo test 依旧全绿——扫描发布前以工具链测试枚举复核
-# 存活下限，防整建制静默消失。串行 Rust 阶段末位执行；绝不挪进并行
-# vitest 套件（冷 cargo 构建会饿死 spawn 子进程的兄弟测试）。
-printf '%s\n' '[SonarQube] 模块图守卫元检查（issue #471）……'
-run_step "$script_directory/check-rust-module-graph-guard.sh"
+if [ "$gate_scope" = 'native' ] || { [ "$gate_scope" = 'full' ] && [ "$full_native" = '1' ]; }; then
+  require_command "$xcodebuild_bin"
+  printf '%s\n' '[SonarQube] 运行原生 Swift/WKWebView 功能回归（压力测量按需运行）……'
+  run_step run_native_tests
+fi
 
 printf '%s\n' '[SonarQube] 扫描并等待 Quality Gate……'
 run_step run_scanner

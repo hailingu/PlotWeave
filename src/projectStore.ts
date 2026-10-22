@@ -6,13 +6,15 @@
  * 在 src/model/convert.ts。统一约定：updatedAt 对外为 ISO 字符串。
  *
  * 域拆分（issue #39）：seeds（演示种子）、memory（内存回退）、saveChain
- * （§3.1 保存链与删除墓碑）、tauri（Rust 命令域）；本文件保留环境分派、
- * 复制命名规则与统一门面。
+ * （§3.1 保存链与删除墓碑）、tauri（命令域）；本文件保留环境分派、
+ * 复制命名规则与统一门面。环境分派与 typed IPC 宿主调用（P2 宿主
+ * 接口收敛）：内存回退仅限纯浏览器预览，Swift 原生宿主与 Tauri 同走
+ * 命令域（宿主传输未接通时可见失败，不落内存模式）。
  */
 import type { ProjectContent } from './model/content'
 import { IPC_COMMANDS } from './ipc/commands'
 import { ipcInvoke } from './ipc/invoke'
-import { isTauriRuntime } from './ipc/runtime'
+import { isBrowserPreviewHost } from './platform/hostEnvironment'
 import {
   memoryCreate,
   memoryDelete,
@@ -36,10 +38,23 @@ import {
   saveAiSession,
 } from './aiSessionStore'
 import type { AiSession } from './ai/session'
+import { createDiagnostic } from './diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  projectDuplicateFailed: createDiagnostic(
+    'WARN',
+    'plotweave::frontend::project_store',
+    'PROJECT_DUPLICATE_FAILED',
+  ),
+  projectDuplicateCleanupFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::project_store',
+    'PROJECT_DUPLICATE_CLEANUP_FAILED',
+  ),
+}
 
 export type { ProjectContent }
-
-const isTauri = isTauriRuntime()
 
 /** 复制命名（§7.3）：新名 = `{源名} 副本`，与现存项目名冲突则递增序号
  * （` 副本 2`、` 副本 3`…）；拼接结果按字符数超 64（§9.3 校验口径）时先
@@ -62,20 +77,22 @@ function duplicateName(source: string, taken: ReadonlySet<string>): string {
 /** 统一门面：两种环境同签名。 */
 export const projectStore = {
   list: (): Promise<ProjectSummary[]> =>
-    isTauri ? tauriList() : Promise.resolve(memoryList()),
+    !isBrowserPreviewHost() ? tauriList() : Promise.resolve(memoryList()),
 
   create: (name: string): Promise<ProjectSummary> =>
-    isTauri ? tauriCreate(name) : Promise.resolve(memoryCreate(name)),
+    !isBrowserPreviewHost()
+      ? tauriCreate(name)
+      : Promise.resolve(memoryCreate(name)),
 
   load: (id: string): Promise<ProjectContent> =>
-    isTauri ? tauriLoad(id) : memoryLoad(id),
+    !isBrowserPreviewHost() ? tauriLoad(id) : memoryLoad(id),
 
   /** 订阅项目文档保存落定（issue #101）：链上保存成功（含失败登记后的后台
    * 重试成功）时通知，首页据此在导航读取之后再刷新摘要；保存失败不通知。 */
   onProjectSaved,
 
   save: async (id: string, doc: ProjectContent): Promise<void> => {
-    if (isTauri) {
+    if (!isBrowserPreviewHost()) {
       await enqueueSave(id, doc)
       return
     }
@@ -104,7 +121,7 @@ export const projectStore = {
   /** 删除项目（首页卡片菜单，§3.2；确认框由界面层负责）。排进保存链，
    * 迟到的保存/重试不得复活已删项目。 */
   delete: async (id: string): Promise<void> => {
-    if (isTauri) await enqueueDelete(id)
+    if (!isBrowserPreviewHost()) await enqueueDelete(id)
     else await memoryDelete(id)
     deleteAiSession(id)
   },
@@ -122,7 +139,7 @@ export const projectStore = {
     const name = duplicateName(doc.name, taken)
     const meta = await projectStore.create(name)
     try {
-      if (isTauri) {
+      if (!isBrowserPreviewHost()) {
         await ipcInvoke(IPC_COMMANDS.copyProjectAssets, {
           fromId: id,
           toId: meta.id,
@@ -131,18 +148,21 @@ export const projectStore = {
       // 副本后续保存要求目标仍在（PR #224 评审）：copy 释放锁后被排队
       // 的删除可能移走目标——expectExisting 使该保存按「项目不存在」拒绝
       // 并落入下方清理分支，不复活用户删除的副本
-      if (isTauri) {
+      if (!isBrowserPreviewHost()) {
         await enqueueSave(meta.id, { ...doc, name, createdAt: undefined }, true)
       } else {
         await projectStore.save(meta.id, { ...doc, name, createdAt: undefined })
       }
     } catch (err) {
-      console.warn('[projectStore] 复制项目失败，清理已建副本', err)
+      logEvents.projectDuplicateFailed(
+        '[projectStore] 复制项目失败，清理已建副本',
+        err,
+      )
       // 清理完成后再抛：调用方看到失败时首页不会遗留空「副本」卡片；
       // 清理自身也失败时合并双错向前抛出并报告可能遗留的副本 id，
       // 绝不静默吞掉（否则空/半拷贝副本永留首页且无人知晓）
       await projectStore.delete(meta.id).catch((cleanupErr: unknown) => {
-        console.error(
+        logEvents.projectDuplicateCleanupFailed(
           '[projectStore] 副本清理失败，首页可能遗留空副本，可手动删除',
           meta.id,
           cleanupErr,

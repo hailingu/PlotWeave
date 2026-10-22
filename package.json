@@ -1,7 +1,7 @@
 {
   "name": "plotweave",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "engines": {
     "node": ">=24.18.0"
@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:native-canvas": "vite build --config vite.native-canvas.config.ts",
+    "build:native": "npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData build",
     "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json",
     "preview": "vite preview",
     "lint": "eslint .",
@@ -20,7 +22,8 @@
     "hooks:install": "git config core.hooksPath .githooks",
     "sonar:gate": "sh scripts/sonar-quality-gate.sh",
     "check:static": "sh scripts/check-static.sh",
-    "check:size": "node scripts/check-file-size.ts"
+    "check:size": "node scripts/check-file-size.ts",
+    "check:workspace-drift": "node scripts/check-workspace-drift.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

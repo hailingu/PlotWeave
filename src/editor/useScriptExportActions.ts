@@ -1,5 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { errorBannerMessage } from './errorBannerMessage'
+import { isSwiftHost } from '../platform/hostEnvironment'
+import { copySystemText, saveSystemText } from '../platform/systemServices'
 
 /** 用户可选的剧本交付格式，同时决定文件后缀与媒体类型。 */
 export type ScriptExportFormat = 'md' | 'json'
@@ -43,6 +45,10 @@ export interface ScriptExportActions {
 async function writeClipboard(text: string): Promise<boolean> {
   let timeout: ReturnType<typeof setTimeout> | undefined
   try {
+    if (isSwiftHost()) {
+      await copySystemText(text)
+      return true
+    }
     return await Promise.race([
       navigator.clipboard.writeText(text).then(() => true),
       new Promise<boolean>((resolve) => {
@@ -111,11 +117,25 @@ export function useScriptExportActions(
 ): ScriptExportActions {
   const copy = useCopyAction(text)
   const [downloadError, setDownloadError] = useState<string | null>(null)
-  useLayoutEffect(() => setDownloadError(null), [text, format])
-  const download = useCallback(() => {
+  const downloadGeneration = useRef(0)
+  useLayoutEffect(() => {
+    downloadGeneration.current += 1
+    setDownloadError(null)
+    return () => {
+      downloadGeneration.current += 1
+    }
+  }, [text, format, fileName])
+  const performDownload = useCallback(async () => {
+    const generation = ++downloadGeneration.current
     setDownloadError(null)
     let url: string | undefined
     try {
+      if (isSwiftHost()) {
+        const result = await saveSystemText(text, `${fileName}.${format}`)
+        if (generation === downloadGeneration.current && result.cancelled)
+          setDownloadError('已取消保存')
+        return
+      }
       const mime = format === 'json' ? 'application/json' : 'text/markdown'
       const blob = new Blob([text], { type: `${mime};charset=utf-8` })
       url = URL.createObjectURL(blob)
@@ -124,11 +144,16 @@ export function useScriptExportActions(
       a.download = `${fileName}.${format}`
       a.click()
     } catch (error) {
-      setDownloadError(`下载失败：${errorBannerMessage(error)}`)
+      if (generation === downloadGeneration.current)
+        setDownloadError(`下载失败：${errorBannerMessage(error)}`)
     } finally {
       if (url !== undefined) URL.revokeObjectURL(url)
     }
   }, [fileName, format, text])
+
+  const download = useCallback(() => {
+    void performDownload()
+  }, [performDownload])
 
   return { ...copy, download, downloadError }
 }

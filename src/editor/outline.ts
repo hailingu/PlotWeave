@@ -110,10 +110,13 @@ export function hostSceneMap(
   nodes: CanvasNode[],
   edges: Edge[],
 ): Map<string, CanvasNode> {
+  const byId = new Map<string, CanvasNode>()
+  // 与原先 find 一致：脏档重复 id 取首个节点，重复目标仍由最后一条有效边覆盖。
+  for (const node of nodes) if (!byId.has(node.id)) byId.set(node.id, node)
   const map = new Map<string, CanvasNode>()
   for (const e of edges) {
     if (e.sourceHandle === SCENE_SHOT_HANDLE) {
-      const host = nodes.find((n) => n.id === e.source)
+      const host = byId.get(e.source)
       if (host) map.set(e.target, host)
     }
   }

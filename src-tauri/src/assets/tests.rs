@@ -2,60 +2,21 @@
 //! 覆盖库资产导入、生成媒体落盘、AssetRef 预检与目录竞态容错。
 
 use super::*;
-use cap_std::ambient_authority;
+use crate::library_fixture::{
+    asset_entry as library_entry, by_id as library_by_id, cap, cleanup,
+    project_fixture as temp_fixture,
+};
 use serde_json::json;
 use std::fs;
-use std::path::{Path, PathBuf};
-
-/// 测试内核的受信句柄：对临时目录做环境打开（等价生产端锚定句柄）。
-fn cap(p: &Path) -> CapDir {
-    CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
-}
+use std::path::Path;
 
 /// 本测试专用的登记表实例（应用状态语义，非共享全局）。
 fn pending() -> project_media::PendingProjectAssets {
     project_media::PendingProjectAssets::new()
 }
 
-/// 唯一临时根：`{tmp}/pw-assets-test-{new_id}/` 下含 `projects/` 与
-/// `library/assets/`；返回 (projects, library, root)——root 供清理。
-fn temp_fixture() -> (PathBuf, PathBuf, PathBuf) {
-    let root = std::env::temp_dir().join(format!("pw-assets-test-{}", new_id()));
-    fs::create_dir_all(root.join("projects")).expect("创建临时 projects 目录");
-    fs::create_dir_all(root.join("library").join("assets")).expect("创建临时 library 目录");
-    (root.join("projects"), root.join("library"), root)
-}
-
-fn cleanup(root: &Path) {
-    let _ = fs::remove_dir_all(root);
-}
-
 fn seed_project(projects: &Path, id: &str) {
     fs::write(projects.join(format!("{id}.json")), b"{}").expect("写入项目控制文件");
-}
-
-/// 库索引条目的完整合法形状（目标 Record 形状，含 §7.2 必填
-/// source/ISO createdAt；relPath 按需投毒）。
-fn library_entry(id: &str, name: &str, kind: &str, mime: &str, rel: &str) -> Value {
-    json!({
-        "id": id,
-        "name": name,
-        "kind": kind,
-        "mime": mime,
-        "relPath": rel,
-        "source": "upload",
-        "createdAt": "2026-01-01T00:00:00.000Z",
-        "tags": [],
-    })
-}
-
-/// 把库索引条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
-fn library_by_id(entries: impl IntoIterator<Item = Value>) -> Value {
-    let mut m = serde_json::Map::new();
-    for e in entries {
-        m.insert(e["id"].as_str().unwrap().to_string(), e);
-    }
-    json!({ "byId": m })
 }
 
 /// 库索引 + 媒体文件的最小合法 fixture（索引条目按 §7.2 Record 形状）。
@@ -562,4 +523,45 @@ fn ensure_child_dir_host_sync_failure_removes_created_dir_and_retries() {
     drop(dir);
     assert!(projects.join("p-1").is_dir(), "重试后目录应存在");
     cleanup(&root);
+}
+
+/// Issues #649/#650: the graph admission boundary must consume the active disk contract too.
+#[test]
+fn asset_admission_matches_shared_active_path_vectors() {
+    let vectors: Value = serde_json::from_str(include_str!(
+        "../../../crates/plotweave-core/testdata/asset-contract.json"
+    ))
+    .unwrap();
+    let paths = vectors["relPaths"].as_array().unwrap();
+    assert!(!paths.is_empty());
+    for row in paths {
+        let asset = json!({
+            "id":"candidate","relPath":row["input"],"mime":"image/png",
+            "source":"upload","createdAt":"2026-08-01T00:00:00.000Z"
+        });
+        assert_eq!(
+            validate_asset_ref(&asset).is_ok(),
+            row["active"].as_bool().unwrap(),
+            "{}",
+            row["id"]
+        );
+    }
+}
+
+/// An existing quarantine file cannot become an active graph reference through the public preflight.
+#[test]
+fn asset_admission_refuses_existing_quarantine_file() {
+    let (projects, _library, root) = temp_fixture();
+    seed_project(&projects, "p-1");
+    let mut asset = seed_valid_asset(&projects);
+    assert!(validate_project_asset_with(&cap(&projects), "p-1", &asset).is_ok());
+    let quarantine = projects.join("p-1/assets/.trash");
+    fs::create_dir_all(&quarantine).unwrap();
+    fs::write(quarantine.join("held.png"), b"private quarantine").unwrap();
+    asset["relPath"] = json!("assets/.trash/held.png");
+    let result = validate_project_asset_with(&cap(&projects), "p-1", &asset);
+    let bytes = fs::read(quarantine.join("held.png")).unwrap();
+    cleanup(&root);
+    assert!(result.is_err(), "reserved reference admitted: {result:?}");
+    assert_eq!(bytes, b"private quarantine");
 }

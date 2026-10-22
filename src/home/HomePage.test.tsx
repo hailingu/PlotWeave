@@ -248,6 +248,32 @@ describe('HomePage 重命名流程', () => {
     expect(spies.onRenameProject).not.toHaveBeenCalled()
     expect(screen.queryByRole('dialog', { name: '重命名项目' })).toBeNull()
   })
+
+  it('组合输入中的 Enter/Esc 归输入法（issue #570）：不提交也不取消，上屏后的真实 Enter 才提交', () => {
+    const spies = setup()
+    const input = openRename()
+    const dialogOpen = () =>
+      screen.queryByRole('dialog', { name: '重命名项目' }) !== null
+    fireEvent.compositionStart(input)
+    fireEvent.input(input, { target: { value: 'xin' }, isComposing: true })
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true, keyCode: 229 })
+    fireEvent.keyDown(input, {
+      key: 'Escape',
+      isComposing: true,
+      keyCode: 229,
+    })
+    expect(dialogOpen()).toBe(true)
+    expect(spies.onRenameProject).not.toHaveBeenCalled()
+    // WebKit 乱序：compositionend 之后晚到的确认键仅 keyCode 229
+    fireEvent.input(input, { target: { value: '新' } })
+    fireEvent.compositionEnd(input, { data: '新' })
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 })
+    expect(dialogOpen()).toBe(true)
+    expect(spies.onRenameProject).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 })
+    expect(spies.onRenameProject).toHaveBeenCalledWith('p1', '新')
+    expect(dialogOpen()).toBe(false)
+  })
 })
 
 describe('HomePage 删除流程', () => {

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Declares the shared application icon; Xcode merges generated bundle identity and version fields. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIconFile</key>
+    <string>icon.icns</string>
+</dict>
+</plist>

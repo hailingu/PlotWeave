@@ -1,16 +1,20 @@
-import { useEffect, useState } from 'react'
+import { DialogFooter } from '../../ui/DialogFooter'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { DocumentEntity, ProjectSettings } from '../settings'
+import { useModalKeyboard } from '../useModalKeyboard'
 
 /**
  * 设定文档查看/编辑弹窗（issue 56，docs/ui-design.md §5）：长篇自由文本
  * （人物小传/世界观/术语表）的阅读与人工编辑入口。标题/正文整体保存，
  * 关联角色/地点经 chips 切换（relatedIds：kind + id 显式成对，§6）。
  * 「保存」一次派发一条 updateDocument 命令入栈可撤销；Esc / 遮罩 /
- * 关闭按钮放弃编辑（编辑即命令的批量变体：单次确认生成单条命令）。
+ * 关闭按钮放弃编辑（编辑即命令的批量变体：单次确认生成单条命令）；
+ * 组合在途的 Esc 归输入法（取消合成，不关闭弹窗，issue #570）。
  * 弹窗是一次模态编辑会话（issue #126）：打开期间全局撤销/重做/删除快捷键
- * 挂起（useEditorHotkeys，输入框内保持原生文本撤销）；底层文档若仍经残余
- * 路径变化，未编辑草稿跟随刷新、已编辑草稿保留（useDocumentDraft），文档
+ * 挂起（useEditorHotkeys，输入框内保持原生文本撤销）；应用设置快捷键也
+ * 挂起以保留草稿，焦点进入/圈定/归还由 useModalKeyboard 统一管理（#595）。
+ * 底层文档若仍经残余路径变化，未编辑草稿跟随刷新、已编辑草稿保留（useDocumentDraft），文档
  * 删除则弹窗随 id 解析失败由宿主卸载——保存永不把已撤销的旧草稿写回。
  * 经 portal 渲染到 document.body：宿主 .pw-panel 同时带 overflow:hidden
  * 与 backdrop-filter，会为 fixed 后代建立包含块并裁剪到窄侧栏内
@@ -199,13 +203,8 @@ export function DocumentEditorDialog({
 }) {
   const draft = useDocumentDraft(doc)
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  useModalKeyboard(dialogRef, onClose)
 
   const save = () => {
     onSave(doc.id, {
@@ -220,7 +219,9 @@ export function DocumentEditorDialog({
     <div className="pw-overlay" onPointerDown={onClose}>
       {/* 原生 dialog 承载对话框语义（S6819，同 ExportDialog）；Esc/遮罩关闭 */}
       <dialog
+        ref={dialogRef}
         open
+        aria-modal="true"
         className="pw-dialog pw-doc-editor"
         aria-label="编辑设定文档"
         onPointerDown={(e) => e.stopPropagation()}
@@ -239,20 +240,17 @@ export function DocumentEditorDialog({
             onToggle={draft.toggleRelated}
           />
         </div>
-        <div className="pw-dialog-foot">
+        <DialogFooter
+          primary={{
+            label: '保存',
+            onClick: save,
+            disabled: draft.title.trim() === '',
+          }}
+        >
           <span className="pw-dialog-hint">
             标题为空时无法保存；编辑中全局撤销挂起；Esc 关闭放弃改动
           </span>
-          <span className="pw-sp" />
-          <button
-            type="button"
-            className="pw-dialog-btn pw-dialog-btn-primary"
-            disabled={draft.title.trim() === ''}
-            onClick={save}
-          >
-            保存
-          </button>
-        </div>
+        </DialogFooter>
       </dialog>
     </div>,
     document.body,

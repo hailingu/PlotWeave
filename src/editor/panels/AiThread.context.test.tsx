@@ -24,13 +24,14 @@ import { EMPTY_SETTINGS } from '../settings'
 import { mergeNodeData } from '../nodes/patch'
 import type { CanvasNode, DialogueFlowNode } from '../nodes/types'
 import { settingsStore } from '../../settings/settingsStore'
+import { stubElementScrollTo } from './testDomStubs'
 import { RightPanel } from './RightPanel'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 const invokeMock = vi.mocked(invoke)
 
 beforeEach(() => {
-  Element.prototype.scrollTo = vi.fn()
+  stubElementScrollTo() // happy-dom 未实现 scrollTo
   invokeMock
     .mockReset()
     .mockResolvedValue({ role: 'assistant', content: '继续讨论。' })
@@ -217,7 +218,13 @@ async function send(text = '再丰富点') {
   const input = screen.getByLabelText('AI 对话输入')
   fireEvent.change(input, { target: { value: text } })
   fireEvent.keyDown(input, { key: 'Enter' })
-  await waitFor(() => expect(input).toHaveProperty('disabled', false))
+  // busy 时输入行被卸载换成「取消」按钮，捕获的 input 引用随之游离、
+  // disabled 恒为 false——必须活查询等输入行回来（回合落定），否则
+  // waitFor 空转通过，用例在回合落定前继续（CI run 38372244808 flake）
+  await waitFor(() => {
+    expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
+    screen.getByLabelText('AI 对话输入')
+  })
 }
 
 /** 读取实际 llm_chat IPC 负载，包含 chat.ts 序列化后的消息。 */
@@ -420,6 +427,26 @@ describe('AiThread 恢复待执行卡的校验边界', () => {
         .disabled,
     ).toBe(true)
     expect(reopened.history.canUndo).toBe(false)
+  })
+
+  it('第一轮 llm_chat 迟到宏任务落定时 send 仍等待回合结束再重开会话', async () => {
+    const h = await setup()
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(proposal()), 200)
+        }),
+    )
+    await send('丰富旁白')
+    // send 必须等到回合落定：否则会话保存只含用户消息（无卡），重开
+    // 还会认领在途回合使 busy 复位，第二轮发送成为 no-op——records 读
+    // 到第一轮请求而无批次记录（CI run 38372244808 的 flake 形态）
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    h.unmount()
+    await setup({ session, nodes: [] })
+    invokeMock.mockResolvedValueOnce(proposal())
+    await send()
+    expect(records()).toMatchObject([{ status: 'validation_failed' }])
   })
 
   it.each([false, true])(
@@ -711,11 +738,50 @@ describe('AiThread 常驻设置入口（issue #87）', () => {
 
   it('会话读取失败态：聊天操作区不挂载，常驻设置入口仍可用', async () => {
     const onOpenSettings = vi.fn()
-    await setup({ onOpenSettings, loadFailed: true })
-    expect(screen.getByRole('alert')).toBeTruthy()
+    // 恢复会话中的待执行卡也不复活执行入口：失败态整段聊天操作区不挂载
+    // （RightPanel 层同名重复断言已收敛至此，issue #539 分层）
+    const h = await setup({
+      onOpenSettings,
+      loadFailed: true,
+      session: {
+        schemaVersion: 1,
+        entries: [
+          {
+            id: 1,
+            kind: 'msg',
+            role: 'assistant',
+            text: '待执行。',
+            card: {
+              v: {
+                ok: true,
+                items: [
+                  {
+                    kind: 'delete',
+                    danger: true,
+                    label: '删除 开场',
+                    key: 'd0',
+                  },
+                ],
+                commands: [{ op: 'delete_node', nodeId: 'd1' }],
+                issues: [],
+                hasDeletes: true,
+              },
+              status: 'pending',
+            },
+          },
+        ],
+      },
+    })
+    expect(screen.getByRole('alert').textContent).toContain('重新打开项目')
     expect(screen.queryByLabelText('AI 对话输入')).toBeNull()
+    expect(screen.queryByRole('button', { name: /执行/ })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '打开设置' }))
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    // 失败态不触模型、不落盘
+    expect(
+      invokeMock.mock.calls.filter(([cmd]) => cmd === 'llm_chat'),
+    ).toHaveLength(0)
+    expect(h.saved).toHaveLength(0)
   })
 })
 

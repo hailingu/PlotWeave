@@ -8,6 +8,11 @@
  * 过程内核（runStart/applyGenerationResult）为模块级纯函数。
  */
 import {
+  isWebExitPending,
+  runWebOperation,
+  WEB_EXIT_PENDING,
+} from '../../webExitFence'
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -17,8 +22,8 @@ import {
   type SetStateAction,
 } from 'react'
 import type { AssetRef } from '../../model/document'
-import { IPC_COMMANDS } from '../../ipc/commands'
-import { isTauriRuntime } from '../../ipc/runtime'
+import { IPC_COMMANDS, type ImageCancelResult } from '../../ipc/commands'
+import { isBrowserPreviewHost } from '../../platform/hostEnvironment'
 import { settingsStore } from '../../settings/settingsStore'
 import type { AppSettings } from '../../settings/types'
 import { uid } from '../../uid'
@@ -30,6 +35,26 @@ import type { CanvasNode } from '../nodes/types'
 import type { ImageGenApi, ImageJobView } from './context'
 import { resolveImageGenPlan } from './plan'
 import { signatureMatches, type ImageGenInput } from './signature'
+import { createDiagnostic } from '../../diagnostics'
+
+/** 失败事件显式绑定级别、域与机器码；旧前缀和上下文原样交付。 */
+const logEvents = {
+  imageCancelUnmountFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::imagegen',
+    'IMAGE_CANCEL_UNMOUNT_FAILED',
+  ),
+  imageCancelDeletedNodeFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::imagegen',
+    'IMAGE_CANCEL_DELETED_NODE_FAILED',
+  ),
+  imageCancelStaleFailed: createDiagnostic(
+    'ERROR',
+    'plotweave::frontend::imagegen',
+    'IMAGE_CANCEL_STALE_FAILED',
+  ),
+}
 
 /** 非桌面环境的统一文案（浏览器预览无 IPC，无法代理生成）。 */
 const PREVIEW_UNSUPPORTED =
@@ -199,7 +224,7 @@ async function runStart(
   nodeId: string,
   jobId: string,
 ): Promise<void> {
-  if (!isTauriRuntime()) {
+  if (isBrowserPreviewHost()) {
     deps.setJobError(nodeId, PREVIEW_UNSUPPORTED)
     return
   }
@@ -294,12 +319,12 @@ function useJobWriteGuard(
       pendingCancellations.clear()
       for (const job of Object.values(readJobs())) {
         if (job?.status === 'running') {
-          void tauriInvoke(IPC_COMMANDS.llmImageCancel, {
+          void tauriInvoke<ImageCancelResult>(IPC_COMMANDS.llmImageCancel, {
             jobId: job.jobId,
           }).catch((err: unknown) => {
             // 卸载后无 UI 宿主（issue #160）：控制台留痕即可定位——
             // 文案诚实：协作式取消未送达，不承诺已停止远端付费请求
-            console.error(
+            logEvents.imageCancelUnmountFailed(
               '[imagegen] 卸载取消请求失败（协作式取消未送达，远端生成可能继续并计费）',
               job.jobId,
               err,
@@ -338,12 +363,12 @@ function useNodeDeletionWatch(
     for (const [nodeId, job] of Object.entries(jobsRef.current)) {
       if (alive.has(nodeId)) continue
       if (job?.status === 'running') {
-        void tauriInvoke(IPC_COMMANDS.llmImageCancel, {
+        void tauriInvoke<ImageCancelResult>(IPC_COMMANDS.llmImageCancel, {
           jobId: job.jobId,
         }).catch((err: unknown) => {
           // 宿主已删无节点级 UI 宿主（issue #160）：控制台留痕定位；
           // 结果到达时 jobAlive 已清，仍按取消语义丢弃
-          console.error(
+          logEvents.imageCancelDeletedNodeFailed(
             '[imagegen] 宿主节点已删除，取消请求失败（远端生成可能继续并计费，结果将被丢弃）',
             job.jobId,
             err,
@@ -431,6 +456,10 @@ function useImageStart(
     table
   return useCallback(
     (nodeId: string) => {
+      if (isWebExitPending()) {
+        setJobError(nodeId, WEB_EXIT_PENDING)
+        return
+      }
       const node = nodesRef.current.find((n) => n.id === nodeId)
       if (node?.type !== 'image') return
       if (jobsRef.current[nodeId]?.status === 'running') return
@@ -442,11 +471,13 @@ function useImageStart(
         [nodeId]: { status: 'running', jobId },
       }
       setJobs(jobsRef.current)
-      void runStart(
-        { projectId, nodesRef, jobAlive, setJobError, clearJob, applyResult },
-        nodeId,
-        jobId,
-      )
+      void runWebOperation(() =>
+        runStart(
+          { projectId, nodesRef, jobAlive, setJobError, clearJob, applyResult },
+          nodeId,
+          jobId,
+        ),
+      ).catch((error: unknown) => setJobError(nodeId, errorText(error)))
     },
     [
       applyResult,
@@ -481,7 +512,9 @@ function useImageCancel(
       pendingCancellationsRef.current.set(nodeId, jobId)
       const ownsDiagnostic = () =>
         pendingCancellationsRef.current.get(nodeId) === jobId
-      void tauriInvoke(IPC_COMMANDS.llmImageCancel, { jobId })
+      void tauriInvoke<ImageCancelResult>(IPC_COMMANDS.llmImageCancel, {
+        jobId,
+      })
         .catch((err: unknown) => {
           if (
             ownsDiagnostic() &&
@@ -492,7 +525,7 @@ function useImageCancel(
               `取消请求发送失败（协作式取消：远端生成可能继续并计费，结果到达时将被丢弃）：${errorText(err)}`,
             )
           } else {
-            console.error(
+            logEvents.imageCancelStaleFailed(
               '[imagegen] 取消请求失败（作业已更替或宿主已移除，远端生成可能继续并计费，结果将被丢弃）',
               jobId,
               err,

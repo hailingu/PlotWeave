@@ -1,22 +1,44 @@
 import {
+  writeNativeCoverageSource,
+  writeXccovStub,
+} from './native-coverage-fixture'
+import {
   chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  gitFixtureEnvironment,
+  gitScenarioFixture,
+} from './git-scenario-fixture'
+import { writeGateRoutingProbe } from './gate-routing-probe'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryDirectories: string[] = []
 const zeroSha = '0000000000000000000000000000000000000000'
+/** 路由矩阵只观察门禁边界；跨完整流水线的用例显式选择真实门禁。 */
+function repositoryFixture(fullGate: boolean) {
+  return gitScenarioFixture((root) => {
+    initScratchRepository(root)
+    commitScenarioTooling(root, fullGate)
+    seedHistory(root)
+  })
+}
+const repositories = repositoryFixture(false)
+const fullRepositories = repositoryFixture(true)
+
+afterAll(() => {
+  repositories.dispose()
+  fullRepositories.dispose()
+})
 
 /** 在被推分支安装零依赖 lifecycle 探针；只记录令牌是否存在，不记录值。 */
 function commitInstallProbe(scenario: PushScenario, body: string): string {
@@ -60,7 +82,17 @@ function commitInstallProbe(scenario: PushScenario, body: string): string {
       'lifecycle.cjs',
     ]).status,
   ).toBe(0)
-  expect(scenario.git(['commit', '-q', '-m', 'install probe']).status).toBe(0)
+  // 此提交仅播种安装输入；真正被测的 push 仍使用真实钩子与完整门禁。
+  expect(
+    scenario.git([
+      '-c',
+      'core.hooksPath=/dev/null',
+      'commit',
+      '-q',
+      '-m',
+      'install probe',
+    ]).status,
+  ).toBe(0)
   expect(scenario.git(['checkout', '-q', 'main']).status).toBe(0)
   const npmPath = resolve(scenario.root, 'bin', 'npm')
   const original = readFileSync(npmPath, 'utf8')
@@ -75,6 +107,41 @@ ${original}`,
   return probePath
 }
 
+/** 在真实 lifecycle 就绪后触发期限回调，避免用 1 秒预算压缩 npm 启动。
+ * 只替换安装监督器的默认期限计时；真实进程、期限处理器与 KILL 升级仍执行。 */
+function triggerInstallDeadlineWhenReady(scenario: PushScenario): void {
+  const clock = resolve(scenario.root, 'bin', 'install-clock.cjs')
+  writeFileSync(
+    clock,
+    String.raw`
+if (process.argv[1]?.endsWith('/pre-push-install.mjs')) {
+  const { existsSync } = require('node:fs')
+  const realSetTimeout = global.setTimeout
+  global.setTimeout = (callback, delay, ...args) => {
+    if (delay !== 300_000) return realSetTimeout(callback, delay, ...args)
+    const started = Date.now()
+    const timer = realSetTimeout(() => {
+      const ready = existsSync(process.env.PLOTWEAVE_TEST_INSTALL_PROBE)
+      if (!ready && Date.now() - started < 20_000) return timer.refresh()
+      if (!ready) console.error('[TEST_INSTALL_NOT_READY] lifecycle 未就绪')
+      callback(...args)
+    }, 20)
+    return timer
+  }
+}
+`,
+  )
+  const node = resolve(scenario.root, 'bin', 'controlled-node')
+  writeExecutable(
+    node,
+    'exec "$PLOTWEAVE_REAL_NODE_BIN" --require "$PLOTWEAVE_TEST_INSTALL_CLOCK" "$@"',
+  )
+  scenario.env.PLOTWEAVE_REAL_NODE_BIN = process.execPath
+  scenario.env.PLOTWEAVE_TEST_INSTALL_CLOCK = clock
+  scenario.env.PLOTWEAVE_NODE_BIN = node
+  scenario.env.PLOTWEAVE_NPM_INSTALL_TIMEOUT = '300'
+}
+
 /** 创建一个仅记录调用并返回受控结果的外部命令替身。 */
 function writeExecutable(path: string, body: string): void {
   writeFileSync(path, `#!/bin/sh\n${body}\n`)
@@ -84,12 +151,17 @@ function writeExecutable(path: string, body: string): void {
 /** 在沙箱内初始化一个 git 仓库并返回其根目录。 */
 function initScratchRepository(sandbox: string): void {
   const git = (args: string[]): void => {
-    const result = spawnSync('git', args, { cwd: sandbox, encoding: 'utf8' })
+    const result = spawnSync('git', args, {
+      cwd: sandbox,
+      encoding: 'utf8',
+      env: gitFixtureEnvironment(),
+    })
     if (result.status !== 0) {
       throw new Error(`git ${args.join(' ')} 失败：${result.stderr}`)
     }
   }
   git(['init', '-q', '-b', 'main'])
+  git(['config', 'core.hooksPath', '/dev/null'])
   git(['config', 'user.email', 'pushgate@test'])
   git(['config', 'user.name', 'push-gate-test'])
 }
@@ -97,7 +169,7 @@ function initScratchRepository(sandbox: string): void {
 /** pre-push 按 ref 分派场景沙箱：真实钩子与门禁脚本（复制进沙箱并提交，
  * 使其成为被跟踪内容而非未跟踪降级因素）+ 记录并受控返回的替身命令。
  * 快路径以「无 npm ci 调用」识别，慢路径以「恰一次 npm ci + 临时
- * worktree 事后清理」识别；门禁次数以 sonar-scanner 替身日志行计。 */
+ * worktree 事后清理」识别；门禁次数以探针或 sonar-scanner 替身日志行计。 */
 interface PushScenario {
   readonly env: NodeJS.ProcessEnv
   readonly git: (args: string[]) => { status: number | null; stderr: string }
@@ -109,7 +181,7 @@ interface PushScenario {
     stderr: string
     stdout: string
   }
-  readonly scannerRuns: () => number
+  readonly gateRuns: () => number
   readonly installRuns: () => number
   readonly worktreeCount: () => number
   readonly headSha: () => string
@@ -125,7 +197,10 @@ function seedHistory(sandbox: string): void {
       ['add', '.'],
       ['commit', '-q', '-m', message],
     ] as const) {
-      const result = spawnSync('git', [...args], { cwd: sandbox })
+      const result = spawnSync('git', [...args], {
+        cwd: sandbox,
+        env: gitFixtureEnvironment(),
+      })
       if (result.status !== 0) {
         throw new Error(`播种提交失败：${message}`)
       }
@@ -135,12 +210,16 @@ function seedHistory(sandbox: string): void {
   seed('f.txt', 'one\ntwo', 'two')
   const branch = spawnSync('git', ['checkout', '-q', '-b', 'side', 'HEAD~1'], {
     cwd: sandbox,
+    env: gitFixtureEnvironment(),
   })
   if (branch.status !== 0) {
     throw new Error('播种分支失败：side')
   }
   seed('g.txt', 'sidec', 'sidec')
-  const back = spawnSync('git', ['checkout', '-q', 'main'], { cwd: sandbox })
+  const back = spawnSync('git', ['checkout', '-q', 'main'], {
+    cwd: sandbox,
+    env: gitFixtureEnvironment(),
+  })
   if (back.status !== 0) {
     throw new Error('切回 main 失败')
   }
@@ -148,20 +227,27 @@ function seedHistory(sandbox: string): void {
 
 /** 复制真实钩子与门禁脚本进沙箱并提交为被跟踪内容（沙箱内的门禁工具
  * 属于被推状态，不得构成快路径的未跟踪降级因素）。 */
-function commitScenarioTooling(sandbox: string): void {
+function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
+  writeNativeCoverageSource(sandbox)
   mkdirSync(resolve(sandbox, 'bin'), { recursive: true })
   mkdirSync(resolve(sandbox, 'scripts'), { recursive: true })
   mkdirSync(resolve(sandbox, '.githooks'), { recursive: true })
   for (const script of [
+    'check-docs.sh',
     'check-file-size.ts',
-    'check-rust-module-graph-guard.sh',
     'check-static.sh',
     'file-size-baseline.json',
     'gate-history.sh',
+    'gate-scope-core.ts',
+    'gate-scope.ts',
     'gate-tree-marker.sh',
     'pre-push-install.mjs',
+    'pre-push-install-launcher.mjs',
+    'pre-push-install-watchdog.mjs',
     'rust-coverage.sh',
     'sonar-quality-gate.sh',
+    'test-native.sh',
+    'native-coverage.ts',
   ]) {
     copyFileSync(
       resolve(repositoryRoot, 'scripts', script),
@@ -179,6 +265,9 @@ function commitScenarioTooling(sandbox: string): void {
       resolve(sandbox, '.githooks', hook),
     )
   }
+  if (!fullGate) {
+    writeGateRoutingProbe(resolve(sandbox, 'scripts/sonar-quality-gate.sh'))
+  }
   // 沙箱产物走根层文件（calls.log 等）：提交沙箱级 .gitignore，使快路径
   // 的未跟踪检查在产物存在时仍可成立（--exclude-standard 生效的实证）
   writeFileSync(
@@ -190,18 +279,23 @@ function commitScenarioTooling(sandbox: string): void {
       'gate-history.jsonl',
       '/bin/',
       '/coverage/',
+      '/native/macos/build/',
       '/rust-coverage/',
       '/.scannerwork/',
       '/origin.git/',
       '',
     ].join('\n'),
   )
-  const commit = spawnSync('git', ['add', '.', '-A'], { cwd: sandbox })
+  const commit = spawnSync('git', ['add', '.', '-A'], {
+    cwd: sandbox,
+    env: gitFixtureEnvironment(),
+  })
   if (commit.status !== 0) {
     throw new Error('暂存沙箱工具失败')
   }
   const tooling = spawnSync('git', ['commit', '-q', '-m', 'tooling'], {
     cwd: sandbox,
+    env: gitFixtureEnvironment(),
   })
   if (tooling.status !== 0) {
     throw new Error('提交沙箱工具失败')
@@ -211,37 +305,36 @@ function commitScenarioTooling(sandbox: string): void {
 /** 安装记录并受控返回的外部命令替身（npm / cargo-llvm-cov / 扫描器 /
  * curl），门禁次数以 sonar-scanner 日志行计、依赖安装以 npm ci 计。 */
 function writeScenarioStubs(bin: string): void {
+  writeXccovStub(resolve(bin, 'xcrun'))
+  writeExecutable(
+    resolve(bin, 'xcodebuild'),
+    String.raw`printf 'xcodebuild %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
+exit "$PLOTWEAVE_TEST_XCODEBUILD_EXIT"`,
+  )
   writeExecutable(
     resolve(bin, 'npm'),
     String.raw`printf 'npm %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-if [ "$*" = "run test:coverage" ]; then
-  mkdir -p "$(dirname "$PLOTWEAVE_COVERAGE_REPORT_PATH")"
-  printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
-fi`,
+case "$*" in
+  # 门禁下发 CPU 预算（--maxWorkers N），按前缀匹配分发
+  "run test:coverage"*)
+    printf '%s\n' 'TN:' 'SF:src/example.ts' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_COVERAGE_REPORT_PATH"
+    ;;
+esac`,
   )
   writeExecutable(
     resolve(bin, 'cargo-llvm-cov'),
     String.raw`printf 'cargo-llvm-cov %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$PLOTWEAVE_RUST_COVERAGE_REPORT_PATH"`,
-  )
-  // cargo 替身（issue #471 元守卫）：门禁的 check-rust-module-graph-guard.sh
-  // 经 PLOTWEAVE_CARGO_BIN 调用 cargo 枚举——输出高于存活下限 90 的受控
-  // module_graph:: 用例清单。
-  writeExecutable(
-    resolve(bin, 'cargo'),
-    String.raw`printf 'cargo %s\n' "$*" >> "$PLOTWEAVE_TEST_LOG"
-i=0
-while [ "$i" -lt 95 ]; do
-  printf 'module_graph::case_%s: test\n' "$i"
-  i=$((i + 1))
-done`,
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--output-path' ]; then output=$2; break; fi
+  shift
+done
+printf '%s\n' 'TN:' 'SF:src-tauri/src/example.rs' 'DA:1,1' 'end_of_record' > "$output"`,
   )
   writeExecutable(
     resolve(bin, 'sonar-scanner'),
     String.raw`printf 'sonar-scanner\n' >> "$PLOTWEAVE_TEST_LOG"
 printf 'analyzed-tree %s\n' "$(git write-tree)" >> "$PLOTWEAVE_TEST_LOG"
 printf 'untracked-input %s\n' "$(git ls-files --others --exclude-standard tests fixtures docs)" >> "$PLOTWEAVE_TEST_LOG"
-mkdir -p "$(dirname "$PLOTWEAVE_SONAR_REPORT_PATH")"
 printf '%s\n' 'projectKey=PlotWeave' 'serverUrl=http://sonar.test' > "$PLOTWEAVE_SONAR_REPORT_PATH"`,
   )
   writeExecutable(
@@ -269,10 +362,16 @@ function scenarioEnvironment(
   qualityGateStatus: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...gitFixtureEnvironment(),
     // 外层慢路径导出的根属于被推树；本场景的门禁只能读取自己的沙箱。
     PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
-    PLOTWEAVE_CARGO_BIN: resolve(bin, 'cargo'),
+    PLOTWEAVE_XCODEBUILD_BIN: resolve(bin, 'xcodebuild'),
+    PLOTWEAVE_XCRUN_BIN: resolve(bin, 'xcrun'),
+    PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE: '',
+    GITHUB_STEP_SUMMARY: resolve(
+      sandbox,
+      'native/macos/build/coverage/step-summary.md',
+    ),
     PLOTWEAVE_CARGO_LLVM_COV_BIN: resolve(bin, 'cargo-llvm-cov'),
     PLOTWEAVE_CURL_BIN: resolve(bin, 'curl'),
     PLOTWEAVE_COVERAGE_REPORT_PATH: resolve(sandbox, 'coverage', 'lcov.info'),
@@ -296,6 +395,7 @@ function scenarioEnvironment(
     PLOTWEAVE_TEST_LOG: logPath,
     PLOTWEAVE_TEST_QUALITY_GATE_STATUS: qualityGateStatus,
     PLOTWEAVE_TEST_UNRESOLVED_ISSUES: '0',
+    PLOTWEAVE_TEST_XCODEBUILD_EXIT: '0',
     SONAR_HOST_URL: 'http://sonar.test',
   }
   delete env.SONAR_TOKEN
@@ -310,9 +410,11 @@ function addBareRemote(sandbox: string): void {
   const remote = resolve(sandbox, 'origin.git')
   const init = spawnSync('git', ['init', '--bare', '-q', remote], {
     cwd: sandbox,
+    env: gitFixtureEnvironment(),
   })
   const add = spawnSync('git', ['remote', 'add', 'origin', remote], {
     cwd: sandbox,
+    env: gitFixtureEnvironment(),
   })
   if (init.status !== 0 || add.status !== 0) {
     throw new Error('创建裸远端失败')
@@ -324,18 +426,21 @@ function addBareRemote(sandbox: string): void {
  * 模拟 git 向提交类钩子导出的工作树定位环境（GIT_INDEX_FILE 等按 cwd
  * 相对解析），验证慢路径子进程对其免疫。 */
 function preparePushScenario(options?: {
+  fullGate?: boolean
   gitHookLocalization?: boolean
   qualityGateStatus?: string
   withRemote?: boolean
 }): PushScenario {
-  const sandbox = mkdtempSync(resolve(tmpdir(), 'plotweave-push-refs-'))
+  const sandbox = (options?.fullGate ? fullRepositories : repositories).create()
   temporaryDirectories.push(sandbox)
-  initScratchRepository(sandbox)
-  commitScenarioTooling(sandbox)
-  seedHistory(sandbox)
 
   const logPath = resolve(sandbox, 'calls.log')
   const bin = resolve(sandbox, 'bin')
+  mkdirSync(resolve(sandbox, 'coverage'))
+  mkdirSync(resolve(sandbox, '.scannerwork'))
+  mkdirSync(resolve(sandbox, 'native/macos/build/coverage'), {
+    recursive: true,
+  })
   writeScenarioStubs(bin)
   const env = scenarioEnvironment(
     sandbox,
@@ -350,6 +455,7 @@ function preparePushScenario(options?: {
 
   const wire = spawnSync('git', ['config', 'core.hooksPath', '.githooks'], {
     cwd: sandbox,
+    env: gitFixtureEnvironment(),
   })
   if (wire.status !== 0) {
     throw new Error('接线 core.hooksPath 失败')
@@ -386,7 +492,8 @@ function preparePushScenario(options?: {
     pendingPath: resolve(sandbox, 'gate-pending.jsonl'),
     root: sandbox,
     runHookWithStdin,
-    scannerRuns: () => countExactLines('sonar-scanner'),
+    gateRuns: () =>
+      countExactLines('sonar-scanner') + countExactLines('gate-probe'),
     installRuns: () => countExactLines('npm ci'),
     worktreeCount: () =>
       git(['worktree', 'list']).stdout.split('\n').filter(Boolean).length,
@@ -449,7 +556,7 @@ describe(
   { timeout: 30_000 },
   () => {
     it('真实 npm ci prepare 无 Sonar 令牌，推送仍完整认证并绑定原始树', () => {
-      const scenario = preparePushScenario()
+      const scenario = preparePushScenario({ fullGate: true })
       const probe = commitInstallProbe(
         scenario,
         String.raw`
@@ -472,27 +579,27 @@ fs.writeFileSync(process.env.PLOTWEAVE_TEST_INSTALL_PROBE, JSON.stringify({
     })
 
     it('真实 npm ci 超时阻止推送并终止忽略 TERM 的 lifecycle 子进程', () => {
-      const scenario = preparePushScenario()
+      const scenario = preparePushScenario({ fullGate: true })
       const probe = commitInstallProbe(
         scenario,
         String.raw`
 const { spawn } = require('node:child_process')
 process.on('SIGTERM', () => {})
 spawn(process.execPath, ['-e', \`
-  require('node:fs').writeFileSync(process.env.PLOTWEAVE_TEST_INSTALL_PROBE, String(process.pid))
   process.on('SIGTERM', () => {})
-  setTimeout(() => process.exit(0), 5000)
+  require('node:fs').writeFileSync(process.env.PLOTWEAVE_TEST_INSTALL_PROBE, String(process.pid))
+  setInterval(() => {}, 1000)
 \`], { stdio: 'inherit' })
-setTimeout(() => process.exit(0), 6000)`.replaceAll('\\`', '`'),
+setInterval(() => {}, 1000)`.replaceAll('\\`', '`'),
       )
-      scenario.env.PLOTWEAVE_NPM_INSTALL_TIMEOUT = '1'
+      triggerInstallDeadlineWhenReady(scenario)
       const push = scenario.git(['push', 'origin', 'side'])
       expect(push.status).not.toBe(0)
       // Stable diagnostic contract: quality-gate-push.md, issue #462.
       expect(push.stderr).toContain('[PRE_PUSH_INSTALL_TIMEOUT]')
       const pid = Number(readFileSync(probe, 'utf8'))
       expect(() => process.kill(pid, 0)).toThrow()
-      expect(scenario.scannerRuns()).toBe(0)
+      expect(scenario.gateRuns()).toBe(0)
       expect(scenario.worktreeCount()).toBe(1)
       expect(
         scenario.git(['ls-remote', 'origin', 'refs/heads/side']).stdout.trim(),
@@ -507,7 +614,7 @@ describe('pre-push 安装失败封闭（issue #462）', { timeout: 30_000 }, () 
     writeExecutable(resolve(scenario.root, 'bin', 'npm'), 'exit 23')
     const push = scenario.git(['push', 'origin', 'side'])
     expect(push.status).not.toBe(0)
-    expect(scenario.scannerRuns()).toBe(0)
+    expect(scenario.gateRuns()).toBe(0)
     expect(scenario.worktreeCount()).toBe(1)
     expect(
       scenario.git(['ls-remote', 'origin', 'refs/heads/side']).stdout.trim(),
@@ -524,11 +631,99 @@ describe('pre-push 安装失败封闭（issue #462）', { timeout: 30_000 }, () 
       // Stable diagnostic contract: quality-gate-push.md, issue #462.
       expect(push.stderr).toContain('[PRE_PUSH_INSTALL_TIMEOUT_INVALID]')
       expect(scenario.installRuns()).toBe(0)
-      expect(scenario.scannerRuns()).toBe(0)
+      expect(scenario.gateRuns()).toBe(0)
       expect(scenario.worktreeCount()).toBe(1)
     },
   )
 })
+
+/** 真实 lifecycle 只挂起自己的祖先监督器；记录安装组用于失败用例的兜底清理。 */
+function commitStoppedSupervisorProbe(scenario: PushScenario): string {
+  return commitInstallProbe(
+    scenario,
+    String.raw`
+const { execFileSync, spawn } = require('node:child_process')
+const fs = require('node:fs')
+let ancestor = process.ppid
+let supervisor
+let group
+while (ancestor > 1) {
+  const row = execFileSync('ps', ['-o', 'ppid=,command=', '-p', String(ancestor)], { encoding: 'utf8' }).trim()
+  if (row.includes('/pre-push-install-launcher.mjs')) group = ancestor
+  if (row.includes('/pre-push-install.mjs')) { supervisor = ancestor; break }
+  ancestor = Number(row.split(/\s+/)[0])
+}
+if (!supervisor || !group) throw new Error('未找到真实安装监督进程')
+process.on('SIGTERM', () => {})
+const descendant = spawn(process.execPath, ['-e', \`
+  process.on('SIGTERM', () => {})
+  process.send(process.pid)
+  setInterval(() => {}, 1000)
+\`], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })
+descendant.once('message', (pid) => {
+  fs.writeFileSync(process.env.PLOTWEAVE_TEST_INSTALL_PROBE, JSON.stringify({ supervisor, group, descendant: pid }))
+  process.kill(supervisor, 'SIGSTOP')
+})
+setInterval(() => {}, 1000)`.replaceAll('\\`', '`'),
+  )
+}
+
+/** 清理自己创建的组与监督器；已结束无需处理，其他信号错误仍显式报告。 */
+function killStoppedInstallProbe(probe: string): void {
+  if (!existsSync(probe)) return
+  const pids = JSON.parse(readFileSync(probe, 'utf8')) as {
+    supervisor: number
+    group: number
+  }
+  for (const pid of [pids.supervisor, -pids.group]) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch (error) {
+      if (!(
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'ESRCH'
+      ))
+        throw error
+    }
+  }
+}
+
+it(
+  '真实 npm ci 挂起监督器后仍限期阻止推送并清理（issue #497）',
+  { timeout: 20_000 },
+  () => {
+    const scenario = preparePushScenario({ fullGate: true })
+    const probe = commitStoppedSupervisorProbe(scenario)
+    scenario.env.PLOTWEAVE_NPM_INSTALL_TIMEOUT = '3'
+    try {
+      const push = spawnSync('git', ['push', 'origin', 'side'], {
+        cwd: scenario.root,
+        env: scenario.env,
+        encoding: 'utf8',
+        timeout: 10_000,
+      })
+      expect(push.error, push.stderr).toBeUndefined()
+      expect(push.status).not.toBe(0)
+      // Stable diagnostic contract: quality-gate-push.md, issue #497.
+      expect(push.stderr).toContain('[PRE_PUSH_INSTALL_TIMEOUT]')
+      const pids = JSON.parse(readFileSync(probe, 'utf8')) as {
+        supervisor: number
+        group: number
+        descendant: number
+      }
+      for (const pid of Object.values(pids))
+        expect(() => process.kill(pid, 0)).toThrow()
+      expect(scenario.gateRuns()).toBe(0)
+      expect(scenario.worktreeCount()).toBe(1)
+      expect(
+        scenario.git(['ls-remote', 'origin', 'refs/heads/side']).stdout.trim(),
+      ).toBe('')
+    } finally {
+      killStoppedInstallProbe(probe)
+    }
+  },
+)
 
 describe(
   'pre-push 测试沙箱根隔离（issue #405 慢路径门禁）',
@@ -536,7 +731,7 @@ describe(
   () => {
     it('继承外层门禁根覆盖时，沙箱快路径仍扫描和记录自己的提交', () => {
       vi.stubEnv('PLOTWEAVE_GATE_REPOSITORY_ROOT', repositoryRoot)
-      const scenario = preparePushScenario()
+      const scenario = preparePushScenario({ fullGate: true })
 
       const push = scenario.git(['push', 'origin', 'main'])
 
@@ -552,7 +747,7 @@ it(
   { timeout: 30_000 },
   () => {
     // 真实 pre-push 慢路径必须应用当前额度，而非把当前登记当成历史树清单。
-    const scenario = preparePushScenario()
+    const scenario = preparePushScenario({ fullGate: true })
     mkdirSync(resolve(scenario.root, 'src'))
     writeFileSync(resolve(scenario.root, 'src/legacy.ts'), '\n'.repeat(900))
     writeFileSync(
@@ -574,7 +769,7 @@ it(
     const result = scenario.git(['push', 'origin', 'side'])
     expect(result.status, result.stderr).toBe(0)
     expect(scenario.installRuns()).toBe(1)
-    expect(scenario.scannerRuns()).toBe(1)
+    expect(scenario.gateRuns()).toBe(1)
     expectOriginalTree(scenario, pushed)
     expect(scenario.worktreeCount()).toBe(1)
   },
@@ -669,19 +864,24 @@ describe(
       const push = scenario.git(['push', 'origin', 'main'])
 
       expect(push.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
       expect(scenario.installRuns()).toBe(0)
       expect(scenario.worktreeCount()).toBe(1)
       expectRecordedCommit(scenario, scenario.headSha())
-      expect(readRecords(scenario.historyPath).length).toBeGreaterThanOrEqual(1)
+      // 推送不物化（PR #581 评审 5537970549）：记录留在待物化文件
+      expect(readRecords(scenario.historyPath)).toHaveLength(0)
+      expect(readRecords(scenario.pendingPath).length).toBeGreaterThanOrEqual(1)
     })
 
     it('快路径门禁失败仍阻止推送：远端不出现该 ref', () => {
-      const scenario = preparePushScenario({ qualityGateStatus: 'ERROR' })
+      const scenario = preparePushScenario({
+        qualityGateStatus: 'ERROR',
+        fullGate: true,
+      })
       const push = scenario.git(['push', 'origin', 'main'])
 
       expect(push.status).not.toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
       expect(
         scenario.git(['ls-remote', 'origin', 'refs/heads/main']).stdout.trim(),
       ).toBe('')
@@ -694,11 +894,11 @@ describe(
   { timeout: 30_000 },
   () => {
     it('推送非检出分支：临时 worktree 检出被推提交执行门禁，分析对象即被推提交（探针自动化）', () => {
-      const scenario = preparePushScenario()
+      const scenario = preparePushScenario({ fullGate: true })
       const push = scenario.git(['push', 'origin', 'side'])
 
       expect(push.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
       // 慢路径标识：临时 worktree 的依赖安装恰发生一次
       expect(scenario.installRuns()).toBe(1)
       expect(scenario.worktreeCount()).toBe(1)
@@ -709,13 +909,13 @@ describe(
     })
 
     it('脏工作树推送当前分支（复现 2b）：在临时 worktree 分析被推提交，本地差异原样保留', () => {
-      const scenario = preparePushScenario()
+      const scenario = preparePushScenario({ fullGate: true })
       writeFileSync(resolve(scenario.root, 'f.txt'), 'one\ntwo\ndirty\n')
 
       const push = scenario.git(['push', 'origin', 'main'])
 
       expect(push.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
       expect(scenario.installRuns()).toBe(1)
       expectRecordedCommit(scenario, scenario.headSha())
       expect(readFileSync(resolve(scenario.root, 'f.txt'), 'utf8')).toContain(
@@ -817,11 +1017,14 @@ describe(
   },
   () => {
     it('慢路径门禁失败阻止推送并清理临时 worktree', () => {
-      const scenario = preparePushScenario({ qualityGateStatus: 'ERROR' })
+      const scenario = preparePushScenario({
+        qualityGateStatus: 'ERROR',
+        fullGate: true,
+      })
       const push = scenario.git(['push', 'origin', 'side'])
 
       expect(push.status).not.toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
       expect(scenario.installRuns()).toBe(1)
       expect(scenario.worktreeCount()).toBe(1)
       expect(
@@ -830,7 +1033,10 @@ describe(
     })
 
     it('提交类钩子导出的 git 定位环境（GIT_INDEX_FILE 等相对 .git/index）不破坏慢路径', () => {
-      const scenario = preparePushScenario({ gitHookLocalization: true })
+      const scenario = preparePushScenario({
+        gitHookLocalization: true,
+        fullGate: true,
+      })
       const push = scenario.git(['push', 'origin', 'side'])
 
       expect(push.status).toBe(0)
@@ -845,12 +1051,12 @@ describe(
   'pre-push 多 ref 分派：按唯一提交去重，快慢路径可并存（issue #405）',
   { timeout: 30_000 },
   () => {
-    it('一次推多个不同 ref：每个唯一提交各一次完整门禁，快慢路径并存', () => {
-      const scenario = preparePushScenario()
+    it('一次推多个不同 ref：每个唯一提交各一次门禁调用，快慢路径并存', () => {
+      const scenario = preparePushScenario({ fullGate: true })
       const push = scenario.git(['push', 'origin', 'main', 'side'])
 
       expect(push.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(2)
+      expect(scenario.gateRuns()).toBe(2)
       // side 走慢路径恰一次依赖安装；main 为快路径不安装
       expect(scenario.installRuns()).toBe(1)
       expectRecordedCommit(scenario, scenario.headSha())
@@ -866,7 +1072,7 @@ describe(
       const push = scenario.git(['push', 'origin', 'side', 'v-side'])
 
       expect(push.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(1)
+      expect(scenario.gateRuns()).toBe(1)
       expect(scenario.installRuns()).toBe(1)
       expectRecordedCommit(scenario, scenario.sideSha())
     })
@@ -882,18 +1088,18 @@ describe(
     it('真实删除推送不产生门禁调用：删除不导出代码', () => {
       const scenario = preparePushScenario()
       expect(scenario.git(['push', 'origin', 'side']).status).toBe(0)
-      const runsAfterSide = scenario.scannerRuns()
+      const runsAfterSide = scenario.gateRuns()
 
       const remove = scenario.git(['push', 'origin', ':side'])
 
       expect(remove.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(runsAfterSide)
+      expect(scenario.gateRuns()).toBe(runsAfterSide)
       expect(
         scenario.git(['ls-remote', 'origin', 'refs/heads/side']).stdout.trim(),
       ).toBe('')
     })
 
-    it('stdin 无待推 ref：不执行门禁，仍物化待物化行', () => {
+    it('stdin 无待推 ref：不执行门禁、不物化，待物化行原样保留（PR #581 评审 5537970549）', () => {
       const scenario = preparePushScenario({ withRemote: false })
       const seed =
         '{"timestamp":"2026-01-01T00:00:00Z","tree":"seed-tree","head":"seed-head",' +
@@ -904,9 +1110,9 @@ describe(
       const result = scenario.runHookWithStdin('')
 
       expect(result.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(0)
-      expect(readRecords(scenario.historyPath)).toHaveLength(1)
-      expect(readRecords(scenario.pendingPath)).toHaveLength(0)
+      expect(scenario.gateRuns()).toBe(0)
+      expect(readRecords(scenario.historyPath)).toHaveLength(0)
+      expect(readRecords(scenario.pendingPath)).toHaveLength(1)
     })
 
     it('仅删除行（本地 sha 全零）不执行门禁', () => {
@@ -916,7 +1122,7 @@ describe(
       )
 
       expect(result.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(0)
+      expect(scenario.gateRuns()).toBe(0)
       expect(scenario.installRuns()).toBe(0)
     })
   },
@@ -962,7 +1168,7 @@ describe(
       expect(result.status).not.toBe(0)
       expect(`${result.stdout}${result.stderr}`).toContain('待推送')
       expect(`${result.stdout}${result.stderr}`).toContain('refs/heads/main')
-      expect(scenario.scannerRuns()).toBe(0)
+      expect(scenario.gateRuns()).toBe(0)
       expect(scenario.installRuns()).toBe(0)
     })
 
@@ -975,7 +1181,7 @@ describe(
 
       expect(result.status).not.toBe(0)
       expect(`${result.stdout}${result.stderr}`).toContain('refs/heads/main')
-      expect(scenario.scannerRuns()).toBe(0)
+      expect(scenario.gateRuns()).toBe(0)
     })
 
     it('残留末行不含字段（仅空白）：与空白行同口径跳过，不视为待推 ref', () => {
@@ -983,7 +1189,7 @@ describe(
       const result = scenario.runHookWithStdin('   ')
 
       expect(result.status).toBe(0)
-      expect(scenario.scannerRuns()).toBe(0)
+      expect(scenario.gateRuns()).toBe(0)
     })
   },
 )
@@ -1161,7 +1367,10 @@ describe(
   { timeout: 60_000 },
   () => {
     it('慢路径悬挂时仅向钩子发 SIGINT：秒级退出并移除临时 worktree', async () => {
-      const scenario = preparePushScenario({ withRemote: false })
+      const scenario = preparePushScenario({
+        withRemote: false,
+        fullGate: true,
+      })
       writeHangingScanner(scenario)
 
       const outcome = await runHookUntilReadyAndInterrupt(
@@ -1176,7 +1385,10 @@ describe(
     })
 
     it('快路径悬挂时仅向钩子发 SIGTERM：秒级退出，无临时树维度', async () => {
-      const scenario = preparePushScenario({ withRemote: false })
+      const scenario = preparePushScenario({
+        withRemote: false,
+        fullGate: true,
+      })
       writeHangingScanner(scenario)
 
       const outcome = await runHookUntilReadyAndInterrupt(
@@ -1188,9 +1400,18 @@ describe(
       expect(outcome.tempWorktreePath).toBeUndefined()
       await expectInterruptConverged(scenario, outcome, 143)
     })
+  },
+)
 
+describe(
+  'pre-push 中断清理：宽限处理与门禁锁归属（issue #465）',
+  { timeout: 60_000 },
+  () => {
     it('门禁前台步骤忽略 TERM 超过宽限：门禁仍先释放锁退出，锁不泄漏（PR #484 评审 5389125859）', async () => {
-      const scenario = preparePushScenario({ withRemote: false })
+      const scenario = preparePushScenario({
+        withRemote: false,
+        fullGate: true,
+      })
       writeTermIgnoringForegroundScanner(scenario)
 
       const outcome = await runHookUntilReadyAndInterrupt(
@@ -1218,7 +1439,10 @@ describe(
     })
 
     it('受监督组长宽限期内未退出：不对其 KILL，锁保持占用并如实提示（PR #484 评审 5389125859）', async () => {
-      const scenario = preparePushScenario({ withRemote: false })
+      const scenario = preparePushScenario({
+        withRemote: false,
+        fullGate: true,
+      })
       writeStubbornGateLeader(scenario)
 
       const outcome = await runHookUntilReadyAndInterrupt(
@@ -1330,3 +1554,240 @@ describe('pre-push 清理警告的真实性（issue #465）', { timeout: 30_000 
     }
   })
 })
+
+/** 在场景沙箱提交一个仅含指定文件的变更分支（跳过 commit 钩子，
+ * 只验证 push 路由本身）。 */
+function commitScopeBranch(
+  scenario: PushScenario,
+  file: string,
+  branch: string,
+): void {
+  expect(scenario.git(['checkout', '-q', '-b', branch]).status).toBe(0)
+  mkdirSync(resolve(scenario.root, file, '..'), { recursive: true })
+  writeFileSync(resolve(scenario.root, file), 'scope probe\n')
+  expect(scenario.git(['add', file]).status).toBe(0)
+  expect(
+    scenario.git([
+      '-c',
+      'core.hooksPath=/dev/null',
+      'commit',
+      '-q',
+      '-m',
+      `scope ${file}`,
+    ]).status,
+  ).toBe(0)
+}
+
+describe('推送范围分流（owner 指示 2026-10-18）', { timeout: 30_000 }, () => {
+  it('仅文档推送跳过依赖安装、代码回归、覆盖率与 Sonar', () => {
+    const scenario = preparePushScenario()
+    commitScopeBranch(scenario, 'docs/scope.md', 'docs-only')
+
+    const push = scenario.git(['push', 'origin', 'docs-only'])
+
+    expect(push.status, push.stderr).toBe(0)
+    expect(scenario.gateRuns()).toBe(0)
+    expect(scenario.installRuns()).toBe(0)
+    expect(`${push.stdout}\n${push.stderr}`).toContain('仅文档变更')
+    expect(`${push.stdout}\n${push.stderr}`).toContain('[check-docs]')
+    expect(
+      scenario.git(['ls-remote', 'origin', 'refs/heads/docs-only']).stdout,
+    ).not.toBe('')
+  })
+
+  it.each([
+    ['src/scope.ts', 'frontend'],
+    ['src-tauri/src/scope.rs', 'rust'],
+    ['native/macos/Scope.swift', 'native'],
+  ] as const)('单栈 %s 只分派 %s 范围并复用另一侧 LCOV', (file, scope) => {
+    const scenario = preparePushScenario()
+    commitScopeBranch(scenario, file, `stack-${scope}`)
+
+    const push = scenario.git(['push', 'origin', `stack-${scope}`])
+
+    expect(push.status, push.stderr).toBe(0)
+    // 被推提交即 HEAD 且工作树干净：快路径在当前树执行，不安装依赖。
+    expect(scenario.installRuns()).toBe(0)
+    expect(scenario.gateRuns()).toBe(1)
+    expect(`${push.stdout}\n${push.stderr}`).toContain(`变更范围：${scope}`)
+    const log = readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')
+    expect(log).toContain(`gate-scope ${scope}`)
+    expect(log).toContain('reused-frontend ')
+    expect(log).toContain('reused-rust ')
+  })
+})
+
+it.each([
+  ['src/scope.ts', 'frontend'],
+  ['src-tauri/src/scope.rs', 'rust'],
+  ['native/macos/Scope.swift', 'native'],
+  ['scripts/scope.sh', 'full'],
+])(
+  '共享提交合并所有远端范围：%s → %s，与 ref 顺序无关',
+  { timeout: 30_000 },
+  (file, scope) => {
+    for (const reverse of [false, true]) {
+      const scenario = preparePushScenario()
+      const beforeCode = scenario.headSha()
+      commitScopeBranch(scenario, file, 'code')
+      const beforeDocs = scenario.headSha()
+      commitScopeBranch(scenario, 'docs/shared.md', 'shared')
+      const head = scenario.headSha()
+      const rows = [
+        `refs/heads/docs ${head} refs/heads/docs ${beforeDocs}\n`,
+        `refs/heads/code ${head} refs/heads/code ${beforeCode}\n`,
+      ]
+
+      const result = scenario.runHookWithStdin(
+        (reverse ? rows.reverse() : rows).join(''),
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(scenario.gateRuns()).toBe(1)
+      expect(
+        readFileSync(resolve(scenario.root, 'calls.log'), 'utf8'),
+      ).toContain(`gate-scope ${scope}\n`)
+    }
+  },
+)
+
+it(
+  '已有远端 tip 不在本地时走 full，不能回退到仅文档父提交',
+  { timeout: 30_000 },
+  () => {
+    const scenario = preparePushScenario({ fullGate: true })
+    scenario.env.PLOTWEAVE_GATE_FULL_NATIVE = '0'
+    commitScopeBranch(scenario, 'docs/missing-tip.md', 'missing-tip')
+    expect(scenario.git(['branch', 'dev', 'HEAD~1']).status).toBe(0)
+    const absent = '1234567890123456789012345678901234567890'
+    const head = scenario.headSha()
+
+    const result = scenario.runHookWithStdin(
+      `refs/heads/a ${head} refs/heads/a ${absent}\n`,
+    )
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(scenario.gateRuns()).toBe(1)
+    expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
+      'xcodebuild -project native/macos/',
+    )
+    expect(JSON.parse(readFileSync(scenario.pendingPath, 'utf8')).scope).toBe(
+      'full',
+    )
+  },
+)
+
+it.each([
+  ['src-tauri/src/scope.rs', 'rust-only'],
+  ['native/macos/Scope.swift', 'native-only'],
+])(
+  '共享提交的 frontend 与 %s 独立范围合并为 full，仍跑原生回归',
+  { timeout: 30_000 },
+  (file, branch) => {
+    const scenario = preparePushScenario({ fullGate: true })
+    const seed = scenario.headSha()
+    commitScopeBranch(scenario, 'src/scope.ts', 'frontend-only')
+    const frontend = scenario.headSha()
+    expect(scenario.git(['checkout', '-q', '--detach', seed]).status).toBe(0)
+    commitScopeBranch(scenario, file, branch)
+    const other = scenario.headSha()
+    expect(scenario.git(['checkout', '-q', 'frontend-only']).status).toBe(0)
+    commitScopeBranch(scenario, file, 'both-stacks')
+    const head = scenario.headSha()
+
+    const result = scenario.runHookWithStdin(
+      `refs/heads/a ${head} refs/heads/a ${frontend}\nrefs/heads/b ${head} refs/heads/b ${other}\n`,
+    )
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(scenario.gateRuns()).toBe(1)
+    expect(readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')).toContain(
+      'xcodebuild -project native/macos/',
+    )
+  },
+)
+
+// #681：一个用例只执行一次真实推送，避免把快慢两条完整流水线的墙钟成本相加。
+it.each([
+  ['src/mixed.ts', false],
+  ['src/mixed.ts', true],
+  ['scripts/mixed.sh', false],
+  ['scripts/mixed.sh', true],
+] as const)(
+  'native 与 %s 混合（slow=%s）：刷新两侧覆盖率并跑原生回归',
+  { timeout: 30_000 },
+  (file, slow) => {
+    const scenario = preparePushScenario({ fullGate: true })
+    const base = scenario.headSha()
+    commitScopeBranch(scenario, 'native/macos/Mixed.swift', 'native-mixed')
+    commitScopeBranch(scenario, file, 'mixed')
+    const head = scenario.headSha()
+    scenario.env.PLOTWEAVE_GATE_FULL_NATIVE = '0'
+    if (slow) expect(scenario.git(['checkout', '-q', 'main']).status).toBe(0)
+
+    const result = scenario.runHookWithStdin(
+      `refs/heads/mixed ${head} refs/heads/mixed ${base}\n`,
+    )
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(scenario.gateRuns()).toBe(1)
+    expect(scenario.installRuns()).toBe(slow ? 1 : 0)
+    const log = readFileSync(resolve(scenario.root, 'calls.log'), 'utf8')
+    expect(log).toContain('npm run test:coverage')
+    expect(log).toContain('cargo-llvm-cov llvm-cov')
+    expect(log).toContain('xcodebuild -project native/macos/')
+    expect(
+      JSON.parse(readFileSync(scenario.pendingPath, 'utf8')),
+    ).toMatchObject({
+      scope: 'full',
+      head,
+    })
+  },
+)
+
+it('混合范围的 native 失败阻断推送且不记录成功', { timeout: 30_000 }, () => {
+  const scenario = preparePushScenario({ fullGate: true })
+  const base = scenario.headSha()
+  commitScopeBranch(scenario, 'native/macos/Fail.swift', 'native-fail')
+  commitScopeBranch(scenario, 'scripts/fail.sh', 'mixed-fail')
+  scenario.env.PLOTWEAVE_TEST_XCODEBUILD_EXIT = '65'
+
+  const result = scenario.runHookWithStdin(
+    `refs/heads/fail ${scenario.headSha()} refs/heads/fail ${base}\n`,
+  )
+
+  expect(result.status).not.toBe(0)
+  expect(scenario.gateRuns()).toBe(0)
+  expect(existsSync(scenario.pendingPath)).toBe(false)
+})
+
+it(
+  '共享 docs 提交检查每个基线，后续范围的空白错误仍阻断',
+  { timeout: 30_000 },
+  () => {
+    const scenario = preparePushScenario()
+    const seed = scenario.headSha()
+    commitScopeBranch(scenario, 'docs/bad.md', 'bad-docs')
+    writeFileSync(resolve(scenario.root, 'docs/bad.md'), 'bad whitespace  \n')
+    expect(scenario.git(['add', 'docs/bad.md']).status).toBe(0)
+    expect(
+      scenario.git([
+        '-c',
+        'core.hooksPath=/dev/null',
+        'commit',
+        '-qm',
+        'bad whitespace',
+      ]).status,
+    ).toBe(0)
+    const bad = scenario.headSha()
+    commitScopeBranch(scenario, 'docs/good.md', 'good-docs')
+    const head = scenario.headSha()
+
+    const result = scenario.runHookWithStdin(
+      `refs/heads/a ${head} refs/heads/a ${bad}\nrefs/heads/b ${head} refs/heads/b ${seed}\n`,
+    )
+
+    expect(result.status).not.toBe(0)
+    expect(scenario.gateRuns()).toBe(0)
+  },
+)

@@ -86,6 +86,12 @@ it('监听失败保留应用可用性，并暂停无法保证诊断完整性的�
   expect(console.error).toHaveBeenCalledWith(
     '[Library] 实时诊断监听失败',
     expect.objectContaining({ code: 'LIBRARY_DIAGNOSTICS_LISTENER_FAILED' }),
+    {
+      level: 'ERROR',
+      target: 'plotweave::frontend::library',
+      code: 'LIBRARY_DIAGNOSTICS_LISTENER_FAILED',
+      message: '[Library] 实时诊断监听失败',
+    },
   )
 })
 

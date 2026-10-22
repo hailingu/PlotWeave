@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url'
+import { nativeCanvasCoverageThresholds } from './scripts/native-canvas-coverage'
 import { configDefaults, defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
@@ -22,27 +24,43 @@ export default defineConfig({
       // 覆盖率下限（issue #393）：整体行覆盖率 ≥ 80%，跌破即本命令非零
       // 退出。数值与本机 SonarQube 服务端 Quality Gate 的 80% 行覆盖率条件
       // 对齐（服务端条件不在版本控制内，这是仓库侧可失败的等价下限），
-      // 不追踪实测基线（98.13%，见 typescript-standard.md「Coverage Floor
-      // And Baseline」），差额留作余量。口径为行覆盖率——与门禁台账
+      // 不追踪逐次实测值；运行摘要见 docs/development/gate-history.jsonl，
+      // 报告来源与核验边界见 typescript-standard.md「Coverage Floor And
+      // Baseline」。口径为行覆盖率——与门禁台账
       // frontendLineCoveragePercent 同一 LCOV DA 口径，sonar-quality-gate.sh
       // 在扫描前按同一口径复核两份报告；分支等其余口径不设下限（Rust 侧
       // 无分支口径，见 rust-standard.md「测试覆盖率」）。恰等于下限通过。
       // 数值契约由 scripts/sonar-test-scope.test.ts 守卫。
-      thresholds: { lines: 80 },
+      // #616: Vitest4's perFile flag is global. One exact-path group per native
+      // canvas source enforces 80% independently without weakening the aggregate.
+      thresholds: {
+        lines: 80,
+        ...nativeCanvasCoverageThresholds(
+          fileURLToPath(new URL('.', import.meta.url)),
+        ),
+      },
       include: ['src/**'],
       // 测试设施不计入产品覆盖率（issue #311，issue #343 补录
-      // sheetRuleQuery 并由 scripts/sonar-test-scope.test.ts 同源核验）：
+      // sheetRuleQuery、issue #534 补录 nodes 测试脚手架、issue #538 补录
+      // sheetToken 共享用例数据表、issue #539 补录 panels 共享 DOM 桩，
+      // 均由 scripts/sonar-test-scope.test.ts 同源核验）：
       // 与 sonar-project.properties 的测试纳入清单同源——仅服务测试的
       // 模块无产品运行时形态，编译期类型探针是纯类型文件（v8 all 模式下
       // 计 0% 空条目）。
       exclude: [
         'src/**/*.test-d.ts',
+        'src/appShellTestScaffolding.tsx',
+        'src/projectStoreTestHarness.ts',
         'src/moduleGraph.ts',
         'src/model/convertFixtures.ts',
         'src/editor/ai/testGraphs.ts',
+        'src/editor/concurrentRenderTestScaffolding.ts',
+        'src/editor/nodes/testScaffolding.tsx',
+        'src/editor/panels/testDomStubs.ts',
         'src/styles/cssColorContract.ts',
         'src/styles/cssValueSyntax.ts',
         'src/styles/sheetRuleQuery.ts',
+        'src/styles/sheetTokenCaseMatrix.ts',
         'src/styles/sheetTokensEngine.ts',
       ],
     },

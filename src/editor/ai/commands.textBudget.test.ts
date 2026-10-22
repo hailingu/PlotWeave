@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { validateAiBatch } from './batchFold'
-import type { AiGraphSnapshot } from './commands'
+import type { AiGraphSnapshot, ValidatedCommand } from './commands'
 import { entSnap, snap } from './testGraphs'
 import { DOCUMENT_BODY_MAX_CHARS, FREE_TEXT_MAX_CHARS } from './textBudget'
 import { WRITE_PARAMETERS, BATCH_PARAMETERS } from './toolSchemas'
@@ -128,8 +128,11 @@ describe('issue #170 · 节点自由文本字段的体积预算', () => {
       snap(),
     )
     expect(ok.ok, JSON.stringify(ok.issues)).toBe(true)
-    const data = ok.commands[0] as { data: { synopsis: string } }
-    expect(data.data.synopsis).toHaveLength(FREE_TEXT_MAX_CHARS)
+    const cmd = ok.commands[0] as Extract<
+      ValidatedCommand,
+      { op: 'create_node' }
+    >
+    expect(cmd.data['synopsis']).toHaveLength(FREE_TEXT_MAX_CHARS)
 
     const bad = validateAiBatch(
       [
@@ -297,8 +300,12 @@ describe('issue #170 · 工具 schema 向模型广告同一预算', () => {
       entGraph(),
     )
     expect(ok.ok, JSON.stringify(ok.issues)).toBe(true)
-    const data = ok.commands[0] as { data: { lines: Array<{ id: string }> } }
-    expect(data.data.lines[0].id).toBe(longId)
+    const cmd = ok.commands[0] as Extract<
+      ValidatedCommand,
+      { op: 'create_node' }
+    >
+    const lines = cmd.data['lines'] as Array<{ id: string }>
+    expect(lines[0].id).toBe(longId)
 
     const variants = WRITE_PARAMETERS.create_node.properties.data as {
       anyOf: Array<{

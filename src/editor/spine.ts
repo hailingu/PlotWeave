@@ -8,7 +8,9 @@ import { compareCodeUnits } from '../compare'
  *
  * 语义：把 X 从剧情流原位拔出（前后邻居缝合直连 p→n），再插到锚点的
  * 前/后。剧情流 = sequence 边子图；attach（垂直派生）与 branch（选项出口）
- * 边不参与。
+ * 边不参与。拔出只对恰一入一出的线性成员安全：分叉/汇合成员（多入/多出）
+ * 的关联边无法在不发明新拓扑的前提下整体补回，计划拒绝并返回 null
+ * （issue #589）——调用方须给出可见提示，不得静默删边。
  */
 
 export interface SplicePlan {
@@ -36,6 +38,17 @@ const pairSig = (pairs: Array<{ source: string; target: string }>): string =>
 /** id 是否剧情流成员（只有 attach 下挂边的分镜卡不算）。 */
 function isSpineMember(seq: SpliceEdge[], id: string): boolean {
   return seq.some((e) => e.source === id || e.target === id)
+}
+
+/** id 是否分叉/汇合成员：sequence 入边或出边多于一条。
+ * 拔出语义只能安全重排恰一入一出的线性成员——多重关联边无法在不发明
+ * 新拓扑的前提下整体补回（issue #589），计划器与大纲拖拽提示共用本判定。 */
+export function isForkOrMergeMember(edges: SpliceEdge[], id: string): boolean {
+  const seq = edges.filter((e) => edgeKindOf(e) === 'sequence')
+  return (
+    seq.filter((e) => e.target === id).length > 1 ||
+    seq.filter((e) => e.source === id).length > 1
+  )
 }
 
 /** 恰一条入边时返回唯一前邻；多入口返回 null（语义上不应发生）。 */
@@ -79,7 +92,8 @@ function insertionNeighbors(
 
 /**
  * 计划把 draggedId 移动到 anchorId 的前/后。
- * 返回 null = 无法执行（锚点即自身、或防御性环检测未通过）；
+ * 返回 null = 无法执行（锚点即自身、dragged 是分叉/汇合成员（issue #589，
+ * 多入/多出的关联边无法安全补回）、或防御性环检测未通过）；
  * removes/adds 全空 = 原位重放（无需变更）。
  */
 export function planSpliceIntoSpine(
@@ -92,6 +106,8 @@ export function planSpliceIntoSpine(
   const seq = edges.filter((e) => edgeKindOf(e) === 'sequence')
   // 锚点必须是剧情流成员（只有 attach 下挂边的分镜卡不可作锚点）
   if (!isSpineMember(seq, anchorId)) return null
+  // 分叉/汇合成员拒绝：拔出会删除全部关联边而计划只补回一条（#589）
+  if (isForkOrMergeMember(seq, draggedId)) return null
   const mine = seq.filter(
     (e) => e.source === draggedId || e.target === draggedId,
   )

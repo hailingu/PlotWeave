@@ -52,9 +52,18 @@ it.each([
   d.publishCleanupPending([routine('pending')], '1')
   d.publishCleanupPending([], revision)
   expect(d.cleanupPendingSnapshot()).toEqual([routine('pending')])
-  expect(console.warn).toHaveBeenCalledWith('[Library] 无效待清理快照', {
-    code: 'LIBRARY_DIAGNOSTICS_SNAPSHOT_INVALID',
-  })
+  expect(console.warn).toHaveBeenCalledWith(
+    '[Library] 无效待清理快照',
+    {
+      code: 'LIBRARY_DIAGNOSTICS_SNAPSHOT_INVALID',
+    },
+    {
+      level: 'WARN',
+      target: 'plotweave::frontend::library',
+      code: 'LIBRARY_DIAGNOSTICS_SNAPSHOT_INVALID',
+      message: '[Library] 无效待清理快照',
+    },
+  )
   d.publishCleanupPending([routine('new')], '2')
   expect(d.cleanupPendingSnapshot()).toEqual([routine('new')])
 })

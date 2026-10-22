@@ -1,11 +1,11 @@
 //! indexUncertain 闩锁回归测试（issue #389）：索引恢复后的两个收敛方向、
 //! 损坏期间的保守保持与修复指引、收敛后再次损坏的重新置位、迁移挂起
 //! （suspended）只读视图的非权威性（PR #413 评审 4121700018）。
-//! 共享 helper 经 `use super::recover_tests::*` 复用（tests.rs 同款惯例）。
+//! 共享磁盘夹具复用 crate::library_fixture。
 
 use super::recover::CleanupKind;
-use super::recover_tests::*;
 use super::*;
+use crate::library_fixture::*;
 use serde_json::{json, Value};
 use std::fs;
 

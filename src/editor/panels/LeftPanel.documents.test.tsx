@@ -237,6 +237,25 @@ describe('文档编辑器弹窗（issue 56）', () => {
     expect(screen.queryByRole('dialog', { name: '编辑设定文档' })).toBeNull()
     expect(spies.settingsActions.updateDocument).not.toHaveBeenCalled()
   })
+
+  it('组合输入中的 Esc 归输入法（issue #570）：isComposing 与 WebKit 晚到的 keyCode 229 均不关闭弹窗', () => {
+    const { spies } = setup()
+    openEditor()
+    const body = screen.getByLabelText('文档正文')
+    const dialogOpen = () =>
+      screen.queryByRole('dialog', { name: '编辑设定文档' }) !== null
+    fireEvent.compositionStart(body)
+    fireEvent.input(body, { target: { value: 'chen' }, isComposing: true })
+    fireEvent.keyDown(body, { key: 'Escape', isComposing: true, keyCode: 229 })
+    expect(dialogOpen()).toBe(true)
+    fireEvent.input(body, { target: { value: '' } })
+    fireEvent.compositionEnd(body, { data: '' })
+    fireEvent.keyDown(body, { key: 'Escape', keyCode: 229 })
+    expect(dialogOpen()).toBe(true)
+    fireEvent.keyDown(body, { key: 'Escape', keyCode: 27 })
+    expect(dialogOpen()).toBe(false)
+    expect(spies.settingsActions.updateDocument).not.toHaveBeenCalled()
+  })
 })
 
 describe('文档弹窗与底层文档协调（issue #126）', () => {

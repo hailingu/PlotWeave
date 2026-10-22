@@ -3,33 +3,15 @@
 //! 项目删除后登记项不得复活媒体、生成产物登记同域。
 
 use super::*;
-use crate::store::new_id;
-use cap_std::ambient_authority;
-use cap_std::fs::Dir as CapDir;
+use crate::library_fixture::{
+    asset_entry, by_id, cap, cleanup, project_fixture as temp_fixture, write_index_raw,
+};
 use serde_json::json;
 use std::fs;
-use std::path::{Path, PathBuf};
-
-/// 测试内核的受信句柄：对临时目录做环境打开（等价生产端锚定句柄）。
-fn cap(p: &Path) -> CapDir {
-    CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
-}
+use std::path::Path;
 
 // 本测试专用的登记表实例：唯一项目 id（见各用例）+ 独立实例双保险，
 // 并行执行不串扰（评审修复）。
-
-/// 唯一临时根：`{tmp}/pw-pmedia-test-{new_id}/` 下含 `projects/` 与
-/// `library/assets/`；返回 (projects, library, root)——root 供清理。
-fn temp_fixture() -> (PathBuf, PathBuf, PathBuf) {
-    let root = std::env::temp_dir().join(format!("pw-pmedia-test-{}", new_id()));
-    fs::create_dir_all(root.join("projects")).expect("创建临时 projects 目录");
-    fs::create_dir_all(root.join("library").join("assets")).expect("创建临时 library 目录");
-    (root.join("projects"), root.join("library"), root)
-}
-
-fn cleanup(root: &Path) {
-    let _ = fs::remove_dir_all(root);
-}
 
 /// 直接按字节写项目文档（最小合法 v1 信封 + 给定 assets.byId）。
 fn write_project_doc_raw(projects: &Path, pid: &str, by_id: Value) {
@@ -48,29 +30,16 @@ fn write_project_doc_raw(projects: &Path, pid: &str, by_id: Value) {
     .expect("写入项目文档");
 }
 
-/// 库索引最小合法 fixture：单条目 + 媒体文件（目标 Record 形状）。
+/// 库索引最小合法 fixture：单条目与真实媒体文件，mime/字节保持调用方输入。
 fn seed_library(library: &Path, id: &str, file: &str, bytes: &[u8], mime: &str) {
     fs::write(library.join("assets").join(file), bytes).expect("写入库媒体文件");
-    let index = json!({
-        "assets": { "byId": {
-            id: {
-                "id": id,
-                "name": file,
-                "kind": "other",
-                "mime": mime,
-                "relPath": format!("assets/{file}"),
-                "source": "upload",
-                "createdAt": "2026-01-01T00:00:00.000Z",
-                "tags": [],
-            }
-        }},
-        "groups": { "byId": {} },
-    });
-    fs::write(
-        library.join("library.json"),
-        serde_json::to_string(&index).expect("序列化库索引"),
-    )
-    .expect("写入库索引");
+    write_index_raw(
+        library,
+        &json!({
+            "assets": by_id([asset_entry(id, file, "other", mime, &format!("assets/{file}"))]),
+            "groups": by_id([]),
+        }),
+    );
 }
 
 /// 防抖落盘窗口（评审修复 P2-1）：导入落盘媒体后、项目文档尚未收录该

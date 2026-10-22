@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
  * 自动无障碍审计（issue #238 建立，issue #363 扩面）：axe-core 规则扫描
- * 覆盖全部可达界面的渲染树，每棵树一个 `audit()` 断言，违例输出可定位
- * 诊断（规则 id、影响、帮助文案、触发选择器、规则文档链接）。
+ * 覆盖全部可达界面的渲染树，每棵树一个 `audit()` 断言，阻断 violations
+ * 以及 incomplete 中的 aria-prohibited-attr（issue #500），输出可定位
+ * 诊断（结果类别、规则 id、影响、帮助文案、触发选择器、规则文档链接）。
  *
  * 覆盖的渲染树：
  * - 首页：正常态、错误态、重命名对话框、删除确认对话框
@@ -22,6 +23,8 @@
  *   恒成立：若 #351 的边界被撤销并改为扩测默认主题，本条前提失效，
  *   须在同一改动中恢复 `color-contrast` 或改用带样式表的审计环境。
  * - 自动扫描不覆盖真实 WebView 行为与屏幕阅读器播报（见 PR 说明）。
+ * - 其余 incomplete 仍需人工判断，不由本文件自动阻断；无布局 DOM 的
+ *   dialog 顶层命中栈由垫片保持为空，不验证遮挡与 inert 行为。
  * - 键盘流程另由 `editorKeyboardFlows.test.tsx`、`ExportDialog` 焦点
  *   陷阱与 `PanelResizer` ARIA 分隔条覆盖，本文件不重复建设。
  */
@@ -139,6 +142,14 @@ function installCanvasMetrics() {
 }
 installCanvasMetrics()
 
+// jsdom 无布局命中测试，也没有 showModal 的顶层；本审计的 dialog[open]
+// 全部直接渲染为普通 DOM。空命中栈避免 axe 的模态探测因 API 缺失抛错，
+// 并让背景与弹窗都继续受审计；真实顶层遮挡／inert 行为仍属 WebView 验收。
+Object.defineProperty(document, 'elementsFromPoint', {
+  configurable: true,
+  value: () => [],
+})
+
 // 同因：jsdom 的 HTMLElement 无 scrollTo（AI 线程挂载滚动到最新条目），
 // Element 无 scrollIntoView（左栏大纲把选中节点滚入视野）
 if (typeof HTMLElement.prototype.scrollTo !== 'function') {
@@ -153,7 +164,7 @@ beforeEach(async () => {
   await settingsStore.save(defaultSettings())
 })
 
-/** 对渲染容器执行 axe 规则扫描，违例格式化为可定位诊断后清零断言。 */
+/** 扫描渲染树，阻断违例与可判定的禁止属性命中（issue #500）。 */
 async function audit(container: HTMLElement, context: string) {
   const results = await axe.run(container, {
     rules: {
@@ -163,13 +174,24 @@ async function audit(container: HTMLElement, context: string) {
       'color-contrast': { enabled: false },
     },
   })
-  const lines = results.violations.map(
-    (v) =>
-      `${v.id}（${v.impact ?? '未分级'}）：${v.help}｜触点 ${v.nodes
+  // axe 把无 role 容器的 aria-label 归入 incomplete；这类标签语义缺失
+  // 已有可判定触发条件，必须失败。其余 incomplete 仍需人工判断，
+  // 本次不把合成 DOM 无法确定的结果直接升级为 violation。
+  const findings = [
+    ...results.violations.map((result) => ({ kind: 'violation', result })),
+    ...results.incomplete
+      .filter((result) => result.id === 'aria-prohibited-attr')
+      .map((result) => ({ kind: 'incomplete', result })),
+  ]
+  const lines = findings.map(
+    ({ kind, result: v }) =>
+      `${kind} ${v.id}（${v.impact ?? '未分级'}）：${v.help}｜触点 ${v.nodes
         .map((n) => n.target.join(' '))
         .join(' ; ')}｜${v.helpUrl}`,
   )
-  expect(lines, `${context} 存在可访问性规则违例`).toEqual([])
+  expect(lines, `${context} 存在可访问性规则违例\n${lines.join('\n')}`).toEqual(
+    [],
+  )
 }
 
 /** 等待画布完成节点测量并挂出连线（测量是异步的，见 installCanvasMetrics）。 */
@@ -370,6 +392,50 @@ const readySettings = {
   defaultChat: 'test:test-model',
   defaultImage: null,
 }
+
+describe('无障碍审计口径回归（issue #500）', () => {
+  it.each([false, true])(
+    '变异守卫：受审计树（含弹窗=%s）的无 role 标签容器必须失败，恢复分组后通过',
+    async (withDialog) => {
+      const { container } = render(
+        <>
+          <HomePage
+            projects={[project]}
+            onOpenProject={vi.fn()}
+            onCreateProject={vi.fn()}
+            onRenameProject={vi.fn()}
+            onDuplicateProject={vi.fn()}
+            onDeleteProject={vi.fn()}
+          />
+          {withDialog && (
+            <ConfirmDeleteDialog
+              title="审计弹窗"
+              message="审计背景仍须扫描"
+              onCancel={vi.fn()}
+              onConfirm={vi.fn()}
+            />
+          )}
+        </>,
+      )
+      const group = document.createElement('div')
+      group.setAttribute('aria-label', '注入的无效分组')
+      group.textContent = '审计变异内容'
+      container.append(group)
+      await expect(audit(container, '无 role 容器变异')).rejects.toThrow(
+        /incomplete.*aria-prohibited-attr/s,
+      )
+      group.setAttribute('role', 'group')
+      await audit(container, '恢复有效分组')
+    },
+  )
+
+  it('违例守卫：无名称按钮仍被既有 violations 口径阻断', async () => {
+    const { container } = render(<button type="button" />)
+    await expect(audit(container, '无名称按钮变异')).rejects.toThrow(
+      /violation.*button-name/s,
+    )
+  })
+})
 
 describe('无障碍审计（首页与设置页）', () => {
   it('首页正常态：项目卡与工具栏无规则违例', async () => {

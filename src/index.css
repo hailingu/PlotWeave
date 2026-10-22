@@ -8,6 +8,7 @@
 @import './editor/nodes/settings/settings.css';
 @import './settings/settings.css';
 @import './editor/nodes/nodes.css';
+@import './editor/nodes/ports.css';
 
 /* 画布占满整个窗口，页面自身不产生滚动条。 */
 html,

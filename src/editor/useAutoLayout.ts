@@ -34,9 +34,12 @@ export interface AutoLayoutDeps {
 const FIT_DURATION_MS = 400
 const FIT_OPTIONS = { padding: 0.15, maxZoom: 1 }
 
+/** 媒体查询与宿主直推语义取或：不能只假定 WK 的媒体查询跟随宿主快照
+ * （迁移计划 §2.2，issue #568）；非宿主环境根属性恒缺省，行为不变。 */
 const prefersReducedMotion = (): boolean =>
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  (typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches) ||
+  document.documentElement.dataset.hostReduceMotion === 'true'
 
 /** 自动排布动作：无变化与失败都是安全无操作，成功才有历史与视图副作用。 */
 export function useAutoLayout(deps: AutoLayoutDeps) {

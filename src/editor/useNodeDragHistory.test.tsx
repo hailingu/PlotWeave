@@ -47,6 +47,8 @@ function setup(nodes: CanvasNode[]) {
   const { result } = renderHook(() => {
     const doc = useEditorDocument(project)
     const drag = useNodeDragHistory({
+      nodesRef: doc.nodesRef,
+      onNodesChange: doc.onNodesChange,
       setNodes: doc.setNodes,
       pushHistory,
     })
@@ -67,10 +69,13 @@ const dragFrame = (
   moves: Record<string, { x: number; y: number }>,
 ) =>
   act(() => {
-    h.result.current.doc.setNodes((nds) =>
-      nds.map((n) =>
-        moves[n.id] ? { ...n, position: { ...moves[n.id]! } } : n,
-      ),
+    h.result.current.drag.onNodesChange(
+      Object.entries(moves).map(([id, position]) => ({
+        id,
+        type: 'position',
+        position,
+        dragging: true,
+      })),
     )
   })
 
@@ -144,6 +149,90 @@ describe('useNodeDragHistory（issue #269：整段拖拽只入栈一步）', () 
     expect(posOf(h, 'a').x).toBe(10)
     expect(posOf(h, 'b').x).toBe(60)
     expect(JSON.stringify(posOf(h, 'c'))).toBe(untouchedBefore)
+  })
+})
+
+describe('框架位置变更过滤（issue #496）', () => {
+  it('选择、测量、缺失坐标、未知节点与零位移不入栈，仍更新会话态', () => {
+    const h = setup([sceneNode('s1', 0)])
+    act(() =>
+      h.result.current.drag.onNodesChange([
+        { id: 's1', type: 'select', selected: true },
+        {
+          id: 's1',
+          type: 'dimensions',
+          dimensions: { width: 120, height: 60 },
+        },
+        { id: 's1', type: 'position', dragging: false },
+        {
+          id: 'missing',
+          type: 'position',
+          position: { x: 22, y: 0 },
+          dragging: false,
+        },
+        {
+          id: 's1',
+          type: 'position',
+          position: { x: 0, y: 0 },
+          dragging: false,
+        },
+      ]),
+    )
+    expect(h.stack.canUndo).toBe(false)
+    expect(h.result.current.doc.nodes[0]).toMatchObject({
+      selected: true,
+      measured: { width: 120, height: 60 },
+      position: { x: 0, y: 0 },
+    })
+  })
+})
+
+describe('拖拽终帧历史（issue #496）', () => {
+  it('拖拽最终 dragging=false 帧不重复记录历史', () => {
+    const h = setup([sceneNode('a', 0), sceneNode('b', 100)])
+    act(() =>
+      h.result.current.drag.onNodeDragStart(
+        null as never,
+        h.result.current.doc.nodes[0]!,
+        h.result.current.doc.nodes,
+      ),
+    )
+    dragFrame(h, { a: { x: 22, y: 0 } })
+    act(() =>
+      h.result.current.drag.onNodesChange([
+        {
+          id: 'a',
+          type: 'position',
+          position: { x: 44, y: 0 },
+          dragging: false,
+        },
+      ]),
+    )
+    expect(h.stack.canUndo).toBe(false)
+    act(() =>
+      h.result.current.drag.onNodeDragStop(
+        null as never,
+        h.result.current.doc.nodes[0]!,
+        h.result.current.doc.nodes,
+      ),
+    )
+    act(() =>
+      h.result.current.drag.onNodesChange([
+        {
+          id: 'a',
+          type: 'position',
+          position: { x: 44, y: 0 },
+          dragging: false,
+        },
+      ]),
+    )
+    act(() => h.stack.undo())
+    expect(posOf(h, 'a').x).toBe(0)
+    expect(posOf(h, 'b').x).toBe(100)
+    expect(h.stack.canUndo).toBe(false)
+    act(() => h.stack.redo())
+    expect(posOf(h, 'a').x).toBe(44)
+    expect(h.stack.canRedo).toBe(false)
   })
 })
 

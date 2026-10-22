@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ScriptKind } from 'typescript'
@@ -22,31 +22,53 @@ const repositoryRoot = resolve(import.meta.dirname, '..')
 const propertiesPath = resolve(repositoryRoot, 'sonar-project.properties')
 
 /** 仅服务测试的模块与编译期探针（issue #311 核实清单，issue #343 补录
- * sheetRuleQuery，仓库相对路径）。 */
+ * sheetRuleQuery，issue #534 补录 nodes 测试共享脚手架，issue #538 补录
+ * sheetToken 共享用例数据表，issue #539 补录 panels 共享 DOM 桩，
+ * issue #525 补录 App 壳测试共享脚手架，仓库相对路径）。 */
 const testFacilityFiles = [
+  'src/appShellTestScaffolding.tsx',
+  'src/projectStoreTestHarness.ts',
   'src/editor/ai/testGraphs.ts',
+  'src/editor/concurrentRenderTestScaffolding.ts',
+  'src/editor/nodes/testScaffolding.tsx',
+  'src/editor/panels/testDomStubs.ts',
   'src/model/convertFixtures.ts',
   'src/model/typeContracts.test-d.ts',
   'src/moduleGraph.ts',
   'src/styles/cssColorContract.ts',
   'src/styles/cssValueSyntax.ts',
   'src/styles/sheetRuleQuery.ts',
+  'src/styles/sheetTokenCaseMatrix.ts',
   'src/styles/sheetTokensEngine.ts',
 ] as const
 
-/** 必须保留在生产源码范围的哨兵（含与测试文件同名的 titleWhitespace）。 */
+/** 必须保留在生产源码范围的哨兵（含与测试文件同名的 titleWhitespace）。
+ * 哨兵必须指向现存文件：模块删除后悬空条目只会空转匹配，削弱守卫
+ * （PR #533 评审 5501107516 的 legacy.ts 发现），由存在性断言拦截。 */
 const productionSentinels = [
   'src/App.tsx',
   'src/model/document.ts',
-  'src/model/legacy.ts',
   'src/model/titleWhitespace.ts',
+  'crates/plotweave-core/src/store/persist.rs',
+  'crates/plotweave-ffi/src/lib.rs',
+] as const
+
+/** 迁出的故障注入与存储夹具只在 cfg(test)/test-support 下编译。 */
+const rustTestFacilities = [
+  'crates/plotweave-core/src/store/testutil.rs',
+  'crates/plotweave-core/src/store/persist/faults.rs',
 ] as const
 
 /** 产品入口哨兵：入口模块被 index.html 直接加载、在 src 内零导入者，
  * 不因「仅被测试导入」误判为测试设施（issue #343 守卫的构成性豁免）。
  * bootstrap 先装全局兜底再动态加载 main（issue #358 评审 5326220397），
- * 对 main 的动态边不进静态导入者图，故两个入口都需登记。 */
-const productionEntryFiles = ['src/bootstrap.ts', 'src/main.tsx'] as const
+ * 对 main 的动态边不进静态导入者图，故两个入口都需登记。
+ * 原生画布入口由独立 Vite 配置构建，入口回归导入它也不改变生产分类（#573）。 */
+const productionEntryFiles = [
+  'src/bootstrap.ts',
+  'src/main.tsx',
+  'src/editor/nativeCanvas/main.tsx',
+] as const
 
 /** 解析 .properties 格式：# 注释与空行忽略，键值以首个 = 分割。 */
 function readSonarProperties(path: string): Map<string, string> {
@@ -139,8 +161,19 @@ describe('Sonar 测试设施分类契约（issue #311）', () => {
     }
   })
 
+  it('迁入 core 的测试夹具仍被分析，但不计入产品源码统计', () => {
+    for (const file of rustTestFacilities) {
+      expect(matchesAny(testInclusions, file), file).toBe(true)
+      expect(matchesAny(exclusions, file), file).toBe(true)
+    }
+  })
+
   it('生产源码哨兵不被误分类为测试', () => {
     for (const file of productionSentinels) {
+      expect(
+        existsSync(resolve(repositoryRoot, file)),
+        `哨兵指向的文件已不存在（模块删除后条目悬空）：${file}`,
+      ).toBe(true)
       expect(
         matchesAny(testInclusions, file),
         `生产文件不应进入测试范围：${file}`,
@@ -288,5 +321,33 @@ describe('vite 覆盖率下限契约（issue #393）', () => {
     // 「测试覆盖率」）。脚本侧同一 80% 下限的行为由
     // sonar-quality-gate.test.ts 的 belowFloor/atFloor 形态核验。
     expect(config.test?.coverage?.thresholds?.lines).toBe(80)
+  })
+})
+
+// Each exact-path glob is one coverage group on the pinned Vitest4 provider.
+describe('native canvas per-file line floor (#616)', () => {
+  it('keeps aggregate80 and assigns80 to every maintained native canvas source', () => {
+    const thresholds = config.test?.coverage?.thresholds as
+      Record<string, unknown> | undefined
+    const files = [
+      ...buildSrcModuleGraph(resolve(repositoryRoot, 'src')).keys(),
+    ]
+      .filter(
+        (path) =>
+          path.startsWith('editor/nativeCanvas/') &&
+          !/\.test(?:-d)?\.tsx?$/.test(path),
+      )
+      .map((path) => 'src/' + path)
+      .sort()
+    expect(files).toContain('src/editor/nativeCanvas/useNativeEditorShell.ts')
+    expect(thresholds?.lines).toBe(80)
+    expect(thresholds?.perFile).not.toBe(true)
+    expect(
+      Object.keys(thresholds ?? {})
+        .filter((key) => key.startsWith('src/editor/nativeCanvas/'))
+        .sort(),
+    ).toEqual(files)
+    for (const path of files)
+      expect(thresholds?.[path], path).toEqual({ lines: 80 })
   })
 })

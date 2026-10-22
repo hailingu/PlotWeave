@@ -24,12 +24,12 @@ pub(crate) async fn run<T: Send + 'static>(
         .map_err(|e| {
             // 本层不打印 panic 载荷或命令参数，避免把项目内容／密钥写入
             // 诊断（worker 线程默认 panic hook 的进程级行为见模块文档）。
-            eprintln!("{}", worker_failure_line(command, &e));
+            log::error!(target: "plotweave::blocking", "{}", worker_failure_line(command, &e));
             format!("{command} 后台任务异常退出")
         })?
 }
 
-/// worker 失败的结构化 stderr 诊断行（issue #400）：join 错误按来源分类
+/// worker 失败的结构化诊断消息体（issue #400）：join 错误按来源分类
 /// ——panic（领域不变量被破坏，最需关注）与未完成（取消／饱和／进程级
 /// 资源异常）使用不同 `code=`；非 JoinError 的错误保守归入未完成。
 fn worker_failure_line(command: &str, error: &tauri::Error) -> String {
@@ -37,7 +37,7 @@ fn worker_failure_line(command: &str, error: &tauri::Error) -> String {
         tauri::Error::JoinError(e) if e.is_panic() => "worker-panicked",
         _ => "worker-incomplete",
     };
-    format!("[blocking] command={command} code={code}")
+    format!("command={command} code={code}")
 }
 
 #[cfg(test)]
@@ -67,7 +67,7 @@ mod tests {
                 .expect_err("panic 任务应 join 失败");
             assert_eq!(
                 worker_failure_line("fixture", &panicked),
-                "[blocking] command=fixture code=worker-panicked"
+                "command=fixture code=worker-panicked"
             );
 
             let cancelled = tauri::async_runtime::spawn(std::future::pending::<()>());
@@ -75,7 +75,7 @@ mod tests {
             let incomplete: tauri::Error = cancelled.await.expect_err("被取消任务应 join 失败");
             assert_eq!(
                 worker_failure_line("fixture", &incomplete),
-                "[blocking] command=fixture code=worker-incomplete"
+                "command=fixture code=worker-incomplete"
             );
         });
     }

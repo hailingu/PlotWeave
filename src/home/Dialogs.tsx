@@ -1,4 +1,6 @@
+import { DialogFooter } from '../ui/DialogFooter'
 import { useEffect, useRef, useState } from 'react'
+import { isCompositionKey } from '../platform/compositionKey'
 
 /**
  * 首页对话框组（docs/ui-design.md §3.2 右键/悬停菜单的承载）：
@@ -8,6 +10,7 @@ import { useEffect, useRef, useState } from 'react'
  * ConfirmDeleteDialog 泛化为 title/message 承载：首页删项目与资产库
  * 删资产共用——原生 window.confirm 在 Tauri WKWebView 无 UI 代理实现、
  * 静默返回 false，不可逆确认一律走应用内对话框。
+ * 组合在途的 Enter/Esc 归输入法（不提交/不取消，issue #570）。
  */
 
 interface RenameDialogProps {
@@ -58,25 +61,16 @@ export function RenameDialog({
             aria-label="项目名"
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
+              if (isCompositionKey(e.nativeEvent)) return
               if (e.key === 'Enter') submit()
               if (e.key === 'Escape') onCancel()
             }}
           />
         </div>
-        <div className="pw-dialog-foot">
-          <span className="pw-sp" />
-          <button type="button" className="pw-dialog-btn" onClick={onCancel}>
-            取消
-          </button>
-          <button
-            type="button"
-            className="pw-dialog-btn pw-dialog-btn-primary"
-            onClick={submit}
-            disabled={!name.trim()}
-          >
-            重命名
-          </button>
-        </div>
+        <DialogFooter
+          secondary={{ label: '取消', onClick: onCancel }}
+          primary={{ label: '重命名', onClick: submit, disabled: !name.trim() }}
+        />
       </dialog>
     </div>
   )
@@ -121,19 +115,11 @@ export function ConfirmDeleteDialog({
         <div className="pw-dialog-body">
           <p className="pw-dialog-text">{message}</p>
         </div>
-        <div className="pw-dialog-foot">
-          <span className="pw-sp" />
-          <button type="button" className="pw-dialog-btn" onClick={onCancel}>
-            取消
-          </button>
-          <button
-            type="button"
-            className="pw-dialog-btn pw-dialog-danger"
-            onClick={onConfirm}
-          >
-            删除
-          </button>
-        </div>
+        <DialogFooter
+          secondary={{ label: '取消', onClick: onCancel }}
+          primary={{ label: '删除', onClick: onConfirm }}
+          primaryKind="danger"
+        />
       </dialog>
     </div>
   )

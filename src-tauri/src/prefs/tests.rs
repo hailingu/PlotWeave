@@ -136,44 +136,51 @@ fn capped_read_maps_invalid_utf8_to_read_failure() {
 
 #[test]
 fn slow_credential_phase_keeps_async_siblings_responsive() {
-    // 凭据准备（目录确保、受限读取、密文解析、历史钥匙串回退）是
-    // 完整同步工作，须离开异步工作线程：受控 400ms 延迟模拟慢凭据
-    // 来源，单线程异步运行时上的兄弟任务（计时器 + 经阻塞调度的
-    // 同步读）必须在凭据阶段保持响应；凭据未完成前不得提前报告
-    // 结果；领域错误原样上浮。HTTP 只在凭据成功后发出，本测试以
-    // 错误终止，不触网。
     let dir = temp_prefs_dir("slow-credential");
     let sibling_target = dir.join("sibling.json");
-    fs::write(&sibling_target, r#"{"providers":[]}"#).expect("写入兄弟读取目标");
+    fs::write(&sibling_target, r#"{"providers":[]}"#).unwrap();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
-        .expect("构建单线程运行时");
+        .unwrap();
+    let (entered, started) = tokio::sync::oneshot::channel();
+    let (release, gate) = std::sync::mpsc::channel();
     let start = std::time::Instant::now();
-    let credential = runtime.spawn(chat_credential(|| {
-        std::thread::sleep(std::time::Duration::from_millis(400));
+    let credential = runtime.spawn(chat_credential::<String>(move || {
+        entered.send(()).unwrap();
+        if gate
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .is_err()
+        {
+            return Err("credential gate watchdog expired".into());
+        }
         Err("未配置 API key，请在设置页填写".to_string())
     }));
     let (latency, sibling_text, finished) = runtime.block_on(async {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        let sibling_text = crate::blocking::run("sibling-read", move || {
-            fs::read_to_string(&sibling_target).map_err(|e| e.to_string())
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            started.await.unwrap();
+            let text = crate::blocking::run("sibling-read", move || {
+                fs::read_to_string(&sibling_target).map_err(|error| error.to_string())
+            })
+            .await
+            .unwrap();
+            (start.elapsed(), text, credential.is_finished())
         })
         .await
-        .expect("兄弟同步读应成功");
-        (start.elapsed(), sibling_text, credential.is_finished())
+        .expect("async sibling must progress while credentials are gated")
     });
-    let error = runtime
-        .block_on(credential)
-        .expect("凭据任务应完成")
-        .expect_err("受控延迟后应携带领域错误");
+    let released = release.send(()).is_ok();
+    let error = runtime.block_on(credential).unwrap().unwrap_err();
     let _ = fs::remove_dir_all(&dir);
-    println!("slow-credential: sibling latency={latency:?}, delay=400ms");
+    println!("slow-credential: sibling observation={latency:?}, explicit release");
     assert!(
-        latency < std::time::Duration::from_millis(200),
-        "兄弟任务被凭据阶段阻塞：{latency:?}"
+        released,
+        "credential gate watchdog cannot establish responsiveness"
     );
-    assert!(!finished, "凭据未完成前不得提前报告结果");
+    assert!(
+        !finished,
+        "credential operation must remain pending until release"
+    );
     assert_eq!(sibling_text, r#"{"providers":[]}"#);
     assert_eq!(error, "未配置 API key，请在设置页填写");
 }

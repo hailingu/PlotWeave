@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react'
 import { WeaveCover } from './WeaveCover'
 import {
   formatRelativeTime,
@@ -11,7 +12,7 @@ interface ProjectCardProps {
   readonly onOpen: (id: string) => void
   /** 右键海报或点悬停 ⋯ 按钮弹出项目菜单（§3.2）。 */
   readonly onMenu: (
-    e: { clientX: number; clientY: number; preventDefault: () => void },
+    e: MouseEvent<HTMLButtonElement>,
     project: ProjectSummary,
   ) => void
 }
@@ -61,6 +62,7 @@ export function ProjectCard({ project, onOpen, onMenu }: ProjectCardProps) {
       <button
         type="button"
         className="project-menu-btn"
+        aria-haspopup="menu"
         aria-label={`项目菜单 ${project.name}`}
         onClick={(e) => onMenu(e, project)}
       >

@@ -156,11 +156,26 @@ describe('serializeProject（会话文档 → ProjectDocument 落盘格式）', 
   })
 })
 
+describe('项目修改时间的加载与保存（#501）', () => {
+  // 加载若丢掉文档修改时间，JSON 导出只能重新盖戳，无法语义往返。
+  it('修改时间透传进会话；再次保存仍以保存时刻盖戳（#501）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    doc.project.updatedAt = '2026-08-27T12:00:00.000Z'
+    const restored = parseProject(doc)
+    expect(restored.warnings).toEqual([])
+    expect(restored.content).toHaveProperty(
+      'updatedAt',
+      '2026-08-27T12:00:00.000Z',
+    )
+    const saved = serializeProject(restored.content, 'p-1', NOW)
+    expect(saved.project.updatedAt).toBe('2026-08-28T12:00:00.000Z')
+  })
+})
+
 describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', () => {
   it('往返一致：节点/边/设定集/视口/集标题还原；branch 边胶囊文案按 sourceHandle 派生', () => {
     const content = mkContent()
     const round = parseProject(serializeProject(content, 'p-1', NOW))
-    expect(round.migrated).toBe(false)
     // 干净 v1：归一化零改写，repaired=false（打开不应触发回写刷 updatedAt）
     expect(round.repaired).toBe(false)
     expect(round.warnings).toEqual([])
@@ -266,6 +281,11 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(() =>
       parseProject({ ...doc, schemaVersion: CURRENT_SCHEMA_VERSION + 1 }),
     ).toThrow(/升级应用/)
+  })
+
+  it('schemaVersion 0 旧扁平信封：按版本过旧拒绝，不进入 v0 迁移（#519 处置）', () => {
+    const doc = serializeProject(mkContent(), 'p-1', NOW)
+    expect(() => parseProject({ ...doc, schemaVersion: 0 })).toThrow(/版本过旧/)
   })
 
   it('schemaVersion 负数/小数/NaN/非有限值：按损坏拒绝，不得按形状降级当 v1 归一化（§11.1 第 0 步）', () => {
@@ -530,45 +550,6 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     expect(round.warnings.some((w) => w.includes('e-dead'))).toBe(true)
   })
 
-  it('schemaVersion 0 旧信封：props/documents 数组的重复/空 id 在键化前重发——不因 Object.fromEntries 折叠丢条目', () => {
-    const v0 = {
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-      graph: { nodes: [], edges: [] },
-      settings: {
-        characters: [],
-        locations: [],
-        props: [
-          { id: 'prop-1', name: '怀表', description: '' },
-          { id: 'prop-1', name: '同 id 道具', description: '' },
-          { id: '', name: '空 id 道具', description: '' },
-        ],
-        documents: [
-          { id: 'doc-1', title: '设定', body: '一', relatedIds: [] },
-          { id: 'doc-1', title: '同 id 文档', body: '二', relatedIds: [] },
-        ],
-      },
-      episodeTitles: {},
-      assets: { byId: {} },
-    }
-    const round = parseProject(v0)
-    expect(round.migrated).toBe(true)
-    // 红：toDocSettings 的 Object.fromEntries 在归一化重发前按键折叠，
-    // 除末见外全部条目被迁移回写永久丢弃（角色/地点已有数组期重发）
-    const propIds = round.content.settings.props?.map((p) => p.id) ?? []
-    expect(propIds).toHaveLength(3)
-    expect(new Set(propIds).size).toBe(3)
-    expect(round.content.settings.documents).toHaveLength(2)
-    expect(
-      new Set(round.content.settings.documents?.map((d) => d.id)).size,
-    ).toBe(2)
-  })
-
   it('逻辑重复边的元组键不可因 id 含 \\u0000 而碰撞：不同端点的两条边都保留', () => {
     // id 是不可信输入，JSON 字符串可含 \u0000——拼接键会让
     // (a → b\0c) 与 (a\0b → c) 折叠成同键，第二条被误判重复并随修复回写移除
@@ -602,260 +583,6 @@ describe('parseProject（ProjectDocument → 会话文档，§11 归一化）', 
     }
     const dupRound = parseProject(serializeProject(dupContent, 'p-1', NOW))
     expect(dupRound.content.edges).toHaveLength(1)
-  })
-
-  it('schemaVersion 0 节点 data 容器异型（null/字符串）：隔离节点与关联边，不制造空白合法节点被回写固化', () => {
-    const v0 = {
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-      graph: {
-        nodes: [
-          // data 非普通对象：预检若重置为 {}，迁移会造出 lines:[] + 空 label
-          // 的"合法"空白对白——修复回写把损坏节点永久固化成空白节点
-          { id: 'd1', type: 'dialogue', position: { x: 0, y: 0 }, data: null },
-          {
-            id: 's1',
-            type: 'scene',
-            position: { x: 0, y: 0 },
-            data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' },
-          },
-        ],
-        edges: [
-          {
-            id: 'e1',
-            source: 's1',
-            target: 'd1',
-            className: 'pw-edge-sequence',
-          },
-        ],
-      },
-      settings: { characters: [], locations: [] },
-      episodeTitles: {},
-      assets: { byId: {} },
-    }
-    const round = parseProject(v0)
-    expect(round.content.nodes.some((n) => n.id === 'd1')).toBe(false)
-    // 关联边随孤儿边规则隔离
-    expect(round.content.edges).toHaveLength(0)
-    expect(
-      round.warnings.some((w) => w.includes('d1') && w.includes('隔离')),
-    ).toBe(true)
-  })
-
-  it('schemaVersion 0 旧信封：边判别字段（type/className）归类为显式 data.kind', () => {
-    const v0 = {
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-      graph: {
-        nodes: [
-          {
-            id: 'br1',
-            type: 'branch',
-            position: { x: 0, y: 0 },
-            data: { prompt: '去哪', options: [{ id: 'opt-a', label: '左' }] },
-          },
-          {
-            id: 's1',
-            type: 'scene',
-            position: { x: 0, y: 0 },
-            data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' },
-          },
-          {
-            id: 's2',
-            type: 'scene',
-            position: { x: 0, y: 0 },
-            data: { name: '场二', sceneNo: 2, interior: true, synopsis: '' },
-          },
-          {
-            id: 'sh1',
-            type: 'shot',
-            position: { x: 0, y: 0 },
-            data: {
-              shotNo: 1,
-              size: '特写',
-              picture: '',
-              prompt: '',
-              refs: [],
-            },
-          },
-        ],
-        edges: [
-          // 旧运行态判别：type=branch / className=attach / className=sequence
-          {
-            id: 'e1',
-            source: 'br1',
-            target: 's1',
-            sourceHandle: 'option-0',
-            type: 'branch',
-            data: { optionLabel: '左' },
-          },
-          {
-            id: 'e2',
-            source: 's1',
-            target: 'sh1',
-            sourceHandle: 'shots',
-            className: 'pw-edge-attach',
-          },
-          {
-            id: 'e3',
-            source: 's1',
-            target: 's2',
-            className: 'pw-edge-sequence',
-          },
-        ],
-      },
-      settings: { characters: [], locations: [] },
-      episodeTitles: {},
-      assets: { byId: {} },
-    }
-    const round = parseProject(v0)
-    expect(round.migrated).toBe(true)
-    // 会话态按归类结果恢复：branch 有 type，attach/sequence 有对应 className
-    const e1 = round.content.edges.find((e) => e.id === 'e1')!
-    const e2 = round.content.edges.find((e) => e.id === 'e2')!
-    const e3 = round.content.edges.find((e) => e.id === 'e3')!
-    expect(e1.type).toBe('branch')
-    expect(e2.className).toBe('pw-edge-attach')
-    expect(e3.className).toBe('pw-edge-sequence')
-    // 再落盘：data.kind 显式化，无 type/className 残留
-    const again = serializeProject(
-      round.content,
-      'p-old',
-      new Date('2026-08-29T00:00:00.000Z'),
-    )
-    expect(again.graph.edges.map((e) => e.data.kind)).toEqual([
-      'branch',
-      'attach',
-      'sequence',
-    ])
-  })
-
-  it('schemaVersion 0 旧信封：数组下标句柄改写为稳定选项 id；越界句柄按孤儿边隔离', () => {
-    const v0 = {
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-      graph: {
-        nodes: [
-          {
-            id: 'br1',
-            type: 'branch',
-            position: { x: 0, y: 0 },
-            data: {
-              prompt: '去哪',
-              options: [
-                { id: 'opt-a', label: '左' },
-                { id: 'opt-b', label: '右' },
-              ],
-            },
-          },
-          {
-            id: 's1',
-            type: 'scene',
-            position: { x: 0, y: 0 },
-            data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' },
-          },
-          {
-            id: 's2',
-            type: 'scene',
-            position: { x: 0, y: 0 },
-            data: { name: '场二', sceneNo: 2, interior: true, synopsis: '' },
-          },
-        ],
-        edges: [
-          {
-            id: 'e1',
-            source: 'br1',
-            target: 's1',
-            sourceHandle: 'option-1',
-            type: 'branch',
-            data: { optionLabel: '右' },
-          },
-          {
-            id: 'e2',
-            source: 'br1',
-            target: 's2',
-            sourceHandle: 'option-9',
-            type: 'branch',
-            data: { optionLabel: '越界' },
-          },
-        ],
-        viewport: { x: 0, y: 0, zoom: 1 },
-      },
-      settings: { characters: [], locations: [] },
-      episodeTitles: {},
-      assets: { byId: {} },
-    }
-    const round = parseProject(v0)
-    expect(round.migrated).toBe(true)
-    const e1 = round.content.edges.find((e) => e.id === 'e1')!
-    expect(e1.sourceHandle).toBe('option-opt-b')
-    expect(e1.data).toBeUndefined()
-    // 越界下标无法改写，归一化按孤儿边隔离（§11.3）
-    expect(round.content.edges.map((e) => e.id)).not.toContain('e2')
-    expect(round.warnings.some((w) => w.includes('e2'))).toBe(true)
-  })
-
-  it('schemaVersion 0 旧信封：节点字段迁移（头像对象 → characterIds）后按 v1 进入会话；旧格式无视口，迁移不伪造', () => {
-    const v0 = {
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-      graph: {
-        nodes: [
-          {
-            id: 's1',
-            type: 'scene',
-            position: { x: 0, y: 0 },
-            data: {
-              name: '场一',
-              sceneNo: 1,
-              interior: true,
-              time: '夜',
-              synopsis: '',
-              characters: [{ label: '林', gradient: 'g-lin' }],
-              location: '天台',
-            },
-          },
-        ],
-        edges: [],
-      },
-      settings: { characters: [], locations: [] },
-      episodeTitles: {},
-      assets: { byId: {} },
-    }
-    const round = parseProject(v0)
-    expect(round.migrated).toBe(true)
-    const scene = round.content.nodes[0].data as {
-      characterIds: string[]
-      locationId?: string
-    }
-    expect(scene.characterIds).toHaveLength(1)
-    expect(scene.locationId).toBeDefined()
-    expect(round.content.settings.characters.map((c) => c.name)).toEqual(['林'])
-    expect(round.content.settings.locations.map((l) => l.name)).toEqual([
-      '天台',
-    ])
-    // 旧格式从未持久化视口：保持缺省，打开时 fitView（不伪造原点视口）
-    expect(round.content.viewport).toBeUndefined()
   })
 })
 
@@ -894,39 +621,6 @@ describe('parseProject 输入所有权契约（issue #102：归一化就地改�
     expect(round.warnings.some((w) => w.includes('c1'))).toBe(true)
     // 归一化结果不回归：会话设定集含改写后的条目
     expect(round.content.settings.characters.map((c) => c.id)).toContain('c1')
-  })
-
-  it('v0：迁移前预归一化同样就地改写——调用方持有的节点引用被补默认 position', () => {
-    const v0 = {
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-      graph: {
-        nodes: [
-          // position 缺失：预归一化就地补 (0,0)，否则迁移器解引用
-          // n.position.x 时单个损坏旧节点令整档迁移崩溃
-          {
-            id: 's1',
-            type: 'scene',
-            data: { name: '场一', sceneNo: 1, interior: true, synopsis: '' },
-          },
-        ],
-        edges: [],
-      },
-      settings: { characters: [], locations: [] },
-      episodeTitles: {},
-      assets: { byId: {} },
-    }
-    const node = v0.graph.nodes[0] as Record<string, unknown>
-    const round = parseProject(v0)
-    expect(round.migrated).toBe(true)
-    expect(node.position).toEqual({ x: 0, y: 0 })
-    expect(round.warnings.some((w) => w.includes('position'))).toBe(true)
-    expect(round.content.nodes.some((n) => n.id === 's1')).toBe(true)
   })
 
   it('契约补救路径：克隆后传入则原始档保持未改动，解析结果不受影响', () => {
@@ -1181,47 +875,11 @@ describe('信封形状判型警告（issue #338 评审，§11 第 0 步「均记
     expect(shapeWarning(round.warnings)).toBe(true)
   })
 
-  it('v0 形状判型（versionless 标记）：迁移交付同样记录判型警告', () => {
-    const v0 = {
-      versionless: true,
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-      graph: { nodes: [], edges: [] },
-      settings: { characters: [], locations: [], props: [], documents: [] },
-      episodeTitles: {},
-      assets: { byId: {} },
-    }
-    const round = parseProject(v0)
-    expect(round.migrated).toBe(true)
-    expect(shapeWarning(round.warnings)).toBe(true)
-  })
-
   it('显式版本号（无标记）：不产生判型警告', () => {
     expect(
       shapeWarning(
         parseProject(serializeProject(mkContent(), 'p-1', NOW)).warnings,
       ),
     ).toBe(false)
-    const v0Explicit = {
-      schemaVersion: 0,
-      project: {
-        id: 'p-old',
-        name: '旧剧',
-        createdAt: '',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-      graph: { nodes: [], edges: [] },
-      settings: { characters: [], locations: [], props: [], documents: [] },
-      episodeTitles: {},
-      assets: { byId: {} },
-    }
-    const round = parseProject(v0Explicit)
-    expect(round.migrated).toBe(true)
-    expect(shapeWarning(round.warnings)).toBe(false)
   })
 })

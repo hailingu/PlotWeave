@@ -6,8 +6,8 @@
 
 use super::*;
 use crate::library::put_asset_with;
+use crate::library_fixture::*;
 use crate::store::new_id;
-use cap_std::ambient_authority;
 use cap_std::fs::Dir as CapDir;
 use serde_json::json;
 use std::fs;
@@ -39,68 +39,9 @@ fn project_media_read(
         .map(|(mime, bytes, _permit)| (mime, bytes))
 }
 
-/// 测试内核的受信句柄：对临时目录做环境打开（等价生产端锚定句柄）。
-fn cap(p: &Path) -> CapDir {
-    CapDir::open_ambient_dir(p, ambient_authority()).expect("打开测试根句柄")
-}
-
-/// 唯一临时根：`{tmp}/pw-library-test-{new_id}/` 下含 `library/assets/`；
-/// 返回 (library, root)——root 供库外受害者文件与清理。
-fn temp_fixture() -> (PathBuf, PathBuf) {
-    let root = std::env::temp_dir().join(format!("pw-library-test-{}", new_id()));
-    fs::create_dir_all(root.join("library").join("assets")).expect("创建临时库目录");
-    (root.join("library"), root)
-}
-
-fn cleanup(root: &Path) {
-    let _ = fs::remove_dir_all(root);
-}
-
-/// 直接按字节写脏索引（绕过写入内核，模拟手工修改/损坏的 library.json）。
-fn write_index_raw(library: &Path, index: &Value) {
-    let mut f = fs::File::create(library.join("library.json")).expect("创建索引文件");
-    use std::io::Write as _;
-    f.write_all(serde_json::to_string(index).expect("序列化").as_bytes())
-        .expect("写入索引");
-}
-
-/// 最小合法索引条目（目标 Record 形状，含 §7.2 必填 source/ISO createdAt；
-/// relPath 按需投毒）。
-fn entry(id: &str, rel: &str) -> Value {
-    json!({
-        "id": id,
-        "name": "x",
-        "kind": "other",
-        "mime": "image/png",
-        "relPath": rel,
-        "source": "upload",
-        "createdAt": "2026-01-01T00:00:00.000Z",
-        "tags": [],
-    })
-}
-
-/// 把最小条目数组包装为目标 Record 形状（`{"byId": {id: entry}}`）。
-/// 接受数组字面量或 Vec（与 tests.rs 的 Vec 版语义同款，形状兼容现有调用点）。
-fn by_id(entries: impl IntoIterator<Item = Value>) -> Value {
-    let mut m = serde_json::Map::new();
-    for e in entries {
-        m.insert(e["id"].as_str().unwrap().to_string(), e);
-    }
-    json!({ "byId": m })
-}
-
 /// 按字符串解析 http::Uri 的测试助手。
 fn media_uri(s: &str) -> tauri::http::Uri {
     s.parse().expect("测试 URI 应可解析")
-}
-
-/// 直接按字节写删除日志（模拟中断的删除事务）。
-fn write_journal_raw(library: &Path, entries: Value) {
-    fs::write(
-        library.join(crate::library_journal::JOURNAL_FILE_NAME),
-        serde_json::to_string(&entries).expect("序列化日志"),
-    )
-    .expect("写入日志");
 }
 
 /// opaque URL 只含逻辑 scope + assetId：不携带 relPath 与本机绝对路径
@@ -454,18 +395,17 @@ fn media_read_consumes_identity_bound_handle_outside_locks() {
     cleanup(&root);
 }
 
-/// 404 折叠不得隐匿失败（评审修复）：后端诊断文本带 `[media]` 标签并
-/// 携带原始原因，脏数据与普通缺失可区分；webview 侧仍只收非敏感 404。
+/// Media failures retain their local cause; HTTP responses never expose the supplied private cause.
 #[test]
-fn media_failure_diagnostic_carries_cause_with_label() {
-    let text = media_failure_diagnostic("资产 la-1 的媒体文件不存在");
-    assert!(text.starts_with("[media]"), "诊断须带模块标签：{text}");
-    assert!(text.contains("la-1"), "诊断须携带原始原因：{text}");
-    // 响应映射保持非敏感：404 正文仍为固定文案
-    let miss = media_http_response(Err("资产 la-1 处于删除事务冲突期，媒体不可用".into()));
+fn media_failure_diagnostic_preserves_cause_without_exposing_it_to_web() {
+    let cause = "code=fixture-media-cause assetId=la-1";
+    let text = media_failure_diagnostic(cause);
+    assert!(text.contains(cause));
+    let miss = media_http_response(Err(cause.into()));
+    let other = media_http_response(Err("code=other-private-cause".into()));
     assert_eq!(miss.status(), tauri::http::StatusCode::NOT_FOUND);
-    let body = String::from_utf8(miss.into_body()).expect("404 正文是 UTF-8");
-    assert_eq!(body, "媒体不可用", "404 正文不得携带原因");
+    assert_eq!(miss.body(), other.body());
+    assert!(!String::from_utf8_lossy(miss.body()).contains(cause));
 }
 
 /// 响应映射：命中 → 200 + 索引 mime；任何失败 → 404（不向 webview 泄露
@@ -700,4 +640,95 @@ fn project_media_serves_assets_across_persisted_contract_sizes() {
     let err = media_read(&cap(&library), "la-big").expect_err("库媒体超 20 MiB 应拒绝");
     assert!(err.contains("20 MiB"), "意外诊断：{err}");
     cleanup(&root);
+}
+
+/// #628 keeps the existing lowercase-only media URL wire contract during codec sharing.
+#[test]
+fn project_media_hex_case_and_invalid_input_contract() {
+    assert_eq!(
+        parse_media_uri(&media_uri("pwmedia://localhost/project/p-1/4a"))
+            .unwrap()
+            .1,
+        "J"
+    );
+    for encoded in ["4A", "4aFf", "f", "gg", "ff", "c328", "efbca6efbca6"] {
+        let uri = media_uri(&format!("pwmedia://localhost/project/p-1/{encoded}"));
+        if encoded == "efbca6efbca6" {
+            assert_eq!(parse_media_uri(&uri).unwrap().1, "ＦＦ");
+        } else {
+            assert!(parse_media_uri(&uri).is_err(), "{encoded}");
+        }
+    }
+}
+
+/// #654: headers restrict active documents without changing legitimate media declarations or response bytes.
+#[test]
+fn media_response_restricts_documents_and_disables_scripts() {
+    for (mime, expected) in [
+        ("image/png", "image/png"),
+        ("image/svg+xml", "image/svg+xml"),
+        ("audio/mpeg", "audio/mpeg"),
+        ("video/mp4", "video/mp4"),
+        ("text/html", "application/octet-stream"),
+        ("application/xhtml+xml", "application/octet-stream"),
+        ("application/pdf", "application/octet-stream"),
+    ] {
+        let response = media_http_response(Ok((mime.into(), b"fixture".to_vec())));
+        assert_eq!(response.status(), tauri::http::StatusCode::OK);
+        assert_eq!(response.body(), b"fixture");
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            expected,
+            "{mime}"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("content-security-policy")
+                .and_then(|v| v.to_str().ok()),
+            Some("sandbox; script-src 'none'")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-content-type-options")
+                .and_then(|v| v.to_str().ok()),
+            Some("nosniff")
+        );
+    }
+}
+
+/// Dirty declarations cannot inject headers, and fixed error responses retain their established safe body/type.
+#[test]
+fn media_response_handles_dirty_mime_and_preserves_safe_404() {
+    for mime in [
+        "image/png\r\nX-Injected: value",
+        "Image/PNG",
+        "image/*",
+        "",
+        "image/png; charset=utf-8",
+    ] {
+        let reply = media_http_response(Ok((mime.into(), b"fixture".to_vec())));
+        assert_eq!(
+            reply.headers().get("content-type").unwrap(),
+            "application/octet-stream"
+        );
+        assert!(reply.headers().get("x-injected").is_none());
+        assert_eq!(reply.body(), b"fixture");
+    }
+    let reply = media_http_response(Err("private disk failure".into()));
+    assert_eq!(reply.status(), tauri::http::StatusCode::NOT_FOUND);
+    assert_eq!(
+        reply.headers().get("content-type").unwrap(),
+        "text/plain; charset=utf-8"
+    );
+    assert_eq!(
+        reply.headers().get("content-security-policy").unwrap(),
+        "sandbox; script-src 'none'"
+    );
+    assert_eq!(
+        reply.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
+    assert_eq!(reply.body(), "媒体不可用".as_bytes());
 }

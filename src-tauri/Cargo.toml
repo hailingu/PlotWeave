@@ -1,6 +1,6 @@
 [package]
 name = "plotweave"
-version = "0.2.0"
+version = "0.3.0"
 description = "PlotWeave —— 面向短剧创作的可视化画布工具"
 edition = "2021"
 
@@ -28,9 +28,13 @@ serde_json = "1.0.151"
 # 库/项目媒体均走 pwmedia 自定义协议（数据模型 §7.1）
 tauri = { version = "2", features = [] }
 cap-std = "4.0.3"
+plotweave-core = { path = "../crates/plotweave-core" }
 # issue #141 作业总预算：tokio::time::timeout（tauri/reqwest 已引入同一
 # tokio 并启用 time——本依赖仅使其可直接引用，不新增编译产物）
 tokio = { version = "1", default-features = false, features = ["time"] }
+log = "0.4"
+env_logger = { version = "0.11", default-features = false }
+env_filter = { version = "2", default-features = false }
 
 [[test]]
 name = "native_quit"
@@ -39,3 +43,17 @@ harness = false
 [[test]]
 name = "invoke_responsiveness"
 harness = false
+
+[[test]]
+name = "canvas_performance"
+harness = false
+
+# issue #551：前端 bundle → IPC → Rust 命令 → 真实落盘 的全链路回归；
+# dist/ 缺失时（本地未构建前端）用例自跳过，不强制本地先 npm run build。
+[[test]]
+name = "frontend_bundle_chain"
+harness = false
+
+[dev-dependencies]
+# 共享内核夹具与故障注入；生产依赖不启用测试接口。
+plotweave-core = { path = "../crates/plotweave-core", features = ["test-support"] }

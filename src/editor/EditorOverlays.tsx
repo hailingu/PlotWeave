@@ -33,9 +33,8 @@ export interface EditorOverlaysProps {
   >
 }
 
-/** 当前会话同时生成两类交付文本，统一时钟与内容快照；JSON 沿用保存契约。 */
+/** 当前会话生成两类可复现文本：Markdown 不盖日期，JSON 保留文档时间。 */
 function buildExportModels(project: EditorProjectContent, doc: SessionDocPart) {
-  const now = new Date()
   return {
     markdown: buildScriptExport({
       projectName: project.name,
@@ -44,9 +43,8 @@ function buildExportModels(project: EditorProjectContent, doc: SessionDocPart) {
       settings: doc.settings,
       assets: doc.assets,
       episodeTitles: doc.episodeTitles ?? {},
-      exportedAt: now.toLocaleDateString('zh-CN'),
     }),
-    json: buildScriptJson(project, doc, now),
+    json: buildScriptJson(project, doc),
   }
 }
 

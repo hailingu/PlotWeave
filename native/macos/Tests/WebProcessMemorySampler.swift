@@ -1,0 +1,107 @@
+import AppKit
+
+/// Samples resident memory of the hosting app and its WebContent (page)
+/// processes (plan §7.2 / matrix M15, issue #523). On this macOS generation
+/// WebContent processes are re-parented to launchd, so ownership cannot come
+/// from `pbi_ppid`; a before/after diff requires an exclusive WebKit suite
+/// scope so sibling suites cannot launch a foreign page during attribution.
+/// This remains a quiet-machine measurement, not a public page-to-PID API.
+/// Public process APIs only: `proc_listallpids` + `proc_pidinfo`.
+struct WebProcessMemorySample: Equatable {
+
+    /// Resident bytes of the hosting app process itself.
+    let appResidentBytes: UInt64
+
+    /// Summed resident bytes of the tracked WebContent (page) processes.
+    let webContentResidentBytes: UInt64
+
+    /// Number of tracked WebContent processes still alive; zero means the
+    /// tracked page processes all exited (or were never attributed).
+    let webContentProcessCount: Int
+
+    /// Megabyte rounding for human-readable gate logs and evidence records.
+    var description: String {
+        let mb = 1_048_576.0
+        return String(
+            format: "app=%.1fMB web(sum)=%.1fMB webProcesses=%d",
+            Double(appResidentBytes) / mb,
+            Double(webContentResidentBytes) / mb,
+            webContentProcessCount
+        )
+    }
+}
+
+/// One-shot sampler; stateless, safe to call from the main actor between waits.
+enum WebProcessMemorySampler {
+
+    /// Invalid attribution stops the measurement before a PID enters an RSS bound.
+    enum AttributionFailure: Error, Equatable {
+        case exclusiveSuiteScopeRequired
+        case ambiguousProcessCount(Int)
+    }
+
+    /// Every live `com.apple.WebKit.WebContent` pid on the machine.
+    static func webContentPids() -> Set<Int32> {
+        // The size probe returns a pid count, while the `buffersize` parameter
+        // is bytes: passing the count would expose only a quarter of the
+        // buffer (PR #574 review). Keep headroom for process churn and pass
+        // the byte size explicitly.
+        let needed = proc_listallpids(nil, 0)
+        guard needed > 0 else { return [] }
+        let slots = Int(needed) + 64
+        var pids = [pid_t](repeating: 0, count: slots)
+        let written = proc_listallpids(&pids, Int32(MemoryLayout<pid_t>.stride * slots))
+        guard written > 0 else { return [] }
+        var webPids: Set<Int32> = []
+        for index in 0..<min(Int(written), slots) {
+            let pid = pids[index]
+            guard pid > 0 else { continue }
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { continue }
+            // pbi_comm truncates to 16 chars ("com.apple.WebKi…"); pbi_name
+            // keeps the full executable name needed to match WebContent.
+            let name = withUnsafeBytes(of: info.pbi_name) { raw -> String in
+                String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
+            }
+            if name.contains("WebContent") { webPids.insert(pid) }
+        }
+        return webPids
+    }
+
+    /// Accepts a single new page process only while sibling WebKit suites are excluded.
+    static func pageWebContentPids(since baseline: Set<Int32>) throws -> Set<Int32> {
+        guard WebKitTestIsolation.isHeld else { throw AttributionFailure.exclusiveSuiteScopeRequired }
+        let candidates = webContentPids().subtracting(baseline)
+        guard candidates.count == 1 else { throw AttributionFailure.ambiguousProcessCount(candidates.count) }
+        return candidates
+    }
+
+    /// Reads the app's resident size plus the still-alive tracked processes.
+    static func sample(tracking: Set<Int32>) -> WebProcessMemorySample {
+        var webBytes: UInt64 = 0
+        var webCount = 0
+        for pid in tracking {
+            let bytes = residentBytes(pid: pid)
+            if bytes > 0 {
+                webBytes += bytes
+                webCount += 1
+            }
+        }
+        return WebProcessMemorySample(
+            appResidentBytes: residentBytes(pid: getpid()),
+            webContentResidentBytes: webBytes,
+            webContentProcessCount: webCount
+        )
+    }
+
+    /// Resident size of one process; exited or unreadable processes report 0.
+    private static func residentBytes(pid: Int32) -> UInt64 {
+        var info = proc_taskinfo()
+        let result = proc_pidinfo(
+            pid, PROC_PIDTASKINFO, 0, &info, Int32(MemoryLayout<proc_taskinfo>.size)
+        )
+        guard result == Int32(MemoryLayout<proc_taskinfo>.size) else { return 0 }
+        return info.pti_resident_size
+    }
+}
