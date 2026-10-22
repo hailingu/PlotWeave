@@ -199,7 +199,7 @@ function AssetImportInput({
   fileRef,
   onFiles,
 }: {
-  readonly fileRef: RefObject<HTMLInputElement>
+  readonly fileRef: RefObject<HTMLInputElement | null>
   readonly onFiles: (files: FileList | null) => void
 }) {
   return (

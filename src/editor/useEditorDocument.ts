@@ -12,7 +12,7 @@ import {
   useRef,
   useState,
   type Dispatch,
-  type MutableRefObject,
+  type RefObject,
   type SetStateAction,
 } from 'react'
 import {
@@ -52,23 +52,23 @@ export interface EditorDocument {
   setAssets: Dispatch<SetStateAction<ProjectContent['assets']>>
   focusedEpisode: number | null
   setFocusedEpisode: Dispatch<SetStateAction<number | null>>
-  nodesRef: MutableRefObject<CanvasNode[]>
-  edgesRef: MutableRefObject<Edge[]>
+  nodesRef: RefObject<CanvasNode[]>
+  edgesRef: RefObject<Edge[]>
   /** 内容稳定投影（issue #157）：仅当节点非位置/非会话内容变化时换引用——
    * 拖拽过程帧（position/selected/dragging/measured 变化）保持引用稳定，
    * 纯内容派生（AI 摘要、节拍兑现）据此跳过逐帧重算。条目仍是原节点对象。 */
   contentNodes: CanvasNode[]
   /** 设定集镜像（issue 44）：AI 校验/落地读取「当前」实体注册表——
    * 预览到确认之间用户的设定集编辑经此被重校验发现。 */
-  settingsRef: MutableRefObject<ProjectSettings>
-  assetsRef: MutableRefObject<ProjectContent['assets']>
-  episodeTitlesRef: MutableRefObject<Record<number, string>>
+  settingsRef: RefObject<ProjectSettings>
+  assetsRef: RefObject<ProjectContent['assets']>
+  episodeTitlesRef: RefObject<Record<number, string>>
   /** 最近完成的视口：导出实时预览订阅该值，不订阅动画过程帧。 */
   viewport: Viewport | undefined
   /** 发布完成视口并同步更新保存镜像，相同坐标保持引用稳定。 */
   updateViewport: (viewport: Viewport) => void
   /** 保存读取同步镜像；写入统一经过 updateViewport，避免预览与保存分离。 */
-  viewportRef: Readonly<MutableRefObject<Viewport | undefined>>
+  viewportRef: Readonly<RefObject<Viewport | undefined>>
 }
 
 /** 节点会话态键（issue #157）：position/selected/dragging/measured 等

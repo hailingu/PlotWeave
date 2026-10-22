@@ -295,7 +295,7 @@ function useOutlineScrollFollow(
   open: boolean,
   tab: LeftTab,
   selectedId: string | undefined,
-  outlineRef: RefObject<HTMLElement>,
+  outlineRef: RefObject<HTMLElement | null>,
 ) {
   useEffect(() => {
     if (!open || tab !== 'outline' || !selectedId) return
@@ -319,7 +319,7 @@ function OutlinePane({
   onLocate,
 }: {
   readonly groups: OutlineGroup[]
-  readonly outlineRef: RefObject<HTMLElement>
+  readonly outlineRef: RefObject<HTMLElement | null>
   readonly selectedId: string | undefined
   readonly onOutlineDrop: LeftPanelProps['onOutlineDrop']
   readonly dnd: OutlineDnD

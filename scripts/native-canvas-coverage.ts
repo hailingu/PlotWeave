@@ -1,4 +1,4 @@
-/** Generate exact-path coverage groups for the native canvas on the pinned Vitest4 provider. */
+/** Generate exact-path coverage groups for the native canvas on the pinned Vitest5 provider. */
 import { readdirSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
