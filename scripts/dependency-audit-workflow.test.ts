@@ -13,6 +13,7 @@ interface Step {
 }
 interface Job {
   steps: Step[]
+  if?: unknown
   'continue-on-error'?: unknown
 }
 interface Workflow {
@@ -34,6 +35,7 @@ const workflow = load(
 function expectBlocking(job: Job, step: Step | undefined): void {
   expect(step).toBeDefined()
   expect(job['continue-on-error'] ?? false).toBe(false)
+  expect(job.if).toBeUndefined()
   expect(step?.['continue-on-error'] ?? false).toBe(false)
   expect(step?.if).toBeUndefined()
 }
@@ -73,4 +75,13 @@ it('pins every remote CI Action to a full commit SHA', () => {
   expect(actions.length).toBeGreaterThan(5)
   for (const action of actions)
     expect(action).toMatch(/^[\w.-]+\/[\w./-]+@[a-f0-9]{40}$/)
+})
+
+it('requires the full workspace drift check for every rust job without a bot exception', () => {
+  const job = workflow.jobs.rust!
+  const checks = job.steps.filter(
+    (step) => step.run === 'npm run check:workspace-drift',
+  )
+  expect(checks).toHaveLength(1)
+  expectBlocking(job, checks[0])
 })

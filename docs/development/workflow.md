@@ -114,6 +114,18 @@ Known boundary (PR #582 review, P2): `target-branch: dev` binds only the version
 
 A Dependabot pull request interacts with the `gate-evidence` required check as follows. Dependabot's default branch shape is a single force-pushed commit, so the PR range contains only the tip and the check passes through the tip-lag tolerance with a warning annotation (`[GATE_EVIDENCE_TIP_LAG]`). If a Dependabot branch accumulates non-tip commits without local gate records (for example after manual collaboration on the branch), `gate-evidence` fails by design; the maintainer then runs the local gate and pushes an evidence commit as documented in [Gate Run Evidence](quality-gate-evidence.md) before merging. No exemption from the evidence check is granted to bot actors.
 
+### Cargo 多目录更新与验收（Issue #732）
+
+Cargo 使用单个 `package-ecosystem: cargo` 条目，`directories` 恰好覆盖 `/src-tauri` 和 `/crates`，两侧共同参与原有 `cargo-minor-and-patch` 更新组。目标仍为 `dev`，每周一按 `Asia/Shanghai` 调度，PR 上限为 5；minor/patch 成批、major 单独评审的政策不变。配置采用 [GitHub 官方多目录分组机制](https://docs.github.com/en/code-security/tutorials/secure-your-dependencies/optimizing-pr-creation-version-updates#example-2-grouped-updates-with-excluded-dependencies)。
+
+验收目标是 **Dependabot 自己生成的受支持共享依赖更新 PR 通过对应 CI**，包括两份锁文件及必要的共享 manifest 更新。解析 YAML 的配置回归只验证目录和分组政策，不证明 GitHub 服务已经采用配置，也不证明两个独立 Cargo resolver 的传递依赖必然一致。必须检查实际 bot 输出，再以该 PR 最终 head 的必需 `frontend`、`rust`、`native`、`gate-evidence` 成功结果验收；不能用人工追加对齐提交代替这一目标。
+
+GitHub [要求从默认分支读取 `dependabot.yml`](https://docs.github.com/en/code-security/concepts/supply-chain-security/about-the-dependabot-yml-file#where-to-store-the-dependabotyml-file)。本仓库默认分支为 `main`，`target-branch: dev` 只选择版本更新目标，不改变配置读取位置。仅将本变更合入 `dev` 不会激活多目录机制；默认分支配置尚未按另行授权的集成流程更新时，真实 bot 服务验收仍待完成，不能据本地配置测试关闭 #732。
+
+若实际更新仍出现 `DRIFT_VERSION_MISMATCH` 或 `DRIFT_CARGO_FAILED`，保留阻断并诊断 resolver、版本约束与锁文件。异常处置须在同一 PR 内补齐 `src-tauri/Cargo.lock`、`crates/Cargo.lock` 和必要 manifest；在两侧分别用 `cargo update --manifest-path <workspace>/Cargo.toml -p <package>@<old-version> --precise <compatible-version>` 定向对齐诊断所指的包，再运行 `npm run check:workspace-drift` 检查整个 `plotweave-core` 共享闭包，不能只检查被更新的直接依赖。不要无目标地全量升级；约束不兼容时继续阻断，单独评审兼容性修复。人工追加提交须正常执行本地提交／推送门禁并补全 gate evidence；这种恢复只解决该次 PR，不代表 bot 自动产出目标已验收。
+
+漂移检查仍以两侧真实 `cargo tree --locked` 为准；共享包版本集合不一致或 manifest 与锁文件失同步均失败，检查过程不得改锁。`rust` 必需检查、审计、分支保护和证据要求保持不变；没有 bot 豁免、配对 PR 放行、合并后对齐窗口或新增写权限的自动修复。
+
 ### Scanner And Action Updates (Issue #618)
 
 The scanner version and advisory data are separate inputs. `ci.yml` pins an exact `cargo-audit` release (0.22.2 at the 2026-10-19 change), while its normal audit commands refresh the RustSec advisory database. Do not replace the version with `latest`, freeze the database, add ignored advisories, or swallow scanner failures to obtain a green job. Informational `unmaintained`, `unsound`, and `yanked` reports retain their existing nonblocking policy; vulnerability advisories remain blocking.
