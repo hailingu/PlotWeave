@@ -4,7 +4,7 @@ This document is the developer entry point for PlotWeave. It keeps repository st
 
 ## Technology And Repository Layout
 
-PlotWeave retains its Tauri/React Flow/Rust application as the released baseline. On `dev`, SwiftUI owns the business interface, AppKit owns window and system integration, and Swift services own project storage, library assets, preferences, encrypted keys, and model requests. React, TypeScript, and `@xyflow/react` retain the single editing session, graph commands, undo/redo, and canvas inside WKWebView. The native application uses the existing typed IPC contracts without linking Rust or the historical C ABI; current capability and verification boundaries are recorded in [Feature Parity](../swiftui-react-flow-feature-parity.md). The native application was developed on the historical branch `codex/swiftui-react-flow`, whose content merged into `dev` through [PR #526](https://github.com/hailingu/PlotWeave/pull/526) on 2026-10-13; that branch no longer exists on the remote.
+PlotWeave v0.3.0 publishes the existing SwiftUI/AppKit and React Flow implementation as source. The Tauri/React Flow/Rust application remains a retained baseline. SwiftUI owns the business interface, AppKit owns window and system integration, and Swift services own project storage, library assets, preferences, encrypted keys, and model requests. React, TypeScript, and `@xyflow/react` retain the single editing session, graph commands, undo/redo, and canvas inside WKWebView. The native application uses the existing typed IPC contracts without linking Rust or the historical C ABI; current capability and verification boundaries are recorded in [Feature Parity](../swiftui-react-flow-feature-parity.md). The native application was developed on the historical branch `codex/swiftui-react-flow`, whose content merged into `dev` through [PR #526](https://github.com/hailingu/PlotWeave/pull/526) on 2026-10-13; that branch no longer exists on the remote.
 
 ```text
 PlotWeave/
@@ -153,7 +153,7 @@ The first GitHub Release is `v0.2.0`, matching the application version already s
 
 For a later release:
 
-1. Update `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `crates/Cargo.toml`, `crates/Cargo.lock`, and `src-tauri/tauri.conf.json` to one consistent application version, and add release notes in the same task pull request when a version change is needed.
+1. Update `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `crates/plotweave-core/Cargo.toml`, `crates/plotweave-ffi/Cargo.toml`, `crates/Cargo.lock`, and `src-tauri/tauri.conf.json` to one consistent application version, and add release notes in the same task pull request when a version change is needed. The virtual `crates/Cargo.toml` workspace has no package version. Keep the native app/test Debug and Release `MARKETING_VERSION`, build number, and actual-bundle assertion in `NativeLaunchModeTests` synchronized too.
 2. Merge the prepared work into `dev`, then use a `dev` to `main` release pull request.
 3. Wait for the `main` push CI to pass.
 4. Create the version tag and GitHub Release at the verified `main` merge commit.

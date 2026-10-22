@@ -6,9 +6,9 @@ import WebKit
 /// Test-host isolation is decided before XCTest loads its bundle, using the shared scheme's launch contract.
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeLaunchModeTests {
-    /// AGENTS.md's v0.2.0 release contract applies to the actual application bundle in both build configurations.
+    /// The v0.3.0 release contract applies to the actual application bundle in both build configurations.
     @Test func applicationBundleUsesDesignatedVersion() {
-        #expect(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == "0.2.0")
+        #expect(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == "0.3.0")
     }
 
     /// The TestAction flag alone must select the isolated host during application bootstrap.

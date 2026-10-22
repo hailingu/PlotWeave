@@ -1,6 +1,6 @@
 [package]
 name = "plotweave-core"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "PlotWeave 宿主无关的项目存储内核（数据模型 v1 §10/§11）"
 

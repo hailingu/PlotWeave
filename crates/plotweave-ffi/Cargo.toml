@@ -1,6 +1,6 @@
 [package]
 name = "plotweave-ffi"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "PlotWeave 历史 C ABI 与合同回归边界（当前 Swift 原生应用不链接）"
 
