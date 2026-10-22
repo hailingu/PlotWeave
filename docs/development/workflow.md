@@ -52,6 +52,8 @@ Useful direct checks:
 - Rust checks from either `src-tauri/` or `crates/`: `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`
 - Complete local quality gate: `npm run sonar:gate`
 
+Gate-workflow regression imports the explicitly approved historical Git objects from the local repository and requires a full Git clone, as used by frontend CI. Source archives remain usable for the source-build commands; the history-dependent regression requires the clone's Git objects.
+
 ### 原生应用启动与验证
 
 2026-10-07 将归档工作树的完整源码恢复并合入当前主目录，构建入口不再指向早期演示壳；来源、重叠修改协调与本次检查见[合入记录](../swiftui-react-flow-integration.md)。
@@ -146,6 +148,8 @@ A failed or unavailable required check blocks the Git operation. Do not use `--n
 - [Gate Run Evidence](quality-gate-evidence.md)
 - [Quality Gate Cost Decision](quality-gate-cost.md)
 - [门禁测试负载与夹具成本（issue #498）](test-workload.md)
+
+The owner approved one historical-base bootstrap on 2026-10-22: when the v0.3.0 same-repository `dev → main` release has exact old base `fbd298ebe6cfa1a9fab6e632c00cdede06d81faf`, which lacks the verifier, the evidence job uses the fixed already-reviewed `4e17c1c198aa8150c87473849d61e92692083777` verifier. The base checkout and Node pin, all evidence rules, required checks, protection and permissions remain unchanged; other bases and PR shapes still use their own base verifier. See [One-time historical-base bootstrap](quality-gate-evidence.md#server-side-evidence-verification-issue-548) for the exact trust boundary and failure behavior.
 
 ## Versioning And Delivery
 
