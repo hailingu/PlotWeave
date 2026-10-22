@@ -25,6 +25,9 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Bootstrap regression fixtures import the approved immutable history locally.
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
@@ -196,4 +199,13 @@ jobs:
         run: |
           # 只获取对象，不检出、安装依赖或执行 head 的任何内容；失败不回退到 PR 核验器。
           git fetch --no-tags origin "$HEAD_SHA"
-          node scripts/verify-gate-evidence.ts --base "$BASE_SHA" --head "$HEAD_SHA" ${RELEASE_BOUNDARY:+--release-boundary}
+          # Owner-approved bootstrap, 2026-10-22; exact old main and release shape only.
+          # The exact old main lacks the verifier; never execute PR-head code.
+          if [ "$BASE_SHA" = "fbd298ebe6cfa1a9fab6e632c00cdede06d81faf" ] &&
+             [ "$RELEASE_BOUNDARY" = "1" ]; then
+            verifier_path="$RUNNER_TEMP/plotweave-bootstrap-verifier.ts"
+            GIT_NO_REPLACE_OBJECTS=1 git show 4e17c1c198aa8150c87473849d61e92692083777:scripts/verify-gate-evidence.ts > "$verifier_path"
+            node "$verifier_path" --base "$BASE_SHA" --head "$HEAD_SHA" --release-boundary
+          else
+            node scripts/verify-gate-evidence.ts --base "$BASE_SHA" --head "$HEAD_SHA" ${RELEASE_BOUNDARY:+--release-boundary}
+          fi

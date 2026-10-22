@@ -21,7 +21,7 @@
 
 ## 当前版本与获取方式
 
-当前发布版本为 [v0.2.0](https://github.com/hailingu/PlotWeave/releases/tag/v0.2.0)。该版本包含画布编辑、分支叙事、设定管理、Markdown / JSON 导出、对齐吸附和首版 AI 图像生成能力。
+当前发布版本为 [v0.3.0](https://github.com/hailingu/PlotWeave/releases/tag/v0.3.0)。本版发布已有的 SwiftUI/AppKit 原生界面、Swift 业务服务与 React Flow 画布，包含保存反馈、资产操作协调、媒体与模型网络边界及画布投影更新改进；完整范围和验证边界见[发布说明](docs/releases/v0.3.0.md)。
 
 目前 Release **仅提供源码归档**，尚未提供经过 Developer ID 签名、公证及安装验收的 macOS 安装包。请勿将 GitHub 自动生成的源码压缩包当作可直接安装的应用。
 
@@ -29,7 +29,7 @@
 
 当前支持平台为 **macOS**；**不支持 Windows**，不提供 Windows 构建、测试或发行支持。非 Unix 平台仅提供源代码：仓库源码在非 Unix 目标上保持可编译（[issue #546](https://github.com/hailingu/PlotWeave/issues/546)），需要 Windows 版本的使用者须自行构建并自担风险——平台能力差异（如库资产删除/恢复协议依赖的 Unix 文件身份与目录持久性屏障原语）会在运行时按能力缺失拒绝，不做官方验证。
 
-当前 `dev` 分支已实现 SwiftUI 首页、编辑工具栏、大纲、检查器、设定、图库、AI、导出与设置界面，存储、素材、密钥和模型服务均由 Swift 承接。React Flow 保留画布与单一编辑会话。该原生实现最初在历史分支 `codex/swiftui-react-flow` 上开发，2026-10-13 经 [PR #526](https://github.com/hailingu/PlotWeave/pull/526) 合入 `dev`，该分支现已被删除。此处描述的是当前源码实现，已发布的 v0.2.0 仍以其[发布说明](docs/releases/v0.2.0.md)为准。
+v0.3.0 源码已实现 SwiftUI 首页、编辑工具栏、大纲、检查器、设定、图库、AI、导出与设置界面，存储、素材、密钥和模型服务均由 Swift 承接。React Flow 保留画布与单一编辑会话。该原生实现最初在历史分支 `codex/swiftui-react-flow` 上开发，2026-10-13 经 [PR #526](https://github.com/hailingu/PlotWeave/pull/526) 合入 `dev`，该分支现已被删除。保留的 v0.2.0 源码以其[历史发布说明](docs/releases/v0.2.0.md)为准；原生开发数据与旧 Tauri 数据的隔离边界不变。
 
 原生构建需要 macOS 26.0+、[Node.js 24.18.0](.nvmrc) 与 Xcode 27.0／macOS SDK 27.0：
 
@@ -46,7 +46,7 @@ open -n native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app
 
 ## 文档
 
-- [v0.2.0 发布说明](docs/releases/v0.2.0.md)
+- [v0.3.0 发布说明](docs/releases/v0.3.0.md)与 [v0.2.0 历史发布说明](docs/releases/v0.2.0.md)
 - [数据模型与项目格式](docs/data-model/README.md)
 - [界面与交互设计](docs/ui-design.md)
 - [SwiftUI/AppKit + React Flow 改造计划](docs/swiftui-react-flow-migration-plan.md)与[当前功能、证据及验收边界](docs/swiftui-react-flow-current-state.md)

@@ -4,7 +4,7 @@ This document is the developer entry point for PlotWeave. It keeps repository st
 
 ## Technology And Repository Layout
 
-PlotWeave retains its Tauri/React Flow/Rust application as the released baseline. On `dev`, SwiftUI owns the business interface, AppKit owns window and system integration, and Swift services own project storage, library assets, preferences, encrypted keys, and model requests. React, TypeScript, and `@xyflow/react` retain the single editing session, graph commands, undo/redo, and canvas inside WKWebView. The native application uses the existing typed IPC contracts without linking Rust or the historical C ABI; current capability and verification boundaries are recorded in [Feature Parity](../swiftui-react-flow-feature-parity.md). The native application was developed on the historical branch `codex/swiftui-react-flow`, whose content merged into `dev` through [PR #526](https://github.com/hailingu/PlotWeave/pull/526) on 2026-10-13; that branch no longer exists on the remote.
+PlotWeave v0.3.0 publishes the existing SwiftUI/AppKit and React Flow implementation as source. The Tauri/React Flow/Rust application remains a retained baseline. SwiftUI owns the business interface, AppKit owns window and system integration, and Swift services own project storage, library assets, preferences, encrypted keys, and model requests. React, TypeScript, and `@xyflow/react` retain the single editing session, graph commands, undo/redo, and canvas inside WKWebView. The native application uses the existing typed IPC contracts without linking Rust or the historical C ABI; current capability and verification boundaries are recorded in [Feature Parity](../swiftui-react-flow-feature-parity.md). The native application was developed on the historical branch `codex/swiftui-react-flow`, whose content merged into `dev` through [PR #526](https://github.com/hailingu/PlotWeave/pull/526) on 2026-10-13; that branch no longer exists on the remote.
 
 ```text
 PlotWeave/
@@ -51,6 +51,8 @@ Useful direct checks:
 - Maintained source size: `npm run check:size` (includes extracted Rust crates and native Swift sources).
 - Rust checks from either `src-tauri/` or `crates/`: `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`
 - Complete local quality gate: `npm run sonar:gate`
+
+Gate-workflow regression imports the explicitly approved historical Git objects from the local repository and requires a full Git clone, as used by frontend CI. Source archives remain usable for the source-build commands; the history-dependent regression requires the clone's Git objects.
 
 ### 原生应用启动与验证
 
@@ -147,13 +149,15 @@ A failed or unavailable required check blocks the Git operation. Do not use `--n
 - [Quality Gate Cost Decision](quality-gate-cost.md)
 - [门禁测试负载与夹具成本（issue #498）](test-workload.md)
 
+The owner approved one historical-base bootstrap on 2026-10-22: when the v0.3.0 same-repository `dev → main` release has exact old base `fbd298ebe6cfa1a9fab6e632c00cdede06d81faf`, which lacks the verifier, the evidence job uses the fixed already-reviewed `4e17c1c198aa8150c87473849d61e92692083777` verifier. The base checkout and Node pin, all evidence rules, required checks, protection and permissions remain unchanged; other bases and PR shapes still use their own base verifier. See [One-time historical-base bootstrap](quality-gate-evidence.md#server-side-evidence-verification-issue-548) for the exact trust boundary and failure behavior.
+
 ## Versioning And Delivery
 
 The first GitHub Release is `v0.2.0`, matching the application version already shared by the frontend, Rust, and Tauri configuration. It is a source-only release and makes no 1.0 stability promise. Passing frontend and Rust CI does not establish desktop distribution readiness.
 
 For a later release:
 
-1. Update `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `crates/Cargo.toml`, `crates/Cargo.lock`, and `src-tauri/tauri.conf.json` to one consistent application version, and add release notes in the same task pull request when a version change is needed.
+1. Update `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `crates/plotweave-core/Cargo.toml`, `crates/plotweave-ffi/Cargo.toml`, `crates/Cargo.lock`, and `src-tauri/tauri.conf.json` to one consistent application version, and add release notes in the same task pull request when a version change is needed. The virtual `crates/Cargo.toml` workspace has no package version. Keep the native app/test Debug and Release `MARKETING_VERSION`, build number, and actual-bundle assertion in `NativeLaunchModeTests` synchronized too.
 2. Merge the prepared work into `dev`, then use a `dev` to `main` release pull request.
 3. Wait for the `main` push CI to pass.
 4. Create the version tag and GitHub Release at the verified `main` merge commit.

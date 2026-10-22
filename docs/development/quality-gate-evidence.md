@@ -414,7 +414,9 @@ two complementary backstops (方案 1 + 方案 2):
    head SHA as Git objects without checking out the head, installing its
    dependencies, or executing its files, then passes both exact SHAs to the
    base verifier. A missing base verifier or unavailable head object fails
-   the job; there is no fallback to the PR's verifier. A PR changing the
+   the job; there is no fallback to the PR's verifier. The sole historical-base
+   bootstrap below uses an explicitly owner-approved immutable source instead.
+   A PR changing the
    verifier is checked by the already-integrated base version, while its new
    behavior is exercised by the ordinary frontend script tests. For the range
    `merge-base(base, head)..head`, against the ledger **as versioned at the
@@ -457,6 +459,30 @@ two complementary backstops (方案 1 + 方案 2):
      semantics; they do not fail the check by themselves.
    - The script always reads original Git objects
      (`GIT_NO_REPLACE_OBJECTS=1`, matching the push gate, PR #442).
+
+   **One-time historical-base bootstrap (owner approval, 2026-10-22).**
+   The first v0.3.0 integration has base
+   `fbd298ebe6cfa1a9fab6e632c00cdede06d81faf`, the immutable v0.2.0 source,
+   which predates the verifier. The owner explicitly approved using only
+   `4e17c1c198aa8150c87473849d61e92692083777:scripts/verify-gate-evidence.ts`,
+   from the already reviewed, CI-passing frozen `dev`, for that exact base
+   and the existing same-repository `dev → main` release shape
+   (`RELEASE_BOUNDARY=1`). The job still checks out the event base, takes
+   `.nvmrc` from it, and fetches the exact head only as objects. It extracts
+   the fixed verifier with replacement objects disabled into `RUNNER_TEMP`
+   and runs the unchanged evidence rules against the real base/head pair.
+   A missing fixed object or failed extraction stops the job; no alternate
+   source, PR verifier, ledger exemption, or success fallback is introduced.
+   Every other base or PR shape retains the ordinary base-verifier rule.
+   Once the new main is integrated, its different SHA automatically leaves
+   this one-time branch inactive. Required checks, protection, permissions,
+   local gates and review requirements remain unchanged. The real-workflow
+   tests cover valid and missing evidence, wrong base/shape, absent trusted
+   objects, head substitution, and head-fetch failure using private Git
+   histories. Frontend CI fetches full history so these fixed source objects
+   are available locally to the fixtures; the tests fetch no remote service.
+   This is a narrow approved trust source, not an exception to
+   passing the release gates.
 
    **Workflow-definition boundary (issue #593).** This base-code selection
    closes replacement of the verifier alone. The `pull_request` workflow
