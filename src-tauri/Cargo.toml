@@ -18,7 +18,7 @@ keyring = "4.1.6"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }
 aes-gcm = "0.11"
-base64 = "0.22"
+base64 = "0.23"
 sha2 = "0.11"
 # issue #392：keyEnc envelope v2 的密钥派生改用 PBKDF2-HMAC-SHA256
 #（迭代拉伸替代单次 SHA-256）；与 sha2 0.11 协同使用 digest 0.11。
