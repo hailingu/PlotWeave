@@ -507,8 +507,8 @@ instead.
    populated, so the Rust compile and test phases are at their incremental
    cost. A cold `target/` would be materially slower. 72.87s is therefore the
    *typical repeated* cost, not a worst case.
-2. **Node version does not match the pin.** `.nvmrc` and `package.json`
-   `engines` require Node >= 24.18.0, but the measuring shell ran Node
+2. **Node version does not match the pin.** `.nvmrc` selects 24.18.0 and
+   `package.json` `engines` requires Node >= 24.18.0, but the measuring shell ran Node
    v22.11.0. The `engines` field is advisory and nothing enforces it, so the
    gate passed on an unsupported Node. Two consequences: the absolute number is
    not exactly what a correctly-provisioned environment would produce, and the
@@ -592,7 +592,7 @@ context only.
 | Component | Version |
 | --- | --- |
 | OS | macOS 26.6.2 (arm64), 16 cores / 64 GiB (same machine as the founding run) |
-| Node.js | **v24.18.0** — matches the `.nvmrc` / `engines` pin |
+| Node.js | **v24.18.0** — matches the `.nvmrc` selection and satisfies the `engines` minimum |
 | npm | 11.16.0 |
 | rustc | 1.95.0 (`59807616e`, pinned by `rust-toolchain.toml`) |
 | `cargo-llvm-cov` | 0.9.0 |
@@ -682,7 +682,7 @@ still triggers the normal revisit.
 | --- | --- |
 | OS | macOS 27.0.1 (arm64), 16 cores / 64 GiB (same machine as both prior baselines) |
 | CPU budget in effect | 5 (`floor(16 / 3)`) |
-| Node.js | **v24.18.0** — matches the `.nvmrc` / `engines` pin |
+| Node.js | **v24.18.0** — matches the `.nvmrc` selection and satisfies the `engines` minimum |
 | npm | 11.16.0 |
 | rustc | 1.95.0 (`59807616e`, pinned by `rust-toolchain.toml`) |
 | `cargo-llvm-cov` | 0.9.0 |

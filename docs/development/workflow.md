@@ -30,6 +30,12 @@ Discover exact dependency versions and commands from `package.json`, `package-lo
 
 按所有者在 [issue #503](https://github.com/hailingu/PlotWeave/issues/503) 的处置决定，Windows 慢路径推送会被安装监督器拒绝。快路径即使未触发该拒绝，也不属于受支持的 Windows 工作流；贡献者须在 macOS 上执行完整门禁并推送。具体后果与依赖 lifecycle 的进程约束见[平台支持范围与依赖进程契约](quality-gate-push.md#平台支持范围与依赖进程契约issue-503)。
 
+### Node.js 最低版本与运行版本
+
+项目最低要求为 Node.js `>=24.18.0`，以 `package.json` 的 `engines.node` 为准，锁文件根包元数据保持一致；满足该范围的更高版本也可使用。`.nvmrc` 选择具体的 `24.18.0`，供 `nvm use` 和 CI 复现同一运行环境，不表示只允许这个版本。首次使用时可运行 `nvm install` 安装该版本，再运行 `nvm use`；使用其他满足最低要求的版本时，验证前用 `node --version` 记录实际版本。
+
+[Node.js 官方发布记录](https://nodejs.org/en/blog/release/v24.18.0)确认 `24.18.0` 已发布。四个 CI job 均使用 `actions/setup-node` 的 `node-version-file: .nvmrc` 选择项目运行时；`gate-evidence` 按既有信任边界读取事件 base 提交的 `.nvmrc`。Action 的提交 SHA／主版本与其自身执行环境是独立的工具配置，不是项目 Node.js 最低要求；本次澄清（[issue #745](https://github.com/hailingu/PlotWeave/issues/745)）不升级 Action 或依赖。
+
 ### Tauri 基线开发环境
 
 ```bash
@@ -60,7 +66,7 @@ Gate-workflow regression imports the explicitly approved historical Git objects 
 
 当前 `dev` 分支的原生应用已实现 SwiftUI 项目首页、工具栏、大纲、属性检查器、设定、图库、AI、导出与应用设置界面，以及 Swift 存储、素材、设置／密钥和模型服务。Swift 承接 25 条业务命令与两条退出命令，共 27 条既有 snake_case IPC 命令，另提供 `system.copyText` 与 `system.saveText` 两条系统交付命令。React 保留单一编辑会话、历史与画布；默认资源入口运行生产应用，只有显式 `#fixture` 加载不落盘的内存演示。当前行为及测试矩阵见[功能补齐记录](../swiftui-react-flow-feature-parity.md)，原 P1／P2 状态仅作为[历史证据](../swiftui-react-flow-p1-evidence.md)与[历史 Rust 抽离记录](../swiftui-react-flow-p2-evidence.md)保留。
 
-需要 macOS 26.0+、Node 24.18.0 与 Xcode 27.0／macOS SDK 27.0，不需要 Rust 来构建原生应用。Swift 6.4 编译器维持 Swift 6 语言模式；所有者升级决策、实测版本与构建／启动结果见[当前工具链记录](../swiftui-react-flow-toolchain.md)。依赖未安装时先运行 `npm install`，并按上节安装版本化 Git hooks。
+需要 macOS 26.0+、Node.js `>=24.18.0` 与 Xcode 27.0／macOS SDK 27.0，不需要 Rust 来构建原生应用；具体运行版本选择见上节。Swift 6.4 编译器维持 Swift 6 语言模式；所有者升级决策、实测版本与构建／启动结果见[当前工具链记录](../swiftui-react-flow-toolchain.md)。依赖未安装时先运行 `npm install`，并按上节安装版本化 Git hooks。
 
 当前构建工具链固定为 Xcode 27.0、macOS SDK 27.0，工程语言模式仍为 Swift 6，最低部署版本仍为 macOS 26.0。构建前用 `xcodebuild -version` 与 `xcrun --sdk macosx --show-sdk-version` 确认所选工具链；实际系统版本、编译器与验证边界见 [Xcode 27 工具链记录](../swiftui-react-flow-p1-evidence.md#xcode-27-工具链同步2026-10-07)。
 
@@ -107,6 +113,18 @@ Dependabot (`.github/dependabot.yml`) opens weekly pull requests for the npm roo
 Known boundary (PR #582 review, P2): `target-branch: dev` binds only the version updates configured in `dependabot.yml`. Dependabot security updates are a separate repository-settings feature — currently **disabled** on this repository — whose pull requests always target the default branch (`main`) by platform behavior that no configuration redirects ([GitHub docs](https://docs.github.com/en/code-security/tutorials/secure-your-dependencies/customizing-dependabot-prs#targeting-pull-requests-against-a-non-default-branch)). If the owner ever enables that feature, a security-update pull request against `main` must not be merged as-is, because it bypasses the branch policy that only `dev`-to-`main` release pull requests may target `main`: close it and re-apply the fix on a task branch targeting `dev`, or record an explicit owner decision accepting the exception. The CI audit steps remain the pre-merge vulnerability gate on the `dev` path in either case.
 
 A Dependabot pull request interacts with the `gate-evidence` required check as follows. Dependabot's default branch shape is a single force-pushed commit, so the PR range contains only the tip and the check passes through the tip-lag tolerance with a warning annotation (`[GATE_EVIDENCE_TIP_LAG]`). If a Dependabot branch accumulates non-tip commits without local gate records (for example after manual collaboration on the branch), `gate-evidence` fails by design; the maintainer then runs the local gate and pushes an evidence commit as documented in [Gate Run Evidence](quality-gate-evidence.md) before merging. No exemption from the evidence check is granted to bot actors.
+
+### Cargo 多目录更新与验收（Issue #732）
+
+Cargo 使用单个 `package-ecosystem: cargo` 条目，`directories` 恰好覆盖 `/src-tauri` 和 `/crates`，两侧共同参与原有 `cargo-minor-and-patch` 更新组。目标仍为 `dev`，每周一按 `Asia/Shanghai` 调度，PR 上限为 5；minor/patch 成批、major 单独评审的政策不变。配置采用 [GitHub 官方多目录分组机制](https://docs.github.com/en/code-security/tutorials/secure-your-dependencies/optimizing-pr-creation-version-updates#example-2-grouped-updates-with-excluded-dependencies)。
+
+验收目标是 **Dependabot 自己生成的受支持共享依赖更新 PR 通过对应 CI**，包括两份锁文件及必要的共享 manifest 更新。解析 YAML 的配置回归只验证目录和分组政策，不证明 GitHub 服务已经采用配置，也不证明两个独立 Cargo resolver 的传递依赖必然一致。必须检查实际 bot 输出，再以该 PR 最终 head 的必需 `frontend`、`rust`、`native`、`gate-evidence` 成功结果验收；不能用人工追加对齐提交代替这一目标。
+
+GitHub [要求从默认分支读取 `dependabot.yml`](https://docs.github.com/en/code-security/concepts/supply-chain-security/about-the-dependabot-yml-file#where-to-store-the-dependabotyml-file)。本仓库默认分支为 `main`，`target-branch: dev` 只选择版本更新目标，不改变配置读取位置。仅将本变更合入 `dev` 不会激活多目录机制；默认分支配置尚未按另行授权的集成流程更新时，真实 bot 服务验收仍待完成，不能据本地配置测试关闭 #732。
+
+若实际更新仍出现 `DRIFT_VERSION_MISMATCH` 或 `DRIFT_CARGO_FAILED`，保留阻断并诊断 resolver、版本约束与锁文件。异常处置须在同一 PR 内补齐 `src-tauri/Cargo.lock`、`crates/Cargo.lock` 和必要 manifest；在两侧分别用 `cargo update --manifest-path <workspace>/Cargo.toml -p <package>@<old-version> --precise <compatible-version>` 定向对齐诊断所指的包，再运行 `npm run check:workspace-drift` 检查整个 `plotweave-core` 共享闭包，不能只检查被更新的直接依赖。不要无目标地全量升级；约束不兼容时继续阻断，单独评审兼容性修复。人工追加提交须正常执行本地提交／推送门禁并补全 gate evidence；这种恢复只解决该次 PR，不代表 bot 自动产出目标已验收。
+
+漂移检查仍以两侧真实 `cargo tree --locked` 为准；共享包版本集合不一致或 manifest 与锁文件失同步均失败，检查过程不得改锁。`rust` 必需检查、审计、分支保护和证据要求保持不变；没有 bot 豁免、配对 PR 放行、合并后对齐窗口或新增写权限的自动修复。
 
 ### Scanner And Action Updates (Issue #618)
 
