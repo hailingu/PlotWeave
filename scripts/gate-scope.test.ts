@@ -77,10 +77,11 @@ describe('gate-scope CLI', () => {
     expect(git(['commit', '-q', '-m', 'docs']).status).toBe(0)
 
     const script = resolve(import.meta.dirname, 'gate-scope.ts')
+    // Hooks in linked worktrees export GIT_DIR; the CLI must use the fixture too.
     const classify = spawnSync(
       process.execPath,
       [script, '--base', 'HEAD~1', '--head', 'HEAD'],
-      { cwd: root, encoding: 'utf8' },
+      { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
     )
     expect(classify.status, classify.stderr).toBe(0)
     expect(classify.stdout).toBe('docs\n')
@@ -88,13 +89,14 @@ describe('gate-scope CLI', () => {
     const missing = spawnSync(process.execPath, [script], {
       cwd: root,
       encoding: 'utf8',
+      env: gitFixtureEnvironment(),
     })
     expect(missing.status).toBe(2)
 
     const badRevision = spawnSync(
       process.execPath,
       [script, '--base', 'no-such-rev', '--head', 'HEAD'],
-      { cwd: root, encoding: 'utf8' },
+      { cwd: root, encoding: 'utf8', env: gitFixtureEnvironment() },
     )
     expect(badRevision.status).toBe(2)
   })
