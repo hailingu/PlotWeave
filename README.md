@@ -9,6 +9,10 @@
 
 **PlotWeave** 是一款面向短剧创作者的可视化桌面工具。它把剧本、场景、角色、道具和剧情分支放到同一张可编辑画布中，让创作者可以直观看见故事结构，组织多线叙事，并将成果导出为可继续加工的文档。
 
+![PlotWeave 开发版：原生故事大纲与场景、对白、分支画布，使用内置合成示例“午夜出租车”](assets/plotweave-canvas-dev-b94ac01f.jpg)
+
+开发版实际运行截图，源码来自 [`b94ac01f`](https://github.com/hailingu/PlotWeave/commit/b94ac01f8276a3aa3c9124bc540555335e6e5590)，画面使用仓库内置合成示例，不代表已发布版本。[截图来源与验证边界](docs/swiftui-react-flow-current-state.md#readme-截图来源)。
+
 ## 可以做什么
 
 - 在无限画布上创建、编辑、连接和整理场景、桥段与对白节点。
@@ -28,17 +32,31 @@
 
 ## 当前版本与获取方式
 
-最新公开 Release 为 [v0.2.0](https://github.com/hailingu/PlotWeave/releases/latest)，该版本的能力见[历史发布说明](docs/releases/v0.2.0.md)。当前 `dev` 源码已推进到 v0.3.0 的 SwiftUI/AppKit 原生界面、Swift 业务服务与 React Flow 画布，包含保存反馈、资产操作协调、媒体与模型网络边界及画布投影更新改进；当前源码范围和验证边界见 [v0.3.0 源码说明](docs/releases/v0.3.0.md)。源码版本不等同于已公开的 Release。
+最新公开 Release 为 [v0.2.0](https://github.com/hailingu/PlotWeave/releases/latest)，能力以其[历史发布说明](docs/releases/v0.2.0.md)为准。当前源码为 v0.3.0 开发版，范围见 [v0.3.0 源码说明](docs/releases/v0.3.0.md)，不等同于已公开的 Release。
 
 目前 Release **仅提供源码归档**，尚未提供经过 Developer ID 签名、公证及安装验收的 macOS 安装包。请勿将 GitHub 自动生成的源码压缩包当作可直接安装的应用。
 
+## 技术栈一览
+
+| 部分       | 当前实现                                                                                             |
+| ---------- | ---------------------------------------------------------------------------------------------------- |
+| 原生应用   | SwiftUI / AppKit 界面，Swift 承接存储、素材、设置、密钥与模型服务                                    |
+| 编辑画布   | WKWebView 中的 React / TypeScript / React Flow，维护单一编辑会话与撤销历史                           |
+| 保留的基线 | Tauri / React Flow / [Rust 1.95.0](rust-toolchain.toml)，用于既有宿主与契约回归；原生应用不链接 Rust |
+
+工程结构与迁移历史见[开发工作流](docs/development/workflow.md)，当前能力和验收边界见[原生版本状态](docs/swiftui-react-flow-current-state.md)。
+
 ## 从源码运行
 
-当前支持平台为 **macOS**；**不支持 Windows**，不提供 Windows 构建、测试或发行支持。非 Unix 平台仅提供源代码：仓库源码在非 Unix 目标上保持可编译（[issue #546](https://github.com/hailingu/PlotWeave/issues/546)），需要 Windows 版本的使用者须自行构建并自担风险——平台能力差异（如库资产删除/恢复协议依赖的 Unix 文件身份与目录持久性屏障原语）会在运行时按能力缺失拒绝，不做官方验证。
+当前支持 **macOS**，不提供 Windows 构建、测试或发行支持；[平台与工具链细则](docs/development/workflow.md#支持平台)维护在开发文档中。
 
-v0.3.0 源码已实现 SwiftUI 首页、编辑工具栏、大纲、检查器、设定、图库、AI、导出与设置界面，存储、素材、密钥和模型服务均由 Swift 承接。React Flow 保留画布与单一编辑会话。该原生实现最初在历史分支 `codex/swiftui-react-flow` 上开发，2026-10-13 经 [PR #526](https://github.com/hailingu/PlotWeave/pull/526) 合入 `dev`，该分支现已被删除。保留的 v0.2.0 源码以其[历史发布说明](docs/releases/v0.2.0.md)为准；原生开发数据与旧 Tauri 数据的隔离边界不变。
+| 原生构建前置      | 要求                                                                                   |
+| ----------------- | -------------------------------------------------------------------------------------- |
+| 系统              | macOS 26.0+                                                                            |
+| Node.js           | [24.18.0 起的 24.x，或 26.0.0 及以上](package.json)；默认运行版本见 [`.nvmrc`](.nvmrc) |
+| Xcode / macOS SDK | [27.0 / 27.0](docs/swiftui-react-flow-toolchain.md)，Swift 6 语言模式                  |
 
-原生构建需要 macOS 26.0+、[Node.js `^24.18.0 || >=26.0.0`](package.json) 与 Xcode 27.0／macOS SDK 27.0。支持 24.18.0 及以上的 Node 24.x，或 Node 26.0.0 及以上版本；Vitest 5 不支持 Node 25。[`.nvmrc`](.nvmrc) 保持 `24.18.0` 作为本地与 CI 的可复现运行版本：
+原生构建无需 Rust。完整环境配置与 Node 版本兼容细则见[开发工作流](docs/development/workflow.md#nodejs-最低版本与运行版本)：
 
 ```bash
 nvm use
@@ -47,9 +65,9 @@ npm run build:native
 open -n native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app
 ```
 
-默认入口运行真实项目应用；`#fixture` 仅为不落盘的隔离演示。原生开发数据位于 Application Support 下独立的 `dev.plotweave.PlotWeaveNative.development` 目录，不读取旧 Tauri 数据或历史 Keychain。AI 功能需要重新配置可用的 Provider。PlotWeave **不支持 VoiceOver**（[所有者决策，issue #569](https://github.com/hailingu/PlotWeave/issues/569)）。真实公网 TLS 与计费模型尚未验收；真实中文输入法与性能保留已登记边界。当前支持范围、自动验证和已取消的验收项见[当前功能、证据及验收边界](docs/swiftui-react-flow-current-state.md)。
+AI 功能需自行配置可用的 Provider；PlotWeave **不支持 VoiceOver**。数据隔离、迁移历史及人工验收边界见[开发运行说明](docs/development/workflow.md#原生应用启动与验证)和[当前功能状态](docs/swiftui-react-flow-current-state.md)。
 
-保留的 Tauri 基线另需 [Rust 1.95.0](rust-toolchain.toml)，通过 `npm run tauri dev` 启动。上述源码构建均不等同于经过签名、公证与安装验收的发行安装包；完整开发与验证步骤见[开发工作流](docs/development/workflow.md)。
+保留的 Tauri 基线运行方式见[开发环境配置](docs/development/workflow.md#tauri-基线开发环境)。源码构建不等同于发行安装包。
 
 ## 文档
 
