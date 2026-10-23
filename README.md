@@ -1,5 +1,12 @@
 # PlotWeave
 
+[![源码发布版本](https://img.shields.io/github/v/release/hailingu/PlotWeave?style=flat&display_name=tag&label=source%20release)](https://github.com/hailingu/PlotWeave/releases/latest)
+[![CI（main push）](https://github.com/hailingu/PlotWeave/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/hailingu/PlotWeave/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush)
+[![macOS 26.0 及以上](https://img.shields.io/badge/macOS-26.0%2B-000000?style=flat&logo=apple&logoColor=white)](#从源码运行)
+[![源码构建要求 Node.js ^24.18.0 或 >=26.0.0](https://img.shields.io/badge/Node.js-%5E24.18.0%20%7C%7C%20%3E%3D26.0.0-5FA04E?style=flat&logo=nodedotjs&logoColor=white)](package.json)
+[![项目文档](https://img.shields.io/badge/docs-%E6%96%87%E6%A1%A3-2563EB?style=flat)](#文档)
+[![MIT 许可证](https://img.shields.io/github/license/hailingu/PlotWeave?style=flat)](LICENSE)
+
 **PlotWeave** 是一款面向短剧创作者的可视化桌面工具。它把剧本、场景、角色、道具和剧情分支放到同一张可编辑画布中，让创作者可以直观看见故事结构，组织多线叙事，并将成果导出为可继续加工的文档。
 
 ## 可以做什么
@@ -21,7 +28,7 @@
 
 ## 当前版本与获取方式
 
-当前发布版本为 [v0.3.0](https://github.com/hailingu/PlotWeave/releases/tag/v0.3.0)。本版发布已有的 SwiftUI/AppKit 原生界面、Swift 业务服务与 React Flow 画布，包含保存反馈、资产操作协调、媒体与模型网络边界及画布投影更新改进；完整范围和验证边界见[发布说明](docs/releases/v0.3.0.md)。
+最新公开 Release 为 [v0.2.0](https://github.com/hailingu/PlotWeave/releases/latest)，该版本的能力见[历史发布说明](docs/releases/v0.2.0.md)。当前 `dev` 源码已推进到 v0.3.0 的 SwiftUI/AppKit 原生界面、Swift 业务服务与 React Flow 画布，包含保存反馈、资产操作协调、媒体与模型网络边界及画布投影更新改进；当前源码范围和验证边界见 [v0.3.0 源码说明](docs/releases/v0.3.0.md)。源码版本不等同于已公开的 Release。
 
 目前 Release **仅提供源码归档**，尚未提供经过 Developer ID 签名、公证及安装验收的 macOS 安装包。请勿将 GitHub 自动生成的源码压缩包当作可直接安装的应用。
 
@@ -46,7 +53,7 @@ open -n native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app
 
 ## 文档
 
-- [v0.3.0 发布说明](docs/releases/v0.3.0.md)与 [v0.2.0 历史发布说明](docs/releases/v0.2.0.md)
+- [v0.3.0 源码说明](docs/releases/v0.3.0.md)与 [v0.2.0 历史发布说明](docs/releases/v0.2.0.md)
 - [数据模型与项目格式](docs/data-model/README.md)
 - [界面与交互设计](docs/ui-design.md)
 - [SwiftUI/AppKit + React Flow 改造计划](docs/swiftui-react-flow-migration-plan.md)与[当前功能、证据及验收边界](docs/swiftui-react-flow-current-state.md)
