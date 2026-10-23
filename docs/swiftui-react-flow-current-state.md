@@ -66,6 +66,22 @@
 
 PR #766 的第一轮本地完整公开入口 `sh scripts/test-native.sh` 的红测为 369 项中仅新增就绪用例失败；修复后 369 项／82 套件通过，原生覆盖率 8709/9890 行、73/73 文件。后续审查补充连续重试的会话归属：真实 WK 红测为新增三个测试族的 15 处预期失败、原 369 项通过；修复后完整 372 项／82 套件通过，8723/9901 行、73/73 文件，仍为 report-only。Web 侧 7 项新增协议回归先红，修复后的桥与真实 React 入口三个文件 27 项通过；托管结果由对应后续 PR 记录。未增加视觉、中文输入法、VoiceOver、公网模型或压力验收。
 
+## README 截图来源
+
+[README 画布截图](../assets/plotweave-canvas-dev-b94ac01f.jpg)用于展示真实应用形态（[issue #772](https://github.com/hailingu/PlotWeave/issues/772)），不新增或替代完整产品视觉验收。
+
+| 项目 | 来源与边界 |
+| --- | --- |
+| 应用源码 | [`b94ac01f8276a3aa3c9124bc540555335e6e5590`](https://github.com/hailingu/PlotWeave/commit/b94ac01f8276a3aa3c9124bc540555335e6e5590)，v0.3.0 开发源码；公开正式 Release 仍为 [v0.2.0](https://github.com/hailingu/PlotWeave/releases/latest) |
+| 真实运行入口 | 从该源码构建的 SwiftUI/AppKit 生产应用与 `native-canvas.html`，未使用 `#fixture`、设计稿或生成图；画面显示故事大纲及 50% 缩放的分支画布局部视图 |
+| 示例数据 | 应用在全新隔离目录自动创建的[仓库内置合成项目](../src/projectStore/seeds.ts)“午夜出租车”，15 个节点；未使用真实用户项目、Provider 配置或密钥 |
+| 隔离方式 | 仅本次构建覆盖 `PRODUCT_BUNDLE_IDENTIFIER=dev.plotweave.readme772demo`，独立数据根由现有 `Bundle.main` 规则派生；启动前确认该根不存在，核验进程可执行路径属于本任务构建。未修改生产源码、项目配置或默认开发数据根 |
+| 捕获方式 | 2026-10-23，直接截取正在运行的原生窗口，保留原始 JPEG；收起空检查器以显示画布，未重绘、拼接或合成界面 |
+| 构建工具 | 本机 Xcode 27.1 / SDK 27.0；源码与 CI 钉版要求仍为 Xcode 27.0 / SDK 27.0，没有更改全局工具链或仓库要求 |
+| 验证边界 | 截图仅证明该示例的可观察运行画面，不表示已完成签名、公证、安装包、真实中文输入法、VoiceOver、公网 TLS、付费模型或整体性能验收；不将本次运行描述为历史 AppKit 异常的根因修复 |
+
+README 下沉信息的查找入口：迁移分支、2026-10-13 的 PR #526 合并与分支删除记录见[工作流的技术栈与工程布局](development/workflow.md#technology-and-repository-layout)；默认生产入口、显式 `#fixture`、独立开发数据根、旧 Tauri／Keychain 隔离、AI Provider 重配见[开发运行说明](development/workflow.md#原生应用启动与验证)；原生界面／Swift 服务的逐域能力及人工边界见本页上方矩阵。原来的源码构建／发行安装包区别、VoiceOver 取消决定、真实 IME／TLS／模型／性能限制均保留。
+
 ## 可核对的验证快照与维护
 
 基线的[自动 dev CI 39535403860](https://github.com/hailingu/PlotWeave/actions/runs/39535403860) 已通过 frontend、rust、native；gate-evidence 在 dev push 按规则 skipped。原生功能测试为 353 项／79 套件，覆盖率工件为 8398/9559 行、71/71 文件、report-only。该次同源本地完整门禁的前端为 3468 项、97.49% 行覆盖率，Rust 为 6790/7954 行；这是明确版本的验证快照，不是永久不变的计数或覆盖所有人工验收的保证。后续变更仍按[当前门禁](development/quality-gate-enforcement.md)取得自己的实际证据。
