@@ -7,6 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  notifyCanvasHostReady,
   readInitialHostAppearance,
   setHostAppearanceHandler,
   type HostAppearance,
@@ -29,6 +30,44 @@ type HostAppearanceWindow = Window & {
 afterEach(() => {
   delete (window as HostAppearanceWindow).__pwHostAppearance
   setHostAppearanceHandler(null)
+  vi.unstubAllGlobals()
+})
+
+describe('ready handshake ownership (migration plan §4.1, issue #764)', () => {
+  it('carries the injected protocol and session with only the canvas channel', () => {
+    const postMessage = vi.fn()
+    vi.stubGlobal('webkit', {
+      messageHandlers: { canvasHost: { postMessage } },
+    })
+    vi.stubGlobal('__pwNativeHost', {
+      kind: 'swift',
+      protocolVersion: 1,
+      sessionId: 'ready-session',
+    })
+    notifyCanvasHostReady()
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith({
+      event: 'ready',
+      protocolVersion: 1,
+      sessionId: 'ready-session',
+    })
+  })
+
+  it.each([
+    undefined,
+    null,
+    {},
+    { protocolVersion: 2, sessionId: 'wrong-version' },
+    { protocolVersion: 1, sessionId: '' },
+    { protocolVersion: 1, sessionId: 42 },
+  ])('does not report ready for invalid injected identity %j', (marker) => {
+    const postMessage = vi.fn()
+    vi.stubGlobal('webkit', {
+      messageHandlers: { canvasHost: { postMessage } },
+    })
+    vi.stubGlobal('__pwNativeHost', marker)
+    notifyCanvasHostReady()
+    expect(postMessage).not.toHaveBeenCalled()
+  })
 })
 
 describe('readInitialHostAppearance 初始注入', () => {

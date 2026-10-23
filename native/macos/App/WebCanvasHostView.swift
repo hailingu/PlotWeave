@@ -141,6 +141,8 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
     private weak var webView: WKWebView?
     private var loadedReloadToken = 0
     private var readyTimeoutTask: Task<Void, Never>?
+    /// Only failures from the selected navigation may invalidate its document session.
+    private var currentNavigation: WKNavigation?
 
     init(
         state: WebCanvasState,
@@ -183,8 +185,11 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         )
     }
 
-    /// Loads the canvas entry page and (re)starts the ready timeout.
-    func loadCanvas(into webView: WKWebView) {
+    /// Starts a fresh page load, revoking earlier readiness before restarting its timeout.
+    @discardableResult
+    func loadCanvas(into webView: WKWebView) -> WKNavigation? {
+        state.beginLoad()
+        currentNavigation = nil
         if self.webView !== webView {
             webView.configuration.userContentController.addScriptMessageHandler(
                 self, contentWorld: .page, name: "plotweaveHost"
@@ -201,7 +206,7 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
             trustedEntry = entry
             onConnection?(self)
             startReadyTimeout()
-            webView.loadFileURL(
+            currentNavigation = webView.loadFileURL(
                 entry,
                 allowingReadAccessTo: entry.deletingLastPathComponent()
             )
@@ -211,7 +216,9 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
                 "未找到画布资源：请先在仓库根目录执行 npm run build:native-canvas，"
                     + "再重新构建应用。"
             )
+            currentNavigation = nil
         }
+        return currentNavigation
     }
 
     /// Reloads when the state's reload token moved on (retry button).
@@ -238,10 +245,12 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
     /// reload so only the load that owns it can fail.
     private func startReadyTimeout() {
         readyTimeoutTask?.cancel()
+        let session = sessionId
         readyTimeoutTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(Self.readyTimeout)) }
             catch { return } // Cancellation ends this owned deadline without a canvas failure.
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled, let self, self.router.isActive,
+                  self.sessionId == session, self.state.phase == .loading else { return }
             self.invalidateSession(canvasFailed: true)
             self.state.fail("画布在 \(Int(Self.readyTimeout)) 秒内未报告就绪。")
         }
@@ -257,6 +266,9 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         guard router.isActive, message.name == Self.bridgeName, isTrusted(message),
               let body = message.body as? [String: Any] else { return }
         if body["event"] as? String == "ready" {
+            guard body["protocolVersion"] as? Int == 1,
+                  body["sessionId"] as? String == sessionId,
+                  state.phase == .loading else { return }
             readyTimeoutTask?.cancel()
             state.markReady()
             pushAppearance(appearance.snapshot)
@@ -368,6 +380,7 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         didFail navigation: WKNavigation!,
         withError error: Error
     ) {
+        guard self.webView === webView, let navigation, navigation === currentNavigation else { return }
         invalidateSession(canvasFailed: true)
         state.fail("画布加载失败：\(error.localizedDescription)")
     }
@@ -377,17 +390,23 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
+        guard self.webView === webView, let navigation, navigation === currentNavigation else { return }
         invalidateSession(canvasFailed: true)
         state.fail("画布导航失败：\(error.localizedDescription)")
     }
 
-    /// Navigation restricted to application-trusted file content (§4.1);
-    /// everything else is cancelled and visible only as a no-op.
+    /// Trusted main-frame page reloads reenter the host-owned load path before any new document starts.
+    /// Other navigation remains restricted to application-trusted file content (§4.1).
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction
     ) async -> WKNavigationActionPolicy {
-        matchesEntry(navigationAction.request.url) ? .allow : .cancel
+        guard matchesEntry(navigationAction.request.url) else { return .cancel }
+        if navigationAction.navigationType == .reload, navigationAction.targetFrame?.isMainFrame == true {
+            loadCanvas(into: webView)
+            return .cancel
+        }
+        return .allow
     }
 }
 

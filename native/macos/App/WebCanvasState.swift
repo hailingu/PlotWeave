@@ -27,6 +27,11 @@ final class WebCanvasState {
     /// Increments on retry; the host reloads the page when it changes.
     private(set) var reloadToken = 0
 
+    /// Starts a host-selected document load without requesting another SwiftUI reload.
+    func beginLoad() {
+        phase = .loading
+    }
+
     /// Records the web ready handshake; ignored once a load has failed so a
     /// stale page can never overwrite the diagnostic.
     func markReady() {
@@ -43,7 +48,7 @@ final class WebCanvasState {
     /// Resets to loading for a user-triggered reload; bumps reloadToken so
     /// the host starts a fresh load.
     func retry() {
-        phase = .loading
+        beginLoad()
         reloadToken += 1
     }
 }

@@ -99,7 +99,7 @@ flowchart TB
 
 ### 4.1 双向桥接
 
-1. Web 就绪握手确认协议版本和能力，再允许原生控件发编辑命令。首次加载失败提供可见错误，不显示虚假的空项目。
+1. Web 就绪握手发送 `event: ready`、`protocolVersion: 1` 与 document-start 注入的 `sessionId`，Swift 只接受当前活动加载会话且仍为 loading 的握手，随后取消该会话期限并放行原生编辑命令。缺字段、错版本、旧会话或失败后的迟到握手均不放行，也不取消新会话期限。每次加载先撤销旧 ready；ready deadline 与导航失败回调分别绑定当前 session 和该次 `WKNavigation`，连续重试的旧回调不能修改新加载。首次或当前加载失败提供可见错误，不显示虚假的空项目（[#764](https://github.com/hailingu/PlotWeave/issues/764)）。
 2. 请求携带请求身份与会话身份，编辑请求绑定项目及目标实体；返回成功或结构化失败。旧会话的迟到结果不能改变当前界面。
 3. 原生选择、表单提交、菜单撤销和重做进入 React 会话的统一动作入口，返回执行后的只读投影、撤销可用性与保存状态。文本输入焦点优先保留输入框的撤销语义。
 4. 编辑序号仅用于当前进程的消息顺序与陈旧投影判定，不复用 `aiRevision`，不写入磁盘 schema，不引入跨进程合并机制。
@@ -107,6 +107,16 @@ flowchart TB
 6. 超时表示结果未知，不能自动重放删除、复制或计费请求。相同会话内重复请求须返回既有结果或查询执行状态，不重复产生副作用。
    原生→Web 的生产身份采用页面 coordinator 拥有的 `native:<正安全整数>` 单调序列，4096 条结果窗口满时只退役已完成记录；退役水位明确拒绝旧重放，在途记录不丢失。真实文档新 session 才重置，项目往返不重置。旧式 opaque 身份仍属既有容量边界，Web→Swift 规范生产请求现也采用独立退役窗口（R36），详见[桥合同与 PR #526 R30](swiftui-react-flow-feature-parity.md#桥合同)。
 7. 导航限制为应用受信内容；业务载荷在桥接和 Swift 服务边界校验。媒体通过资源协议读取，不通过逐帧 JSON 或 base64 大载荷传送。
+
+**页面重载关键状态与不变量**（[PR #774 审查](https://github.com/hailingu/PlotWeave/pull/774#discussion_r4360340671)，2026-10-23）：生产错误边界的 `window.location.reload()` 同样属于文档替换。可信主框架的 reload 须导入宿主既有加载流程，不能保留旧 ready 或绕过当前导航的失败身份校验；原 15 秒握手期限保持不变。
+
+| 场景 | 不变量与写入边界 | 验证 |
+| --- | --- | --- |
+| 就绪页面自身重载 | 宿主撤销 ready、建立新 session；真实新握手前拒绝原生命令 | `WebHostBridgeTests.pageReloadRequiresFreshHandshake` |
+| 旧页面 ready 迟到 | 不放行新页面，也不取消其就绪期限 | 上述测试及 `staleReadyPreservesReplacementDeadline` |
+| 当前重载导航失败 | 当前 load/provisional 错误使画布失败、退出屏障可见；不继续向失效文档发命令 | `pageReloadFailureRevokesReadyAndCanRetry`：记录真实导航后注入两类失败 |
+| 失败后原生重试 | 新握手恢复命令；不重放未知结果的旧命令 | `pageReloadFailureRevokesReadyAndCanRetry` |
+| 被替换的导航失败 | 旧导航不能使当前文档失败；可信入口与主框架约束不扩大 | `staleNavigationFailurePreservesCurrentDocument` 及既有桥信任回归 |
 
 Web→Swift 的生产 `sessionId:<正安全整数>` 同样保留至多 4096 条请求身份（在途 Task／近期小响应／已退役摘要）；只退役已完成规范身份，水位以下新请求返回 `PW_HOST_REQUEST_RETIRED`，但已在途的旧身份仍共享 Task。近期参数冲突、真正全在途／opaque 满载及旧页拒绝保持；规范工作完成后可明确重试，opaque 满载只能实际重载页面，不以项目往返伪造重置。Swift 退出先同步暂停新 Web 业务及输入，等待已接纳业务完整交付和 React 提交确认，再排空四个保存 owner；操作与保存都空闲才同步封口并请求原生批准。最终写入口及新原生意图明确拒绝，失败释放租约、恢复输入并取消系统决定；不复制文档或自动计费重放。详见 [R36–R37 桥合同](swiftui-react-flow-feature-parity.md#桥合同)。
    [issue #597](https://github.com/hailingu/PlotWeave/issues/597) 为完成响应增加默认 8 MiB 总预算、1 MiB 单条上限，按完整 JSON 回执的 UTF-8 编码字节计。完成后身份条目不再保留 Task；超出单条上限的响应只完整交付当前等待者，其他缓存压力按完成先后淘汰旧响应并保留指纹摘要，同身份重放明确返回 `PW_HOST_REQUEST_RETIRED`、不同参数仍拒绝 `PW_REQUEST_CONFLICT`。在途重复继续共享原 Task，不受完成响应淘汰影响；opaque 摘要仍占身份窗口，不能通过释放响应再次执行旧副作用。4096 规范身份容量退役与水位保持原规则，只有真实页面会话重建／失效才清空预算与身份。预算不包含在途/交付中响应、身份元数据或 JSON 编码的临时内存，不宣称进程 RSS 上限。

@@ -7,7 +7,7 @@
 import {
   useCallback,
   type Dispatch,
-  type MutableRefObject,
+  type RefObject,
   type SetStateAction,
 } from 'react'
 import type { Edge, FitView, XYPosition } from '@xyflow/react'
@@ -17,8 +17,8 @@ import type { CanvasNode } from './nodes/types'
 
 /** useAutoLayout 的依赖注入：文档镜像 ref、写通道、命令栈、视口与错误上浮。 */
 export interface AutoLayoutDeps {
-  nodesRef: MutableRefObject<CanvasNode[]>
-  edgesRef: MutableRefObject<Edge[]>
+  nodesRef: RefObject<CanvasNode[]>
+  edgesRef: RefObject<Edge[]>
   setNodes: Dispatch<SetStateAction<CanvasNode[]>>
   pushHistory: (cmd: HistoryCommand) => void
   /** 排布完成后的视图适配（成功路径独享）。 */

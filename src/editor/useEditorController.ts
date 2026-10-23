@@ -4,7 +4,7 @@
  * props、节点编辑上下文与图片生成 Provider 的依赖。本模块只做接线与分组，
  * 各动作语义由对应 hook 的单元测试守护。
  */
-import { useRef, useState, type MutableRefObject, type RefObject } from 'react'
+import { useRef, useState, type RefObject } from 'react'
 import type { FitView, XYPosition } from '@xyflow/react'
 import { useAiBridge, type AiBridge } from './useAiBridge'
 import { useCanvasView, type CanvasView } from './useCanvasView'
@@ -38,8 +38,8 @@ import type { ProjectContent } from '../model/content'
 export interface ImageGenBinding {
   projectId: string
   nodes: CanvasNode[]
-  nodesRef: MutableRefObject<CanvasNode[]>
-  assetsRef: MutableRefObject<ProjectContent['assets']>
+  nodesRef: RefObject<CanvasNode[]>
+  assetsRef: RefObject<ProjectContent['assets']>
   settings: ProjectSettings
   applyDataPatch: (id: string, cmd: NodeDataPatch) => void
   addAsset: (asset: AssetRef) => void
@@ -57,7 +57,7 @@ export interface EditorControllerDeps {
 
 /** 装配层输出：布局层 props 的域对象 + Provider 依赖。 */
 export interface EditorController {
-  canvasRef: RefObject<HTMLDivElement>
+  canvasRef: RefObject<HTMLDivElement | null>
   doc: EditorDocument
   panels: EditorPanels
   persistence: EditorPersistence

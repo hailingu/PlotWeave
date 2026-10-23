@@ -182,7 +182,9 @@ struct NativeAiDraftTests {
                   window.sent.push(request.args.text);
                   return await new Promise(resolve => window.finishSend = resolve);
                 };
-                window.webkit.messageHandlers.canvasHost.postMessage({event: 'ready'});
+                window.webkit.messageHandlers.canvasHost.postMessage({
+                    event: 'ready', protocolVersion: 1, sessionId: window.__pwNativeHost.sessionId
+                });
                 </script>
                 """.utf8).write(to: entry)
             let configuration = WKWebViewConfiguration()

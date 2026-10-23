@@ -1,4 +1,4 @@
-/** Dependabot must update both Cargo resolvers within the existing weekly batch. */
+/** Dependabot must keep paired npm dependencies and both Cargo resolvers in coherent review units. */
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
@@ -53,8 +53,41 @@ it('retains npm and Actions update policies without adding another ecosystem', (
       'package-ecosystem': 'npm',
       directory: '/',
       ...weeklyPolicy,
-      groups: { 'npm-minor-and-patch': { 'update-types': ['minor', 'patch'] } },
+      groups: {
+        'react-family': {
+          patterns: ['react', 'react-dom', '@types/react', '@types/react-dom'],
+        },
+        'vite-family': { patterns: ['vite', '@vitejs/plugin-react'] },
+        'vitest-family': { patterns: ['vitest', '@vitest/coverage-v8'] },
+        'npm-minor-and-patch': { 'update-types': ['minor', 'patch'] },
+      },
     },
     { 'package-ecosystem': 'github-actions', directory: '/', ...weeklyPolicy },
   ])
+})
+
+it('routes paired packages before the general minor/patch group for every update level', () => {
+  const npm = configuration.updates.find(
+    (entry) => entry['package-ecosystem'] === 'npm',
+  )
+  const groups = npm?.groups as Record<
+    string,
+    { patterns?: string[]; 'update-types'?: string[] }
+  >
+  for (const [family, packages] of Object.entries({
+    'react-family': ['react', 'react-dom', '@types/react', '@types/react-dom'],
+    'vite-family': ['vite', '@vitejs/plugin-react'],
+    'vitest-family': ['vitest', '@vitest/coverage-v8'],
+  })) {
+    for (const name of packages) {
+      for (const level of ['major', 'minor', 'patch']) {
+        const match = Object.entries(groups).find(
+          ([, rule]) =>
+            (!rule.patterns || rule.patterns.includes(name)) &&
+            (!rule['update-types'] || rule['update-types'].includes(level)),
+        )
+        expect(match?.[0], `${name} ${level}`).toBe(family)
+      }
+    }
+  }
 })

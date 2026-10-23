@@ -42,7 +42,7 @@ async function productionProbe() {
     plugins: [probeEntry()],
     build: {
       write: false,
-      rollupOptions: { input: 'virtual:canvas-profile' },
+      rolldownOptions: { input: 'virtual:canvas-profile' },
     },
   })
   if (Array.isArray(result) || !('output' in result))

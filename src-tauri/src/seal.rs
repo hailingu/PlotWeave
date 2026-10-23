@@ -20,7 +20,7 @@
 //! 封装）不提供恢复通道，正常环境下按非本机数据同款拒绝，用户在设置页
 //! 重新录入 key。
 
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
+use aes_gcm::aead::{Aead, Generate, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use pbkdf2::pbkdf2_hmac;
 use sha2::{Digest, Sha256};
@@ -67,15 +67,16 @@ fn valid_provider_binding(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// 生成 SALT_LEN 随机盐（原始字节）。
-fn new_salt_bytes() -> [u8; SALT_LEN] {
-    // generate_nonce 固定 12 字节；拼接两个补足 SALT_LEN
-    let a = Aes256Gcm::generate_nonce(&mut OsRng);
-    let b = Aes256Gcm::generate_nonce(&mut OsRng);
-    let mut bytes = [0u8; SALT_LEN];
-    bytes[..NONCE_LEN].copy_from_slice(&a);
-    bytes[NONCE_LEN..].copy_from_slice(&b[..SALT_LEN - NONCE_LEN]);
-    bytes
+/// 生成 SALT_LEN 原始随机盐；系统熵失败必须拒绝封装，不能 panic 或回退。
+fn new_salt_bytes() -> Result<[u8; SALT_LEN], String> {
+    <[u8; SALT_LEN]>::try_generate().map_err(|_| "安全随机源不可用".to_string())
+}
+
+/// AES-GCM nonce 与盐独立生成，沿用 12 字节线格式并传播熵失败。
+fn new_nonce_bytes() -> Result<[u8; NONCE_LEN], String> {
+    Nonce::<aes_gcm::aead::consts::U12>::try_generate()
+        .map(Into::into)
+        .map_err(|_| "安全随机源不可用".to_string())
 }
 
 /// 从 ioreg 输出提取机器材料。提取结果是既有密文的密钥派生输入，
@@ -166,16 +167,33 @@ pub fn seal_for(provider_id: &str, plaintext: &str) -> Result<String, String> {
 }
 
 fn seal_for_with(material: &str, provider_id: &str, plaintext: &str) -> Result<String, String> {
+    seal_for_with_entropy(
+        material,
+        provider_id,
+        plaintext,
+        new_salt_bytes,
+        new_nonce_bytes,
+    )
+}
+
+/// 注入熵边界以验证任一随机调用失败均不产出部分封装；其余路径与生产相同。
+fn seal_for_with_entropy(
+    material: &str,
+    provider_id: &str,
+    plaintext: &str,
+    salt_source: impl FnOnce() -> Result<[u8; SALT_LEN], String>,
+    nonce_source: impl FnOnce() -> Result<[u8; NONCE_LEN], String>,
+) -> Result<String, String> {
     if !valid_provider_binding(provider_id) {
         return Err(format!("非法 provider id：{provider_id}"));
     }
-    let salt = new_salt_bytes();
+    let salt = salt_source()?;
+    let nonce = nonce_source()?;
     let cipher = Aes256Gcm::new_from_slice(&derive_hardened_key(material, &salt, KDF_ROUNDS))
         .map_err(|e| format!("密钥初始化失败：{e}"))?;
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ct = cipher
         .encrypt(
-            &nonce,
+            &nonce.into(),
             Payload {
                 msg: plaintext.as_bytes(),
                 aad: provider_id.as_bytes(),
@@ -234,11 +252,12 @@ fn open_v2_with(material: &str, provider_id: &str, body: &str) -> Result<String,
         return Err("密文负载过短".into());
     }
     let (nonce, ct) = bytes.split_at(NONCE_LEN);
+    let nonce = Nonce::try_from(nonce).map_err(|_| "密文 nonce 长度非法")?;
     let cipher = Aes256Gcm::new_from_slice(&derive_hardened_key(material, &salt, rounds))
         .map_err(|e| format!("密钥初始化失败：{e}"))?;
     let plain = cipher
         .decrypt(
-            Nonce::from_slice(nonce),
+            &nonce,
             Payload {
                 msg: ct,
                 aad: provider_id.as_bytes(),
@@ -260,10 +279,11 @@ fn open_legacy_with(material: &str, body: &str) -> Result<String, String> {
         return Err("密文负载过短".into());
     }
     let (nonce, ct) = bytes.split_at(NONCE_LEN);
+    let nonce = Nonce::try_from(nonce).map_err(|_| "密文 nonce 长度非法")?;
     let cipher = Aes256Gcm::new_from_slice(&derive_legacy_key(material, salt))
         .map_err(|e| format!("密钥初始化失败：{e}"))?;
     let plain = cipher
-        .decrypt(Nonce::from_slice(nonce), ct)
+        .decrypt(&nonce, ct)
         .map_err(|_| "解密失败：密文被篡改或非本机数据".to_string())?;
     String::from_utf8(plain).map_err(|_| "解密结果不是合法 UTF-8".to_string())
 }
@@ -279,16 +299,16 @@ pub fn is_legacy_envelope(envelope: &str) -> bool {
 /// 按同一语义复刻，供兼容解密与迁移路径的行为测试构造夹具。
 #[cfg(test)]
 pub(crate) mod test_support {
-    use aes_gcm::aead::{Aead, AeadCore, KeyInit};
+    use aes_gcm::aead::{Aead, KeyInit};
 
     /// 以指定材料按 v1 冻结语义封装（单次 SHA-256 派生、无 AAD）。
     pub fn legacy_seal_with(material: &str, plaintext: &str) -> Result<String, String> {
-        let salt = super::hex_encode(&super::new_salt_bytes());
+        let salt = super::hex_encode(&super::new_salt_bytes()?);
         let cipher = aes_gcm::Aes256Gcm::new_from_slice(&super::derive_legacy_key(material, &salt))
             .map_err(|e| format!("密钥初始化失败：{e}"))?;
-        let nonce = aes_gcm::Aes256Gcm::generate_nonce(&mut aes_gcm::aead::OsRng);
+        let nonce = super::new_nonce_bytes()?;
         let ct = cipher
-            .encrypt(&nonce, plaintext.as_bytes())
+            .encrypt(&nonce.into(), plaintext.as_bytes())
             .map_err(|e| format!("加密失败：{e}"))?;
         Ok(format!(
             "{}{}:{}",
@@ -303,6 +323,9 @@ pub(crate) mod test_support {
         legacy_seal_with(&super::machine_material()?, plaintext)
     }
 }
+
+#[cfg(test)]
+mod compatibility_tests;
 
 #[cfg(test)]
 mod tests {
@@ -342,6 +365,10 @@ mod tests {
         let a = seal_for_with(MATERIAL, PROVIDER, "same-secret").unwrap();
         let b = seal_for_with(MATERIAL, PROVIDER, "same-secret").unwrap();
         assert_ne!(a, b);
+        let a_fields: Vec<_> = a.split(':').collect();
+        let b_fields: Vec<_> = b.split(':').collect();
+        assert_ne!(a_fields[3], b_fields[3]);
+        assert_ne!(&a_fields[4][..NONCE_LEN * 2], &b_fields[4][..NONCE_LEN * 2]);
         assert_eq!(
             open_for_with(MATERIAL, PROVIDER, &a).unwrap(),
             "same-secret"

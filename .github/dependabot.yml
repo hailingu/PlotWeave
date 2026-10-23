@@ -8,8 +8,9 @@
 # 根 package.json；cargo 以一个多目录条目覆盖双 Cargo workspace
 #（src-tauri 与 crates），共享同一 minor/patch 更新组（issue #732）；github-actions 覆盖
 # .github/workflows（native 应用无第三方 Swift 包依赖，不在覆盖面内）。
-# minor/patch 按 ecosystem 分组合并降噪；major 单独成 PR 逐个评审——本仓库
-# react / vitest / typescript 等大版本滞后是代际决策，需要评审而非批量跟随。
+# npm 的 React、Vite、Vitest 配套包先按家族成组（所有更新级别，issue #761），
+# 避免 runtime/类型或精确 peer 版本被拆开；其余 minor/patch 按 ecosystem 降噪。
+# 其他 major 仍单独评审，分组不保证未来代际兼容，安装/测试门禁继续阻断。
 # 工具链钉版（.nvmrc / rust-toolchain.toml）不属于这些 ecosystem，不受影响。
 version: 2
 updates:
@@ -22,6 +23,20 @@ updates:
       timezone: Asia/Shanghai
     open-pull-requests-limit: 5
     groups:
+      react-family:
+        patterns:
+          - react
+          - react-dom
+          - '@types/react'
+          - '@types/react-dom'
+      vite-family:
+        patterns:
+          - vite
+          - '@vitejs/plugin-react'
+      vitest-family:
+        patterns:
+          - vitest
+          - '@vitest/coverage-v8'
       npm-minor-and-patch:
         update-types:
           - minor

@@ -343,7 +343,9 @@ struct NativeLibraryQuitEligibilityTests {
                 <!doctype html><script>
                 window.quitEvents = 0;
                 window.__pwDispatchHostEvent = name => { if (name === 'app-quit-requested') window.quitEvents++; };
-                window.webkit.messageHandlers.canvasHost.postMessage({event: 'ready'});
+                window.webkit.messageHandlers.canvasHost.postMessage({
+                    event: 'ready', protocolVersion: 1, sessionId: window.__pwNativeHost.sessionId
+                });
                 </script>
                 """.utf8).write(to: page)
             let configuration = WKWebViewConfiguration()

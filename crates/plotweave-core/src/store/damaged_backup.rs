@@ -65,7 +65,11 @@ pub fn backup_damaged_file(dir: &CapDir, spec: &DamagedFileBackup) -> Result<(),
     if serde_json::from_slice::<serde_json::Value>(&bytes).is_ok_and(|value| value.is_object()) {
         return Ok(());
     }
-    let name = format!("{}{:x}.bak", spec.backup_prefix, Sha256::digest(&bytes));
+    let digest: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let name = format!("{}{digest}.bak", spec.backup_prefix);
     if reuse_durable_backup(dir, spec, &name, &bytes)? {
         return Ok(());
     }

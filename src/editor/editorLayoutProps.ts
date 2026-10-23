@@ -29,7 +29,7 @@ export interface EditorLayoutProps {
   // 可显式 undefined = 未接线（issue #231）
   readonly onOpenSettings?: (() => void) | undefined
   /** 画布容器：新节点落点中心换算与拖放命中读它。 */
-  readonly canvasRef: RefObject<HTMLDivElement>
+  readonly canvasRef: RefObject<HTMLDivElement | null>
   readonly doc: EditorDocument
   /** AI 执行卡的提交身份（§12.2 / issue #139）：装配层把 doc.aiRevision 与
    * persistence.whenCanvasCommitted 捆成单一嵌套对象——批次计数必带、画布
