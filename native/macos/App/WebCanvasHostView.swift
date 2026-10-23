@@ -395,13 +395,18 @@ final class WebCanvasCoordinator: NSObject, WKNavigationDelegate, WKScriptMessag
         state.fail("画布导航失败：\(error.localizedDescription)")
     }
 
-    /// Navigation restricted to application-trusted file content (§4.1);
-    /// everything else is cancelled and visible only as a no-op.
+    /// Trusted main-frame page reloads reenter the host-owned load path before any new document starts.
+    /// Other navigation remains restricted to application-trusted file content (§4.1).
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction
     ) async -> WKNavigationActionPolicy {
-        matchesEntry(navigationAction.request.url) ? .allow : .cancel
+        guard matchesEntry(navigationAction.request.url) else { return .cancel }
+        if navigationAction.navigationType == .reload, navigationAction.targetFrame?.isMainFrame == true {
+            loadCanvas(into: webView)
+            return .cancel
+        }
+        return .allow
     }
 }
 
