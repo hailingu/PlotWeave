@@ -101,6 +101,63 @@ struct WebHostBridgeTests {
         #expect(try await fixture.webView.evaluateJavaScript("window.intentCalls") as? Int == 1)
     }
 
+    /// ErrorBoundary's real page reload must retire readiness and require the replacement document's session.
+    @Test func pageReloadRequiresFreshHandshake() async throws {
+        let fixture = try WebFixture(automaticallyReady: false)
+        defer { fixture.close() }
+        try await fixture.waitForCurrentDocument(requiresReady: false)
+        let previous = fixture.coordinator.sessionId
+        try await fixture.sendReady(["event": "ready", "protocolVersion": 1, "sessionId": previous], sequence: 40)
+        try await fixture.reloadFromPage()
+        #expect(fixture.coordinator.sessionId != previous)
+        #expect(fixture.state.phase == .loading)
+        do {
+            _ = try await fixture.coordinator.sendNativeIntent(request: ["command": "fixture.beforeReady"])
+            Issue.record("Page reload retained permission to send native intents")
+        } catch let error as HostFailure { #expect(error.code == "PW_CANVAS_NOT_READY") }
+        try await fixture.sendReady(["event": "ready", "protocolVersion": 1, "sessionId": previous], sequence: 41)
+        #expect(fixture.state.phase == .loading)
+        try await fixture.sendReady(["event": "ready", "protocolVersion": 1,
+                                     "sessionId": fixture.coordinator.sessionId], sequence: 42)
+        #expect(fixture.state.phase == .ready)
+        _ = try await fixture.coordinator.sendNativeIntent(request: ["command": "fixture.afterReady"])
+        #expect(try await fixture.webView.evaluateJavaScript("window.intentCalls") as? Int == 1)
+    }
+
+    /// Failures of the real replacement navigation must surface and recover through the existing native retry.
+    @Test(arguments: ["load", "provisional"])
+    func pageReloadFailureRevokesReadyAndCanRetry(kind: String) async throws {
+        let fixture = try WebFixture()
+        defer { fixture.close() }
+        try await fixture.waitUntilReady()
+        let observer = NavigationObserver(coordinator: fixture.coordinator)
+        defer { withExtendedLifetime(observer) {} }
+        fixture.webView.navigationDelegate = observer
+        _ = try await fixture.webView.evaluateJavaScript("setTimeout(() => window.location.reload(), 0); null")
+        try await fixture.wait { observer.navigation != nil }
+        let navigation = try #require(observer.navigation)
+        if kind == "load" {
+            fixture.coordinator.webView(fixture.webView, didFail: navigation, withError: URLError(.networkConnectionLost))
+        } else {
+            fixture.coordinator.webView(fixture.webView, didFailProvisionalNavigation: navigation, withError: URLError(.cannotFindHost))
+        }
+        guard case .failed = fixture.state.phase else {
+            Issue.record("Page reload failure did not surface a failed canvas")
+            return
+        }
+        #expect(fixture.quit.canvasUnavailable)
+        do {
+            _ = try await fixture.coordinator.sendNativeIntent(request: ["command": "fixture.failed"])
+            Issue.record("Failed page reload accepted a native intent")
+        } catch let error as HostFailure { #expect(error.code == "PW_STALE_SESSION") }
+        fixture.state.retry()
+        fixture.coordinator.reloadIfNeeded(into: fixture.webView)
+        try await fixture.waitForCurrentDocument()
+        try await fixture.waitUntilReady()
+        _ = try await fixture.coordinator.sendNativeIntent(request: ["command": "fixture.recovered"])
+        #expect(try await fixture.webView.evaluateJavaScript("window.intentCalls") as? Int == 1)
+    }
+
     /// Native identities belong to the retained page, survive application-state reconnects, and reset only on real reload.
     @Test func nativeIntentIdentityUsesCurrentPageOrdinal() async throws {
         let fixture = try WebFixture()
@@ -299,6 +356,38 @@ struct WebHostBridgeTests {
         #expect(replies == [true])
     }
 
+    /// Test-only observation records real selected navigations while preserving production policy and failures.
+    @MainActor
+    private final class NavigationObserver: NSObject, WKNavigationDelegate {
+        /// The real coordinator remains the navigation and session authority.
+        let coordinator: WebCanvasCoordinator
+        /// WebKit supplies this identity after its actual main-frame provisional start.
+        private(set) var navigation: WKNavigation?
+
+        /// Observation never constructs a replacement WKWebView or chooses its navigation policy.
+        init(coordinator: WebCanvasCoordinator) { self.coordinator = coordinator }
+
+        /// Host policy still owns any replacement load and its document-start script.
+        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
+            await coordinator.webView(webView, decidePolicyFor: action)
+        }
+
+        /// Captures the actual identity instead of guessing it from a page URL or private state.
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            self.navigation = navigation
+        }
+
+        /// Unexpected real load errors retain their production failure behavior.
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            coordinator.webView(webView, didFail: navigation, withError: error)
+        }
+
+        /// Unexpected provisional errors also remain owned by the production coordinator.
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            coordinator.webView(webView, didFailProvisionalNavigation: navigation, withError: error)
+        }
+    }
+
     /// Host-selected temporary HTML keeps trust tests independent of app resources and real data roots.
     @MainActor
     private final class WebFixture {
@@ -361,6 +450,18 @@ struct WebHostBridgeTests {
                   };
                 })(); null
                 """)
+        }
+
+        /// A document-local probe observes the actual reload, independently of the host session implementation.
+        func reloadFromPage() async throws {
+            _ = try await webView.evaluateJavaScript("window.__pwPreviousDocument = true; setTimeout(() => window.location.reload(), 0); null")
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while ContinuousClock.now < deadline {
+                if !webView.isLoading,
+                   (try? await webView.evaluateJavaScript("window.__pwPreviousDocument === undefined")) as? Bool == true { return }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            throw HostFailure(code: "PW_TEST_DOCUMENT_TIMEOUT", message: "隔离页面未完成自身重载")
         }
 
         /// A direct coordinator reload must await the new document marker, rather than reuse the previous ready state.
