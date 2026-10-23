@@ -49,6 +49,25 @@ fn decode_b64_reads_data_member() {
     );
 }
 
+/// 直接 base64 升级保持标准 alphabet、padding 与非法尾位边界；固定字节
+/// 不使用被测库生成，错误仍交由调用方执行原有 URL 回退。
+#[test]
+fn decode_b64_preserves_standard_bytes_and_rejects_malformed_input() {
+    for (encoded, expected) in [
+        ("Zg==", b"f".as_slice()),
+        ("Zm8=", b"fo".as_slice()),
+        ("Zm9v", b"foo".as_slice()),
+        ("+/8=", b"\xfb\xff".as_slice()),
+    ] {
+        let resp = json!({ "data": [{ "b64_json": encoded }] });
+        assert_eq!(decode_b64_image(&resp).as_deref(), Some(expected));
+    }
+    for encoded in ["Zg", "Zg=", "Zg===", "Zh==", "Zm9=", "-_8=", "Zg==\n"] {
+        let resp = json!({ "data": [{ "b64_json": encoded }] });
+        assert_eq!(decode_b64_image(&resp), None);
+    }
+}
+
 #[test]
 fn image_url_reads_string_member() {
     let resp = json!({ "data": [{ "url": "https://cdn.example.test/a.png" }] });
