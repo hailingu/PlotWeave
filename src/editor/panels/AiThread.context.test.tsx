@@ -811,10 +811,13 @@ describe('AiThread 在途回合取消（issue #154）', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(await screen.findByText('下一轮回复。')).toBeTruthy()
     expect(screen.getByText('已取消')).toBeTruthy()
-    const last = h.saved[h.saved.length - 1]
-    expect(last.entries.map((e) => e.text ?? '')).toEqual(
-      expect.arrayContaining(['已取消', '下一轮回复。']),
-    )
+    // DOM 提交和保存副作用是独立完成条件（issue #765）。
+    await waitFor(() => {
+      const last = h.saved[h.saved.length - 1]
+      expect(last.entries.map((e) => e.text ?? '')).toEqual(
+        expect.arrayContaining(['已取消', '下一轮回复。']),
+      )
+    })
   })
 
   it('取消后经导航卸载重开（#63）：迟到的已取消结果仍丢弃，不复活旧轮', async () => {
