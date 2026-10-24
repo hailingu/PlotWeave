@@ -25,8 +25,8 @@ import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
 import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import { ConfirmDeleteDialog } from '../../home/Dialogs'
 import { LibraryWarnings } from './LibraryWarnings'
+import { useAssetImport } from './useAssetImport'
 import { useAssetThumbnails } from './useAssetThumbnails'
-import { useWebExitAction } from '../../useWebExitAction'
 import {
   isWebExitPending,
   reportWebExitPending,
@@ -137,59 +137,6 @@ function RemoveAssetDialog({
       }}
     />
   )
-}
-
-/** 导入与选取状态族（AssetsPanel 拆分，issue #99）：多选导入（逐文件
- * 入库后立即追加并预热缩略；后续拒绝保留已成功项并标明文件），分类
- * 选取经隐藏 file input 触发，不因部分失败重放已成功的 put。 */
-function useAssetImport(
-  setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
-  setError: (err: string | null) => void,
-  refreshUrl: (asset: LibraryAsset) => void,
-  loading: boolean,
-) {
-  const [busy, setBusy] = useState(false)
-  const fileRef = useRef<HTMLInputElement>(null)
-  const importKind = useRef<LibraryKind>('other')
-  const importFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return
-    if (loading) {
-      setError('资产库正在读取，请稍候再导入。')
-      if (fileRef.current) fileRef.current.value = ''
-      return
-    }
-    setBusy(true)
-    setError(null)
-    const kind = importKind.current
-    let currentFile: File | undefined
-    try {
-      for (const file of Array.from(files)) {
-        currentFile = file
-        const added = await libraryStore.put(file, kind)
-        setAssets((list) => [...list, added])
-        refreshUrl(added)
-      }
-    } catch (err) {
-      setError(
-        currentFile
-          ? `导入「${currentFile.name}」失败：${String(err)}`
-          : String(err),
-      )
-    } finally {
-      setBusy(false)
-      if (fileRef.current) fileRef.current.value = ''
-    }
-  }
-  const onPick = (kind: LibraryKind) => {
-    importKind.current = kind
-    fileRef.current?.click()
-  }
-  return {
-    busy: busy || loading,
-    fileRef,
-    importFiles: useWebExitAction(importFiles),
-    onPick,
-  }
 }
 
 /** 隐藏文件输入（AssetsPanel 拆分，issue #241）：useAssetImport 的视图

@@ -857,6 +857,33 @@ describe('AssetsPanel 导入', () => {
     fireEvent.change(input)
     expect(await screen.findByText(/磁盘满/)).toBeTruthy()
   })
+
+  it('中途失败不中断：剩余文件继续导入并汇总失败清单（#719）', async () => {
+    const spies = mockStore([])
+    spies.put.mockImplementation((file) =>
+      file.name === '坏图.png'
+        ? Promise.reject(new Error('磁盘满'))
+        : Promise.resolve(
+            asset({ id: `a-${file.name}`, name: file.name, kind: 'other' }),
+          ),
+    )
+    render(<AssetsPanel />)
+    await screen.findByText('个人资产库 · 跨项目')
+    const input = document.querySelector('input[type=file]') as HTMLInputElement
+    const files = ['图1.png', '坏图.png', '图3.png'].map(
+      (name) => new File(['x'], name, { type: 'image/png' }),
+    )
+    Object.defineProperty(input, 'files', { value: files, configurable: true })
+    fireEvent.change(input)
+    // 每个文件都恰好尝试一次：失败后循环继续处理后续文件
+    await waitFor(() => expect(spies.put).toHaveBeenCalledTimes(3))
+    fireEvent.click(screen.getByText('其他'))
+    expect(await screen.findByText('图1.png')).toBeTruthy()
+    expect(await screen.findByText('图3.png')).toBeTruthy()
+    // 汇总点名失败文件与原因，并给出成功数（#719 验收）
+    expect(await screen.findByText(/成功 2 个，失败 1 个/)).toBeTruthy()
+    expect(screen.getByText(/「坏图.png」失败：Error: 磁盘满/)).toBeTruthy()
+  })
 })
 
 describe('AssetsPanel 缩略图失败与重试（issue #142）', () => {
