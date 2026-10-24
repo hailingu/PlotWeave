@@ -286,32 +286,30 @@ describe('菜单按钮配色结构（issue #261）', () => {
 })
 
 describe('菜单按钮配对令牌黄金基准（issue #261）', () => {
-  it('浅色基线与修复前字面量逐位相同（视觉零变化）：前景 #1d1d1f、面 rgba(255,255,255,.82)、hover #ffffff、描边透明', () => {
-    const env: Env = {
-      scheme: 'light',
-      contrast: 'no-preference',
-      transparency: 'no-preference',
+  it('浅/暗基线：前景、面、hover 与描边（浅色与修复前字面量逐位相同）', () => {
+    for (const [env, fg, bg, hoverBg, border] of [
+      [
+        ALL_ENVS[0]![1],
+        '#1d1d1f',
+        'rgba(255, 255, 255, 0.82)',
+        '#ffffff',
+        '1px solid transparent',
+      ],
+      [
+        ALL_ENVS[1]![1],
+        '#f2f2f7',
+        'rgba(38, 38, 44, 0.94)',
+        '#3a3a40',
+        '1px solid rgba(255, 255, 255, 0.14)',
+      ],
+    ] as const) {
+      expect(stateColors(env, 'rest').fg).toBe(fg)
+      expect(stateColors(env, 'rest').bg).toBe(bg)
+      expect(stateColors(env, 'hover').bg).toBe(hoverBg)
+      expect(
+        resolveChain(declOf(ruleOf(BTN), 'border'), tokenValues(env)).trim(),
+      ).toBe(border)
     }
-    expect(stateColors(env, 'rest').fg).toBe('#1d1d1f')
-    expect(stateColors(env, 'rest').bg).toBe('rgba(255, 255, 255, 0.82)')
-    expect(stateColors(env, 'hover').bg).toBe('#ffffff')
-    expect(
-      resolveChain(declOf(ruleOf(BTN), 'border'), tokenValues(env)).trim(),
-    ).toBe('1px solid transparent')
-  })
-
-  it('暗色基线：前景 #f2f2f7、面 rgba(38,38,44,.94)、hover #3a3a40、白系描边', () => {
-    const env: Env = {
-      scheme: 'dark',
-      contrast: 'no-preference',
-      transparency: 'no-preference',
-    }
-    expect(stateColors(env, 'rest').fg).toBe('#f2f2f7')
-    expect(stateColors(env, 'rest').bg).toBe('rgba(38, 38, 44, 0.94)')
-    expect(stateColors(env, 'hover').bg).toBe('#3a3a40')
-    expect(
-      resolveChain(declOf(ruleOf(BTN), 'border'), tokenValues(env)).trim(),
-    ).toBe('1px solid rgba(255, 255, 255, 0.14)')
   })
 
   it('more 对比度：背景近实色（浅 #ffffff / 深 #26262c）+ 描边加强', () => {
