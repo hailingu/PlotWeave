@@ -430,12 +430,20 @@ fn is_atomic_temp_name(name: &str, target_ok: &dyn Fn(&str) -> bool) -> bool {
     target_ok(target) && is_generated_temp_id(id)
 }
 /// projects/ 的原子写目标白名单（§10.2）：唯一目标是 `{项目 id}.json`
-/// （create/save）；AI 会话临时文件位于 `projects/{id}/` 会话目录，
-/// 不在本目录的清扫范围（记录边界）。
+/// （create/save）；AI 会话临时文件位于 `projects/{id}/` 会话目录，由
+/// [`sweep_session_dir_temp_files`] 以 [`is_session_temp_target`] 单独
+/// 清扫（issue #722），不在本目录的清扫范围。
 pub fn is_project_temp_target(target: &str) -> bool {
     target
         .strip_suffix(".json")
         .is_some_and(|id| validate_id(id).is_ok())
+}
+/// `projects/{id}/` 会话目录的原子写目标白名单（issue #722）：唯一目标
+/// `ai-session.json`（`save_ai_session_file` 的原子写目标）——目录内其余
+/// 名字的条目与本协议无关，永不进入清扫候选；`assets/` 等子目录不进入
+/// 本清扫的扫描范围（媒体临时文件仍为记录边界）。
+pub fn is_session_temp_target(target: &str) -> bool {
+    target == "ai-session.json"
 }
 /// 清扫候选判定：归属可辨（目标白名单 + 生成器 id 形状）+ no-follow
 /// 归类为普通文件（符号链接/目录等异型条目只跳过、绝不跟随）+ mtime
@@ -522,6 +530,65 @@ pub fn sweep_orphan_temp_files(
         }
     }
     removed
+}
+/// 会话目录崩溃遗留临时文件清扫（issue #722，§10.2 资源回收边界）：
+/// `save_ai_session_file` 在 `projects/{id}/` 内走同一原子写协议，其崩溃
+/// 遗留临时文件由本清扫承接——遍历 projects/ 根下名字为合法项目 id 的
+/// 真实目录（会话目录仅以合法 id 创建；no-follow 归类，符号链接与异型
+/// 条目只跳过、绝不跟随），经 [`open_dir_bound`] 身份绑定打开后对每个
+/// 目录执行 [`sweep_orphan_temp_files`] 同款内核（目标白名单
+/// [`is_session_temp_target`] + 生成器 id 形状 + 24h 宽限 + 普通文件），
+/// 只扫目录顶层、不进入 `assets/` 等子目录（媒体临时文件仍为记录边界）。
+/// 与清扫内核同款 fail-soft：单目录扫描/归类/打开失败只留结构化诊断并
+/// 继续其余目录，不向调用方传播、永不阻断列表。调用方须持有
+/// [`projects_op_lock`]（与 `save_ai_session_file` 的原子写串行——挂起
+/// 恢复或时钟前跳使进行中写入的临时文件显得超龄时，清扫也不得插入
+/// 排他创建与 rename 之间）。
+pub fn sweep_session_dir_temp_files(root: &CapDir) {
+    let entries = match root.entries() {
+        Ok(entries) => entries,
+        Err(e) => {
+            log::warn!(target: "plotweave::store", "会话目录：扫描项目目录失败（跳过清扫）：{e}");
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                log::warn!(target: "plotweave::store", "会话目录：遍历项目目录失败（跳过该条目）：{e}");
+                continue;
+            }
+        };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        // 会话目录名即项目 id（ai_session_dir 仅以合法 id 创建）：名字
+        // 不合法的目录与本协议无关，不进入
+        if validate_id(name).is_err() {
+            continue;
+        }
+        // DirEntry::metadata 取 lstat 语义：符号链接不是目录，只跳过不跟随
+        let md = match entry.metadata() {
+            Ok(md) => md,
+            Err(e) => {
+                log::warn!(target: "plotweave::store", "会话目录：读取目录元数据失败（跳过 {name}）：{e}");
+                continue;
+            }
+        };
+        if !md.is_dir() {
+            continue;
+        }
+        match open_dir_bound(root, name, &md, "项目会话目录") {
+            Ok(dir) => {
+                sweep_orphan_temp_files(&dir, "项目会话目录", is_session_temp_target);
+            }
+            Err(e) => {
+                log::warn!(target: "plotweave::store", "会话目录：打开会话目录失败（跳过 {name}）：{e}")
+            }
+        }
+    }
 }
 /// 目录条目持久化计划（§10.2，Unix）：`hosts` 为新条目宿主链——从
 /// `dir` 的最深已存在祖先（锚点，含 `dir` 本身）到其直接父目录的每一
