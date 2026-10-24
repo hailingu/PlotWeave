@@ -151,12 +151,16 @@ actor NativeProjectStore {
                 metas.append(Self.brokenMeta(id: id, reason: "项目文件损坏或不可读：\(error.localizedDescription)"))
             }
         }
-        metas.sort {
-            let a = NativeProjectEnvelope.parseTime($0["updated_at"]?.string ?? "") ?? .distantPast
-            let b = NativeProjectEnvelope.parseTime($1["updated_at"]?.string ?? "") ?? .distantPast
-            return a == b ? ($0["id"]?.string ?? "") < ($1["id"]?.string ?? "") : a > b
+        return .array(Self.newestFirst(metas))
+    }
+
+    /// Home order: newest instant first, unparsable stamps as oldest, ties by id. Each row's stamp is parsed
+    /// once up front because `parseTime` builds a formatter per call and the comparator runs O(N log N) times.
+    private static func newestFirst(_ metas: [HostJSON]) -> [HostJSON] {
+        let keyed = metas.map { row in
+            (row: row, updated: NativeProjectEnvelope.parseTime(row["updated_at"]?.string ?? "") ?? Date.distantPast, id: row["id"]?.string ?? "")
         }
-        return .array(metas)
+        return keyed.sorted { $0.updated == $1.updated ? $0.id < $1.id : $0.updated > $1.updated }.map(\.row)
     }
 
     /// Native UUID generation plus vacant-target validation prevents cross-process new-project collisions.

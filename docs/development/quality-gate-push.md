@@ -105,7 +105,7 @@ CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建�
 入口的选择契约为：默认向 Xcode 显式传入环境变量
 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=0`；Xcode 去掉 `TEST_RUNNER_`
 前缀后把该值转发给测试宿主（[Apple 环境变量说明](https://developer.apple.com/documentation/xcode/environment-variable-reference)），
-以下六个方法通过 Swift Testing 的 `.enabled` 条件跳过。
+以下十个方法通过 Swift Testing 的 `.enabled` 条件跳过。
 开关未设置或不是精确值 `1` 时同样跳过：
 
 - `WebCanvasPerformanceTests/sustainedScriptedOperationsMatchFixtureScale(scale:)`
@@ -114,6 +114,10 @@ CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建�
 - `WebCanvasPerformanceTests/repeatedReloadsRecordLongMemoryTrend()`
 - `WebCanvasFirstDragLatencyTests/sameNodeFirstAndSecondDragRecordStartupEvidence()`
 - `WebCanvasFirstDragLatencyTests/openedProjectFirstDragsRecordPreparedEntryEvidence(mixedTypes:)`（首拖专用入口的项目加载对照）
+- `NativeListScalingBaselineTests/listProjectsDurationScalesWithStoredBytes(point:)`（issue #730 存储侧列表伸缩性基线）
+- `NativeListScalingBaselineTests/listLibraryAssetsDurationScalesWithAssetCount(assets:)`
+- `NativeListScalingBaselineTests/descriptorChainRebuildCostPerOperation()`
+- `NativeListScalingBaselineTests/perItemUnitCostsAttributeListTime()`
 
 `sh scripts/test-native.sh stress` 传入环境变量 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1`，
 通过 `-only-testing` 选择整个 `WebCanvasPerformanceTests` 套件与首拖测量；
@@ -125,6 +129,17 @@ CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建�
 只选择 `WebCanvasFirstDragLatencyTests` 套件，启用该套件中的首拖测量并关闭覆盖率；
 不选择 `WebCanvasPerformanceTests`，因此不运行大图持续交互、窗口重建或长循环 reload。
 原 `stress` 的选择、规模与断言不变；默认功能回归仍关闭压力开关。
+
+存储侧列表伸缩性基线（[issue #730](https://github.com/hailingu/PlotWeave/issues/730)）同样有专用入口
+`sh scripts/test-native.sh list-scaling`：只选择 `NativeListScalingBaselineTests` 套件，
+启用其中的 N×V 项目网格、资产数扫描、描述符链重建与单项成本归因测量并关闭覆盖率；
+不选择任何画布套件，因此不启动 WKWebView、大图持续交互、长循环或首拖测量。
+该入口以 `-configuration Release ENABLE_TESTABILITY=YES` 构建：Release 对应生产优化级别
+（与 Rust 侧 issue #731 基线的 release 口径一致），而 `@testable import` 需要显式开启
+testability，Release 配置默认关闭。测量以 `PW-LIST-SCALING` 前缀打印证据行；该套件的
+三个夹具不变量冒烟（项目行健康且有序、库索引规范不被重写、描述符链重建打开实际目录）
+不受开关影响，默认功能回归照常以 Debug 运行。`stress` 的选择不变，不包含该套件。
+测量结论与处置记录于[持久化 §10.2](../data-model/persistence.md#102-写入安全)。
 
 这将六组 100/500/1000 节点持续交互、五次窗口重建、100 次 reload 和首拖
 对照测量移出默认门禁，原来的规模、等待、断言与证据口径保留。

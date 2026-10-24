@@ -62,6 +62,21 @@ struct NativeProjectStoreTests {
         #expect(rows.first { $0["id"]?.string == "broken" }?["diagnostic"]?.string != nil)
     }
 
+    /// The home order is newest first by the actual instant; equal or unparsable stamps fall back to id order,
+    /// with unparsable ones sorting as oldest — the contract the sort must keep however stamps are parsed.
+    @Test func listOrdersNewestFirstWithIdTieBreakAndUnparsableStampsLast() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("b-mid.json", Self.document("b-mid", updatedAt: "2026-10-04T00:00:01.000Z"))
+        try fixture.write("a-new.json", Self.document("a-new", updatedAt: "2026-10-04T08:00:02.000+08:00"))
+        try fixture.write("z-tie.json", Self.document("z-tie", updatedAt: "2026-10-04T00:00:01.000Z"))
+        try fixture.write("d-bad.json", Self.document("d-bad", updatedAt: "yesterday"))
+        try fixture.write("c-bad.json", Self.document("c-bad", updatedAt: ""))
+        try Data("{broken".utf8).write(to: fixture.projects.appendingPathComponent("e-broken.json"))
+        let listed = try await fixture.store.invoke(command: "list_projects", args: [:])
+        #expect(listed.array.map { $0["id"]?.string } == ["a-new", "b-mid", "z-tie", "c-bad", "d-bad", "e-broken"])
+    }
+
     /// Retired v0 flat envelopes are rejected like corruption (#519): the file stays untouched, listing keeps a diagnostic card, and loading fails.
     @Test func legacyFlatEnvelopeIsRejectedAndPreserved() async throws {
         let fixture = try Fixture()
@@ -197,10 +212,10 @@ struct NativeProjectStoreTests {
     }
 
     /// Contract fixture uses complete authoritative v1 buckets without importing production builders.
-    private static func document(_ id: String, name: String = "测试剧") -> HostJSON {
+    private static func document(_ id: String, name: String = "测试剧", updatedAt: String = "2026-10-04T00:00:00.000Z") -> HostJSON {
         .object([
             "schemaVersion": .number(1), "project": .object([
-                "id": .string(id), "name": .string(name), "createdAt": .string("2026-10-04T00:00:00.000Z"), "updatedAt": .string("2026-10-04T00:00:00.000Z")
+                "id": .string(id), "name": .string(name), "createdAt": .string("2026-10-04T00:00:00.000Z"), "updatedAt": .string(updatedAt)
             ]), "graph": .object(["nodes": .array([]), "edges": .array([])]),
             "settings": .object(["characters": .object([:]), "locations": .object([:]), "props": .object([:]), "documents": .object([:])]),
             "episodeTitles": .object([:]), "assets": .object(["byId": .object([:])])
