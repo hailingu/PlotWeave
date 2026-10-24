@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import {
   gitFixtureEnvironment,
   gitScenarioFixture,
@@ -211,40 +211,53 @@ describe(
 
 const scenarioFixtures: Array<ReturnType<typeof gitScenarioFixture>> = []
 
-/** 准备独立 Git 仓库并提交种子台账（归因判定需要已跟踪基线）；
- * 返回台账与待物化文件的绝对路径。脚本副本放进 scripts/ 子目录镜像
- * 真实布局（脚本按自身位置推算仓库根）。 */
-function prepareIsolatedRepository(historySeed: string): {
-  root: string
-  historyPath: string
-  pendingPath: string
-} {
-  const fixture = gitScenarioFixture((root) => {
-    const environment = gitFixtureEnvironment()
-    const run = (args: string[]) =>
-      spawnSync('git', args, { cwd: root, encoding: 'utf8', env: environment })
-    run(['init', '--initial-branch=main'])
-    run(['config', 'user.name', 'Stage'])
-    run(['config', 'user.email', 'stage@example.invalid'])
-    mkdirSync(resolve(root, 'scripts'), { recursive: true })
-    mkdirSync(resolve(root, 'docs/development'), { recursive: true })
-    writeFileSync(
-      resolve(root, 'docs/development/gate-history.jsonl'),
-      historySeed,
-    )
-    // 目录保留文件：git rm 台账后目录不被修剪，贴合真实仓库形态
-    //（评审 5542467935 的复现前提是折并能重建工作树文件）
-    writeFileSync(resolve(root, 'docs/development/.keepme'), '')
-    run(['add', '-A'])
-    run(['commit', '-m', 'base'])
-  })
-  scenarioFixtures.push(fixture)
+/** 在指定根目录播种独立 Git 仓库并提交种子台账（归因判定需要已跟踪基线）。
+ * 与 prepareIsolatedRepository 分离，供组级共享夹具只播种一次（issue #736）。 */
+function seedIsolatedRepository(root: string, historySeed: string): void {
+  const environment = gitFixtureEnvironment()
+  const run = (args: string[]) =>
+    spawnSync('git', args, { cwd: root, encoding: 'utf8', env: environment })
+  run(['init', '--initial-branch=main'])
+  run(['config', 'user.name', 'Stage'])
+  run(['config', 'user.email', 'stage@example.invalid'])
+  mkdirSync(resolve(root, 'scripts'), { recursive: true })
+  mkdirSync(resolve(root, 'docs/development'), { recursive: true })
+  writeFileSync(
+    resolve(root, 'docs/development/gate-history.jsonl'),
+    historySeed,
+  )
+  // 目录保留文件：git rm 台账后目录不被修剪，贴合真实仓库形态
+  //（评审 5542467935 的复现前提是折并能重建工作树文件）
+  writeFileSync(resolve(root, 'docs/development/.keepme'), '')
+  run(['add', '-A'])
+  run(['commit', '-m', 'base'])
+}
+
+/** 从夹具复制独立仓库并返回台账/待物化路径；脚本副本放进 scripts/ 子目录
+ * 镜像真实布局（脚本按自身位置推算仓库根）。 */
+function createSeededRepository(
+  fixture: ReturnType<typeof gitScenarioFixture>,
+): { root: string; historyPath: string; pendingPath: string } {
   const root = fixture.create()
   return {
     root,
     historyPath: resolve(root, 'docs/development/gate-history.jsonl'),
     pendingPath: resolve(root, 'gate-pending.jsonl'),
   }
+}
+
+/** 准备独立 Git 仓库并提交种子台账（归因判定需要已跟踪基线）；
+ * 返回台账与待物化文件的绝对路径。 */
+function prepareIsolatedRepository(historySeed: string): {
+  root: string
+  historyPath: string
+  pendingPath: string
+} {
+  const fixture = gitScenarioFixture((root) =>
+    seedIsolatedRepository(root, historySeed),
+  )
+  scenarioFixtures.push(fixture)
+  return createSeededRepository(fixture)
 }
 
 /** 在准备好的仓库上执行物化；stageForCommit 选择提交入口或裸物化，
@@ -424,43 +437,35 @@ describe(
   '无折并时拒绝未归因台账改动（pending 为空，工作树改动不自动暂存）',
   { timeout: 30_000 },
   () => {
-    afterEach(() => {
-      for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
-    })
+    // 三种篡改形态共用同一种子（issue #736）：组级共享夹具只播种一次，
+    // 每例 create() 经 gitScenarioFixture 内置模板 + cpSync 复制独立仓库。
+    // 不进入 scenarioFixtures/afterEach——逐例 dispose 会清空模板导致重播；
+    // 模板与全部副本随 afterAll 统一清理。
+    const fixtures = gitScenarioFixture((root) =>
+      seedIsolatedRepository(root, `${seedRecord}\n`),
+    )
+    afterAll(() => fixtures.dispose())
 
-    it('人工追加的合法 JSON 行（评审场景：与门禁产物语法不可区分）：不暂存并警告', () => {
-      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
-        `${seedRecord}\n`,
-      )
-      appendFileSync(historyPath, `${secondRecord}\n`)
-
-      const result = runStageMaterialize(root, historyPath, pendingPath, '')
-      const state = isolatedLedgerState(root)
-
-      expect(result.status).toBe(0)
-      expect(state.stagedModified).toBe(false)
-      expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
-    })
-
-    it('修改既有记录行：不暂存并警告', () => {
-      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
-        `${seedRecord}\n`,
-      )
-      writeFileSync(historyPath, `${secondRecord}\n`)
-
-      const result = runStageMaterialize(root, historyPath, pendingPath, '')
-      const state = isolatedLedgerState(root)
-
-      expect(result.status).toBe(0)
-      expect(state.stagedModified).toBe(false)
-      expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
-    })
-
-    it('追加畸形行（如 diff 前缀污染形态）：不暂存并警告', () => {
-      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
-        `${seedRecord}\n`,
-      )
-      appendFileSync(historyPath, `+${secondRecord}\n`)
+    it.each([
+      {
+        name: '人工追加的合法 JSON 行（评审场景：与门禁产物语法不可区分）',
+        tamper: (historyPath: string) =>
+          appendFileSync(historyPath, `${secondRecord}\n`),
+      },
+      {
+        name: '修改既有记录行',
+        tamper: (historyPath: string) =>
+          writeFileSync(historyPath, `${secondRecord}\n`),
+      },
+      {
+        name: '追加畸形行（如 diff 前缀污染形态）',
+        tamper: (historyPath: string) =>
+          appendFileSync(historyPath, `+${secondRecord}\n`),
+      },
+    ])('$name：不暂存并警告', ({ tamper }) => {
+      const { root, historyPath, pendingPath } =
+        createSeededRepository(fixtures)
+      tamper(historyPath)
 
       const result = runStageMaterialize(root, historyPath, pendingPath, '')
       const state = isolatedLedgerState(root)
