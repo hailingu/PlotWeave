@@ -31,6 +31,10 @@ if [ "$mode" = regression ]; then
   rm -f "$coverage_directory/coverage-summary.json" "$coverage_directory/coverage-summary.md" "$coverage_directory/xccov.json"
 fi
 "${PLOTWEAVE_NPM_BIN:-npm}" run build:native-canvas
+# Current gates also verify historical trees; build this fixture only when that tree owns its test.
+if [ -f "$repository_root/native/macos/Tests/WebLibraryImportTests.swift" ]; then
+  "${PLOTWEAVE_NPM_BIN:-npm}" run build:library-import-probe
+fi
 set -- -project native/macos/PlotWeaveNative.xcodeproj \
   -scheme PlotWeaveNative -destination 'platform=macOS' \
   -derivedDataPath native/macos/build/DerivedData -jobs "$native_jobs"

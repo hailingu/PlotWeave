@@ -36,6 +36,7 @@ export const IPC_COMMANDS = {
   // ── library：个人资产库与编组（docs/data-model/assets.md §7.2）──
   listLibraryAssets: 'list_library_assets',
   importLibraryAsset: 'import_library_asset',
+  importLibraryAssetChunk: 'import_library_asset_chunk',
   updateLibraryAsset: 'update_library_asset',
   deleteLibraryAsset: 'delete_library_asset',
   upsertLibraryGroup: 'upsert_library_group',

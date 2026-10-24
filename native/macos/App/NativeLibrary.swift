@@ -8,6 +8,7 @@ actor NativeLibrary {
     enum Command: String, CaseIterable, Sendable {
         case listLibraryAssets = "list_library_assets"
         case importLibraryAsset = "import_library_asset"
+        case importLibraryAssetChunk = "import_library_asset_chunk"
         case updateLibraryAsset = "update_library_asset"
         case deleteLibraryAsset = "delete_library_asset"
         case upsertLibraryGroup = "upsert_library_group"
@@ -17,6 +18,8 @@ actor NativeLibrary {
     /// Only the host selects this trusted app-data root.
     let root: URL
     private var revision: UInt64 = 0
+    /// Incomplete Web uploads own no files and remain charged while committing.
+    private var uploads = NativeLibraryUploads()
     private var eventSink: (@Sendable (HostJSON) async -> Void)?
     private let importCheckpoint: @Sendable (ImportCheckpoint) throws -> Void
     static let maximumBytes = 20 * 1024 * 1024
@@ -40,6 +43,8 @@ actor NativeLibrary {
         case .listLibraryAssets: return try await execute { state, number in state.response(state.listing, revision: number) }
         case .importLibraryAsset:
             return try await importAsset(name: args.requiredString("name", domain: .library), mime: args.requiredString("mime", domain: .library), kind: args.requiredString("kind", domain: .library), bytes: byteData(args["bytes"]))
+        case .importLibraryAssetChunk:
+            return try await importChunk(args)
         case .updateLibraryAsset:
             let id = try identity(args)
             guard let patch = args["patch"] else { throw NativeLibraryIndex.invalid("缺少修改对象") }
@@ -67,6 +72,18 @@ actor NativeLibrary {
                 try state.write()
                 return state.response(.object(["id": .string(id)]), revision: number)
             }
+        }
+    }
+
+    /// Staging is actor-owned; commits retain their slot across suspension and use the existing journal.
+    private func importChunk(_ args: [String: HostJSON]) async throws -> HostJSON {
+        guard let request = args["request"]?.object else { throw NativeLibraryIndex.invalid("缺少分块上传请求") }
+        let id = try request.requiredString("uploadId", domain: .library)
+        switch try uploads.accept(request) {
+        case .reply(let reply): return reply
+        case .complete(let metadata, let bytes):
+            defer { uploads.finish(id) }
+            return try await importAsset(name: metadata.name, mime: metadata.mime, kind: metadata.kind, bytes: bytes)
         }
     }
 

@@ -66,7 +66,7 @@ Gate-workflow regression imports the explicitly approved historical Git objects 
 
 2026-10-07 将归档工作树的完整源码恢复并合入当前主目录，构建入口不再指向早期演示壳；来源、重叠修改协调与本次检查见[合入记录](../swiftui-react-flow-integration.md)。
 
-当前 `dev` 分支的原生应用已实现 SwiftUI 项目首页、工具栏、大纲、属性检查器、设定、图库、AI、导出与应用设置界面，以及 Swift 存储、素材、设置／密钥和模型服务。Swift 承接 25 条业务命令与两条退出命令，共 27 条既有 snake_case IPC 命令，另提供 `system.copyText` 与 `system.saveText` 两条系统交付命令。React 保留单一编辑会话、历史与画布；默认资源入口运行生产应用，只有显式 `#fixture` 加载不落盘的内存演示。当前行为及测试矩阵见[功能补齐记录](../swiftui-react-flow-feature-parity.md)，原 P1／P2 状态仅作为[历史证据](../swiftui-react-flow-p1-evidence.md)与[历史 Rust 抽离记录](../swiftui-react-flow-p2-evidence.md)保留。
+当前 `dev` 分支的原生应用已实现 SwiftUI 项目首页、工具栏、大纲、属性检查器、设定、图库、AI、导出与应用设置界面，以及 Swift 存储、素材、设置／密钥和模型服务。Swift 承接 26 条业务命令与两条退出命令，共 28 条 snake_case IPC 命令，另提供 `system.copyText` 与 `system.saveText` 两条系统交付命令。React 保留单一编辑会话、历史与画布；默认资源入口运行生产应用，只有显式 `#fixture` 加载不落盘的内存演示。当前行为及测试矩阵见[功能补齐记录](../swiftui-react-flow-feature-parity.md)，原 P1／P2 状态仅作为[历史证据](../swiftui-react-flow-p1-evidence.md)与[历史 Rust 抽离记录](../swiftui-react-flow-p2-evidence.md)保留。
 
 需要 macOS 26.0+、Node.js `^24.18.0 || >=26.0.0` 与 Xcode 27.0／macOS SDK 27.0，不需要 Rust 来构建原生应用；具体运行版本选择见上节。Swift 6.4 编译器维持 Swift 6 语言模式；所有者升级决策、实测版本与构建／启动结果见[当前工具链记录](../swiftui-react-flow-toolchain.md)。依赖未安装时先运行 `npm install`，并按上节安装版本化 Git hooks。
 

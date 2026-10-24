@@ -23,6 +23,8 @@ afterEach(() => {
 interface NativeOptions {
   mode?: string
   npmExit?: number
+  probeExit?: number
+  legacy?: boolean
   xcodeExit?: number
   xccovExit?: number
   rawReport?: unknown
@@ -34,7 +36,7 @@ interface NativeOptions {
 }
 
 /** A real source inventory with synthetic xccov output at the external tool boundary. */
-function nativeFixture() {
+function nativeFixture(legacy = false) {
   const root = mkdtempSync(resolve(tmpdir(), 'plotweave-native-entry-'))
   roots.push(root)
   const app = resolve(root, 'native/macos/App')
@@ -59,6 +61,13 @@ function nativeFixture() {
       },
     ],
   }
+  if (!legacy) {
+    mkdirSync(resolve(root, 'native/macos/Tests'), { recursive: true })
+    writeFileSync(
+      resolve(root, 'native/macos/Tests/WebLibraryImportTests.swift'),
+      '// fixture owns the optional import probe test\n',
+    )
+  }
   const log = resolve(root, 'calls.jsonl')
   writeFileSync(log, '')
   return { root, report, log }
@@ -71,12 +80,13 @@ function nativeTool(
   name: string,
   status: number,
   output = '',
+  probeStatus = status,
 ) {
   const path = resolve(root, name)
   writeFileSync(
     path,
     `#!${process.execPath}\n` +
-      `require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool:${JSON.stringify(name)},args:process.argv.slice(2),stress:process.env.TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS})+'\\n');process.stdout.write(${JSON.stringify(output)});process.exit(${status})\n`,
+      `require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify({tool:${JSON.stringify(name)},args:process.argv.slice(2),stress:process.env.TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS})+'\\n');process.stdout.write(${JSON.stringify(output)});process.exit(process.argv[3] === 'build:library-import-probe' ? ${probeStatus} : ${status})\n`,
   )
   chmodSync(path, 0o755)
   return path
@@ -84,7 +94,7 @@ function nativeTool(
 
 /** Exercise the real shell entry and report adapter in an exclusively owned repository fixture. */
 function runNative(options: NativeOptions = {}) {
-  const { root, report, log } = nativeFixture()
+  const { root, report, log } = nativeFixture(options.legacy)
   if (options.staleSummary) {
     const directory = resolve(root, 'native/macos/build/coverage')
     mkdirSync(directory, { recursive: true })
@@ -114,7 +124,14 @@ function runNative(options: NativeOptions = {}) {
           options.mode === 'stress' ? '0' : '1',
         PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE: options.minimum ?? '',
         GITHUB_STEP_SUMMARY: resolve(root, 'step-summary.md'),
-        PLOTWEAVE_NPM_BIN: nativeTool(root, log, 'npm', options.npmExit ?? 0),
+        PLOTWEAVE_NPM_BIN: nativeTool(
+          root,
+          log,
+          'npm',
+          options.npmExit ?? 0,
+          '',
+          options.probeExit ?? options.npmExit ?? 0,
+        ),
         PLOTWEAVE_XCODEBUILD_BIN: nativeTool(
           root,
           log,
@@ -159,8 +176,9 @@ it('默认保留功能回归，开启 App 覆盖率并关闭压力测量', () =>
     tool: 'npm',
     args: ['run', 'build:native-canvas'],
   })
-  const args = result.calls[1]?.args ?? []
-  expect(result.calls[1]?.stress).toBe('0')
+  expect(result.calls[1]?.args).toEqual(['run', 'build:library-import-probe'])
+  const args = result.calls[2]?.args ?? []
+  expect(result.calls[2]?.stress).toBe('0')
   expect(args.some((arg) => arg.startsWith('-only-testing'))).toBe(false)
   expect(args.some((arg) => arg.startsWith('-skip-testing'))).toBe(false)
   expect(args.slice(-3)).toEqual(['-parallel-testing-enabled', 'NO', 'test'])
@@ -168,10 +186,11 @@ it('默认保留功能回归，开启 App 覆盖率并关闭压力测量', () =>
   expect(args[args.indexOf('-jobs') + 1]).toBe('4')
   expect(result.calls.map((call) => call.tool)).toEqual([
     'npm',
+    'npm',
     'xcodebuild',
     'xcrun',
   ])
-  expect(result.calls[2]?.args.slice(0, 4)).toEqual([
+  expect(result.calls[3]?.args.slice(0, 4)).toEqual([
     'xccov',
     'view',
     '--report',
@@ -188,23 +207,29 @@ it('默认保留功能回归，开启 App 覆盖率并关闭压力测量', () =>
 it('stress 显式开启原规模测量，关闭覆盖率且不采集报告', () => {
   const result = runNative({ mode: 'stress' })
   expect(result.status, result.stderr).toBe(0)
-  const args = result.calls[1]?.args ?? []
-  expect(result.calls[1]?.stress).toBe('1')
+  expect(result.calls[1]?.args).toEqual(['run', 'build:library-import-probe'])
+  const args = result.calls[2]?.args ?? []
+  expect(result.calls[2]?.stress).toBe('1')
   expect(args.filter((arg) => arg.startsWith('-only-testing:'))).toEqual([
     '-only-testing:PlotWeaveNativeTests/WebCanvasPerformanceTests',
     '-only-testing:PlotWeaveNativeTests/WebCanvasFirstDragLatencyTests/sameNodeFirstAndSecondDragRecordStartupEvidence()',
   ])
   expect(args[args.indexOf('-enableCodeCoverage') + 1]).toBe('NO')
-  expect(result.calls).toHaveLength(2)
+  expect(result.calls).toHaveLength(3)
   expect(result.summary).toBeNull()
 })
 
 it('first-drag 仅启用首拖套件，不运行大图或长循环且不采覆盖率', () => {
   const result = runNative({ mode: 'first-drag' })
   expect(result.status).toBe(0)
-  expect(result.calls.map((call) => call.tool)).toEqual(['npm', 'xcodebuild'])
-  expect(result.calls[1]?.stress).toBe('1')
-  const args = result.calls[1]?.args ?? []
+  expect(result.calls.map((call) => call.tool)).toEqual([
+    'npm',
+    'npm',
+    'xcodebuild',
+  ])
+  expect(result.calls[2]?.stress).toBe('1')
+  expect(result.calls[1]?.args).toEqual(['run', 'build:library-import-probe'])
+  const args = result.calls[2]?.args ?? []
   expect(args).toContain(
     '-only-testing:PlotWeaveNativeTests/WebCanvasFirstDragLatencyTests',
   )
@@ -236,7 +261,7 @@ it.each([
 ])('构建状态 %i / 测试状态 %i 透传失败', (npmExit, xcodeExit, calls) => {
   const result = runNative({ npmExit, xcodeExit })
   expect(result.status).toBe(npmExit || xcodeExit)
-  expect(result.calls).toHaveLength(calls)
+  expect(result.calls).toHaveLength(npmExit ? calls : calls + 1)
   expect(result.summary).toBeNull()
 })
 
@@ -300,8 +325,27 @@ it('uses the configured Node even when PATH resolves to an incompatible executab
   expect(result.status, result.stderr).toBe(0)
   expect(result.calls.map((call) => call.tool)).toEqual([
     'npm',
+    'npm',
     'xcodebuild',
     'xcrun',
   ])
   expect(result.summary).toMatchObject({ coveredLines: 6, executableLines: 10 })
+})
+
+it('导入探针构建失败在Xcode之前阻断且不保留旧报告', () => {
+  const result = runNative({ probeExit: 31, staleSummary: true })
+  expect(result.status, result.stderr).toBe(31)
+  expect(result.calls.map((call) => call.tool)).toEqual(['npm', 'npm'])
+  expect(result.summary).toBeNull()
+})
+
+it('旧提交无导入探针测试时保留历史原生门禁，不调用不存在的npm命令', () => {
+  const result = runNative({ legacy: true, probeExit: 31 })
+  expect(result.status, result.stderr).toBe(0)
+  expect(result.calls.map((call) => call.tool)).toEqual([
+    'npm',
+    'xcodebuild',
+    'xcrun',
+  ])
+  expect(result.summary).toMatchObject({ lineCoveragePercent: 60 })
 })
