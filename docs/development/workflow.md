@@ -44,13 +44,14 @@ The [official Node.js release record](https://nodejs.org/en/blog/release/v24.18.
 nvm use
 npm install
 cargo install cargo-llvm-cov
-npm run hooks:install
 export SONAR_HOST_URL=http://localhost:9000
 # Export SONAR_TOKEN or PLOTWEAVE_SONAR_TOKEN when the service requires it.
 npm run tauri dev
 ```
 
 Never commit SonarQube credentials or other secrets. Use the URL and token for the developer's own environment.
+
+`npm install` (and `npm ci`) runs the `prepare` lifecycle script `scripts/install-hooks.mjs`, which wires `core.hooksPath` to the versioned `.githooks/` automatically in any non-CI Git checkout ([issue #725](https://github.com/hailingu/PlotWeave/issues/725)); environments that set `CI` skip the wiring because hosted runners never create commits through local hooks. Until dependencies are first installed, or if the wiring reported `[HOOKS_INSTALL_FAILED]`, run `npm run hooks:install` as the manual fallback.
 
 Useful direct checks:
 
@@ -68,7 +69,7 @@ On 2026-10-07, the complete source from the archived worktree was restored and m
 
 The native application on the current `dev` branch implements the SwiftUI project home, toolbar, outline, property inspector, story settings, library, AI, export, and application settings interfaces, together with Swift storage, asset, preferences/key, and model services. Swift handles 26 business commands and two exit commands, totaling 28 snake_case IPC commands, plus the `system.copyText` and `system.saveText` system delivery commands. React retains the single editing session, history, and canvas; the default resource entry runs the production application, and only an explicit `#fixture` loads a non-persistent in-memory demo. See the [feature parity record](../swiftui-react-flow-feature-parity.md) for current behavior and the test matrix; the former P1/P2 status is retained only as [historical evidence](../swiftui-react-flow-p1-evidence.md) and in the [historical Rust extraction record](../swiftui-react-flow-p2-evidence.md).
 
-macOS 26.0+, Node.js `^24.18.0 || >=26.0.0`, and Xcode 27.0/macOS SDK 27.0 are required; Rust is not required to build the native application. See the previous section for runtime version selection. The Swift 6.4 compiler remains in Swift 6 language mode; the owner's upgrade decision, measured versions, and build/launch results are in the [current toolchain record](../swiftui-react-flow-toolchain.md). If dependencies are not installed, run `npm install` first and install the versioned Git hooks as described above.
+macOS 26.0+, Node.js `^24.18.0 || >=26.0.0`, and Xcode 27.0/macOS SDK 27.0 are required; Rust is not required to build the native application. See the previous section for runtime version selection. The Swift 6.4 compiler remains in Swift 6 language mode; the owner's upgrade decision, measured versions, and build/launch results are in the [current toolchain record](../swiftui-react-flow-toolchain.md). If dependencies are not installed, run `npm install` first; its `prepare` lifecycle wires the versioned Git hooks automatically as described above.
 
 The build toolchain is pinned to Xcode 27.0 and macOS SDK 27.0, the project remains in Swift 6 language mode, and the minimum deployment target remains macOS 26.0. Before building, confirm the selected toolchain with `xcodebuild -version` and `xcrun --sdk macosx --show-sdk-version`; the actual system version, compiler, and verification boundaries are in the [Xcode 27 toolchain record](../swiftui-react-flow-p1-evidence.md#xcode-27-工具链同步2026-10-07).
 

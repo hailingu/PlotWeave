@@ -28,6 +28,7 @@ const subprocessDriven = [
   'scripts/check-workspace-drift.ts',
   'scripts/gate-scope.ts',
   'scripts/verify-gate-evidence.ts',
+  'scripts/install-hooks.mjs',
   'scripts/pre-push-install.mjs',
   'scripts/pre-push-install-launcher.mjs',
   'scripts/pre-push-install-watchdog.mjs',
