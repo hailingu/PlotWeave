@@ -320,4 +320,6 @@ pub(crate) fn parse_file(text: &str) -> Result<ProjectFile, StoreError> {
 }
 
 #[cfg(test)]
+mod scaling_tests;
+#[cfg(test)]
 mod tests;
