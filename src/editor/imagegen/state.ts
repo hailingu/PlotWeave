@@ -87,7 +87,8 @@ function errorText(err: unknown): string {
 }
 
 /** Rust 生成命令的执行（§9.3 预检已在命令内完成，前端单次 IPC 直收
- * 已校验的资产条目）。 */
+ * 已校验的资产条目；unknown 线值由 normalizeAssetRef 全量校验收窄，
+ * issue #729）。 */
 async function runGeneration(
   projectId: string,
   jobId: string,
@@ -109,7 +110,7 @@ async function runGeneration(
       size: plan.size,
     },
   })
-  return normalizeAssetRef(raw as never)
+  return normalizeAssetRef(raw)
 }
 
 /** 资产是否仍被引用（角色头像 avatarAssetId、图片 outputs.primary、分镜

@@ -88,6 +88,62 @@ describe('projectAssets Tauri 路径：revalidate（撤销后重做防线，issu
   })
 })
 
+describe('projectAssets Tauri 路径：normalizeAssetRef unknown 线值边界（issue #729）', () => {
+  it('非对象与缺字段/错类型线值全部拒绝（坏数据不进会话索引）', async () => {
+    const { normalizeAssetRef } = await load()
+    const wires: unknown[] = [
+      undefined,
+      null,
+      'pa-1',
+      7,
+      [],
+      {},
+      {
+        id: '',
+        relPath: 'assets/pa-1.png',
+        mime: 'image/png',
+        source: 'upload',
+        createdAt: '2026-09-04T08:00:00.000Z',
+      },
+      {
+        id: 'pa-1',
+        relPath: 'media/pa-1.png',
+        mime: 'image/png',
+        source: 'upload',
+        createdAt: '2026-09-04T08:00:00.000Z',
+      },
+      {
+        id: 'pa-1',
+        relPath: 'assets/pa-1.png',
+        mime: 'image/png',
+        source: 'import',
+        createdAt: '2026-09-04T08:00:00.000Z',
+      },
+      {
+        id: 'pa-1',
+        relPath: 'assets/pa-1.png',
+        mime: 1,
+        source: 'upload',
+        createdAt: '2026-09-04T08:00:00.000Z',
+      },
+    ]
+    for (const wire of wires)
+      expect(() => normalizeAssetRef(wire)).toThrow(/无效资产条目/)
+  })
+
+  it('合法对象规范化返回：mime trim/小写，其余字段原样', async () => {
+    const { normalizeAssetRef } = await load()
+    const wire: unknown = assetRef({ mime: ' Image/PNG ' })
+    expect(normalizeAssetRef(wire)).toEqual({
+      id: 'pa-1',
+      relPath: 'assets/pa-1.png',
+      mime: 'image/png',
+      source: 'upload',
+      createdAt: '2026-09-04T08:00:00.000Z',
+    })
+  })
+})
+
 describe('projectAssets Tauri 路径：mediaUrl', () => {
   it('get_asset_media_url 携带项目 scope + assetId，返回 opaque URL 透传（issue #31）', async () => {
     invoke.mockResolvedValue('pwmedia://localhost/project/p-1/pa-1')

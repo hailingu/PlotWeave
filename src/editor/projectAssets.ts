@@ -31,12 +31,20 @@ interface RawAssetRef {
   createdAt?: unknown
 }
 
+/** unknown 线值 → RawAssetRef 的唯一收窄出口（issue #729）：RawAssetRef
+ * 全字段可选（unknown 占位），非空对象即候选；字段形状契约由
+ * normalizeAssetRef 的全量校验背书，调用点不得再散布裸 cast。 */
+function isAssetRefCandidate(raw: unknown): raw is RawAssetRef {
+  return typeof raw === 'object' && raw !== null
+}
+
 /** IPC 返回条目的边界校验 + 规范化（mime trim/小写）：坏数据不进会话索引。
- * 导出供生成产物并入索引时共用（llm_image_generate 返回值同域，§9.3）。 */
-export function normalizeAssetRef(raw: RawAssetRef | null): AssetRef {
+ * 入参诚实接受 unknown 线值（IPC 与生成命令的返回值无类型标注，§9.3），
+ * 经 isAssetRefCandidate 收窄后逐字段全量校验。导出供生成产物并入索引
+ * 时共用（llm_image_generate 返回值同域）。 */
+export function normalizeAssetRef(raw: unknown): AssetRef {
   if (
-    raw === null ||
-    typeof raw !== 'object' ||
+    !isAssetRefCandidate(raw) ||
     typeof raw.id !== 'string' ||
     raw.id === '' ||
     typeof raw.relPath !== 'string' ||
