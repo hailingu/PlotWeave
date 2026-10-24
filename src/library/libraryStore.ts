@@ -9,6 +9,7 @@
  */
 
 import { uid } from '../uid'
+import { importLibraryChunks, LIBRARY_CHUNK_BYTES } from './libraryImport'
 import { IPC_COMMANDS } from '../ipc/commands'
 import { ipcInvoke } from '../ipc/invoke'
 import { isBrowserPreviewHost } from '../platform/hostEnvironment'
@@ -138,7 +139,7 @@ async function tauriList(): Promise<LibraryAsset[]> {
     .filter((a): a is LibraryAsset => a !== null)
 }
 
-/** 与两种宿主共享20 MiB契约：元数据先阻止整文件读取，实际长度再阻止JS数组展开。 */
+/** 与两种宿主共享20 MiB契约：元数据先阻止整文件读取，实际长度再阻止传输超限数据。 */
 function requireBoundedImport(size: number): void {
   if (size > 20 * 1024 * 1024) throw new Error('文件超过 20 MiB 上限')
 }
@@ -147,12 +148,18 @@ async function tauriPut(file: File, kind: LibraryKind): Promise<LibraryAsset> {
   requireBoundedImport(file.size)
   const bytes = new Uint8Array(await file.arrayBuffer())
   requireBoundedImport(bytes.byteLength)
-  const entry = await ipcInvoke<RawAsset>(IPC_COMMANDS.importLibraryAsset, {
+  const metadata = {
     name: file.name,
     mime: file.type || 'application/octet-stream',
     kind,
-    bytes: Array.from(bytes),
-  })
+  }
+  const entry =
+    bytes.length > LIBRARY_CHUNK_BYTES
+      ? await importLibraryChunks<RawAsset>(metadata, bytes)
+      : await ipcInvoke<RawAsset>(IPC_COMMANDS.importLibraryAsset, {
+          ...metadata,
+          bytes: Array.from(bytes),
+        })
   reportLibraryDiagnostics(entry)
   const normalized = normalizeAsset(entry)
   if (!normalized) throw new Error('导入返回了无效条目')

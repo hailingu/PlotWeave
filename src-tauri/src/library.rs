@@ -197,6 +197,17 @@ pub async fn import_library_asset(
     bytes: import_bytes::ImportBytes,
 ) -> Result<Value, String> {
     let bytes = bytes.into_bytes().map_err(|e| e.to_string())?;
+    import_uploaded_asset(app, name, mime, kind, bytes).await
+}
+
+/// Both Web transports commit through the same diagnostics and anchored storage boundary.
+pub(super) async fn import_uploaded_asset(
+    app: AppHandle,
+    name: String,
+    mime: String,
+    kind: String,
+    bytes: Vec<u8>,
+) -> Result<Value, String> {
     crate::blocking::run("import_library_asset", move || {
         let library = library_root(&app).map_err(|e| e.to_string())?;
         diagnostics::with_snapshot(
@@ -508,3 +519,5 @@ mod read_only_tests;
 mod recovery_tests;
 #[cfg(test)]
 mod tests;
+/// Bounded in-memory Web uploads; no caller-controlled filesystem paths.
+pub(crate) mod upload;

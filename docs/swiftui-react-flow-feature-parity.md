@@ -296,7 +296,7 @@ N71 最小回归先红：1 test／1 suite、5 项预期失败，日志 `/private
 
 ## 差异与实施范围
 
-比较起点：生产 React 项目管理、六类节点编辑、历史、大纲、设定、资产、设置、AI 与导出均已在分支中，但原生入口只有内存演示，服务和正常退出未接通。当前已实现 SwiftUI 首页、设置、大纲、检查器、设定、图库、AI 与导出，25 条业务命令和两条退出命令由 Swift 承接，另提供两条系统文本交付命令。默认入口运行真实编辑会话，`#fixture` 仅用于隔离演示。补齐复用既有编辑动作，不升级磁盘 schema；视频制作、JSON 导入和资产收藏回库等 dev 尚未实现的规划功能不计入差异。
+比较起点：生产 React 项目管理、六类节点编辑、历史、大纲、设定、资产、设置、AI 与导出均已在分支中，但原生入口只有内存演示，服务和正常退出未接通。当前已实现 SwiftUI 首页、设置、大纲、检查器、设定、图库、AI 与导出，26 条业务命令和两条退出命令由 Swift 承接，另提供两条系统文本交付命令。默认入口运行真实编辑会话，`#fixture` 仅用于隔离演示。补齐复用既有编辑动作，不升级磁盘 schema；视频制作、JSON 导入和资产收藏回库等 dev 尚未实现的规划功能不计入差异。
 
 所有者于 2026-10-04 明确选择“存储、素材和模型服务也用 Swift 实现”。服务改为 Swift 原生实现，旧 Tauri/Rust 作为行为与磁盘合同回归基线；新宿主不链接 Rust，事件、媒体资源及系统交付由 Swift 管理。React 保持唯一文档写入者和保存协调者。界面全部使用 SwiftUI，React Flow 保留画布和单一编辑会话；沿用原计划的独立数据／测试身份，不访问真实 Tauri 项目或历史 Keychain。
 
@@ -306,7 +306,7 @@ N71 最小回归先红：1 test／1 suite、5 项预期失败，日志 `/private
 
 | ID | 前置状态／动作与顺序 | 预期可观察结果 | 不变量、责任方与入口 | 验证与当前缺口 |
 | --- | --- | --- | --- | --- |
-| F01 | 有效加载会话发送 25 类业务和两类退出请求；缺桥、坏载荷或协议版本不支持 | 成功返回真实结果；失败有结构化诊断，不进入浏览器内存回退 | 平台传输与 Swift router 仅服务受信页面／有效会话；所有 IPC 入口 | 通过：`swiftHost`、`HostCommandRouterTests` 和真实 WK 生产链；坏协议、非主页面、未知命令拒绝 |
+| F01 | 有效加载会话发送 26 类业务和两类退出请求；缺桥、坏载荷或协议版本不支持 | 成功返回真实结果；失败有结构化诊断，不进入浏览器内存回退 | 平台传输与 Swift router 仅服务受信页面／有效会话；所有 IPC 入口 | 通过：`swiftHost`、`HostCommandRouterTests` 和真实 WK 生产链；坏协议、非主页面、未知命令拒绝 |
 | F02 | 请求 A 在途，页面重载到 B；相同会话同 requestId 重复请求或回执超时 | 旧回执不作用于 B；重复不重做副作用；超时显示结果未知 | Swift router 拥有请求去重，Web 拥有回执会话归属；创建／复制／删除／模型／系统保存 | 通过：router 在途／完成去重、参数冲突、容量拒绝与页面失效；Web 超时和旧回执回归。已提交副作用不承诺取消回滚 |
 | F03 | 隔离根创建项目→编辑→防抖保存；旧保存完成后再编辑→退出→重开 | 文件恢复最新文档、视口与独立 AI 历史 | React 文档／历史／保存链为唯一写入者；原生和画布动作进入同一路径 | 通过：`NativeProductionLifecycleTests` 真实 WK→文件→退出→重开→JSON 导出；项目、视口和 AI 临时根往返 |
 | F04 | 保存失败、删除在途或返回首页后有失败快照→重试／重开／复制删除 | 失败可见，最新快照保留；删除成功不被迟到保存复活 | 应用会话协调层拥有项目、画布、AI 三类写入顺序；所有导航／删除入口 | 通过：既有 App／保存链回归、原生连续编辑与 `NativeProjectStoreTests` 删除后项目／AI 写入不复活；fsync 故障注入未覆盖 |
@@ -339,7 +339,7 @@ F05 还覆盖 [PR #526 R29](swiftui-react-flow-pr526-fixes.md#原生意图进入
 
 `settings.setDefaults` 的原生→Web 意图接受 `defaultChat`、`defaultImage` 中至少一个字段，每个存在的字段必须是字符串或 null；未知字段、空补丁及类型非法拒绝。缺席字段保留 Web owner 当前同步快照，null 只清指定项，旧式双字段提交保持有效；原生 Picker 只发送自身选择。普通服务草稿当前按前一权威值比较决定跟随，已覆盖新稿与该值不同的旧回执；模型使用逐行规范化语义且保留相同确认的输入原文。名称／地址／模型 A→B→A 回改的旧 B 投影仍可能覆盖新 A，后续键入会以 B 为基底；第25条转 [issue #527](https://github.com/hailingu/PlotWeave/issues/527) 待修复，当前没有逐字段编辑确认身份。命令名称、版本、磁盘 schema 和唯一 saver 不变，已实现范围见 [R33–R34](swiftui-react-flow-pr526-fixes.md#设置字段与投影回执)，所有者延期决定及验证缺口见 [R39](swiftui-react-flow-pr526-fixes.md#服务文字回改缺陷的后续修复r39)。
 
-命令通道使用 WebKit 带回执 handler `plotweaveHost`。文档开始时注入 `__pwNativeHost={kind:"swift",protocolVersion:1,sessionId:…}`，会话身份随每次加载更新。请求包含 `protocolVersion`、`sessionId`、`requestId`、`command` 与可选参数对象 `args`；回执为 `{ok:…}` 或 `{error:{code,message}}`。25 条现有业务 snake_case 命令及两条退出命令保持载荷语义；系统文本交付为 `system.copyText` 和 `system.saveText`。
+命令通道使用 WebKit 带回执 handler `plotweaveHost`。文档开始时注入 `__pwNativeHost={kind:"swift",protocolVersion:1,sessionId:…}`，会话身份随每次加载更新。请求包含 `protocolVersion`、`sessionId`、`requestId`、`command` 与可选参数对象 `args`；回执为 `{ok:…}` 或 `{error:{code,message}}`。25 条既有业务 snake_case 命令及两条退出命令保持载荷语义；新增 `import_library_asset_chunk` 是有界 Web 上传入口（issue #716），不改变磁盘格式；系统文本交付为 `system.copyText` 和 `system.saveText`。
 
 同一会话请求去重覆盖在途和完成结果，不自动重试删除、复制或计费请求。媒体字节通过 Swift 资源服务／`WKURLSchemeHandler`，不进入 JSON 或 base64 命令回执。宿主事件由 `__pwDispatchHostEvent` 投递 `app-quit-requested`、`library-diagnostics`，监听建立后才确认退出就绪。Swift 的 `app_exit` 可选布尔 `cancel:true` 是幂等失败回执，不要求监听就绪；缺省／`false` 保持批准，非法类型返回 `PW_INVALID_REQUEST`。只有 Swift 失败路径发送该参数，Tauri 保持原有载荷。
 

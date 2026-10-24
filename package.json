@@ -10,6 +10,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "build:native-canvas": "vite build --config vite.native-canvas.config.ts",
+    "build:library-import-probe": "node scripts/build-library-import-probe.ts",
     "build:native": "npm run build:native-canvas && xcodebuild -project native/macos/PlotWeaveNative.xcodeproj -scheme PlotWeaveNative -destination 'platform=macOS' -derivedDataPath native/macos/build/DerivedData build",
     "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json",
     "preview": "vite preview",

@@ -197,6 +197,7 @@ pub fn app_builder() -> tauri::Builder<tauri::Wry> {
         // 启动间隙退出请求缓冲（issue #65）：原生屏障先于前端监听注册的
         // 窗口内暂存退出请求，确认就绪时重放
         .manage(QuitGate::default())
+        .manage(library::upload::LibraryUploads::default())
         .invoke_handler(tauri::generate_handler![
             store::list_projects,
             store::create_project,
@@ -213,6 +214,7 @@ pub fn app_builder() -> tauri::Builder<tauri::Wry> {
             prefs::llm_chat,
             library::list_library_assets,
             library::import_library_asset,
+            library::upload::import_library_asset_chunk,
             library::update_library_asset,
             library::delete_library_asset,
             library::group_commands::upsert_library_group,
