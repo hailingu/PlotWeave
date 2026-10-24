@@ -941,72 +941,43 @@ describe(
   'pre-push 慢路径触发原因输出（issue #463）',
   { timeout: 30_000 },
   () => {
-    it('快路径可达：不输出任何慢路径触发原因', () => {
-      const scenario = preparePushScenario()
-      const push = scenario.git(['push', 'origin', 'main'])
+    // 空原因表示干净快路径；每行仍创建独立沙箱，避免脏状态与调用计数串例。
+    it.each([
+      { reason: '', ref: 'main' },
+      { reason: 'NOT_HEAD', ref: 'side' },
+      { reason: 'TRACKED_DIRTY', ref: 'main', file: 'f.txt' },
+      { reason: 'INDEX_DIRTY', ref: 'main', file: 'f.txt', indexOnly: true },
+      { reason: 'UNTRACKED_INPUT', ref: 'main', file: 'draft.md' },
+    ])(
+      '推送 $ref：慢路径原因「$reason」',
+      ({ reason, ref, file, indexOnly }) => {
+        const scenario = preparePushScenario()
+        if (file) {
+          writeFileSync(resolve(scenario.root, file), 'one\ntwo\ndirty\n')
+        }
+        if (indexOnly) {
+          expect(scenario.git(['add', '--', 'f.txt']).status).toBe(0)
+          // 工作树内容还原为 HEAD 版本，差异只保留在索引。
+          writeFileSync(
+            resolve(scenario.root, 'f.txt'),
+            scenario.git(['show', 'HEAD:f.txt']).stdout,
+          )
+        }
 
-      expect(push.status).toBe(0)
-      expect(scenario.installRuns()).toBe(0)
-      expect(`${push.stdout}${push.stderr}`).not.toContain('PRE_PUSH_SLOW_')
-    })
+        const push = scenario.git(['push', 'origin', ref])
 
-    it('推送非检出分支：输出 PRE_PUSH_SLOW_NOT_HEAD', () => {
-      const scenario = preparePushScenario()
-      const push = scenario.git(['push', 'origin', 'side'])
-
-      expect(push.status).toBe(0)
-      expect(scenario.installRuns()).toBe(1)
-      // Stable diagnostic contract: quality-gate-push.md, issue #463.
-      expect(`${push.stdout}${push.stderr}`).toContain('PRE_PUSH_SLOW_NOT_HEAD')
-    })
-
-    it('工作树被跟踪内容与 HEAD 有差异：输出 PRE_PUSH_SLOW_TRACKED_DIRTY', () => {
-      const scenario = preparePushScenario()
-      writeFileSync(resolve(scenario.root, 'f.txt'), 'one\ntwo\ndirty\n')
-
-      const push = scenario.git(['push', 'origin', 'main'])
-
-      expect(push.status).toBe(0)
-      expect(scenario.installRuns()).toBe(1)
-      // Stable diagnostic contract: quality-gate-push.md, issue #463.
-      expect(`${push.stdout}${push.stderr}`).toContain(
-        'PRE_PUSH_SLOW_TRACKED_DIRTY',
-      )
-    })
-
-    it('索引内容与 HEAD 有差异（差异只在暂存区）：输出 PRE_PUSH_SLOW_INDEX_DIRTY', () => {
-      const scenario = preparePushScenario()
-      writeFileSync(resolve(scenario.root, 'f.txt'), 'one\ntwo\nstaged\n')
-      expect(scenario.git(['add', '--', 'f.txt']).status).toBe(0)
-      // 工作树内容还原为 HEAD 版本，差异只保留在索引
-      writeFileSync(
-        resolve(scenario.root, 'f.txt'),
-        scenario.git(['show', 'HEAD:f.txt']).stdout,
-      )
-
-      const push = scenario.git(['push', 'origin', 'main'])
-
-      expect(push.status).toBe(0)
-      expect(scenario.installRuns()).toBe(1)
-      // Stable diagnostic contract: quality-gate-push.md, issue #463.
-      expect(`${push.stdout}${push.stderr}`).toContain(
-        'PRE_PUSH_SLOW_INDEX_DIRTY',
-      )
-    })
-
-    it('未忽略未跟踪文件：输出 PRE_PUSH_SLOW_UNTRACKED_INPUT', () => {
-      const scenario = preparePushScenario()
-      writeFileSync(resolve(scenario.root, 'draft.md'), 'scratch note\n')
-
-      const push = scenario.git(['push', 'origin', 'main'])
-
-      expect(push.status).toBe(0)
-      expect(scenario.installRuns()).toBe(1)
-      // Stable diagnostic contract: quality-gate-push.md, issue #463.
-      expect(`${push.stdout}${push.stderr}`).toContain(
-        'PRE_PUSH_SLOW_UNTRACKED_INPUT',
-      )
-    })
+        expect(push.status).toBe(0)
+        expect(scenario.gateRuns()).toBe(1)
+        expect(scenario.installRuns()).toBe(reason ? 1 : 0)
+        // Stable diagnostic contract: quality-gate-push.md, issue #463.
+        const output = `${push.stdout}${push.stderr}`
+        if (reason) {
+          expect(output).toContain(`PRE_PUSH_SLOW_${reason}`)
+        } else {
+          expect(output).not.toContain('PRE_PUSH_SLOW_')
+        }
+      },
+    )
   },
 )
 
