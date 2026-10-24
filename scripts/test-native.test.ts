@@ -121,7 +121,7 @@ function runNative(options: NativeOptions = {}) {
         PLOTWEAVE_GATE_REPOSITORY_ROOT: root,
         PLOTWEAVE_GATE_CPU_BUDGET: options.budget ?? '4',
         TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS:
-          options.mode === 'stress' ? '0' : '1',
+          options.mode && options.mode !== 'regression' ? '0' : '1',
         PLOTWEAVE_NATIVE_MIN_LINE_COVERAGE: options.minimum ?? '',
         GITHUB_STEP_SUMMARY: resolve(root, 'step-summary.md'),
         PLOTWEAVE_NPM_BIN: nativeTool(
@@ -249,6 +249,35 @@ it('first-drag 仅启用首拖套件，不运行大图或长循环且不采覆�
 it('first-drag 透传构建与首拖失败，不转成默认回归或成功', () => {
   for (const options of [{ npmExit: 23 }, { xcodeExit: 29 }]) {
     const result = runNative({ mode: 'first-drag', ...options })
+    expect(result.status).toBe(options.npmExit ?? options.xcodeExit)
+    expect(result.summary).toBeNull()
+    expect(result.calls.some((call) => call.tool === 'xcrun')).toBe(false)
+  }
+})
+
+it('list-scaling 仅启用存储侧列表伸缩性基线套件，以 Release 构建且不采覆盖率', () => {
+  const result = runNative({ mode: 'list-scaling' })
+  expect(result.status, result.stderr).toBe(0)
+  expect(result.calls.map((call) => call.tool)).toEqual([
+    'npm',
+    'npm',
+    'xcodebuild',
+  ])
+  expect(result.calls[2]?.stress).toBe('1')
+  const args = result.calls[2]?.args ?? []
+  expect(args.filter((arg) => arg.startsWith('-only-testing:'))).toEqual([
+    '-only-testing:PlotWeaveNativeTests/NativeListScalingBaselineTests',
+  ])
+  expect(args[args.indexOf('-configuration') + 1]).toBe('Release')
+  expect(args).toContain('ENABLE_TESTABILITY=YES')
+  expect(args[args.indexOf('-enableCodeCoverage') + 1]).toBe('NO')
+  expect(args.slice(-3)).toEqual(['-parallel-testing-enabled', 'NO', 'test'])
+  expect(result.summary).toBeNull()
+})
+
+it('list-scaling 透传构建与测量失败，不转成默认回归或成功', () => {
+  for (const options of [{ npmExit: 23 }, { xcodeExit: 29 }]) {
+    const result = runNative({ mode: 'list-scaling', ...options })
     expect(result.status).toBe(options.npmExit ?? options.xcodeExit)
     expect(result.summary).toBeNull()
     expect(result.calls.some((call) => call.tool === 'xcrun')).toBe(false)
