@@ -33,6 +33,26 @@ struct NativeProviderHTTPTests {
         #expect(stalled.entry.stopped.withLock { $0 } > 0)
     }
 
+    /// Image-scale megabyte responses complete within a budget only per-chunk reads can meet (issue #723).
+    @Test func megabyteResponseMeetsChunkedReaderTimeBudget() async throws {
+        let body = Data((0..<(24 * 1_048_576)).map { UInt8(truncatingIfNeeded: $0 &* 31) })
+        let fixture = try Fixture(status: 200, body: body)
+        defer { fixture.remove() }
+        let started = ContinuousClock.now
+        let reply = try await fixture.transport.post(fixture.request(maximum: 32 * 1_048_576, timeout: .seconds(60)))
+        #expect(reply.body == body)
+        let elapsed = started.duration(to: .now)
+        #expect(elapsed < .seconds(1), "接收 24 MiB 响应耗时 \(elapsed)，超出按块读取预算")
+    }
+
+    /// A body exactly at the cap is accepted; the cap rejects only bytes beyond the maximum.
+    @Test func capBoundaryAcceptsBodyExactlyAtMaximum() async throws {
+        let exact = try Fixture(status: 200, body: Data(repeating: 7, count: 4096))
+        defer { exact.remove() }
+        let reply = try await exact.transport.post(exact.request(maximum: 4096))
+        #expect(reply.body.count == 4096)
+    }
+
     /// Remote plaintext HTTP is refused before URLSession/credentials; explicit loopback remains compatible.
     @Test func providerURLBoundaryRejectsBeforeSending() async throws {
         let fixture = try Fixture(status: 200, body: Data())
