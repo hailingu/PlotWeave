@@ -17,13 +17,13 @@ struct NativeProviderHTTP: Sendable {
         return next
     }
 
-    /// The whole nonstreaming POST, redirected headers and decoded body consume one monotonic budget.
+    /// The whole nonstreaming POST, redirected headers and chunk-collected body consume one monotonic budget.
     func post(_ input: NativeProviderRequest) async throws -> NativeHTTPReply {
         try NativeNetworkPolicy.provider(input.url)
         guard !input.key.contains("\r"), !input.key.contains("\n"), input.maximum >= 0 else {
             throw HostFailure(code: "PW_KEY_ERROR", message: "API key 或响应限额无效")
         }
-        let redirect = NativeProviderRedirect(initial: input.url)
+        let transfer = NativeProviderTransfer(initial: input.url, maximum: input.maximum)
         let config = configuration()
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
@@ -33,7 +33,7 @@ struct NativeProviderHTTP: Sendable {
         let timeout = max(0.001, min(300, Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18))
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout
-        let session = URLSession(configuration: config, delegate: redirect, delegateQueue: nil)
+        let session = URLSession(configuration: config, delegate: transfer, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         var request = URLRequest(url: input.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
@@ -44,17 +44,13 @@ struct NativeProviderHTTP: Sendable {
         do {
             return try await NativeDeadline.run(until: input.deadline) {
                 try await withTaskCancellationHandler {
-                    let (bytes, response) = try await session.bytes(for: wire)
-                    if let failure = redirect.failure { throw failure }
-                    guard let response = response as? HTTPURLResponse else { throw Self.invalid("服务响应不是 HTTP") }
-                    guard response.expectedContentLength <= Int64(input.maximum) else { throw Self.invalid("服务响应超过大小上限") }
-                    let body = try await Self.read(bytes, maximum: input.maximum)
-                    if let failure = redirect.failure { throw failure }
-                    return NativeHTTPReply(status: response.statusCode, headers: Self.headers(response), body: body)
+                    let task = session.dataTask(with: wire)
+                    task.resume()
+                    return try await transfer.reply()
                 } onCancel: { session.invalidateAndCancel() }
             }
         } catch {
-            if let failure = redirect.failure { throw failure }
+            if let failure = transfer.failure { throw failure }
             if let failure = error as? HostFailure { throw failure }
             if error is CancellationError { throw error }
             if let error = error as? URLError {
@@ -64,20 +60,8 @@ struct NativeProviderHTTP: Sendable {
         }
     }
 
-    /// The byte reader rejects before appending past the cap and checks cancellation during cached-buffer iteration.
-    private static func read(_ bytes: URLSession.AsyncBytes, maximum: Int) async throws -> Data {
-        var output = Data()
-        for try await byte in bytes {
-            if output.count.isMultiple(of: 4096) { try Task.checkCancellation() }
-            guard output.count < maximum else { throw invalid("服务响应超过大小上限") }
-            output.append(byte)
-        }
-        try Task.checkCancellation()
-        return output
-    }
-
     /// Header names are normalized for shared response consumers without passing Foundation objects across actors.
-    private static func headers(_ response: HTTPURLResponse) -> [String: String] {
+    fileprivate static func headers(_ response: HTTPURLResponse) -> [String: String] {
         var result: [String: String] = [:]
         for (name, value) in response.allHeaderFields {
             if let name = name as? String, let value = value as? String { result[name.lowercased()] = value }
@@ -86,31 +70,55 @@ struct NativeProviderHTTP: Sendable {
     }
 
     /// Body errors omit the request URL, provider response fragments and credentials.
-    private static func invalid(_ message: String) -> HostFailure { HostFailure(code: "PW_MODEL_RESPONSE", message: message) }
+    fileprivate static func invalid(_ message: String) -> HostFailure { HostFailure(code: "PW_MODEL_RESPONSE", message: message) }
 }
 
-/// URLSession's concurrent redirect callbacks share a mutexed policy state; no unchecked conformance is needed.
-private final class NativeProviderRedirect: NSObject, URLSessionTaskDelegate {
-    /// HTTPS history and the ten-hop ceiling apply to the whole request chain.
+/// One request's delegate owns redirect policy, per-chunk body collection and the exactly-once completion bridge.
+private final class NativeProviderTransfer: NSObject, URLSessionDataDelegate {
+    /// All mutable transfer state, including the single completion slot, lives behind this one mutex.
     private struct State {
-        /// The first refusal stays authoritative even if Foundation returns its redirect response as a value.
+        /// The first policy or cap failure stays authoritative over later transport errors.
         var failure: HostFailure?
         /// Once HTTPS is encountered, every later hop must remain HTTPS.
         var secureSeen: Bool
         /// Ten followed hops are the unchanged provider redirect ceiling.
         var count = 0
+        /// The final (post-redirect) HTTP response supplies status and headers at completion.
+        var response: HTTPURLResponse?
+        /// Body bytes are accumulated only from whole URLSession chunks already accepted under the cap.
+        var body = Data()
+        /// Exactly one completion is cached when the task settles before reply() registers its waiter.
+        var result: Result<NativeHTTPReply, Error>?
+        /// The registered waiter is resumed outside the mutex exactly once.
+        var continuation: CheckedContinuation<NativeHTTPReply, Error>?
     }
-    /// Immutable origin and synchronized state are safe under Foundation's Sendable delegate contract.
+    /// Immutable origin and cap plus synchronized state are safe under Foundation's Sendable delegate contract.
     private let initial: URL
-    /// Concurrent delegate callbacks mutate policy history through this one mutex.
+    /// The transport cap governs every accumulated chunk boundary, not only the final body size.
+    private let maximum: Int
+    /// Concurrent delegate callbacks mutate transfer state through this one mutex.
     private let state: Mutex<State>
     /// The initial origin seeds downgrade policy before URLSession starts the request.
-    init(initial: URL) {
+    init(initial: URL, maximum: Int) {
         self.initial = initial
+        self.maximum = maximum
         state = Mutex(State(secureSeen: initial.scheme?.lowercased() == "https"))
     }
     /// Domain policy errors remain visible independently of Foundation's cancellation/status representation.
     var failure: HostFailure? { state.withLock { $0.failure } }
+
+    /// The settled outcome returns even when task completion raced ahead of this suspension.
+    func reply() async throws -> NativeHTTPReply {
+        try await withCheckedThrowingContinuation { continuation in
+            let settled = state.withLock { state -> Result<NativeHTTPReply, Error>? in
+                if let result = state.result { return result }
+                state.continuation = continuation
+                return nil
+            }
+            if let settled { continuation.resume(with: settled) }
+        }
+    }
+
     /// Each redirect is validated before calling Foundation's follow completion; nil prevents the next send.
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
@@ -125,5 +133,60 @@ private final class NativeProviderRedirect: NSObject, URLSessionTaskDelegate {
             catch { state.failure = NativeNetworkPolicy.refused("服务重定向无效"); return nil }
         }
         completionHandler(next)
+    }
+
+    /// The final response is checked for HTTP identity and announced length before any body byte is accepted.
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
+        let allowed = state.withLock { state -> Bool in
+            if state.failure != nil { return false }
+            guard let response = response as? HTTPURLResponse else {
+                state.failure = NativeProviderHTTP.invalid("服务响应不是 HTTP")
+                return false
+            }
+            guard response.expectedContentLength <= Int64(maximum) else {
+                state.failure = NativeProviderHTTP.invalid("服务响应超过大小上限")
+                return false
+            }
+            state.response = response
+            return true
+        }
+        completionHandler(allowed ? .allow : .cancel)
+    }
+
+    /// Whole data chunks are accepted or rejected at the chunk boundary, never appended past the cap.
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        state.withLock { state in
+            guard state.failure == nil else { return }
+            guard state.body.count + data.count <= maximum else {
+                state.failure = NativeProviderHTTP.invalid("服务响应超过大小上限")
+                dataTask.cancel()
+                return
+            }
+            state.body.append(data)
+        }
+    }
+
+    /// Completion prefers the recorded policy/cap failure, maps Foundation cancellation and settles exactly once.
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let settled = state.withLock { state -> (CheckedContinuation<NativeHTTPReply, Error>?, Result<NativeHTTPReply, Error>)? in
+            guard state.result == nil else { return nil }
+            let result: Result<NativeHTTPReply, Error>
+            if let failure = state.failure { result = .failure(failure) }
+            else if let error { result = .failure(Self.transport(error)) }
+            else if let response = state.response {
+                result = .success(NativeHTTPReply(status: response.statusCode, headers: NativeProviderHTTP.headers(response), body: state.body))
+            } else { result = .failure(NativeProviderHTTP.invalid("服务响应不是 HTTP")) }
+            state.result = result
+            let waiter = state.continuation
+            state.continuation = nil
+            return (waiter, result)
+        }
+        if let settled { settled.0?.resume(with: settled.1) }
+    }
+
+    /// Foundation's cancellation becomes CancellationError; other transport errors keep their identity for post's mapping.
+    private static func transport(_ error: Error) -> Error {
+        (error as NSError).code == NSURLErrorCancelled ? CancellationError() : error
     }
 }
