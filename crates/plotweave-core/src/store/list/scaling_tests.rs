@@ -6,6 +6,7 @@
 use super::*;
 use crate::store::commands::{delete_project_files, persist_project};
 use crate::store::testutil::{cap, cleanup_temp, temp_projects_dir, valid_save_doc};
+use cap_std::fs::Dir as CapDir;
 use serde_json::json;
 use std::fs;
 
@@ -90,39 +91,131 @@ fn measure_list_at_scale(n: usize, target_bytes: usize) {
     cleanup_temp(&projects);
 }
 
+/// 争用观测的采样集合（issue #731）：纯取锁等待、争用保存与删除的逐样本
+/// 计时；后台列表自身的耗时分布由列表线程的返回值单独携带。
+struct ContentionObs {
+    lock_waits: Vec<std::time::Duration>,
+    saves: Vec<std::time::Duration>,
+    deletes: Vec<std::time::Duration>,
+}
+
+/// 以同内容重建删除目标的项目文件（争用删除观测之间使用，重建不计时）。
+fn rebuild_del_target(projects: &std::path::Path) {
+    let text = serde_json::to_string(&valid_save_doc()).expect("序列化删除目标");
+    fs::write(projects.join("p-del-target.json"), text).expect("重建删除目标项目文件");
+}
+
+/// 无争用基线（issue #731）：无后台负载时同一小项目的保存/删除各三次，
+/// 返回前各自排序（中位 = 中间元素）。
+fn uncontended_baselines(
+    root: &CapDir,
+    projects: &std::path::Path,
+) -> (Vec<std::time::Duration>, Vec<std::time::Duration>) {
+    let mut save_base = Vec::new();
+    for _ in 0..3 {
+        let start = std::time::Instant::now();
+        persist_project(root, "p-save-target", valid_save_doc()).expect("无争用保存");
+        save_base.push(start.elapsed());
+    }
+    let mut delete_base = Vec::new();
+    for _ in 0..3 {
+        let start = std::time::Instant::now();
+        delete_project_files(root, "p-del-target").expect("无争用删除");
+        delete_base.push(start.elapsed());
+        rebuild_del_target(projects);
+    }
+    save_base.sort();
+    delete_base.sort();
+    (save_base, delete_base)
+}
+
+/// 争用采样（issue #731）：后台连续列表持锁期间，先做纯取锁等待探针
+/// （10 次只取锁不做事——把「等锁」与保存/删除自身的 I/O（fsync 抖动）
+/// 分开，端到端样本中的超出部分即自身工作在并发读负载下的延迟），再
+/// 逐样本计时争用保存（5 次）与争用删除（3 次，每次删除后重建目标，
+/// 重建不计时）。
+fn contended_samples(root: &CapDir, projects: &std::path::Path) -> ContentionObs {
+    let mut lock_waits = Vec::new();
+    for _ in 0..10 {
+        let start = std::time::Instant::now();
+        let _guard = crate::store::persist::projects_op_lock();
+        lock_waits.push(start.elapsed());
+    }
+    let mut saves = Vec::new();
+    for _ in 0..5 {
+        let start = std::time::Instant::now();
+        persist_project(root, "p-save-target", valid_save_doc()).expect("争用保存");
+        saves.push(start.elapsed());
+    }
+    let mut deletes = Vec::new();
+    for _ in 0..3 {
+        let start = std::time::Instant::now();
+        delete_project_files(root, "p-del-target").expect("争用删除");
+        deletes.push(start.elapsed());
+        rebuild_del_target(projects);
+    }
+    ContentionObs {
+        lock_waits,
+        saves,
+        deletes,
+    }
+}
+
+/// 汇报争用观测（issue #731）：后台列表耗时分布、纯锁等待分布，以及
+/// 保存/删除的无争用基线与争用逐样本对比。
+fn report_contention(
+    n: usize,
+    target_bytes: usize,
+    save_base: &[std::time::Duration],
+    delete_base: &[std::time::Duration],
+    mut obs: ContentionObs,
+    mut list_runs: Vec<std::time::Duration>,
+) {
+    obs.lock_waits.sort();
+    list_runs.sort();
+    let sample_ms = |v: &[std::time::Duration]| {
+        v.iter()
+            .map(|d| format!("{:.1?}", d))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    println!(
+        "[issue-731] N={n:>3} 单文件≈{target_bytes:>7}B | 后台列表 {} 次：中位 {:?} 最大 {:?}",
+        list_runs.len(),
+        list_runs[list_runs.len() / 2],
+        list_runs[list_runs.len() - 1],
+    );
+    println!(
+        "[issue-731]   纯锁等待（10 次采样）：中位 {:?} 最大 {:?}",
+        obs.lock_waits[obs.lock_waits.len() / 2],
+        obs.lock_waits[obs.lock_waits.len() - 1],
+    );
+    println!(
+        "[issue-731]   保存 无争用中位 {:?}；争用逐样本（ms）：{}",
+        save_base[save_base.len() / 2],
+        sample_ms(&obs.saves)
+    );
+    println!(
+        "[issue-731]   删除 无争用中位 {:?}；争用逐样本（ms）：{}",
+        delete_base[delete_base.len() / 2],
+        sample_ms(&obs.deletes)
+    );
+}
+
 /// 并发等待观测（issue #731）：后台线程连续执行 `list_project_metas`
 /// （每次完整持锁），主线程测量同一小项目的保存/删除总时长，与无争用
 /// 基线对比——增量即 projects 操作锁等待，上限为当前列表的剩余持锁
 /// 时长。等后台列表至少完成两次后才进入计时（排除线程启动未建立争用
 /// 的假阴性），并输出后台列表自身的耗时分布与逐样本观测，使等待来源
-/// （锁等待 vs 自身 I/O）当场可分。删除目标每次删除后以同内容重建
-/// （重建不计时）；争用循环内的列表不断言条目数（删除/重建窗口内条目
-/// 数波动是预期行为）。
+/// （锁等待 vs 自身 I/O）当场可分。争用循环内的列表不断言条目数（删除/
+/// 重建窗口内条目数波动是预期行为）。
 fn measure_contended_save_delete(n: usize, target_bytes: usize) {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     let projects = write_scaling_fixture(n, target_bytes);
     let root = cap(&projects);
     persist_project(&root, "p-save-target", valid_save_doc()).expect("建保存目标项目");
     persist_project(&root, "p-del-target", valid_save_doc()).expect("建删除目标项目");
-    let rebuild_del_target = |projects: &std::path::Path| {
-        let text = serde_json::to_string(&valid_save_doc()).expect("序列化删除目标");
-        fs::write(projects.join("p-del-target.json"), text).expect("重建删除目标项目文件");
-    };
-    let mut save_base = Vec::new();
-    for _ in 0..3 {
-        let start = std::time::Instant::now();
-        persist_project(&root, "p-save-target", valid_save_doc()).expect("无争用保存");
-        save_base.push(start.elapsed());
-    }
-    let mut delete_base = Vec::new();
-    for _ in 0..3 {
-        let start = std::time::Instant::now();
-        delete_project_files(&root, "p-del-target").expect("无争用删除");
-        delete_base.push(start.elapsed());
-        rebuild_del_target(&projects);
-    }
-    save_base.sort();
-    delete_base.sort();
+    let (save_base, delete_base) = uncontended_baselines(&root, &projects);
     let stop = std::sync::Arc::new(AtomicBool::new(false));
     let completed = std::sync::Arc::new(AtomicUsize::new(0));
     let list_root = cap(&projects);
@@ -140,59 +233,10 @@ fn measure_contended_save_delete(n: usize, target_bytes: usize) {
     while completed.load(Ordering::Relaxed) < 2 {
         std::thread::yield_now();
     }
-    // 纯锁等待探针：列表持锁循环期间只取锁不做事——把「等锁」与保存/
-    // 删除自身的 I/O（fsync 抖动）分开，端到端样本中的超出部分即自身
-    // 工作在并发读负载下的延迟
-    let mut lock_waits = Vec::new();
-    for _ in 0..10 {
-        let start = std::time::Instant::now();
-        let _guard = crate::store::persist::projects_op_lock();
-        lock_waits.push(start.elapsed());
-    }
-    lock_waits.sort();
-    let mut save_contended = Vec::new();
-    for _ in 0..5 {
-        let start = std::time::Instant::now();
-        persist_project(&root, "p-save-target", valid_save_doc()).expect("争用保存");
-        save_contended.push(start.elapsed());
-    }
-    let mut delete_contended = Vec::new();
-    for _ in 0..3 {
-        let start = std::time::Instant::now();
-        delete_project_files(&root, "p-del-target").expect("争用删除");
-        delete_contended.push(start.elapsed());
-        rebuild_del_target(&projects);
-    }
+    let obs = contended_samples(&root, &projects);
     stop.store(true, Ordering::Relaxed);
-    let mut list_runs = list_thread.join().expect("争用列表线程结束");
-    list_runs.sort();
-    let list_runs_len = list_runs.len();
-    let sample_ms = |v: &[std::time::Duration]| {
-        v.iter()
-            .map(|d| format!("{:.1?}", d))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    println!(
-        "[issue-731] N={n:>3} 单文件≈{target_bytes:>7}B | 后台列表 {list_runs_len} 次：中位 {:?} 最大 {:?}",
-        list_runs[list_runs_len / 2],
-        list_runs[list_runs_len - 1],
-    );
-    println!(
-        "[issue-731]   纯锁等待（10 次采样）：中位 {:?} 最大 {:?}",
-        lock_waits[lock_waits.len() / 2],
-        lock_waits[lock_waits.len() - 1],
-    );
-    println!(
-        "[issue-731]   保存 无争用中位 {:?}；争用逐样本（ms）：{}",
-        save_base[1],
-        sample_ms(&save_contended)
-    );
-    println!(
-        "[issue-731]   删除 无争用中位 {:?}；争用逐样本（ms）：{}",
-        delete_base[1],
-        sample_ms(&delete_contended)
-    );
+    let list_runs = list_thread.join().expect("争用列表线程结束");
+    report_contention(n, target_bytes, &save_base, &delete_base, obs, list_runs);
     cleanup_temp(&projects);
 }
 
