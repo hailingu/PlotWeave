@@ -41,7 +41,7 @@ function writeFile(root: string, path: string, content: string): void {
 /** 向台账追加记录行；不动其他文件，配合调用方的提交构成物化形态。 */
 function appendLedger(root: string, lines: string[]): void {
   if (lines.length === 0) return
-  let existing = ''
+  let existing: string
   try {
     existing = readFileSync(resolve(root, ledgerPath), 'utf8')
   } catch {

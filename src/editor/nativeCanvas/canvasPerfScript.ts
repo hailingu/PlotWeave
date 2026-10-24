@@ -411,8 +411,8 @@ export async function runCanvasPerfScript(
     from: number
   }> = []
   const effects = { draggedNodeMovedPx: 0, panTranslatePx: 0, zoomTravel: 0 }
-  let samples: FrameSample[] = []
-  let taskStats: CanvasPerfScriptResult['longTasks'] = null
+  let samples: FrameSample[]
+  let taskStats: CanvasPerfScriptResult['longTasks']
 
   // finally 单点回收采样资源：异常路径同样不留常驻 rAF/observer。
   try {
