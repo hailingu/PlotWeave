@@ -6,7 +6,6 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { scriptsCoverageLineFloors } from './scripts-coverage-floor'
 import config from '../vite.config'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
@@ -14,7 +13,7 @@ const repositoryRoot = resolve(import.meta.dirname, '..')
 /** 持独立行覆盖率下限的生产文件（in-process 导入可测）。native-coverage
  * 的 50 是记录的起步下限（issue #726 允许低于 80 起步；实测 53.84%，dev
  * 9e2d89b1），其余与 nativeCanvas 同为 80；下限生成模块自身经 vite.config
- * 被本守卫 in-process 执行，同样登记。 */
+ * 被测试 in-process 执行，同样登记。 */
 const flooredLineFloors: Readonly<Record<string, number>> = {
   'scripts/gate-scope-core.ts': 80,
   'scripts/native-canvas-coverage.ts': 80,
@@ -91,14 +90,24 @@ function hasTestDriverEvidence(
   )
 }
 
-describe('scripts 生产代码覆盖率分类契约（issue #726）', () => {
-  const classified = new Set([
-    ...Object.keys(flooredLineFloors),
-    ...subprocessDriven,
-    ...testFacilities,
-  ])
-  const discovered = productionScriptFiles(resolve(repositoryRoot, 'scripts'))
+const classified = new Set([
+  ...Object.keys(flooredLineFloors),
+  ...subprocessDriven,
+  ...testFacilities,
+])
+const discovered = productionScriptFiles(resolve(repositoryRoot, 'scripts'))
 
+// 驱动证据语料必须排除本守卫自身：登记清单含全部受检文件名，自引用会让
+// 删除全部真实测试后证据判定仍通过（PR #823 评审 4367590497）。下限生成
+// 模块的驱动证据由 scripts/scripts-coverage-floor.test.ts 提供。
+const driverEvidenceContents = readdirSync(resolve(repositoryRoot, 'scripts'))
+  .filter(
+    (name) =>
+      /\.test\.tsx?$/.test(name) && name !== 'scripts-coverage-scope.test.ts',
+  )
+  .map((name) => readFileSync(resolve(repositoryRoot, 'scripts', name), 'utf8'))
+
+describe('scripts 生产代码覆盖率分类契约（issue #726）', () => {
   it('清单完整：磁盘上的生产文件全部已分类，登记条目无悬空', () => {
     expect(
       discovered.filter((file) => !classified.has(file)),
@@ -153,36 +162,16 @@ describe('scripts 生产代码覆盖率分类契约（issue #726）', () => {
   })
 
   it('下限与子进程类文件均有测试驱动证据（删除其全部测试即失败）', () => {
-    const testContents = readdirSync(resolve(repositoryRoot, 'scripts'))
-      .filter((name) => /\.test\.tsx?$/.test(name))
-      .map((name) =>
-        readFileSync(resolve(repositoryRoot, 'scripts', name), 'utf8'),
-      )
-    expect(testContents.length).toBeGreaterThan(0)
+    expect(driverEvidenceContents.length).toBeGreaterThan(0)
     for (const file of [
       ...Object.keys(flooredLineFloors),
       ...subprocessDriven,
     ]) {
       const basename = file.split('/').pop() ?? ''
       expect(
-        hasTestDriverEvidence(basename, testContents),
+        hasTestDriverEvidence(basename, driverEvidenceContents),
         `无任何 scripts 测试引用生产文件（删除全部测试将无人察觉）：${file}`,
       ).toBe(true)
     }
-  })
-
-  it('下限生成 fail-closed：登记路径缺失时抛错，不静默产出空组', () => {
-    expect(scriptsCoverageLineFloors(repositoryRoot)).toEqual(
-      Object.fromEntries(
-        Object.entries(flooredLineFloors).map(([path, lines]) => [
-          path,
-          { lines },
-        ]),
-      ),
-    )
-    // 任意登记文件缺失（临时空根）都不得产出部分/空下限组。
-    expect(() =>
-      scriptsCoverageLineFloors(join(repositoryRoot, 'scripts', 'fixtures')),
-    ).toThrow('不存在的文件')
   })
 })
