@@ -218,7 +218,7 @@ it('restores a rejected optimistic deletion, keeps its thumbnail, and allows a s
   expect(screen.queryByText(/删除拒绝/)).toBeNull()
 })
 
-it('keeps acknowledged imports after a later file rejects and resets the input for retry', async () => {
+it('keeps acknowledged imports, continues the remaining files after a rejection, and resets the input for retry (#719)', async () => {
   const storage = mutationStorage()
   const second = storage.pauseImport('坏图.png')
   await mountOtherAssets()
@@ -228,13 +228,22 @@ it('keeps acknowledged imports after a later file rejects and resets the input f
   )
   expect(input.value).toContain('fakepath')
   await act(async () => second.reject(new Error('文件不可读')))
-  expect(await screen.findByText(/坏图.png.*文件不可读/)).toBeTruthy()
+  // #719: the rejection no longer aborts the batch — the remaining file is still imported.
+  expect(await screen.findByRole('button', { name: '未处理.png' })).toBeTruthy()
+  expect(await screen.findByText(/成功 2 个，失败 1 个/)).toBeTruthy()
+  expect(screen.getByText(/坏图.png.*文件不可读/)).toBeTruthy()
   expect(screen.getByRole('button', { name: '成功.png' })).toBeTruthy()
-  expect(storage.names()).toEqual(['原有.png', '成功.png'])
+  expect(storage.imported).toEqual(['成功.png', '坏图.png', '未处理.png'])
+  expect(storage.names()).toEqual(['原有.png', '成功.png', '未处理.png'])
   expect(input.value).toBe('')
   pickFiles(['重试.png'])
   expect(await screen.findByRole('button', { name: '重试.png' })).toBeTruthy()
-  expect(storage.names()).toEqual(['原有.png', '成功.png', '重试.png'])
+  expect(storage.names()).toEqual([
+    '原有.png',
+    '成功.png',
+    '未处理.png',
+    '重试.png',
+  ])
   expect(screen.queryByText(/文件不可读/)).toBeNull()
 })
 
