@@ -8,6 +8,7 @@ import * as outline from '../outline'
 import { useEditorController } from '../useEditorController'
 import type { EditorProjectContent } from '../useEditorDocument'
 import type { SceneFlowNode } from '../nodes/types'
+import { canvasPerfFixture } from './canvasPerfFixture'
 import { useNativeEditorShell } from './useNativeEditorShell'
 
 const host = window as Window & {
@@ -43,6 +44,18 @@ const PROJECT: EditorProjectContent = {
 }
 const save = () => undefined
 
+/** The editor payload is the only projection carrying both a content revision and a project identity. */
+const payloadObject = (value: unknown): boolean =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  'contentRevision' in value &&
+  'projectId' in value
+
+/** A serialized editor payload would be the only JSON text naming the content revision. */
+const payloadText = (value: unknown): boolean =>
+  typeof value === 'string' && value.includes('"contentRevision"')
+
 /** Production provider and boundary permit genuinely abandoned shell renders. */
 function Wrapper({ children }: { children: ReactNode }) {
   return (
@@ -52,7 +65,7 @@ function Wrapper({ children }: { children: ReactNode }) {
   )
 }
 
-/** Capture the actual JSON wire shape without replacing controller or transport policy. */
+/** Capture the actual wire payload without replacing controller or transport policy. */
 function fixture(
   swift = true,
   project = PROJECT,
@@ -68,7 +81,8 @@ function fixture(
     }
   host.webkit = { messageHandlers: { canvasHost: { postMessage: post } } }
   const builds = vi.spyOn(outline, 'buildOutlineGroups')
-  const strings = vi.spyOn(JSON, 'stringify')
+  const stringify = vi.spyOn(JSON, 'stringify')
+  const parse = vi.spyOn(JSON, 'parse')
   let release = () => {}
   const pending = new Promise<void>((resolve) => {
     release = resolve
@@ -102,19 +116,15 @@ function fixture(
   )
   const projection = () =>
     post.mock.calls[post.mock.calls.length - 1]![0].projection.editor
-  const encodedCount = () =>
-    strings.mock.calls.filter(
-      ([value]) =>
-        value &&
-        typeof value === 'object' &&
-        'contentRevision' in value &&
-        'projectId' in value,
-    ).length
+  /** Document-scale JSON passes over the editor payload, in either direction. */
+  const codecCount = () =>
+    stringify.mock.calls.filter(([value]) => payloadObject(value)).length +
+    parse.mock.calls.filter(([value]) => payloadText(value)).length
   return {
     ...hook,
     builds,
     renders,
-    encodedCount,
+    codecCount,
     projection,
     post,
     attempts,
@@ -138,10 +148,10 @@ afterEach(() => {
   delete host.webkit
 })
 
-it('reuses outline and encoded projection on same-order position/session frames', () => {
+it('reuses outline and projection on same-order position/session frames', () => {
   const view = fixture()
   const builds = view.builds.mock.calls.length
-  const strings = view.encodedCount()
+  const codec = view.codecCount()
   const posts = view.post.mock.calls.length
   for (const x of [1, 40, 100]) move(view, x, 55)
   act(() =>
@@ -157,7 +167,7 @@ it('reuses outline and encoded projection on same-order position/session frames'
     view.projection().outline[0].rows.map((row: { id: string }) => row.id),
   ).toEqual(['a', 'b'])
   expect(view.builds.mock.calls).toHaveLength(builds)
-  expect(view.encodedCount()).toBe(strings)
+  expect(view.codecCount()).toBe(codec)
   expect(view.post.mock.calls).toHaveLength(posts)
 })
 
@@ -243,7 +253,7 @@ it('does not derive or encode native chrome on a non-Swift host', () => {
   const view = fixture(false)
   move(view, 10)
   expect(view.builds).not.toHaveBeenCalled()
-  expect(view.encodedCount()).toBe(0)
+  expect(view.codecCount()).toBe(0)
   expect(view.post).not.toHaveBeenCalled()
 })
 
@@ -279,7 +289,7 @@ it('reuses the selected inspector payload and preparation seeds during same-orde
   const view = fixture()
   act(() => view.result.current.editor.panels.toggleSettings('a'))
   const before = view.projection()
-  const strings = view.encodedCount()
+  const codec = view.codecCount()
   const builds = view.builds.mock.calls.length
   move(view, 50, 80)
   expect(view.projection()).toEqual(before)
@@ -287,7 +297,7 @@ it('reuses the selected inspector payload and preparation seeds during same-orde
     x: 50,
     y: 80,
   })
-  expect(view.encodedCount()).toBe(strings)
+  expect(view.codecCount()).toBe(codec)
   expect(view.builds.mock.calls).toHaveLength(builds)
 })
 
@@ -378,7 +388,62 @@ it.each(['edges', 'settings', 'assets', 'viewport', 'name'])(
     changeNonNativeField(view, field)
     expect(view.renders).toHaveBeenCalledTimes(requiredRenders)
     expect(view.builds).not.toHaveBeenCalled()
-    expect(view.encodedCount()).toBe(0)
+    expect(view.codecCount()).toBe(0)
     expect(view.post).not.toHaveBeenCalled()
   },
 )
+
+it('publishes consecutive large-graph edits as structured payloads without a JSON codec round-trip', () => {
+  const perf = canvasPerfFixture(100)
+  const view = fixture(true, {
+    id: PROJECT.id,
+    name: PROJECT.name,
+    nodes: perf.nodes,
+    edges: perf.edges,
+    settings: perf.settings,
+  })
+  expect(view.projection().nodes).toHaveLength(100)
+  const target = 'perf-s100-u0-s1'
+  const posts = view.post.mock.calls.length
+  for (let edit = 1; edit <= 3; edit += 1) {
+    act(() =>
+      view.result.current.editor.doc.setNodes((nodes) =>
+        nodes.map((node) =>
+          node.id === target && node.type === 'scene'
+            ? { ...node, data: { ...node.data, name: `Rename ${edit}` } }
+            : node,
+        ),
+      ),
+    )
+  }
+  const summary = view
+    .projection()
+    .nodes.find((node: { id: string }) => node.id === target)
+  expect(summary?.label).toContain('Rename 3')
+  expect(view.post.mock.calls).toHaveLength(posts + 3)
+  expect(view.codecCount()).toBe(0)
+})
+
+it('republishes only the revision for content edits that leave every projected field unchanged', () => {
+  const view = fixture(true, {
+    ...PROJECT,
+    nodes: [A, B, { ...A, id: 'c', position: { x: 200, y: 0 } }],
+  })
+  const before = view.projection()
+  const revision = before.contentRevision
+  const posts = view.post.mock.calls.length
+  act(() =>
+    view.result.current.editor.doc.setNodes((nodes) =>
+      nodes.map((node) =>
+        node.id === 'c' && node.type === 'scene'
+          ? { ...node, data: { ...A.data, synopsis: '不可见编辑' } }
+          : node,
+      ),
+    ),
+  )
+  expect(view.post.mock.calls).toHaveLength(posts + 1)
+  expect(view.projection()).toEqual({
+    ...before,
+    contentRevision: revision + 1,
+  })
+})

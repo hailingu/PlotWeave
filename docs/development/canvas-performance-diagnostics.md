@@ -375,6 +375,30 @@ owner 确认的流程为：打开项目 → 显示「正在准备项目…」并
 
 定向复现入口为 `sh scripts/test-native.sh first-drag`：仅运行 `WebCanvasFirstDragLatencyTests`，保留旧同节点对照并增加两种已保存图；不会运行大图或长循环套件，也不产覆盖率。普通功能回归仍运行原生完整功能套件并产 report-only 覆盖率，默认 minimum null；前端／Rust 80% 与 CPU 4 不变。入口行为的 15 项脚本测试、38 项相关前端回归及 28 项原生聚焦回归已通过。共享完整门禁和 PR CI 的提交绑定结果在对应 PR 记录。
 
+### 原生投影结构化发布（2026-10-24，issue #728）
+
+issue #728（P3）记录：#703 字段级 memoization 之后，编辑器域每次真实内容提交仍对全文档 `JSON.stringify` 再 `JSON.parse`——两趟 O(文档) 编解码往返外加 `JSON.parse(...) as unknown` 的边界类型丢弃，大图下逐次编辑成本随图规模线性放大。本轮沿 issue 给出的第二方向（结构化通道，避免字符串往返）做最小修正：`useNativeEditorProjection` 从「记忆化 JSON 字符串」改为「记忆化类型化投影对象」，`useNativeEditorShell` 直接把对象交给 `publishNativeProjection`，React 与 WebKit 边界之间不再有任何 JSON 编解码；WebKit 对 v1 全量快照信封的单次序列化保留，按域／切片分片增量发布不属本轮范围。
+
+发布语义等价论证：旧实现的去重粒度是整串字节相等，新实现是载荷对象身份。重字段（标签数组、准备种子、大纲）只在各自来源身份变化时重派生，而这些来源（contentNodes／edges／settings／assets／episodeTitles／viewport／项目名）同时全部作为身份敏感源驱动 `contentRevision` 标量——任何重字段身份搅动都必然带动 contentRevision 变化，使旧实现的字符串本就不同。因此所有可达路径上「对象身份变化 ⇔ 载荷内容变化」，身份复用完整复现原字节去重；不存在只换身份不换内容的漏发或错发窗口。
+
+| 编号 | 前置状态、动作与顺序 | 预期可见结果 | 不变量、所有者／入口 | 验证与缺口 |
+| ---- | -------------------- | ------------ | -------------------- | ---------- |
+| W1 | Swift 宿主已投影 → 真实内容提交（改名） | `projection.editor` 新结构化对象到达，标签／大纲新值正确；每编辑恰一次发布 | wire 字段集合与信封（event／protocolVersion 1／sessionId／单调 sequence／全量 map）不变；React 仍是唯一文档 owner | 投影套件字段更新回归；nativeShell 信封回归未改动 |
+| W2 | 同序位置／会话帧连续拖拽 | 不重发布、不重建大纲、不新增编解码 | 派生身份稳定 → 载荷对象身份稳定（原「不重编码」的等价物） | 'reuses outline and projection on same-order position/session frames' 回归 |
+| W3 | 内容等价的身份搅动（改非代表节点的 synopsis：标签／大纲／种子内容不变） | 与旧实现一致地重发布一次，载荷仅 contentRevision 递增，其余字段内容相等 | 发布 iff 载荷内容变化；contentRevision 身份敏感源涵盖全部重字段来源（见上文等价论证） | 'republishes only the revision...' 回归（旧／新实现均绿，锁定等价） |
+| W4 | 非 Swift 宿主（浏览器／Tauri） | 不派生、不编码、不发布，且无原生专属渲染轮 | 禁用通道语义与渲染对照不变 | 禁用态与 'non-Swift %s updates' 渲染对照回归 |
+| W5 | 大图（#523 夹具 scale 100）连续真实编辑 | 发布路径 JSON 编解码计数为 0（旧实现初始 2 + 每编辑 2）；每次编辑仍恰一次发布且标签更新 | 双重编解码消除；React 侧每次真实提交的通道工作降为对象组装（O(字段)） | 'publishes consecutive large-graph edits as structured payloads without a JSON codec round-trip'（先红 8≠0 后绿） |
+| W6 | 会话／序号／类型边界 | `nativeShell` 信封与 Swift 端校验路径零改动；投影载荷在编辑器层有类型（`NativeEditorProjection`），`as unknown` 类型丢弃消除 | 版本／会话／单调序号校验语义不变 | nativeShell 20 项回归；`typecheck:strict` |
+
+一次性量化（临时脚本，已删除；Node 24.18.0／happy-dom，JIT 预热后均值）：scale 500（500 节点）载荷 73,339 字节，每次真实提交被消除的 stringify 0.134ms＋parse 0.178ms ≈ 0.312ms；scale 1000 载荷 148,965 字节 ≈ 0.561ms，随规模线性——正是被移除的两趟全文档通道成本。该数字是 Node 环境证据，不代表应用内 WebKit JSC 或 WKWebView 序列化耗时；应用内每次提交剩余的 WebKit 单次快照序列化与 Swift 端解码不在本轮消除，若后续大图实测仍需进一步解耦，按域分片增量发布是 issue #728 记录的备选方向（需协议版本演进与 Swift 端合并逻辑，另行 owner 决策）。
+
+验证记录（2026-10-24，仓库根目录，Node 24.18.0）：
+
+- 红：新增 W5 回归在旧实现上失败（编解码计数 8 ≠ 0：初始发布 2 + 三次编辑 × 2），其余 13 项既有投影回归在同次运行全部通过——失败精确落在被修复的通道成本上。
+- 绿：`nativeEditorProjection.test.tsx` 14 项；`src/editor/nativeCanvas/` 全目录 + `nativeShell.test.ts` 共 12 文件 129 项。stringify spy 断言（原 `encodedCount`）随实现一并改为编解码计数（`codecCount`），同序帧断言保持「快照不变」语义。
+- 修改文件：`useNativeEditorProjection.ts`（类型化载荷 + 对象记忆化）、`useNativeEditorShell.ts`（直接发布）、`nativeEditorProjection.test.tsx`；生产文件 213／169 行，均低于 800 行上限，实质修改执行单位低于 80 代码行（人工复核）。
+- 本文档无配置的自动语义检查；矩阵在生产修改前记录，UI §12.1 投影段落同步。前端完整路由（format／lint／size／typecheck:strict／build／test）、Git 门禁与 PR CI 的绑定结果记录于对应 PR。
+
 ### 单节点拖动的渲染范围（2026-10-08）
 
 用户指出只拖一个节点却出现大量整体提交，需要直接验证无关组件的更新范围。当前两层 Profiler 嵌套：同一画布子树提交也被外层记录，277／277 不能相加，也不能证明全部 15 个节点或整个装配层执行了 277 次。139 批位置变更在当前受控 React Flow 中经过外部 React state 与 StoreUpdater effect 同步内部 store，接近两次提交的数量本身不作为缺陷判据。[React Profiler 语义](https://react.dev/reference/react/Profiler)。rAF 样本数记录采样回调，不是组件重渲染次数。
