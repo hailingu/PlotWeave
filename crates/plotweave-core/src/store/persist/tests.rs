@@ -154,6 +154,98 @@ fn sweep_candidate_gates_name_type_and_age() {
     cleanup_temp(&projects);
 }
 
+/// issue #722：会话目录清扫——只清理 `projects/{id}/` 顶层超龄归属的
+/// `ai-session.json` 临时文件；新鲜临时文件、外来名字（非法目标/非法
+/// id 段）与 `assets/` 子目录条目不受影响（媒体目录仍为记录边界）；
+/// 名字不在项目 id 域的目录与普通文件条目不进入；多个会话目录都被
+/// 遍历到。
+#[test]
+fn sweep_session_dirs_remove_only_aged_ai_session_temp_files() {
+    let projects = temp_projects_dir();
+    let now = std::time::SystemTime::now();
+    let aged = now - std::time::Duration::from_secs(48 * 60 * 60);
+    let session = projects.join("p-1");
+    fs::create_dir_all(session.join("assets")).expect("建会话目录与媒体子目录");
+    // 超龄归属临时文件（崩溃遗留）：移除
+    plant_file_with_mtime(&session, ".ai-session.json.p-18f-0.tmp", aged);
+    // 新鲜临时文件（进行中的写入）：保留
+    plant_file_with_mtime(&session, ".ai-session.json.p-18f-1.tmp", now);
+    // 外来目标名与外来 id 形状：即便超龄也不归属（fail-safe）
+    plant_file_with_mtime(&session, ".notes.p-18f-0.tmp", aged);
+    plant_file_with_mtime(&session, ".ai-session.json.q-18f-0.tmp", aged);
+    plant_file_with_mtime(&session, ".ai-session.json.p-18g-0.tmp", aged);
+    // 正会话文件与媒体子目录条目：永不触碰（assets/ 不进入扫描范围）
+    fs::write(session.join("ai-session.json"), b"{}").expect("写正会话文件");
+    plant_file_with_mtime(&session.join("assets"), ".poster.png.p-18f-2.tmp", aged);
+    // 第二个会话目录同样被遍历清扫
+    let other = projects.join("p-2");
+    fs::create_dir_all(&other).expect("建第二个会话目录");
+    plant_file_with_mtime(&other, ".ai-session.json.p-18f-3.tmp", aged);
+    // 名字不在项目 id 域的目录（点号非法）：不进入
+    let foreign_dir = projects.join("a.b");
+    fs::create_dir_all(&foreign_dir).expect("建 id 域外目录");
+    plant_file_with_mtime(&foreign_dir, ".ai-session.json.p-18f-0.tmp", aged);
+    // 名字为合法 id 的普通文件条目：非目录，只跳过
+    fs::write(projects.join("p-3"), b"not a dir").expect("建同名普通文件");
+    sweep_session_dir_temp_files(&cap(&projects));
+    assert!(
+        !session.join(".ai-session.json.p-18f-0.tmp").exists(),
+        "超龄归属会话临时文件应被清理"
+    );
+    assert!(
+        !other.join(".ai-session.json.p-18f-3.tmp").exists(),
+        "第二个会话目录的超龄临时文件同样被清理"
+    );
+    for kept in [
+        ".ai-session.json.p-18f-1.tmp",
+        ".notes.p-18f-0.tmp",
+        ".ai-session.json.q-18f-0.tmp",
+        ".ai-session.json.p-18g-0.tmp",
+        "ai-session.json",
+    ] {
+        assert!(session.join(kept).exists(), "{kept} 不应被清理");
+    }
+    assert!(
+        session.join("assets/.poster.png.p-18f-2.tmp").exists(),
+        "assets/ 子目录不在会话清扫范围"
+    );
+    assert!(
+        foreign_dir.join(".ai-session.json.p-18f-0.tmp").exists(),
+        "id 域外目录不进入"
+    );
+    assert!(projects.join("p-3").exists(), "普通文件条目只跳过");
+    cleanup_temp(&projects);
+}
+
+/// issue #722：会话目录条目为符号链接时只跳过、绝不跟随——根外目录的
+/// 超龄临时文件不受清扫影响（§10.2 no-follow 归类纪律）。
+#[cfg(unix)]
+#[test]
+fn sweep_session_dirs_never_follow_symlinked_entries() {
+    let projects = temp_projects_dir();
+    let outside = projects
+        .parent()
+        .expect("临时根")
+        .join("victim-session-dir");
+    fs::create_dir_all(&outside).expect("建根外目录");
+    plant_file_with_mtime(
+        &outside,
+        ".ai-session.json.p-18f-0.tmp",
+        std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 60 * 60),
+    );
+    std::os::unix::fs::symlink(&outside, projects.join("p-1")).expect("建符号链接会话目录");
+    sweep_session_dir_temp_files(&cap(&projects));
+    assert!(
+        projects.join("p-1").symlink_metadata().is_ok(),
+        "链接自身保留"
+    );
+    assert!(
+        outside.join(".ai-session.json.p-18f-0.tmp").exists(),
+        "根外目标不受影响"
+    );
+    cleanup_temp(&projects);
+}
+
 #[cfg(unix)]
 #[test]
 fn sweep_never_follows_symlink_temp_names() {

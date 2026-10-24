@@ -11,6 +11,7 @@ use crate::isotime::iso8601_to_epoch_millis;
 use crate::store::error::StoreError;
 use crate::store::persist::{
     is_project_temp_target, projects_op_lock, read_verified_file, sweep_orphan_temp_files,
+    sweep_session_dir_temp_files,
 };
 use crate::store::types::{validate_id, ProjectFile, ProjectInfo, ProjectMeta};
 /// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
@@ -121,6 +122,10 @@ pub fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, StoreError>
     // 排他创建与 rename 之间；fail-soft 不阻断列表
     let _op = projects_op_lock();
     sweep_orphan_temp_files(root, "项目目录", is_project_temp_target);
+    // 会话目录（projects/{id}/）同款清扫（issue #722）：与
+    // save_ai_session_file 的原子写共享本操作锁，清扫不得插入排他创建
+    // 与 rename 之间；fail-soft 不阻断列表
+    sweep_session_dir_temp_files(root);
     let mut metas: Vec<ProjectMeta> = Vec::new();
     for entry in root
         .entries()
@@ -321,5 +326,7 @@ pub(crate) fn parse_file(text: &str) -> Result<ProjectFile, StoreError> {
 
 #[cfg(test)]
 mod scaling_tests;
+#[cfg(test)]
+mod sweep_tests;
 #[cfg(test)]
 mod tests;
