@@ -382,6 +382,38 @@ describe('项目删除与保存协调：陈旧登记不回放（PR #292 评审�
   })
 })
 
+// 旧后台重试不得复活被新意图成功取代的名称（issue #801）：App 层在交付
+// 保存前作废旧重命名意图后，链上仍须保证「旧稿失败登记 → 新稿成功清除
+// 登记 → 旧定时器到点」的事件序不把旧名重放到已落盘的新名之后。
+describe('重命名意图取代：旧登记不复活（issue #801）', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('旧稿失败的登记被新稿成功清除：5s 重试到点不重放旧名', async () => {
+    const id = 'stale-retry-superseded-test'
+    const docA: ProjectContent = { ...DOC, name: '旧A' }
+    const docB: ProjectContent = { ...DOC, name: '新B' }
+    let failA = true
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      invoke.mockImplementation(async () => {
+        if (failA) {
+          failA = false
+          throw new Error('磁盘已满')
+        }
+      })
+      await expect(enqueueSave(id, docA)).rejects.toThrow('磁盘已满')
+      await enqueueSave(id, docB)
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(savedNames()).toEqual(['旧A', '新B'])
+      expect(hasPendingProjectSaves()).toBe(false)
+    } finally {
+      error.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('退出冲刷：就绪探针与立即重存（issue #119）', () => {
   afterEach(() => vi.clearAllMocks())
 
