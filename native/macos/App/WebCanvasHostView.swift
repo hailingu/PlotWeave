@@ -51,14 +51,24 @@ struct WebCanvasHostView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        webView.isHidden = !isPresented
-        // SwiftUI opacity and FocusState alone do not resign a WebKit first
-        // responder. Release only this hidden canvas's responder, leaving
-        // another window or an already-focused home control untouched.
-        if (!isPresented || !acceptsInput), let window = webView.window,
-            let responder = window.firstResponder as? NSView,
-            responder.isDescendant(of: webView) {
-            window.makeFirstResponder(nil)
+        // Issue #742: writing `isHidden` synchronously inside SwiftUI's update pass makes the
+        // hosting view's Auto Layout attributes depend on state being mutated mid-render, which
+        // AppKit reports as `Cycle detected through attribute` and can escalate into the
+        // "more Update Constraints in Window passes than there are views" NSGenericException.
+        // Defer visibility (and the responder release that accompanies it) past the current
+        // update pass so the native surface still hides without feeding a constraint cycle.
+        let presented = isPresented
+        let accepts = acceptsInput
+        DispatchQueue.main.async {
+            webView.isHidden = !presented
+            // SwiftUI opacity and FocusState alone do not resign a WebKit first
+            // responder. Release only this hidden canvas's responder, leaving
+            // another window or an already-focused home control untouched.
+            if (!presented || !accepts), let window = webView.window,
+                let responder = window.firstResponder as? NSView,
+                responder.isDescendant(of: webView) {
+                window.makeFirstResponder(nil)
+            }
         }
         context.coordinator.reloadIfNeeded(into: webView)
     }
