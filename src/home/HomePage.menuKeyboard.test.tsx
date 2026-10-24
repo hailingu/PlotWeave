@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-/** #603: DOM position and focus ownership for keyboard versus pointer project menus. */
-import { afterEach, expect, it, vi } from 'vitest'
+/** #603: DOM position and focus ownership for keyboard versus pointer project menus.
+ * #803: the delete confirm dialog owns keyboard focus (entry, Tab wrap, return). */
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { HomePage } from './HomePage'
 
@@ -143,4 +144,74 @@ it('keyboard anchors retain the existing right-edge position limit', () => {
   expect(screen.getByRole('menu').style.left).toBe(
     `${window.innerWidth - 150}px`,
   )
+})
+
+/** #803: keyboard-open a project's delete confirm dialog from the menu. */
+function openDeleteDialog(trigger: ReturnType<typeof setup>['trigger']) {
+  trigger.focus()
+  fireEvent.click(trigger, { detail: 0 })
+  fireEvent.click(screen.getByRole('menuitem', { name: '🗑 删除' }))
+  return {
+    dialog: screen.getByRole('dialog', { name: '删除项目' }),
+    cancel: screen.getByRole('button', { name: '取消' }),
+    confirm: screen.getByRole('button', { name: '删除' }),
+  }
+}
+
+describe('HomePage 删除确认对话框键盘焦点（issue #803）', () => {
+  it('keyboard entry moves focus into the dialog and Tab wraps within it', () => {
+    const { trigger } = setup()
+    const { dialog, cancel, confirm } = openDeleteDialog(trigger)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    expect(document.activeElement).toBe(cancel)
+    fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(confirm)
+    fireEvent.keyDown(confirm, { key: 'Tab' })
+    expect(document.activeElement).toBe(cancel)
+  })
+
+  it('Escape closes the dialog and returns focus to the menu trigger', () => {
+    const { trigger } = setup()
+    openDeleteDialog(trigger)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '删除项目' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('confirming deletion returns focus safely when the card is already gone', () => {
+    const { trigger, rerender, actions } = setup()
+    openDeleteDialog(trigger)
+    rerender(<HomePage projects={[]} {...actions} />)
+    fireEvent.click(screen.getByRole('button', { name: '删除' }))
+    expect(actions.onDeleteProject).toHaveBeenCalledExactlyOnceWith('one')
+    expect(screen.queryByRole('dialog', { name: '删除项目' })).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('Escape after external card removal never focuses the detached trigger', () => {
+    const { trigger, rerender, actions } = setup()
+    openDeleteDialog(trigger)
+    rerender(<HomePage projects={[]} {...actions} />)
+    const focus = vi.spyOn(trigger, 'focus')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(focus).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: '删除项目' })).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('pointer-opened dialog still takes focus and Escape returns the pre-open focus', () => {
+    const { trigger } = setup()
+    // 指针流不登记触发钮（menu.keyboard=false）：归还打开前焦点所在
+    // （这里显式聚焦搜索框，模拟指针与键盘混用时的打开前焦点）
+    const search = screen.getByRole('searchbox', { name: '搜索项目' })
+    search.focus()
+    fireEvent.click(trigger, { detail: 1 })
+    fireEvent.click(screen.getByRole('menuitem', { name: '🗑 删除' }))
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: '取消' }),
+    )
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '删除项目' })).toBeNull()
+    expect(document.activeElement).toBe(search)
+  })
 })

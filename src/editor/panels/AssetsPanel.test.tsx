@@ -136,6 +136,27 @@ describe('AssetsPanel 类别内操作', () => {
     expect(spies.remove).toHaveBeenCalledWith('a1')
     await waitFor(() => expect(revokeSpy).toHaveBeenCalledWith('blob:mock-url'))
   })
+
+  // #803：✕ 键盘激活后确认框接管焦点（进入/Tab 环绕/Escape 归还仍存在的 ✕）
+  it('删除确认框接管键盘焦点：进入「取消」、Tab 环绕、Escape 归还 ✕（#803）', async () => {
+    mockStore([asset()])
+    await enterCharacter()
+    const removeBtn = screen.getByRole('button', { name: '删除资产 女主正面' })
+    removeBtn.focus()
+    fireEvent.click(removeBtn)
+    const dialog = await screen.findByRole('dialog', { name: '删除资产' })
+    const cancel = screen.getByRole('button', { name: '取消' })
+    const confirm = screen.getByRole('button', { name: '删除' })
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    expect(document.activeElement).toBe(cancel)
+    fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(confirm)
+    fireEvent.keyDown(confirm, { key: 'Tab' })
+    expect(document.activeElement).toBe(cancel)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '删除资产' })).toBeNull()
+    expect(document.activeElement).toBe(removeBtn)
+  })
 })
 
 describe('AssetsPanel 行内改名', () => {

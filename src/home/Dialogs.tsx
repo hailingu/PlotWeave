@@ -1,4 +1,5 @@
 import { DialogFooter } from '../ui/DialogFooter'
+import { useModalKeyboard } from '../ui/useModalKeyboard'
 import { useEffect, useRef, useState } from 'react'
 import { isCompositionKey } from '../platform/compositionKey'
 
@@ -11,6 +12,8 @@ import { isCompositionKey } from '../platform/compositionKey'
  * 删资产共用——原生 window.confirm 在 Tauri WKWebView 无 UI 代理实现、
  * 静默返回 false，不可逆确认一律走应用内对话框。
  * 组合在途的 Enter/Esc 归输入法（不提交/不取消，issue #570）。
+ * 删除确认是模态（#803）：焦点进入/Tab 圈定/关闭归还由共享
+ * useModalKeyboard 统一管理；重命名沿用自身输入框焦点入口。
  */
 
 interface RenameDialogProps {
@@ -81,32 +84,37 @@ interface ConfirmDeleteDialogProps {
   readonly title: string
   /** 正文：指名被删对象与不可撤销后果。 */
   readonly message: string
+  /** 关闭时优先归还焦点的目标（#803）：键盘经同批卸载控件（首页菜单项）
+   * 打开时传原触发钮；未传或已分离则回落打开前焦点（useModalKeyboard）。 */
+  readonly returnFocusTo?: HTMLElement | null
   readonly onCancel: () => void
   readonly onConfirm: () => void
 }
 
 /** 不可逆操作的确认对话框（§3.2）：title/message 泛化承载——首页删项目
- * 与资产库删资产共用；原生 confirm 在 Tauri WKWebView 不可用（见模块头）。 */
+ * 与资产库删资产共用；原生 confirm 在 Tauri WKWebView 不可用（见模块头）。
+ * 模态键盘边界（焦点移入/Tab 循环/关闭归还/Esc，含组合键让位）由共享
+ * useModalKeyboard 统一管理（#803）。 */
 export function ConfirmDeleteDialog({
   title,
   message,
+  returnFocusTo,
   onCancel,
   onConfirm,
 }: ConfirmDeleteDialogProps) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onCancel])
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  useModalKeyboard(dialogRef, onCancel, returnFocusTo)
 
   return (
     <div className="pw-overlay" onPointerDown={onCancel}>
+      {/* 原生 dialog 承载对话框语义（S6819）；非模态 open 标记 + aria-modal，
+          键盘模态边界（焦点移入/Tab 循环/关闭归还/Esc）见 useModalKeyboard */}
       <dialog
+        ref={dialogRef}
         open
         className="pw-dialog pw-dialog-sm"
         aria-label={title}
+        aria-modal="true"
         onPointerDown={(e) => e.stopPropagation()}
       >
         <div className="pw-dialog-head">
