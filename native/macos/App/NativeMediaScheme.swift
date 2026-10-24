@@ -4,6 +4,13 @@ import WebKit
 /// WebKit media delivery owns background chunks, cancellation and its concurrency permit until the final callback.
 @MainActor
 final class NativeMediaScheme: NSObject, WKURLSchemeHandler {
+    /// Delivery granularity (issue #718): WKURLSchemeTask callbacks are main-thread only,
+    /// so the delivery loop's actor hops — not the background preads — pace a large load.
+    /// One chunk per hop at 4 MiB keeps a 256 MiB project video at 64 main-thread
+    /// deliveries (64 KiB granularity needed 4096), while transient read buffers stay
+    /// bounded by the read gate (≤ 4 concurrent × 4 MiB).
+    static let deliveryChunkBytes = 4 * 1024 * 1024
+
     /// The adapter accepts domain-owned descriptors instead of arbitrary host file paths.
     typealias Loader = @Sendable (URL) async throws -> (NativeMediaFile, Int)
     private let loader: Loader
@@ -73,9 +80,12 @@ final class NativeMediaScheme: NSObject, WKURLSchemeHandler {
         retire(id, generation: generation)
     }
 
-    /// Background pread is bounded to one chunk; cancellation propagates to its explicit child task.
+    /// Background pread is bounded to one delivery chunk; cancellation propagates to its explicit child task.
+    /// The chunk bound is read on the main actor before detaching — a detached closure cannot touch
+    /// main-actor-isolated statics.
     private func read(_ file: NativeMediaFile, offset: Int64) async throws -> Data {
-        let work = Task.detached { try file.readChunk(offset: offset, maximum: 65_536) }
+        let chunkBytes = Self.deliveryChunkBytes
+        let work = Task.detached { try file.readChunk(offset: offset, maximum: chunkBytes) }
         return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
     }
 

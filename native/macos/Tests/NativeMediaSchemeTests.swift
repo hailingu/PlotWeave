@@ -64,6 +64,32 @@ struct NativeMediaSchemeTests {
         #expect(task.failed == 0)
     }
 
+    /// Issue #718: scheme callbacks are main-thread only, so delivery granularity — not the
+    /// background preads — paces a large load. Two full chunks plus a remainder must deliver
+    /// as exactly three bounded 4 MiB deliveries; 64 KiB granularity would need hundreds of
+    /// main-thread hops for the same payload. The bound is pinned here independently of the
+    /// production constant so a granularity regression cannot satisfy this test.
+    @Test func deliversLargeMediaInCoarseChunks() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("pw-native-granularity-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = try NativeDirectory(root: root)
+        let chunk = 4 * 1024 * 1024
+        #expect(NativeMediaScheme.deliveryChunkBytes == chunk)
+        let total = chunk * 2 + 12_345
+        let payload = Data(repeating: 0x5A, count: total)
+        try dir.write(payload, name: "video")
+        let file = try NativeMediaFile(descriptor: dir.openFile("video"), mime: "video/mp4")
+        let handler = NativeMediaScheme(loader: { _ in (file, total) })
+        let task = SchemeTask(url: try #require(URL(string: "pwmedia://localhost/library/a")))
+        handler.webView(try IsolatedWebViewFixture.makeWebView(), start: task)
+        for _ in 0..<100 where task.terminals == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(task.status == 200)
+        #expect(task.bytes == payload)
+        #expect(task.finished == 1)
+        #expect(task.failed == 0)
+        #expect(task.chunkSizes == [chunk, chunk, 12_345])
+    }
+
     /// Stop during asynchronous resolution revokes every callback and returns capacity when the late result arrives.
     @Test func stoppedRequestIgnoresLateOpenedFileAndReturnsPermit() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("pw-native-scheme-" + UUID().uuidString)
@@ -103,13 +129,15 @@ struct NativeMediaSchemeTests {
         var response: HTTPURLResponse?
         var status: Int?
         var bytes = Data()
+        /// One entry per data delivery; count and bounds pin issue #718's granularity contract.
+        var chunkSizes: [Int] = []
         var finished = 0
         var failed = 0
         var terminals: Int { finished + failed }
         init(url: URL) { request = URLRequest(url: url) }
         /// Capture the actual delivered headers and status independently of completion.
         func didReceive(_ response: URLResponse) { self.response = response as? HTTPURLResponse; status = self.response?.statusCode }
-        func didReceive(_ data: Data) { bytes.append(data) }
+        func didReceive(_ data: Data) { bytes.append(data); chunkSizes.append(data.count) }
         func didFinish() { finished += 1 }
         func didFailWithError(_ error: any Error) { failed += 1 }
     }
