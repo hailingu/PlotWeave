@@ -19,8 +19,10 @@ final class NativeApplicationState {
     private var imageProjection: HostJSON = .null
     /// Provider settings remain a read-only projection rather than an editable native document.
     private var settingsProjection: HostJSON = .null
-    /// A command failure remains visible until the next explicit action or page generation.
-    private(set) var error: String?
+    /// Failures queue in completion order so near-simultaneous commands never overwrite each other (issue #724).
+    private(set) var errors: [String] = []
+    /// Banner text for every queued failure; each stays visible until the next explicit action or page generation.
+    var error: String? { errors.isEmpty ? nil : errors.joined(separator: "\n") }
     /// Native actions may await Web-owned saves; presentation disables conflicting controls.
     private(set) var busy = false
     /// Native sheets are presentation state only and do not own editable document copies.
@@ -86,7 +88,7 @@ final class NativeApplicationState {
         nativeIntents.removeAll()
         lastSequence = 0
         replaceProjection(.object([:]))
-        error = nil
+        errors.removeAll()
         pending = 0
         busy = false
     }
@@ -121,7 +123,7 @@ final class NativeApplicationState {
         // A valid projection proves the canvas is live again; the retry overlay can leave the failure presentation.
         if canvasUnavailable {
             canvasUnavailable = false
-            error = nil
+            errors.removeAll()
         }
         lastSequence = sequence
     }
@@ -165,14 +167,15 @@ final class NativeApplicationState {
         replaceProjection(.object([:]))
         pending = 0
         busy = false
-        error = message
+        // The page failure supersedes command failures of the dead session so the retry overlay presents one cause.
+        errors = [message]
     }
 
     /// Registers one explicit action synchronously; an optional presentation acknowledgment follows its validated completion.
     func send(_ command: String, args: [String: HostJSON] = [:], onCompletion: (@MainActor (Result<HostJSON, Error>) -> Void)? = nil) {
         let session = activeSession
         let blocksUI = command.hasPrefix("app.") || ["settings.close", "settings.retry"].contains(command)
-        error = nil
+        errors.removeAll()
         if blocksUI { pending += 1; busy = true }
         let intent = enqueueNativeIntent(command, args: args)
         // Completion adapter for the future owned by nativeIntents, not a second command.
@@ -194,7 +197,7 @@ final class NativeApplicationState {
                 }
                 onCompletion?(.success(value))
             } catch {
-                if self.activeSession == session { self.error = error.localizedDescription }
+                if self.activeSession == session { self.errors.append(error.localizedDescription) }
                 onCompletion?(.failure(error))
             }
         }
@@ -265,10 +268,11 @@ final class NativeApplicationState {
     }
 
     /// Binds editor operations to the current project, including delayed native form submissions.
+    /// A synchronous rejection is itself the explicit action, so it acknowledges earlier failures like `send` does.
     func sendEditor(_ command: String, args: [String: HostJSON] = [:]) {
-        guard let projectId else { error = "没有打开的项目。"; return }
+        guard let projectId else { errors = ["没有打开的项目。"]; return }
         if let target = args["projectId"]?.string, target != projectId {
-            error = "表单所属项目已关闭，请重新选择。"
+            errors = ["表单所属项目已关闭，请重新选择。"]
             return
         }
         var owned = args
