@@ -80,7 +80,7 @@ PR #766 的第一轮本地完整公开入口 `sh scripts/test-native.sh` 的红�
 | 构建工具 | 本机 Xcode 27.1 / SDK 27.0；源码与 CI 钉版要求仍为 Xcode 27.0 / SDK 27.0，没有更改全局工具链或仓库要求 |
 | 验证边界 | 截图仅证明该示例的可观察运行画面，不表示已完成签名、公证、安装包、真实中文输入法、VoiceOver、公网 TLS、付费模型或整体性能验收；不将本次运行描述为历史 AppKit 异常的根因修复 |
 
-README 下沉信息的查找入口：迁移分支、2026-10-13 的 PR #526 合并与分支删除记录见[工作流的技术栈与工程布局](development/workflow.md#technology-and-repository-layout)；默认生产入口、显式 `#fixture`、独立开发数据根、旧 Tauri／Keychain 隔离、AI Provider 重配见[开发运行说明](development/workflow.md#原生应用启动与验证)；原生界面／Swift 服务的逐域能力及人工边界见本页上方矩阵。原来的源码构建／发行安装包区别、VoiceOver 取消决定、真实 IME／TLS／模型／性能限制均保留。
+README 下沉信息的查找入口：迁移分支、2026-10-13 的 PR #526 合并与分支删除记录见[工作流的技术栈与工程布局](development/workflow.md#technology-and-repository-layout)；默认生产入口、显式 `#fixture`、独立开发数据根、旧 Tauri／Keychain 隔离、AI Provider 重配见[开发运行说明](development/workflow.md#native-application-launch-and-verification)；原生界面／Swift 服务的逐域能力及人工边界见本页上方矩阵。原来的源码构建／发行安装包区别、VoiceOver 取消决定、真实 IME／TLS／模型／性能限制均保留。
 
 ## 可核对的验证快照与维护
 

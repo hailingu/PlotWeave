@@ -48,7 +48,7 @@
 
 ## 从源码运行
 
-当前支持 **macOS**，不提供 Windows 构建、测试或发行支持；[平台与工具链细则](docs/development/workflow.md#支持平台)维护在开发文档中。
+当前支持 **macOS**，不提供 Windows 构建、测试或发行支持；[平台与工具链细则](docs/development/workflow.md#supported-platforms)维护在开发文档中。
 
 | 原生构建前置      | 要求                                                                                   |
 | ----------------- | -------------------------------------------------------------------------------------- |
@@ -56,7 +56,7 @@
 | Node.js           | [24.18.0 起的 24.x，或 26.0.0 及以上](package.json)；默认运行版本见 [`.nvmrc`](.nvmrc) |
 | Xcode / macOS SDK | [27.0 / 27.0](docs/swiftui-react-flow-toolchain.md)，Swift 6 语言模式                  |
 
-原生构建无需 Rust。完整环境配置与 Node 版本兼容细则见[开发工作流](docs/development/workflow.md#nodejs-最低版本与运行版本)：
+原生构建无需 Rust。完整环境配置与 Node 版本兼容细则见[开发工作流](docs/development/workflow.md#nodejs-minimum-and-runtime-versions)：
 
 ```bash
 nvm use
@@ -65,9 +65,9 @@ npm run build:native
 open -n native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app
 ```
 
-AI 功能需自行配置可用的 Provider；PlotWeave **不支持 VoiceOver**。数据隔离、迁移历史及人工验收边界见[开发运行说明](docs/development/workflow.md#原生应用启动与验证)和[当前功能状态](docs/swiftui-react-flow-current-state.md)。
+AI 功能需自行配置可用的 Provider；PlotWeave **不支持 VoiceOver**。数据隔离、迁移历史及人工验收边界见[开发运行说明](docs/development/workflow.md#native-application-launch-and-verification)和[当前功能状态](docs/swiftui-react-flow-current-state.md)。
 
-保留的 Tauri 基线运行方式见[开发环境配置](docs/development/workflow.md#tauri-基线开发环境)。源码构建不等同于发行安装包。
+保留的 Tauri 基线运行方式见[开发环境配置](docs/development/workflow.md#tauri-baseline-development-environment)。源码构建不等同于发行安装包。
 
 ## 文档
 

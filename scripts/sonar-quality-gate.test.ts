@@ -905,15 +905,8 @@ describe('Sonar 地址与前端覆盖率报告边界', { timeout: 30_000 }, () =
 })
 
 describe('扫描与服务门禁失败时阻断提交', { timeout: 30_000 }, () => {
-  it('另一个门禁正在运行时停止，避免共享扫描目录互相覆盖', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', {
-      lockOccupied: true,
-    })
-
-    expect(result.status).not.toBe(0)
-    expect(result.log).toBe('')
-    expect(`${result.stdout}${result.stderr}`).toContain('正在运行')
-  })
+  // 锁占用的阻断行为（措辞与稳定码双断言）由「门禁锁恢复命令」组断言
+  // （issue #735 合并重复的 lockOccupied 早退运行）。
 
   it('扫描器失败时停止，不接受旧的服务器结果', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', { scannerExit: 2 })
@@ -943,7 +936,9 @@ describe('扫描与服务门禁失败时阻断提交', { timeout: 30_000 }, () =
 })
 
 describe('Sonar 凭据传递与优先级', { timeout: 30_000 }, () => {
-  it('SONAR_TOKEN 经 curl 标准输入传 Authorization 头并以环境变量供扫描器，不进入命令参数或调用日志', () => {
+  // 同输入单次运行承载凭据三面断言（issue #735）：curl 传参路径、调用日志、
+  // 待物化门禁记录——「记录不携带令牌」原属门禁历史记录组，契约随断言并入此处。
+  it('SONAR_TOKEN 经 curl 标准输入传 Authorization 头并以环境变量供扫描器，不进入命令参数、调用日志或门禁记录', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       sonarToken: 'sqp_token-a.1',
     })
@@ -952,6 +947,7 @@ describe('Sonar 凭据传递与优先级', { timeout: 30_000 }, () => {
     expect(result.curlStdin).toContain('Authorization: Bearer sqp_token-a.1')
     expect(result.scannerToken).toBe('sqp_token-a.1')
     expect(result.log).not.toContain('sqp_token-a.1')
+    expect(result.pending).not.toContain('sqp_token-a.1')
   })
 
   it('未设 SONAR_TOKEN 时回退到 PLOTWEAVE_SONAR_TOKEN（如 ~/.zshrc 导出的值），扫描器与 API 调用同源', () => {
@@ -1152,12 +1148,16 @@ describe('门禁锁恢复命令（issue #430）', { timeout: 30_000 }, () => {
     },
   )
 
-  it('锁被占用时说明运行中的推送门禁会持有锁数分钟并建议等待（issue #465）', () => {
+  // 同输入单例双断言（issue #735 合并原「另一个门禁正在运行时停止」用例）：
+  // 占用期不启动任何外部命令，人类可读措辞与稳定诊断码同源一次运行。
+  it('锁被占用时停止且不启动任何外部命令，措辞建议等待运行中的门禁（issue #465）', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       lockOccupied: true,
     })
 
     expect(result.status).not.toBe(0)
+    expect(result.log).toBe('')
+    expect(`${result.stdout}${result.stderr}`).toContain('正在运行')
     // Stable diagnostic contract: quality-gate-lifecycle.md（issue #465）.
     expect(result.stderr).toContain('[SONAR_GATE_LOCK_WAIT_FOR_RUNNING_GATE]')
   })
@@ -1412,14 +1412,8 @@ describe(
       expect(`${result.stdout}${result.stderr}`).toContain('无法写入门禁记录')
     })
 
-    it('记录不携带令牌：摘要只入结论，凭据不入库', () => {
-      const result = runGate('scripts/sonar-quality-gate.sh', {
-        sonarToken: 'sqp_token-a.1',
-      })
-
-      expect(result.status).toBe(0)
-      expect(result.pending).not.toContain('sqp_token-a.1')
-    })
+    // 记录不携带令牌（凭据不入库）由「Sonar 凭据传递与优先级」组的同输入
+    // 运行断言承载（issue #735 合并重复的完整成功流水线运行）。
 
     it('pre-commit 完整通过只写待物化文件：不物化、不弄脏版本化文件', () => {
       const result = runGate('.githooks/pre-commit')
