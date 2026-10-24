@@ -52,11 +52,17 @@ function installScenarioCopy(root: string): string {
   return copy
 }
 
-/** 以受控环境运行安装器副本；不传 CI 时显式删除，保证非 CI 路径确定性。 */
-function runInstaller(copy: string, root: string, ci?: string) {
+/** 以受控环境运行安装器副本；不传 ci 时显式删除 CI（CI 下走跳过分支，到不了被测分支），prependPath 注入 git 替身。 */
+function runInstaller(
+  copy: string,
+  root: string,
+  options?: { ci?: string; prependPath?: string },
+) {
   const env = gitFixtureEnvironment()
-  if (ci === undefined) delete env.CI
-  else env.CI = ci
+  if (options?.ci === undefined) delete env.CI
+  else env.CI = options.ci
+  if (options?.prependPath)
+    env.PATH = `${options.prependPath}:${env.PATH ?? process.env.PATH}`
   return spawnSync(process.execPath, [copy], {
     cwd: root,
     encoding: 'utf8',
@@ -97,7 +103,7 @@ it('Git 检出内接线 core.hooksPath 且重复运行幂等（issue #725）', (
 it('CI 环境跳过接线且不改写检出配置（issue #725）', () => {
   const root = clones.create()
   const copy = installScenarioCopy(root)
-  const result = runInstaller(copy, root, 'true')
+  const result = runInstaller(copy, root, { ci: 'true' })
   expect(result.status).toBe(0)
   expect(result.stdout).toContain('[HOOKS_INSTALL_SKIPPED]')
   expect(readHooksPath(root).status).not.toBe(0)
@@ -128,14 +134,7 @@ exec /usr/bin/git "$@"
 `,
   )
   chmodSync(shim, 0o755)
-  const result = spawnSync(process.execPath, [copy], {
-    cwd: root,
-    encoding: 'utf8',
-    env: {
-      ...gitFixtureEnvironment(),
-      PATH: `${shimDirectory}:${process.env.PATH}`,
-    },
-  })
+  const result = runInstaller(copy, root, { prependPath: shimDirectory })
   expect(result.status).toBe(0)
   expect(result.stderr).toContain('[HOOKS_INSTALL_FAILED]')
   expect(result.stdout).not.toContain('[HOOKS_INSTALLED]')
