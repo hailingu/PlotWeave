@@ -186,6 +186,51 @@ mod tests {
         assert_ne!(new_id(), new_id());
     }
 
+    /// 非空小写十六进制段（生成器 `{:x}` 格式化的产出字符集）。
+    fn is_lowercase_hex(s: &str) -> bool {
+        !s.is_empty() && s.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+    }
+
+    /// 把 `{prefix}-{ms:x}{rnd:x}-{seq:x}` 拆成两段十六进制主体；前缀须
+    /// 原样出现在最前且紧随一个 `-`，否则返回 None 由断言报出完整 id。
+    fn split_generated_body<'a>(id: &'a str, prefix: &str) -> Option<(&'a str, &'a str)> {
+        id.strip_prefix(prefix)?.strip_prefix('-')?.rsplit_once('-')
+    }
+
+    /// 生成器形状契约（issue #720）：`new_id()` 的唯一产出形状是
+    /// `p-{ms:x}{rnd:x}-{seq:x}`——下游（原子写临时名归属、各域前缀 id）
+    /// 以此契约消费。前缀或分段若变更，须先在此可见，而不是让某个调用方
+    /// 的字节偏移假设在字符边界 panic 或静默切错。
+    #[test]
+    fn new_id_keeps_documented_prefix_shape() {
+        let id = new_id();
+        let (ms_rnd, seq) =
+            split_generated_body(&id, "p").unwrap_or_else(|| panic!("形状不符：{id}"));
+        assert!(
+            is_lowercase_hex(ms_rnd) && is_lowercase_hex(seq),
+            "分段须为非空小写十六进制：{id}"
+        );
+        assert!(validate_id(&id).is_ok(), "id 须文件名安全：{id}");
+    }
+
+    /// 各域直接以自身前缀生成（项目资产 `pa`、库资产 `la`），不再剥离
+    /// `new_id()` 的 `p-` 再拼接：前缀原样出现，主体形状与 `new_id()` 一致，
+    /// 同毫秒连续调用共享防碰撞内核。
+    #[test]
+    fn new_id_with_prefix_emits_caller_prefix_verbatim() {
+        for prefix in ["p", "pa", "la"] {
+            let id = new_id_with_prefix(prefix);
+            let (ms_rnd, seq) = split_generated_body(&id, prefix)
+                .unwrap_or_else(|| panic!("前缀 {prefix} 未原样出现或形状不符：{id}"));
+            assert!(
+                is_lowercase_hex(ms_rnd) && is_lowercase_hex(seq),
+                "分段须为非空小写十六进制：{id}"
+            );
+            assert!(validate_id(&id).is_ok(), "id 须文件名安全：{id}");
+        }
+        assert_ne!(new_id_with_prefix("pa"), new_id_with_prefix("pa"));
+    }
+
     #[test]
     fn project_info_none_description_is_omitted_not_null() {
         // description 缺省若序列化为 null：前端归一化把 null 当异型剥离

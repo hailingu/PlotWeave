@@ -33,6 +33,24 @@ fn seed_library(library: &Path, id: &str, file: &str, bytes: &[u8], mime: &str) 
     .expect("写入库索引");
 }
 
+/// 资产 id 形状契约（issue #720）：`new_asset_id()` 以自身前缀 `pa` 直接
+/// 走生成器，不再对 `new_id()` 返回值做 `[2..]` 字节切片——输出形状保持
+/// `pa-{ms:x}{rnd:x}-{seq:x}`（`pa-` + 两段非空小写十六进制）、文件名安全，
+/// 同毫秒连续调用不碰撞。生成器前缀若变更由 core 契约测试报出，此处不受
+/// 影响。
+#[test]
+fn new_asset_id_keeps_pa_prefix_shape_without_slicing_new_id() {
+    let id = new_asset_id();
+    let (ms_rnd, seq) = id
+        .strip_prefix("pa-")
+        .and_then(|body| body.rsplit_once('-'))
+        .unwrap_or_else(|| panic!("形状不符：{id}"));
+    let hex = |s: &str| !s.is_empty() && s.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+    assert!(hex(ms_rnd) && hex(seq), "分段须为非空小写十六进制：{id}");
+    assert!(validate_id(&id).is_ok(), "资产 id 须文件名安全：{id}");
+    assert_ne!(id, new_asset_id(), "同毫秒连续生成不得碰撞");
+}
+
 #[test]
 fn import_copies_file_and_returns_project_asset_ref() {
     let (projects, library, root) = temp_fixture();

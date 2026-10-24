@@ -20,17 +20,19 @@ use crate::isotime::{is_canonical_utc_timestamp, now_iso};
 use crate::library_fs::{atomic_write_with, library_root, open_library_asset};
 use crate::media_format::{ext_for, ext_for_mime};
 use crate::store::{
-    is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path, new_id,
+    is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path, new_id_with_prefix,
     open_dir_bound, projects_dir, to_ipc_text, validate_id, verify_asset_real_path,
 };
 
 pub(crate) mod error;
 pub(crate) mod project_media;
 
-/// 新资产 id：`pa-{ms:x}-{seq:x}`（复用 store 的毫秒 + 进程内计数不碰撞内核）。
+/// 新资产 id：`pa-{ms:x}{rnd:x}-{seq:x}`——以自身前缀直接走 store 的防碰撞
+/// 生成器（毫秒 + 进程随机段 + 进程内计数），不对 `new_id()` 的返回值做
+/// 字节切片剥前缀（issue #720：生成器前缀契约显式化，调用方不再假设另一
+/// 模块产出的字节偏移；前缀若变更由 core 的生成器契约测试报出）。
 fn new_asset_id() -> String {
-    let nid = new_id();
-    format!("pa-{}", &nid[2..])
+    new_id_with_prefix("pa")
 }
 
 /// 读取库索引并定位条目（索引读取走 library_fs 共享内核：no-follow 归类 +
