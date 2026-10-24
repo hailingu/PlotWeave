@@ -7,7 +7,7 @@ dedup marker helper `scripts/gate-tree-marker.sh` (issue #404). Like the root
 `AGENTS.md` and the other standards under `docs/development/`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-10-18
+**Last reviewed**: 2026-10-24
 
 **Status**: Active — accepted decision. Recorded 2026-09-27, resolving
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
@@ -56,7 +56,13 @@ hooks remain the complete uniform gate; `pre-push` now routes docs-only,
 single-frontend, single-Rust, single-native, and cross-stack/tooling ranges
 to the minimum sufficient check set (see
 [Scoped Push Cost](#scoped-push-cost-2026-10-18-owner-direction) and
-[Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18)).
+[Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18));
+clarified 2026-10-24 for
+[issue #807](https://github.com/hailingu/PlotWeave/issues/807): the absolute
+"every hook runs the complete gate / nothing reduces the check set" wording in
+the Decision tail and [Impact On Gate Strength](#impact-on-gate-strength) is
+now scoped to the commit-creating hooks and links the push-path routing — a
+consistency fix only; no hook, threshold, or governance decision changed.
 
 ## Required Reading
 
@@ -177,8 +183,12 @@ This is option C of issue #356. The issue did not argue for lower quality
 requirements; it argued that the "cost tier" question deserved one explicit
 decision and a recorded baseline. Both now exist.
 
-There is no cheaper or faster variant of that sequence, and no configuration
-that selects one. Which commit-producing commands actually reach it — and which
+For the commit-creating hooks there is no cheaper or faster variant of that
+sequence, and no configuration that selects one; the scoped push routing
+(2026-10-18 owner direction,
+[Scoped Push Cost](#scoped-push-cost-2026-10-18-owner-direction)) is the only
+owner-approved exception and applies to `pre-push` only, never to commit
+creation. Which commit-producing commands actually reach it — and which
 currently do not — is recorded precisely in
 [What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces).
 
@@ -217,8 +227,8 @@ Issue #601 also applies the same positive-integer budget (unset: fixed `4`) to `
   `[GATE_CPU_BUDGET_INVALID]` — no silent fallback to full parallelism.
 - **Gate strength**: unchanged. The same complete sequence runs with the
   same thresholds; nothing is skipped, reduced, or tiered. This is a
-  scheduling bound, not a cheaper variant: the "no environment variable …
-  reduces the check set" invariant in
+  scheduling bound, not a cheaper variant: the commit-creation "no
+  environment variable … reduces the check set" invariant in
   [Impact On Gate Strength](#impact-on-gate-strength) keeps holding, because
   `PLOTWEAVE_GATE_CPU_BUDGET` can only change how many cores execute the
   checks, never which checks execute. Setting it to the full logical-core
@@ -336,14 +346,17 @@ The following decisions must not be conflated (评审 4120364296):
   cheaper variant, skip, or fast path, and relaxes nothing.
 - The **issue #405 extension (2026-09-30) also deliberately changes gate
   behavior**: the push path no longer scans whatever happens to be checked
-  out. `pre-push` reads the refs Git hands it on stdin and runs the complete
-  gate once per unique pushed commit, at that commit's own state — see
-  [Push-Path Per-Ref Gating](quality-gate-push.md#push-path-per-ref-gating-issue-405). It
-  introduces no cheaper variant of the sequence: the fast path is the same
-  complete sequence in the current working tree, taken only when that tree
-  is provably identical to the pushed commit, and the slow path is the same
-  complete sequence in a temporary worktree checked out at the pushed
-  commit.
+  out. `pre-push` reads the refs Git hands it on stdin and gates every unique
+  pushed commit once, at that commit's own state — see
+  [Push-Path Per-Ref Gating](quality-gate-push.md#push-path-per-ref-gating-issue-405).
+  As introduced it ran the same complete sequence on both paths — the fast
+  path in the current working tree, taken only when that tree was provably
+  identical to the pushed commit, and the slow path in a temporary worktree
+  checked out at the pushed commit — with no cheaper variant. Since the
+  2026-10-18 scoped push routing (next bullet) the check set per pushed
+  range is scope-selected, while #405's per-commit dispatch invariant — one
+  gate run per unique pushed commit, at that commit's own state — is
+  unchanged.
 - The **CPU budget extension (2026-10-16) also deliberately changes gate
   behavior — scheduling only**: the coverage phases run under the
   one-third-of-cores parallelism cap recorded in
@@ -351,6 +364,14 @@ The following decisions must not be conflated (评审 4120364296):
   weaker variant, skip, or fast path: the check set, sequence, thresholds,
   and failure semantics are identical, and an invalid budget *blocks* the
   operation rather than relaxing anything.
+- The **scoped push extension (2026-10-18, owner direction) also
+  deliberately changes gate behavior — push path only**: `pre-push` routes
+  each pushed range to the minimum sufficient check set (docs-only,
+  single-stack, full), while the commit-creating hooks keep the complete
+  uniform gate. This is the owner-approved push-path exception recorded in
+  [Scoped Push Cost](#scoped-push-cost-2026-10-18-owner-direction) and
+  [Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18);
+  it is not a variant the commit-creating hooks can select.
 
   [issue #462](https://github.com/hailingu/PlotWeave/issues/462) 为慢路径依赖安装
   增加期限，并将 Sonar 环境变量与安装、检查、覆盖率执行分离；仍执行 lifecycle，
@@ -366,14 +387,28 @@ The following remain in force exactly as written in `AGENTS.md`, and nothing
 in this file is an exception to them:
 
 - All four hooks stay enabled (`pre-commit`, `pre-merge-commit`,
-  `prepare-commit-msg`, `pre-push`) and each runs the complete
-  `sonar-quality-gate.sh`; the tree marker only deduplicates within one
-  commit-creating operation and never selects a cheaper check set.
+  `prepare-commit-msg`, `pre-push`). Each commit-creating hook runs the
+  complete `sonar-quality-gate.sh`; the tree marker only deduplicates within
+  one commit-creating operation and never selects a cheaper check set.
+  `pre-push` runs the owner-approved scoped routing
+  ([Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18)):
+  docs-only and single-stack ranges run the minimum sufficient check set, and
+  every full-scope range still runs the complete gate.
 - `--no-verify` remains prohibited, and `core.hooksPath` remains pointed at the
   versioned `.githooks/` directory.
-- No new skip, allowlist, or "fast" path is introduced. There is no environment
-  variable, flag, or branch condition that reduces the check set.
-- SonarQube analysis and the Quality Gate still execute on the push path.
+- No new skip, allowlist, or "fast" path is introduced for commit creation:
+  there, no environment variable, flag, or branch condition reduces the check
+  set. On the push path, the scope variables (`PLOTWEAVE_GATE_SCOPE` and the
+  reused-LCOV pointers) are that owner-approved routing rather than a bypass —
+  they fail closed on missing or empty reports, and the commit-creating entry
+  points force the full scope so no inherited environment can weaken a commit
+  gate.
+- SonarQube analysis and the Quality Gate still execute on the push path for
+  every non-docs scope: single-stack scopes import both stacks' reports (the
+  unchanged stack through its most recent LCOV), and full scopes run the
+  complete analysis. Docs-only pushes skip them by the same owner decision
+  recorded in
+  [Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18).
 - A failed or unavailable gate still blocks the Git operation.
 - The New Code period incremental zeroing rule is unchanged: new-code unresolved
   issues must be zero, while historical issues on overall code stay triaged
@@ -381,8 +416,9 @@ in this file is an exception to them:
 
 测试专用注入项与其保留边界统一记录在[测试注入边界](quality-gate-lifecycle.md#test-injection-boundary)；这些入口不授权绕过门禁。
 
-Anyone reading a faster local workflow elsewhere in this repository should
-treat it as a defect in that workflow, not as sanctioned by this decision.
+Anyone reading a faster local workflow elsewhere in this repository that no
+recorded owner decision approves should treat it as a defect in that
+workflow, not as sanctioned by this decision.
 
 ## Push-Path Per-Ref Gating (issue #405)
 
@@ -739,6 +775,8 @@ a fully cold machine and overstates a repeat slow path against a recently
 built tree); dependencies resolved from the shared local npm/cargo caches.
 The fast path is unaffected — it is the same complete-gate run the refreshed
 baseline measures, with only the equality preconditions added ahead of it.
+Both paths were measured at the 2026-09-30 hook state, before the 2026-10-18
+scoped push routing made the pushed range scope-select the check set.
 
 **Reachability caveat (issue #463).** The fast/slow comparison above is
 conditional on the fast path being *reachable*, and in daily workflow it
@@ -862,7 +900,10 @@ time sh scripts/rust-coverage.sh
 
 For the push-path slow path (issue #405), push a non-checked-out commit to a
 disposable local bare remote and time the whole push — the hook's worktree
-checkout, `npm ci`, and complete gate all sit inside it:
+checkout, `npm ci`, and the scope-selected gate run all sit inside it. Pick a
+commit whose range classifies as `full` (cross-stack or tooling changes) to
+re-measure the complete-gate slow path; docs-only and single-stack ranges run
+their shorter scoped checks instead:
 
 ```sh
 git init --bare -q "$(mktemp -d)/origin.git"   # 把输出路径用于下行
