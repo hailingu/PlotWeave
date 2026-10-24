@@ -120,13 +120,15 @@ struct NativeHomeViewTests {
         #expect(state.error == nil)
     }
 
-    /// Opening must wait for a finished list just like the existing creation command.
-    @Test func loadingDisablesOpening() async throws {
+    /// Opening and creation must both wait for a finished list.
+    @Test func loadingDisablesOpeningAndCreation() async throws {
         let window = try makeWindow(loading: true)
         defer { window.close(); window.contentView = nil }
         try await Task.sleep(for: .milliseconds(300))
-        let button = try await NativeCreationControlFixture.button(in: window, named: "打开项目")
-        #expect(try !NativeCreationControlFixture.isEnabled(button))
+        let opening = try await NativeCreationControlFixture.button(in: window, named: "打开项目")
+        #expect(try !NativeCreationControlFixture.isEnabled(opening))
+        let creation = try await NativeCreationControlFixture.button(in: window)
+        #expect(try !NativeCreationControlFixture.isEnabled(creation))
     }
 
     /// Reintroducing a homepage search field violates the owner's unfiltered-library UI contract.
@@ -172,15 +174,6 @@ struct NativeHomeViewTests {
                 #expect(NativeCreationControlFixture.string(button, kAXHelpAttribute) == "新建短剧（⌘N）")
             }
         }
-    }
-
-    /// Changing only the header must not make project creation available before the list is ready.
-    @Test func loadingDisablesCreationControl() async throws {
-        let window = try makeWindow(loading: true)
-        defer { window.close(); window.contentView = nil }
-        try await Task.sleep(for: .milliseconds(300))
-        let button = try await NativeCreationControlFixture.button(in: window)
-        #expect(try !NativeCreationControlFixture.isEnabled(button))
     }
 
     /// A mismatched menu label hides the equivalence between keyboard and visible creation entry points.
