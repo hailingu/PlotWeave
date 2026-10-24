@@ -133,79 +133,69 @@ describe('项目附属数据保存链', () => {
 describe('项目删除与保存协调', () => {
   afterEach(() => vi.clearAllMocks())
 
-  it('删除成功：不回吐画布保存（已删项目不得复活）', async () => {
-    const id = 'delete-cleanup-error-test'
+  // 删除墓碑 2×2 矩阵（issue #740 表驱动收敛）：{删除成功/失败} × {画布保存/
+  // 附属写入}。统一模板下两侧期望互斥：成功侧经一个宏任务落账后断言「不回吐」
+  // （已删项目不得复活），失败侧经 waitFor 断言回吐重排到账；四象限墓碑吸收
+  // 路径都必须发出告警——证明写入确实经墓碑吸收而非旁路丢弃。
+  it.each([
+    {
+      title: '删除成功：墓碑期吸收的画布保存不回吐（已删项目不得复活）',
+      id: 'delete-tombstone-success-canvas-test',
+      deleteSucceeds: true,
+      writeKind: '画布保存',
+    },
+    {
+      title: '删除成功：墓碑期吸收的附属写入不回吐（已删项目不得复活）',
+      id: 'delete-tombstone-success-auxiliary-test',
+      deleteSucceeds: true,
+      writeKind: '附属写入',
+    },
+    {
+      title: '删除失败（项目仍在）：墓碑期吸收的画布保存回吐重排',
+      id: 'delete-tombstone-failure-canvas-test',
+      deleteSucceeds: false,
+      writeKind: '画布保存',
+    },
+    {
+      title: '删除失败（项目仍在）：墓碑期吸收的附属写入回吐重排',
+      id: 'delete-tombstone-failure-auxiliary-test',
+      deleteSucceeds: false,
+      writeKind: '附属写入',
+    },
+  ] as const)('$title', async ({ id, deleteSucceeds, writeKind }) => {
     const commands: string[] = []
     invoke.mockImplementation(async (command: string) => {
       commands.push(command)
+      if (command === 'delete_project' && !deleteSucceeds) {
+        throw new Error('资产目录只读')
+      }
       return undefined
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const replayMarker = writeKind === '画布保存' ? 'save_project' : 'aux-write'
 
-    const deleting = enqueueDelete(id)
-    await enqueueSave(id, DOC) // 墓碑期吸收的画布保存
-    await deleting
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    try {
+      const deleting = enqueueDelete(id).catch(() => undefined)
+      if (writeKind === '画布保存') {
+        await enqueueSave(id, DOC) // 墓碑期吸收的画布保存
+      } else {
+        await enqueueProjectWrite(id, async () => {
+          commands.push('aux-write') // 墓碑期吸收的附属写入
+        })
+      }
+      await deleting
+      // 经一个宏任务让潜在回吐链落账：成功侧据此测「不回吐」，失败侧由 waitFor 兜到账
+      await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(commands).not.toContain('save_project')
-    expect(warn).toHaveBeenCalled()
-    warn.mockRestore()
-  })
-
-  it('删除失败（项目仍在）：墓碑期吸收的画布保存回吐重排', async () => {
-    const id = 'delete-failure-replay-test'
-    const commands: string[] = []
-    invoke.mockImplementation(async (command: string) => {
-      commands.push(command)
-      if (command === 'delete_project') throw new Error('资产目录只读')
-      return undefined
-    })
-
-    const deleting = enqueueDelete(id).catch(() => undefined)
-    await enqueueSave(id, DOC)
-    await deleting
-
-    await vi.waitFor(() => expect(commands).toContain('save_project'))
-  })
-
-  it('删除失败（项目仍在）：墓碑期吸收的附属写入回吐重排', async () => {
-    const id = 'delete-failure-auxiliary-replay-test'
-    const commands: string[] = []
-    invoke.mockImplementation(async (command: string) => {
-      commands.push(command)
-      if (command === 'delete_project') throw new Error('资产目录只读')
-      return undefined
-    })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    const deleting = enqueueDelete(id).catch(() => undefined)
-    await enqueueProjectWrite(id, async () => {
-      commands.push('aux-write')
-    })
-    await deleting
-
-    await vi.waitFor(() => expect(commands).toContain('aux-write'))
-    warn.mockRestore()
-  })
-
-  it('删除成功：墓碑期吸收的附属写入不回吐（已删项目不得复活）', async () => {
-    const id = 'delete-success-auxiliary-drop-test'
-    const commands: string[] = []
-    invoke.mockImplementation(async (command: string) => {
-      commands.push(command)
-      return undefined
-    })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    const deleting = enqueueDelete(id)
-    await enqueueProjectWrite(id, async () => {
-      commands.push('aux-write')
-    })
-    await deleting
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(commands).not.toContain('aux-write')
-    warn.mockRestore()
+      expect(warn).toHaveBeenCalled()
+      if (deleteSucceeds) {
+        expect(commands).not.toContain(replayMarker)
+      } else {
+        await vi.waitFor(() => expect(commands).toContain(replayMarker))
+      }
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('删除失败后回吐重排失败：通知回吐失败订阅者', async () => {
