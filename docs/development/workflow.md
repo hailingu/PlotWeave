@@ -24,21 +24,21 @@ Discover exact dependency versions and commands from `package.json`, `package-lo
 
 ## Local Setup
 
-### 支持平台
+### Supported Platforms
 
-当前支持平台为 **macOS**；**不支持 Windows**，应用运行、开发工具链、提交/推送门禁及发行均不承诺 Windows 兼容性。仓库构建与 CI 只在 macOS 上验证，Linux 也没有本仓库的构建与测试覆盖；使用 Unix 进程组不代表支持所有 Unix 平台。
+The only supported platform is **macOS**; **Windows is not supported**. Application runtime, the development toolchain, commit/push gates, and releases make no Windows compatibility commitment. Repository builds and CI are verified only on macOS; Linux likewise has no build or test coverage in this repository. Using Unix process groups does not imply support for every Unix platform.
 
-非 Unix 平台仅提供源代码：仓库源码在非 Unix 目标上保持可编译（[issue #546](https://github.com/hailingu/PlotWeave/issues/546)），需要 Windows 版本的使用者须自行构建并自担风险。平台能力差异（例如库资产删除／恢复协议依赖的 Unix 文件身份与目录持久性屏障原语）会在运行时按能力缺失拒绝，不做官方验证。本段由 [README](../../README.md) 的平台细则下沉至此（[issue #772](https://github.com/hailingu/PlotWeave/issues/772)），不扩大既有支持范围。
+Non-Unix platforms are source-only: the repository sources remain compilable for non-Unix targets ([issue #546](https://github.com/hailingu/PlotWeave/issues/546)), and users who need a Windows version must build it themselves at their own risk. Platform capability differences (such as the Unix file-identity and directory-persistence barrier primitives required by the library asset deletion/restoration protocol) are rejected at runtime when the capability is unavailable and receive no official verification. This section moves the platform details from the [README](../../README.md) here ([issue #772](https://github.com/hailingu/PlotWeave/issues/772)) without expanding the existing support scope.
 
-按所有者在 [issue #503](https://github.com/hailingu/PlotWeave/issues/503) 的处置决定，Windows 慢路径推送会被安装监督器拒绝。快路径即使未触发该拒绝，也不属于受支持的 Windows 工作流；贡献者须在 macOS 上执行完整门禁并推送。具体后果与依赖 lifecycle 的进程约束见[平台支持范围与依赖进程契约](quality-gate-push.md#平台支持范围与依赖进程契约issue-503)。
+Under the owner's disposition in [issue #503](https://github.com/hailingu/PlotWeave/issues/503), the installation supervisor rejects Windows slow-path pushes. Even when the fast path does not trigger that rejection, it is not a supported Windows workflow; contributors must run the complete gates and push from macOS. See [Platform Support Scope And Dependency Process Contract](quality-gate-push.md#平台支持范围与依赖进程契约issue-503) for the exact consequences and lifecycle-dependent process constraints.
 
-### Node.js 最低版本与运行版本
+### Node.js Minimum And Runtime Versions
 
-项目支持 Node.js `^24.18.0 || >=26.0.0`，以 `package.json` 的 `engines.node` 为准，锁文件根包元数据保持一致。最低版本仍为24.18.0：支持该版本及以上的24.x，或26.0.0及以上版本；#761引入的Vitest 5上游不支持Node 25，因此项目范围同步排除25，避免engine-strict安装与声明矛盾。`.nvmrc` 保持 `24.18.0`，供 `nvm use` 和 CI 复现同一运行环境。首次使用时可运行 `nvm install` 安装该版本，再运行 `nvm use`；使用其他受支持版本时，验证前用 `node --version` 记录实际版本。`scripts/node-engine.test.ts` 通过锁中的semver解析器核验24.18/25/26等边界及依赖engine兼容性；这不代表已在所有受支持运行版本逐一执行完整回归，当前验收使用24.18.0。
+The project supports Node.js `^24.18.0 || >=26.0.0`, as defined by `engines.node` in `package.json`; the root package metadata in the lockfile stays consistent. The minimum remains 24.18.0: supported versions are 24.x at 24.18.0 or later, or 26.0.0 and later. Vitest 5, introduced by #761, does not support Node 25 upstream, so the project range excludes 25 as well and avoids a contradiction between `engine-strict` installation and the declared range. `.nvmrc` remains `24.18.0`, allowing `nvm use` and CI to reproduce the same runtime. On first use, run `nvm install` to install that version and then `nvm use`; when using another supported version, record the actual version with `node --version` before verification. `scripts/node-engine.test.ts` uses the semver parser from the lockfile to verify boundaries such as 24.18/25/26 and dependency engine compatibility. This does not mean the full regression suite has been run on every supported runtime; current acceptance uses 24.18.0.
 
-[Node.js 官方发布记录](https://nodejs.org/en/blog/release/v24.18.0)确认 `24.18.0` 已发布。四个 CI job 均使用 `actions/setup-node` 的 `node-version-file: .nvmrc` 选择项目运行时；`gate-evidence` 按既有信任边界读取事件 base 提交的 `.nvmrc`。Action 的提交 SHA／主版本与其自身执行环境是独立的工具配置，不是项目 Node.js 最低要求；本次澄清（[issue #745](https://github.com/hailingu/PlotWeave/issues/745)）不升级 Action 或依赖。
+The [official Node.js release record](https://nodejs.org/en/blog/release/v24.18.0) confirms that `24.18.0` has been published. All four CI jobs select the project runtime through `actions/setup-node` with `node-version-file: .nvmrc`; `gate-evidence` reads `.nvmrc` from the event base commit under the existing trust boundary. An Action's commit SHA, major version, and own execution environment are independent tool configuration, not the project's Node.js minimum requirement. This clarification ([issue #745](https://github.com/hailingu/PlotWeave/issues/745)) upgrades neither Actions nor dependencies.
 
-### Tauri 基线开发环境
+### Tauri Baseline Development Environment
 
 ```bash
 nvm use
@@ -62,15 +62,15 @@ Useful direct checks:
 
 Gate-workflow regression imports the explicitly approved historical Git objects from the local repository and requires a full Git clone, as used by frontend CI. Source archives remain usable for the source-build commands; the history-dependent regression requires the clone's Git objects.
 
-### 原生应用启动与验证
+### Native Application Launch And Verification
 
-2026-10-07 将归档工作树的完整源码恢复并合入当前主目录，构建入口不再指向早期演示壳；来源、重叠修改协调与本次检查见[合入记录](../swiftui-react-flow-integration.md)。
+On 2026-10-07, the complete source from the archived worktree was restored and merged into the current primary tree; the build entry no longer points to the early demo shell. See the [integration record](../swiftui-react-flow-integration.md) for provenance, coordination of overlapping changes, and this verification.
 
-当前 `dev` 分支的原生应用已实现 SwiftUI 项目首页、工具栏、大纲、属性检查器、设定、图库、AI、导出与应用设置界面，以及 Swift 存储、素材、设置／密钥和模型服务。Swift 承接 25 条业务命令与两条退出命令，共 27 条既有 snake_case IPC 命令，另提供 `system.copyText` 与 `system.saveText` 两条系统交付命令。React 保留单一编辑会话、历史与画布；默认资源入口运行生产应用，只有显式 `#fixture` 加载不落盘的内存演示。当前行为及测试矩阵见[功能补齐记录](../swiftui-react-flow-feature-parity.md)，原 P1／P2 状态仅作为[历史证据](../swiftui-react-flow-p1-evidence.md)与[历史 Rust 抽离记录](../swiftui-react-flow-p2-evidence.md)保留。
+The native application on the current `dev` branch implements the SwiftUI project home, toolbar, outline, property inspector, story settings, library, AI, export, and application settings interfaces, together with Swift storage, asset, preferences/key, and model services. Swift handles 25 business commands and two exit commands, totaling 27 existing snake_case IPC commands, plus the `system.copyText` and `system.saveText` system delivery commands. React retains the single editing session, history, and canvas; the default resource entry runs the production application, and only an explicit `#fixture` loads a non-persistent in-memory demo. See the [feature parity record](../swiftui-react-flow-feature-parity.md) for current behavior and the test matrix; the former P1/P2 status is retained only as [historical evidence](../swiftui-react-flow-p1-evidence.md) and in the [historical Rust extraction record](../swiftui-react-flow-p2-evidence.md).
 
-需要 macOS 26.0+、Node.js `^24.18.0 || >=26.0.0` 与 Xcode 27.0／macOS SDK 27.0，不需要 Rust 来构建原生应用；具体运行版本选择见上节。Swift 6.4 编译器维持 Swift 6 语言模式；所有者升级决策、实测版本与构建／启动结果见[当前工具链记录](../swiftui-react-flow-toolchain.md)。依赖未安装时先运行 `npm install`，并按上节安装版本化 Git hooks。
+macOS 26.0+, Node.js `^24.18.0 || >=26.0.0`, and Xcode 27.0/macOS SDK 27.0 are required; Rust is not required to build the native application. See the previous section for runtime version selection. The Swift 6.4 compiler remains in Swift 6 language mode; the owner's upgrade decision, measured versions, and build/launch results are in the [current toolchain record](../swiftui-react-flow-toolchain.md). If dependencies are not installed, run `npm install` first and install the versioned Git hooks as described above.
 
-当前构建工具链固定为 Xcode 27.0、macOS SDK 27.0，工程语言模式仍为 Swift 6，最低部署版本仍为 macOS 26.0。构建前用 `xcodebuild -version` 与 `xcrun --sdk macosx --show-sdk-version` 确认所选工具链；实际系统版本、编译器与验证边界见 [Xcode 27 工具链记录](../swiftui-react-flow-p1-evidence.md#xcode-27-工具链同步2026-10-07)。
+The build toolchain is pinned to Xcode 27.0 and macOS SDK 27.0, the project remains in Swift 6 language mode, and the minimum deployment target remains macOS 26.0. Before building, confirm the selected toolchain with `xcodebuild -version` and `xcrun --sdk macosx --show-sdk-version`; the actual system version, compiler, and verification boundaries are in the [Xcode 27 toolchain record](../swiftui-react-flow-p1-evidence.md#xcode-27-工具链同步2026-10-07).
 
 ```bash
 nvm use
@@ -78,13 +78,13 @@ npm run build:native
 open -n native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app
 ```
 
-`build:native` 依次构建画布资源与原生应用。`open -n` 启动本次构建的新实例；重新构建后已运行的窗口不会自动替换资源。单独 `xcodebuild build` 不会重建画布资源，缺失时应用显示诊断；Xcode ⌘R 调试前先运行 `npm run build:native-canvas`。资源使用 IIFE 经典脚本与独立 CSS 适配 WKWebView 的 `file://` 加载，独立入口包含 React Flow 基础样式。
+`build:native` builds the canvas resources and then the native application. `open -n` launches a new instance of this build; rebuilding does not automatically replace resources in windows that are already running. A standalone `xcodebuild build` does not rebuild the canvas resources, and the application reports a diagnostic when they are missing; run `npm run build:native-canvas` before debugging with Xcode ⌘R. The resources use an IIFE classic script and separate CSS for WKWebView `file://` loading, and the standalone entry includes the base React Flow styles.
 
-排查拖动渲染耗时时可运行 `PLOTWEAVE_CANVAS_PROFILE=1 npm run build:native`，随后退出旧实例、启动新构建并开启画布左下角性能诊断。该显式模式使用 React 生产 profiling renderer，报告区分编辑器整体与画布子树；普通构建保留默认禁用 Profiler 的行为。指标边界、复测方式与测试证据见[画布性能诊断](canvas-performance-diagnostics.md)。
+To investigate drag rendering latency, run `PLOTWEAVE_CANVAS_PROFILE=1 npm run build:native`, then quit the old instance, launch the new build, and enable the performance diagnostics in the canvas's lower-left corner. This explicit mode uses the React production profiling renderer, and its reports distinguish the editor as a whole from the canvas subtree; ordinary builds keep Profiler disabled by default. See [Canvas Performance Diagnostics](canvas-performance-diagnostics.md) for metric boundaries, rerun procedures, and test evidence.
 
-本地原生数据根使用 Application Support 下的 `BundleID + ".development"`，当前为 `dev.plotweave.PlotWeaveNative.development`；首次真实请求才打开目录。它不读取旧 Tauri 数据根或历史 Keychain。测试注入临时根、合成密钥与传输，不使用该真实开发目录；请勿同时启动多个实例写同一根，本次实现仍以单用户单实例为边界。
+The local native data root is under Application Support as `BundleID + ".development"`, currently `dev.plotweave.PlotWeaveNative.development`; it is opened only on the first real request. It reads neither the legacy Tauri data root nor the historical Keychain. Tests inject temporary roots, synthetic keys, and transports rather than using the real development directory. Do not run multiple instances that write to the same root concurrently; this implementation remains scoped to a single user and a single instance.
 
-原生路由验证在仓库根目录执行 `npm run check:size && sh scripts/test-native.sh`。共享 TestAction 在启动前选内存宿主；真实窗口、焦点与退出委托共享 `NSApplication`，功能回归串行执行以隔离夹具，见 [PR #526 修复记录](../swiftui-react-flow-pr526-fixes.md)。所有者在 PR #604（2026-10-18）选择日常保留功能回归、压力测试按需运行：`sh scripts/test-native.sh stress` 单独运行持续性能、长循环内存与首拖测量，原规模和断言保留，选择边界见 [Native Regression And Stress](quality-gate-push.md#native-regression-and-stress)。回归覆盖真实 WKWebView 生产页面／夹具、会话桥、存储、媒体、设置、模型传输与退出；不能只检查资源入包。真实公网 TLS 信任链、模型计费、实际系统面板、视觉、中文输入法、VoiceOver 与触控板性能仍未验收，详见[功能补齐记录](../swiftui-react-flow-feature-parity.md)。`native/macos/build/` 与 `native/macos/App/WebCanvas/` 均为忽略的生成产物；纯验证输出在任务完成前删除，本地运行构建使用完后删除。
+Run native routing verification from the repository root with `npm run check:size && sh scripts/test-native.sh`. The shared TestAction selects an inert host before launch; real windows, focus, and exit delegates share `NSApplication`, so functional regression runs serially to isolate fixtures, as recorded in the [PR #526 fix record](../swiftui-react-flow-pr526-fixes.md). In PR #604 (2026-10-18), the owner chose to retain functional regression routinely and run stress tests on demand: `sh scripts/test-native.sh stress` separately runs sustained performance, long-loop memory, and first-drag measurements, preserving the original scale and assertions; see [Native Regression And Stress](quality-gate-push.md#native-regression-and-stress) for the selection boundary. Regression covers real WKWebView production pages and fixtures, the session bridge, storage, media, preferences, model transport, and exit; checking only that resources are bundled is insufficient. Real public-network TLS trust chains, model billing, actual system panels, visuals, Chinese input methods, VoiceOver, and trackpad performance remain unaccepted; see the [feature parity record](../swiftui-react-flow-feature-parity.md) for details. Both `native/macos/build/` and `native/macos/App/WebCanvas/` are ignored generated artifacts; delete pure verification output before task completion and delete local run build output after use.
 
 ## Branch And Pull-Request Model
 
@@ -122,17 +122,17 @@ Known boundary (PR #582 review, P2): `target-branch: dev` binds only the version
 
 A Dependabot pull request interacts with the `gate-evidence` required check as follows. Dependabot's default branch shape is a single force-pushed commit, so the PR range contains only the tip and the check passes through the tip-lag tolerance with a warning annotation (`[GATE_EVIDENCE_TIP_LAG]`). If a Dependabot branch accumulates non-tip commits without local gate records (for example after manual collaboration on the branch), `gate-evidence` fails by design; the maintainer then runs the local gate and pushes an evidence commit as documented in [Gate Run Evidence](quality-gate-evidence.md) before merging. No exemption from the evidence check is granted to bot actors.
 
-### Cargo 多目录更新与验收（Issue #732）
+### Cargo Multi-Directory Updates And Acceptance (Issue #732)
 
-Cargo 使用单个 `package-ecosystem: cargo` 条目，`directories` 恰好覆盖 `/src-tauri` 和 `/crates`，两侧共同参与原有 `cargo-minor-and-patch` 更新组。目标仍为 `dev`，每周一按 `Asia/Shanghai` 调度，PR 上限为 5；minor/patch 成批、major 单独评审的政策不变。配置采用 [GitHub 官方多目录分组机制](https://docs.github.com/en/code-security/tutorials/secure-your-dependencies/optimizing-pr-creation-version-updates#example-2-grouped-updates-with-excluded-dependencies)。
+Cargo uses a single `package-ecosystem: cargo` entry whose `directories` covers exactly `/src-tauri` and `/crates`; both sides participate in the existing `cargo-minor-and-patch` update group. The target remains `dev`, the schedule remains every Monday in `Asia/Shanghai`, and the PR limit remains 5; the policy of grouping minor/patch updates and reviewing majors separately is unchanged. The configuration uses [GitHub's official multi-directory grouping mechanism](https://docs.github.com/en/code-security/tutorials/secure-your-dependencies/optimizing-pr-creation-version-updates#example-2-grouped-updates-with-excluded-dependencies).
 
-验收目标是 **Dependabot 自己生成的受支持共享依赖更新 PR 通过对应 CI**，包括两份锁文件及必要的共享 manifest 更新。解析 YAML 的配置回归只验证目录和分组政策，不证明 GitHub 服务已经采用配置，也不证明两个独立 Cargo resolver 的传递依赖必然一致。必须检查实际 bot 输出，再以该 PR 最终 head 的必需 `frontend`、`rust`、`native`、`gate-evidence` 成功结果验收；不能用人工追加对齐提交代替这一目标。
+The acceptance goal is for **a supported shared-dependency update PR generated by Dependabot itself to pass the corresponding CI**, including both lockfiles and any necessary shared manifest updates. The YAML-parsing configuration regression validates only the directory and grouping policy; it does not prove that the GitHub service has adopted the configuration or that the transitive dependencies resolved by the two independent Cargo resolvers necessarily match. Inspect the actual bot output, then accept the result through successful required `frontend`, `rust`, `native`, and `gate-evidence` checks on that PR's final head; manually added alignment commits cannot substitute for this goal.
 
-GitHub [要求从默认分支读取 `dependabot.yml`](https://docs.github.com/en/code-security/concepts/supply-chain-security/about-the-dependabot-yml-file#where-to-store-the-dependabotyml-file)。本仓库默认分支为 `main`，`target-branch: dev` 只选择版本更新目标，不改变配置读取位置。仅将本变更合入 `dev` 不会激活多目录机制；默认分支配置尚未按另行授权的集成流程更新时，真实 bot 服务验收仍待完成，不能据本地配置测试关闭 #732。
+GitHub [requires `dependabot.yml` to be read from the default branch](https://docs.github.com/en/code-security/concepts/supply-chain-security/about-the-dependabot-yml-file#where-to-store-the-dependabotyml-file). This repository's default branch is `main`; `target-branch: dev` selects only the version-update target and does not change where the configuration is read. Merging this change only into `dev` does not activate the multi-directory mechanism. Until a separately authorized integration updates the default-branch configuration, real bot-service acceptance remains pending, and #732 must not be closed on the basis of local configuration tests.
 
-若实际更新仍出现 `DRIFT_VERSION_MISMATCH` 或 `DRIFT_CARGO_FAILED`，保留阻断并诊断 resolver、版本约束与锁文件。异常处置须在同一 PR 内补齐 `src-tauri/Cargo.lock`、`crates/Cargo.lock` 和必要 manifest；在两侧分别用 `cargo update --manifest-path <workspace>/Cargo.toml -p <package>@<old-version> --precise <compatible-version>` 定向对齐诊断所指的包，再运行 `npm run check:workspace-drift` 检查整个 `plotweave-core` 共享闭包，不能只检查被更新的直接依赖。不要无目标地全量升级；约束不兼容时继续阻断，单独评审兼容性修复。人工追加提交须正常执行本地提交／推送门禁并补全 gate evidence；这种恢复只解决该次 PR，不代表 bot 自动产出目标已验收。
+If actual updates still produce `DRIFT_VERSION_MISMATCH` or `DRIFT_CARGO_FAILED`, retain the block and diagnose the resolver, version constraints, and lockfiles. Exception handling must complete `src-tauri/Cargo.lock`, `crates/Cargo.lock`, and any necessary manifests in the same PR. In each workspace, run `cargo update --manifest-path <workspace>/Cargo.toml -p <package>@<old-version> --precise <compatible-version>` to align the package identified by the diagnostic, then run `npm run check:workspace-drift` to check the entire `plotweave-core` shared closure rather than only the updated direct dependency. Do not upgrade everything indiscriminately; if constraints are incompatible, keep the block and review the compatibility fix separately. Manually added commits must run the normal local commit/push gates and complete the gate evidence; this recovery resolves only that PR and does not establish acceptance of the bot-generated-output goal.
 
-漂移检查仍以两侧真实 `cargo tree --locked` 为准；共享包版本集合不一致或 manifest 与锁文件失同步均失败，检查过程不得改锁。`rust` 必需检查、审计、分支保护和证据要求保持不变；没有 bot 豁免、配对 PR 放行、合并后对齐窗口或新增写权限的自动修复。
+The drift check continues to use real `cargo tree --locked` results from both sides; differing shared-package version sets or manifests out of sync with their lockfiles fail the check, which must not modify the locks. The required `rust` check, auditing, branch protection, and evidence requirements remain unchanged: there are no bot exemptions, paired-PR approvals, post-merge alignment windows, or automatic fixes with newly granted write permissions.
 
 ### Scanner And Action Updates (Issue #618)
 
@@ -173,7 +173,7 @@ A failed or unavailable required check blocks the Git operation. Do not use `--n
 - [Gate Lifecycle And Recovery](quality-gate-lifecycle.md)
 - [Gate Run Evidence](quality-gate-evidence.md)
 - [Quality Gate Cost Decision](quality-gate-cost.md)
-- [门禁测试负载与夹具成本（issue #498）](test-workload.md)
+- [Gate Test Workload And Fixture Cost (Issue #498)](test-workload.md)
 
 The owner approved one historical-base bootstrap on 2026-10-22: when the v0.3.0 same-repository `dev → main` release has exact old base `fbd298ebe6cfa1a9fab6e632c00cdede06d81faf`, which lacks the verifier, the evidence job uses the fixed already-reviewed `4e17c1c198aa8150c87473849d61e92692083777` verifier. The base checkout and Node pin, all evidence rules, required checks, protection and permissions remain unchanged; other bases and PR shapes still use their own base verifier. See [One-time historical-base bootstrap](quality-gate-evidence.md#server-side-evidence-verification-issue-548) for the exact trust boundary and failure behavior.
 
