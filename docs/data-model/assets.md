@@ -152,3 +152,7 @@ Tauri的导入参数借用框架已解析的 `InvokeBody::Json` 先取数组长�
 ### 媒体响应的文档隔离（#654）
 
 `pwmedia` 的响应层保留规范的图片／音频／视频类型，其他声明仅以 `application/octet-stream` 交付原字节；磁盘 `AssetRef.mime` 和共享词法规则不变。SVG 继续以图片类型交付，媒体响应统一附带强制 sandbox／禁脚本 CSP 与 nosniff；404 保持固定纯文本。读取授权、描述符身份、容量和取消仍由原 owner 负责。真实 WK 正向对照、SVG 文档／图片回归及限制见[媒体响应边界](../development/media-response-boundary.md)。
+
+### 原生投递粒度（#718）
+
+Swift `NativeMediaScheme` 的 WKURLSchemeTask 回调受 WebKit 框架约束只能在主线程执行（[WKURLSchemeTask](https://developer.apple.com/documentation/webkit/wkurlschemetask) 协议方法由主线程调用），因此大媒体的响应性由**投递粒度**决定，而非后台读取：投递循环以 **4 MiB**（`NativeMediaScheme.deliveryChunkBytes`）为一个「后台 pread + 主线程 `didReceive`」单元——256 MiB 项目媒体上限只产生 64 次主线程投递（64 KiB 粒度需 4096 次，issue #718 修复前），单次投递为亚毫秒级数据搬运，主线程在加载期间保持可响应；后台读取、取消传播、身份绑定与并发闸门契约不变，瞬时读取缓冲峰值由闸门约束为 ≤ 4 并发 × 4 MiB。Tauri 侧 `pwmedia` 处理器在阻塞线程整包缓冲读取、经异步 Responder 单次 respond 交付（协议 API 无流式 body，见 [media_protocol](../../../src-tauri/src/media_protocol.rs)），主线程不参与媒体字节搬运，无对应问题。
