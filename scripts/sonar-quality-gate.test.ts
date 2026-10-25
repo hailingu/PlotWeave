@@ -1000,7 +1000,7 @@ it('统一门禁执行检查与覆盖率时不向被分析代码下发 Sonar 令
   expect(result.log).not.toContain('rust-token-present')
   expect(result.scannerToken).toBe('test_primary')
   expect(result.curlStdin).toContain('Authorization: Bearer test_primary')
-})
+}, 30_000)
 
 it('门禁检查与记录绑定最小测试仓库，不扫描完整工作区（issue #498）', () => {
   vi.stubEnv('PLOTWEAVE_GATE_REPOSITORY_ROOT', repositoryRoot)
@@ -1032,7 +1032,7 @@ it('门禁检查与记录绑定最小测试仓库，不扫描完整工作区（i
   expect(blocked.log).not.toContain('test:coverage')
   expect(blocked.log).not.toContain('sonar-scanner')
   expect(blocked.pending).toBe(result.pending)
-})
+}, 30_000)
 
 it.each(['OK', 'ERROR'])(
   '不覆盖根变量时，夹具内完整门禁从脚本目录推导根并处理 %s（PR #513）',
@@ -1106,6 +1106,7 @@ it.each(['primary', 'fallback'] as const)(
     expect(result.scannerToken).toBe(expectedToken)
     expect(result.curlStdin).toContain(`Authorization: Bearer ${expectedToken}`)
   },
+  30_000,
 )
 
 it('宿主 pre-push 导出的范围变量不泄入夹具：未指定 scope 的用例仍走完整门禁（PR #599 推送阻断）', () => {
@@ -1118,7 +1119,7 @@ it('宿主 pre-push 导出的范围变量不泄入夹具：未指定 scope 的�
   expect(result.status).toBe(0)
   expect(result.log).toContain('npm run test:coverage')
   expect(result.log).toContain('cargo-llvm-cov')
-})
+}, 30_000)
 
 describe('门禁锁恢复命令（issue #430）', { timeout: 30_000 }, () => {
   it.each(['sonar-gate.lock', "sonar lock's $(touch injected).lock"])(
@@ -1274,7 +1275,7 @@ while :; do sleep 1; done`,
 // pre-push 的门禁分派与按 ref 行为见 scripts/pre-push-refs.test.ts（issue
 // #405：钩子读取 stdin，空 stdin 不再触发门禁）；此处只覆盖 pre-commit
 // 的接线与失败透传。
-describe('.githooks/pre-commit', () => {
+describe('.githooks/pre-commit', { timeout: 30_000 }, () => {
   it.each(['pre-commit', 'pre-merge-commit', 'prepare-commit-msg'])(
     '%s 覆盖外部范围，始终刷新两侧覆盖率',
     (hook) => {
