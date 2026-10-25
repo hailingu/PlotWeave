@@ -11,7 +11,8 @@ import { useWebExitAction } from '../../useWebExitAction'
  * 入库后立即追加并预热缩略）；单个文件失败不中断批次——逐文件捕获、
  * 继续处理剩余文件，结束时汇总（成功 N 个、失败清单点名文件与原因，
  * issue #719），已成功项照常保留；分类选取经隐藏 file input 触发，
- * 不因部分失败重放已成功的 put。 */
+ * 不因部分失败重放已成功的 put。issue #802：put 成功发布的通知重读在
+ * 浏览器内存回退下可先于本回执落地，回执按资产 id 幂等合并防重复行。 */
 export function useAssetImport(
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
   setError: (err: string | null) => void,
@@ -37,7 +38,9 @@ export function useAssetImport(
       for (const file of Array.from(files)) {
         try {
           const added = await libraryStore.put(file, kind)
-          setAssets((list) => [...list, added])
+          setAssets((list) =>
+            list.some((a) => a.id === added.id) ? list : [...list, added],
+          )
           refreshUrl(added)
           succeeded += 1
         } catch (err) {
