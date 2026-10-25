@@ -74,6 +74,131 @@ struct NativeAiDraftTests {
         #expect(try await page.webView.evaluateJavaScript("window.sent") as? [String] == ["合成失败重试稿", "合成失败重试稿"])
     }
 
+    /// Plain Return submits the focused composer through the same ai.send path as the send button (issue #744).
+    @Test func plainReturnSendsThroughComposerPath() async throws {
+        let fixture = try Fixture(bridge: true)
+        defer { fixture.remove() }
+        let page = try #require(fixture.page)
+        try await page.waitUntilReady()
+        let editor = try await fixture.editor()
+        fixture.enter("回车发送稿", in: editor)
+        try await fixture.focusEditor(editor)
+        fixture.postReturnKey(to: editor)
+        try await page.waitForSend(count: 1)
+        #expect(editor.string == "回车发送稿")
+        try await page.completeSend()
+        try await fixture.wait { editor.string.isEmpty }
+        #expect(try await page.webView.evaluateJavaScript("window.sent") as? [String] == ["回车发送稿"])
+    }
+
+    /// Shift+Return keeps AppKit's newline editing and never dispatches a send (issue #744).
+    @Test func shiftReturnInsertsNewlineWithoutSending() async throws {
+        let fixture = try Fixture(bridge: true)
+        defer { fixture.remove() }
+        let page = try #require(fixture.page)
+        try await page.waitUntilReady()
+        let editor = try await fixture.editor()
+        fixture.enter("换行第一行", in: editor)
+        try await fixture.focusEditor(editor)
+        fixture.postReturnKey(to: editor, shift: true)
+        try await fixture.wait { editor.string.contains("\n") }
+        #expect(editor.string.hasPrefix("换行第一行"))
+        #expect(try await page.webView.evaluateJavaScript("window.sent.length") as? Int == 0)
+    }
+
+    /// Return during an input-method composition belongs to the candidate confirmation, never to sending.
+    @Test func returnDuringCompositionConfirmsCandidatesWithoutSending() async throws {
+        let fixture = try Fixture(bridge: true)
+        defer { fixture.remove() }
+        let page = try #require(fixture.page)
+        try await page.waitUntilReady()
+        let editor = try await fixture.editor()
+        fixture.enter("", in: editor)
+        try await fixture.focusEditor(editor)
+        editor.setMarkedText("pinyin", selectedRange: NSRange(location: 6, length: 0),
+                             replacementRange: NSRange(location: 0, length: 0))
+        try await fixture.wait { editor.hasMarkedText() }
+        fixture.postReturnKey(to: editor)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try await page.webView.evaluateJavaScript("window.sent.length") as? Int == 0)
+    }
+
+    /// The Web owner publishing the accepted user entry clears the draft before the round completes (issue #744).
+    @Test func admittedUserEntryClearsDraftAndAllowsNextDraft() async throws {
+        let fixture = try Fixture(bridge: true)
+        defer { fixture.remove() }
+        let page = try #require(fixture.page)
+        try await page.waitUntilReady()
+        let editor = try await fixture.editor()
+        fixture.enter("接受即清空稿", in: editor)
+        _ = AXUIElementPerformAction(try await fixture.sendButton(), kAXPressAction as CFString)
+        try await page.waitForSend(count: 1)
+        #expect(editor.string == "接受即清空稿")
+        // 真实 Web 端在派发时同步入列用户消息并置 busy；投影到达即应清空草稿。
+        try fixture.publishAI(busy: true, thread: [["id": 11, "kind": "msg", "role": "user", "text": "接受即清空稿"]])
+        try await fixture.wait { editor.string.isEmpty }
+        // 回合结束投影复位 busy；随后撰写的新草稿立即可发送，且迟到回执不清除它。
+        try fixture.publishAI(busy: false, thread: [
+            ["id": 11, "kind": "msg", "role": "user", "text": "接受即清空稿"],
+            ["id": 12, "kind": "msg", "role": "assistant", "text": "回合结束"],
+        ])
+        try await fixture.wait { fixture.state.ai["busy"]?.bool == false }
+        fixture.enter("回合后新草稿", in: try await fixture.editor())
+        _ = try await fixture.sendButton(enabled: true)
+        try await page.completeSend()
+        try await Task.sleep(for: .milliseconds(200))
+        let finalEditor = try await fixture.editor()
+        #expect(finalEditor.string == "回合后新草稿")
+    }
+
+    /// A busy round blocks sending but must not block composing the next message (issue #744):
+    /// the composer still accepts focus and keeps its editing capability during the round.
+    /// Boundary: assistive focus does not traverse SwiftUI's disabled hit-testing, so this
+    /// guards the retained editing capability, while the real click-to-compose path stays
+    /// with the documented on-device verification gap.
+    @Test func composerRemainsEditableWhileRoundIsBusy() async throws {
+        let fixture = try Fixture(bridge: true)
+        defer { fixture.remove() }
+        let page = try #require(fixture.page)
+        try await page.waitUntilReady()
+        let editor = try await fixture.editor()
+        fixture.enter("忙碌可写稿", in: editor)
+        _ = AXUIElementPerformAction(try await fixture.sendButton(), kAXPressAction as CFString)
+        try await page.waitForSend(count: 1)
+        try fixture.publishAI(busy: true, thread: [["id": 21, "kind": "msg", "role": "user", "text": "忙碌可写稿"]])
+        try await fixture.wait { fixture.state.ai["busy"]?.bool == true }
+        let area = try await fixture.textArea()
+        let focusError = AXUIElementSetAttributeValue(area, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        #expect(focusError == .success)
+        let busyEditor = try await fixture.editor()
+        try await fixture.wait { fixture.window.firstResponder === busyEditor }
+        #expect(busyEditor.isEditable)
+        #expect(busyEditor.isSelectable)
+    }
+
+    /// The first text line stays fully visible with positive top breathing room inside the composer (issue #744).
+    @Test func firstLineStaysFullyVisibleBelowComposerTopEdge() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let editor = try await fixture.editor()
+        fixture.enter("首行可见性检查\n第二行内容", in: editor)
+        try await fixture.wait { Self.firstLineTopInset(editor) >= 3 }
+        #expect(Self.firstLineFrame(editor, in: fixture.window).maxY <= editor.visibleRect.maxY + 1)
+    }
+
+    /// The first character's on-screen frame converted into the editor's coordinate space.
+    private static func firstLineFrame(_ editor: NSTextView, in window: NSWindow) -> NSRect {
+        var actual = NSRange()
+        let screenRect = editor.firstRect(forCharacterRange: NSRange(location: 0, length: 1), actualRange: &actual)
+        return editor.convert(window.convertFromScreen(screenRect), from: nil)
+    }
+
+    /// Positive top inset proves the first line sits below the composer's visible top edge.
+    private static func firstLineTopInset(_ editor: NSTextView) -> CGFloat {
+        guard let window = editor.window else { return -1 }
+        return firstLineFrame(editor, in: window).minY - editor.visibleRect.minY
+    }
+
     /// Read-only synthetic projections never connect this composer to a model service or user data root.
     @MainActor private final class Fixture {
         /// The real action boundary rejects because this initial fixture has no coordinator.
@@ -86,21 +211,74 @@ struct NativeAiDraftTests {
         /// A ready synthetic AI projection enables normal controls without granting service authority.
         init(bridge: Bool = false) throws {
             page = bridge ? try ReplyPage(application: state) : nil
-            let session = page?.coordinator.sessionId ?? "ai-draft"
+            session = page?.coordinator.sessionId ?? "ai-draft"
             state.beginSession(session)
-            try state.receiveProjection([
-                "protocolVersion": 1, "sessionId": session, "sequence": 1,
-                "projection": [
-                    "app": ["route": "editor", "project": ["id": "fixture", "name": "合成剧本"]],
-                    "ai": ["projectId": "fixture", "ready": true, "busy": false, "thread": []]
-                ]
-            ])
             window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 620),
                               styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.level = .floating
+            try publishAI(busy: false, thread: [])
             mount()
             window.orderFrontRegardless()
+        }
+
+        /// Projection envelopes are session-bound and monotonically sequenced like the real stream.
+        private let session: String
+        /// Local sequence authority keeps synthetic envelopes ahead of the initial projection.
+        private var sequence: Double = 0
+
+        /// Publishes the next synthetic AI-domain projection, repeating the app domain like the Web owner.
+        func publishAI(busy: Bool, thread: [[String: Any]]) throws {
+            sequence += 1
+            try state.receiveProjection([
+                "protocolVersion": 1, "sessionId": session, "sequence": sequence,
+                "projection": [
+                    "app": ["route": "editor", "project": ["id": "fixture", "name": "合成剧本"]],
+                    "ai": ["projectId": "fixture", "ready": true, "busy": busy, "thread": thread]
+                ]
+            ])
+        }
+
+        /// Focuses the composer the way an assistive interaction would, so SwiftUI's own focus
+        /// routing engages before the direct first-responder fallback.
+        func focusEditor(_ editor: NSTextView) async throws {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            let area = try await textArea()
+            AXUIElementSetAttributeValue(area, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            if window.firstResponder !== editor {
+                guard window.makeFirstResponder(editor) else {
+                    throw HostFailure(code: "PW_TEST_COMPOSER_FOCUS", message: "合成窗口无法聚焦输入框")
+                }
+            }
+        }
+
+        /// Delivers a real Return keyDown through the application event queue; a handler-consumed
+        /// press never returns from dequeue, and a press the handlers ignore falls back to the
+        /// focused editor's AppKit default because this runner provides no key window.
+        func postReturnKey(to editor: NSTextView, shift: Bool = false) {
+            let event = CGEvent(keyboardEventSource: CGEventSource(stateID: .combinedSessionState),
+                                virtualKey: 0x24, keyDown: true)
+            var characters: [UniChar] = Array("\r".utf16)
+            event?.keyboardSetUnicodeString(stringLength: characters.count, unicodeString: &characters)
+            event?.flags = shift ? .maskShift : []
+            guard let cgEvent = event, let keyDown = NSEvent(cgEvent: cgEvent) else { return }
+            NSApp.postEvent(keyDown, atStart: false)
+            while let next = NSApp.nextEvent(matching: .any, until: nil, inMode: .default, dequeue: true) {
+                if next === keyDown { editor.keyDown(with: next) } else { NSApp.sendEvent(next) }
+            }
+        }
+
+        /// The composer's accessibility text area exposes SwiftUI's effective enabled state.
+        func textArea() async throws -> AXUIElement {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            repeat {
+                let elements = try await NativeCreationControlFixture.elements(in: window)
+                if let area = elements.first(where: {
+                    NativeCreationControlFixture.string($0, kAXRoleAttribute) == kAXTextAreaRole
+                }) { return area }
+            } while ContinuousClock.now < deadline
+            throw HostFailure(code: "PW_TEST_COMPOSER_TEXTAREA_TIMEOUT", message: "合成窗口未找到输入框无障碍元素")
         }
 
         /// Mounts the actual composer under the same fixed pane constraints used by this disposable window.
