@@ -26,7 +26,7 @@ import { EditableName } from '../nodes/settings/NodeSettingsPanel'
 import { ConfirmDeleteDialog } from '../../home/Dialogs'
 import { LibraryWarnings } from './LibraryWarnings'
 import { useAssetImport } from './useAssetImport'
-import { useAssetThumbnails } from './useAssetThumbnails'
+import { useLibraryAssetList } from './useLibraryAssetList'
 import {
   isWebExitPending,
   reportWebExitPending,
@@ -47,27 +47,6 @@ type AssetTagsIntent = 'edit' | 'draft' | 'none'
  * 与项目的流转（§7.3）：缩略图即拖拽把手，拖上画布分镜卡拷贝进项目
  * 并绑定引用位（dragDrop 协议 + useCanvasDrop 承接）。
  */
-/** 资产列表状态族（AssetsPanel 拆分，issue #99）：挂载加载、错误与
- * 缩略 URL 缓存（懒加载：进入类别才取）。 */
-function useLibraryAssetList() {
-  const [assets, setAssets] = useState<LibraryAsset[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const thumbnails = useAssetThumbnails()
-  useEffect(() => {
-    let alive = true
-    libraryStore
-      .list()
-      .then((list) => alive && setAssets(list))
-      .catch((err) => alive && setError(String(err)))
-      .finally(() => alive && setLoading(false))
-    return () => {
-      alive = false
-    }
-  }, [])
-  return { assets, setAssets, error, setError, loading, ...thumbnails }
-}
-
 /** Confirmation retains its displayed asset and an independently captured durable name for a rejected deletion. */
 interface AssetRemoval {
   readonly asset: LibraryAsset
@@ -88,9 +67,13 @@ function assetRemovalTarget(asset: LibraryAsset): AssetRemoval {
 /** 确认后执行删除（AssetsPanel 拆分，issue #99）：移除列表项并回收缩
  * 略 URL（blob: 回收防长会话内存泄漏）；落盘删除交给库门面。仅在
  * ConfirmDeleteDialog 确认后调用。行先乐观隐藏，拒绝恢复最近落盘条目；
- * 缩略 URL 仅在成功后回收，失败保留以供恢复行与显式重试。 */
+ * 缩略 URL 仅在成功后回收，失败保留以供恢复行与显式重试。乐观隐藏记入
+ * 本实例的隐藏集（issue #802）：删除在途期间其他写触发的收敛重读不得
+ * 让存储残影复活该行，失败恢复时解除。 */
 function removeLibraryAsset(
   asset: LibraryAsset,
+  hideAsset: (id: string) => void,
+  unhideAsset: (id: string) => void,
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
   forgetUrl: (id: string) => void,
   setError: (err: string | null) => void,
@@ -100,11 +83,13 @@ function removeLibraryAsset(
     return
   }
   setError(null)
+  hideAsset(asset.id)
   setAssets((list) => list.filter((a) => a.id !== asset.id))
   runWebOperation(async () => {
     await libraryStore.remove(asset.id)
     forgetUrl(asset.id)
   }).catch((err) => {
+    unhideAsset(asset.id)
     const restored = libraryStore.persistedSnapshot(asset.id) ?? asset
     setAssets((list) =>
       list.some((a) => a.id === asset.id) ? list : [...list, restored],
@@ -326,9 +311,13 @@ function useAssetTagsErrors() {
  * 成功响应字段级合并同步，以及独立的标签错误横幅——按资产
  * 逐个记录未解决失败、自持展示状态，与导入/列表错误分属两行互不覆盖
  * （同文案也不误清）；任一资产成功或无写入的回退（放弃该次修改）都只
- * 解除自身错误，横幅刷新为其余未解决项。 */
+ * 解除自身错误。issue #802：提交即占有该行的列表投影，成功或终结时
+ * 释放；未解决失败保留占有——收敛重读不得推进 saved 而清除保留的
+ * 失败草稿显示。 */
 function useAssetTagsCommit(
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
+  ownProjection: (id: string) => void,
+  releaseProjection: (id: string) => void,
 ) {
   /** 提交代际（issue #124）：assetId → 最新已发起提交的序号。 */
   const tagsCommitSeq = useRef(new Map<string, number>())
@@ -343,6 +332,7 @@ function useAssetTagsCommit(
     tagsCommitSeq.current.set(id, (tagsCommitSeq.current.get(id) ?? 0) + 1)
     pendingTags.current.delete(id)
     resolveTagsError(id)
+    releaseProjection(id)
   }
 
   /** 排队一次标签写入：立即进入门面队列 + 代际守卫取用响应；成功只合并
@@ -355,12 +345,14 @@ function useAssetTagsCommit(
     const seq = (tagsCommitSeq.current.get(assetId) ?? 0) + 1
     tagsCommitSeq.current.set(assetId, seq)
     pendingTags.current.set(assetId, tags)
+    ownProjection(assetId)
     runWebOperation(() =>
       libraryStore.updateMeta(assetId, { tags }).then((updated) => {
         // 持久化基线由门面快照推进（跨挂载共享）：被取代的成功也落盘
         if (tagsCommitSeq.current.get(assetId) !== seq) return
         pendingTags.current.delete(assetId)
         resolveTagsError(assetId)
+        releaseProjection(assetId)
         setAssets((list) => mergeAssetTags(list, assetId, updated.tags))
       }),
     ).catch((err) => {
@@ -505,6 +497,10 @@ export function AssetsPanel() {
     loading,
     thumbErrors,
     refreshUrl,
+    hideAsset,
+    unhideAsset,
+    ownProjection,
+    releaseProjection,
   } = useLibraryAssetList()
   const [selectedKind, setSelectedKind] = useState<LibraryKind | null>(null)
   /** 待删除资产（非 null 时弹应用内确认框）。 */
@@ -517,14 +513,25 @@ export function AssetsPanel() {
     refreshUrl,
     loading,
   )
-  const { commitTags, tagsError, forgetTags } = useAssetTagsCommit(setAssets)
+  const { commitTags, tagsError, forgetTags } = useAssetTagsCommit(
+    setAssets,
+    ownProjection,
+    releaseProjection,
+  )
   const { rename, renameError, forgetRename } = useAssetRename(setAssets)
 
   const remove = ({ asset, fallbackName }: AssetRemoval) => {
     forgetTags(asset.id)
     forgetRename(asset.id)
     const fallback = { ...asset, name: fallbackName }
-    removeLibraryAsset(fallback, setAssets, forgetUrl, setError)
+    removeLibraryAsset(
+      fallback,
+      hideAsset,
+      unhideAsset,
+      setAssets,
+      forgetUrl,
+      setError,
+    )
   }
 
   return (

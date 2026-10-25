@@ -251,6 +251,32 @@ function applyUpdateMeta(
  * 零写入守卫不得以陈旧本地值放行。 */
 const lastPersistedAssets = new Map<string, LibraryAsset>()
 
+/** 库变更通知（issue #802）：put／元数据更新／删除每次成功落盘后发布，
+ * 与 assetQueues／lastPersistedAssets 同层（会话级）。存活的面板实例
+ * 订阅并重读列表——旧实例在面板重挂载后落定的成功结果无需再次失焦或
+ * 重挂载即对当前实例可见；失败不发布（无新持久化状态）。 */
+const libraryChangeListeners = new Set<() => void>()
+
+/** 发布库变更：逐个同步通知（Set 迭代不受订阅方异步退订影响），单个
+ * 订阅方异常不中断其余（防御边界）。 */
+function notifyLibraryChange(): void {
+  for (const listener of libraryChangeListeners) {
+    try {
+      listener()
+    } catch {
+      // 订阅方自身异常不阻断门面与其它订阅方
+    }
+  }
+}
+
+/** 订阅库成功写入通知（issue #802）；返回退订函数，订阅方卸载时调用。 */
+export function subscribeLibraryChange(listener: () => void): () => void {
+  libraryChangeListeners.add(listener)
+  return () => {
+    libraryChangeListeners.delete(listener)
+  }
+}
+
 /** 删除的实际执行体：排队落定后才删除，成功清除快照，失败保持原基线
  * 并交由调用方呈现错误；Tauri 返回的隔离区诊断继续上报。 */
 async function applyRemove(id: string): Promise<void> {
@@ -280,7 +306,11 @@ export const libraryStore = {
         ),
 
   put: (file: File, kind: LibraryKind): Promise<LibraryAsset> => {
-    if (!isBrowserPreviewHost()) return tauriPut(file, kind)
+    if (!isBrowserPreviewHost())
+      return tauriPut(file, kind).then((entry) => {
+        notifyLibraryChange()
+        return entry
+      })
     const id = uid('local-la')
     const asset: LibraryAsset = {
       id,
@@ -294,21 +324,32 @@ export const libraryStore = {
       createdAt: new Date().toISOString(),
     }
     memoryAssets.set(id, { asset, blob: file })
+    notifyLibraryChange()
     return Promise.resolve({ ...asset })
   },
 
   /** 元数据补丁更新：门面层按资产串行（见 assetQueues）——跨面板挂载
    * 与跨消费方（改名/标签同走此口）保证到达存储的顺序与发起顺序一致；
-   * 每次成功（含发起方实例已卸载）都推进 lastPersistedAssets 基线。 */
+   * 每次成功（含发起方实例已卸载）都推进 lastPersistedAssets 基线并
+   * 发布库变更通知（issue #802）。 */
   updateMeta: (
     id: string,
     patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>,
-  ): Promise<LibraryAsset> =>
-    enqueueAssetOperation(id, async () => {
+  ): Promise<LibraryAsset> => {
+    // 成功通知注册在 enqueueAssetOperation 的队列尾清理之后（同一
+    // promise 的反应按注册序执行）：通知触发的收敛重读不会把刚落定的
+    // 资产误判为在途而保留旧投影。
+    const run = enqueueAssetOperation(id, async () => {
       const updated = await applyUpdateMeta(id, patch)
       lastPersistedAssets.set(id, { ...updated })
       return updated
-    }),
+    })
+    void run.then(
+      () => notifyLibraryChange(),
+      () => {},
+    )
+    return run
+  },
 
   /** 该资产最近一次经门面成功落盘的条目快照（克隆）；本会话未经门面
    * 更新过则 undefined，调用方回退自身列表值。 */
@@ -321,9 +362,16 @@ export const libraryStore = {
    * 改变持久化值时，真实撤回不能被判为无变化。 */
   hasPendingOperation: (id: string): boolean => assetQueues.has(id),
 
-  /** 删除排在该资产的既有更新之后，避免抢先删除使排队更新失去目标。 */
-  remove: (id: string): Promise<void> =>
-    enqueueAssetOperation(id, () => applyRemove(id)),
+  /** 删除排在该资产的既有更新之后，避免抢先删除使排队更新失去目标；
+   * 成功落盘后发布库变更通知（issue #802，注册序同 updateMeta）。 */
+  remove: (id: string): Promise<void> => {
+    const run = enqueueAssetOperation(id, () => applyRemove(id))
+    void run.then(
+      () => notifyLibraryChange(),
+      () => {},
+    )
+    return run
+  },
 
   /** 媒体 URL：Tauri 走 pwmedia 自定义协议（opaque URL，Rust 侧逐请求
    * 解析 id）；内存回退为 object URL。
