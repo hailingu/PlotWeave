@@ -42,6 +42,19 @@ cd "$repository_root"
 # 取值；非仓库环境回退到仓库根下的 .git。
 pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-$(git rev-parse --git-path plotweave-gate-history.pending 2>/dev/null || printf '%s' "$repository_root/.git/plotweave-gate-history.pending")}
 
+# 归因读取的 Git 环境（issue #829）：链接 worktree（git worktree add）的提交
+# 钩子导出绝对 GIT_DIR（.git/worktrees/<name>），显式 GIT_DIR 使 Git 把当前目
+# 录当作工作树根，":./<台账>" 与 "HEAD:./<台账>" 被解析成根级路径——两条读取
+# 都 exit 128，归因落入空索引分支：字节匹配场景必然判为不可归因，已暂存删除
+# 场景反而误判 attributed、把折并重建的台账暂存回去替换删除。主 worktree 的
+# 钩子不导出 GIT_DIR、本就按台账目录自动发现仓库；这里把两种形态统一为同一
+# 语义：只在归因读取上清除 GIT_DIR，让 Git 从台账目录发现 worktree 根。
+# GIT_INDEX_FILE 原样保留——它仍指向钩子选定的索引（链接 worktree 为绝对路径，
+# 主 worktree 为相对路径且由 Git 按工作树根解析）。
+ledger_git() {
+  env -u GIT_DIR git -C "$ledger_directory" "$@"
+}
+
 # 台账改动的归因判定（PR #581 评审 5537970549）：自动暂存只收编本次
 # 折并的待物化行本身。判定用钉版 Node 对比三个输入：有效索引版、工作
 # 树版与本次折并的待物化行；工作树原始字节必须恰为「索引字节 + 本次
@@ -57,8 +70,8 @@ ledger_change_attribution() {
   ledger_directory=$(CDPATH= cd -- "$(dirname -- "$history_path")" && pwd) || return 1
   ledger_name=$(basename -- "$history_path")
   index_temp=$(mktemp) || return 1
-  if ! git -C "$ledger_directory" show ":./$ledger_name" >"$index_temp" 2>/dev/null; then
-    if git -C "$ledger_directory" cat-file -e "HEAD:./$ledger_name" 2>/dev/null; then
+  if ! ledger_git show ":./$ledger_name" >"$index_temp" 2>/dev/null; then
+    if ledger_git cat-file -e "HEAD:./$ledger_name" 2>/dev/null; then
       rm -f "$index_temp"
       printf 'staged-deletion'
       return 0

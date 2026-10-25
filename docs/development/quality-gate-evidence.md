@@ -212,7 +212,11 @@ NODE
   5542467935): the fold rebuilds only the worktree file, the hook warns
   `[GATE_HISTORY_STAGED_DELETION]` and keeps the deletion staged instead of
   resurrecting the ledger via `git add` (a both-absent path is the bootstrap
-  state and still folds normally). The lines are carried by that commit, so no unstaged residue
+  state and still folds normally). The attribution reads the index and
+  `HEAD` with the hook-exported `GIT_DIR` cleared, so a linked worktree
+  (`git worktree add`, whose hooks receive an absolute `GIT_DIR`) resolves
+  the ledger path from its own worktree root exactly like the main worktree
+  (issue #829). The lines are carried by that commit, so no unstaged residue
   remains while the operation proceeds — the PR #415 breakage was an
   *unstaged* write; this path folds and stages into the same commit. The
   record for commit C's own gate run is therefore versioned in the **next**
@@ -291,6 +295,9 @@ NODE
 | 上述暂缓状态 | 开发者补换行并暂存，再次物化 | pending 正常入库并清空，所有行仍可解析 | 边界修复后的重试必须保留原记录与待物化记录 | 补换行后恢复用例 |
 | 台账为空、不存在，或末行已有换行 | 正常物化 | 沿用既有追加、归因和暂存规则 | 边界检查不能阻止首条记录或正常追加 | 空文件、引导态与正常追加用例 |
 | Node 不可用或台账读取失败 | 排水前的边界检查无法完成 | `GATE_HISTORY_BOUNDARY_UNAVAILABLE`，保留全部输入供重试 | 无法验证边界时不得追加或清空 pending | Node 不可用与既有目录占位不可写用例 |
+| 链接 worktree（`git worktree add`）的普通提交，pending 有记录，台账无额外改动 | 钩子导出绝对 `GIT_DIR` 与 `GIT_INDEX_FILE` → 折并 → 归因读取索引与 HEAD | 记录自动暂存进本提交，pending 清空，台账状态干净 | 归因读取不依赖钩子导出的 `GIT_DIR`：Git 从台账目录发现 worktree 根，字节契约在链接 worktree 与主 worktree 下一致 | 链接 worktree 自动暂存用例（issue #829） |
+| 同上，台账在折并之外另有人工追加 | 折并后归因 | `GATE_HISTORY_UNATTRIBUTED_CHANGE`，提交只含开发者的暂存选择，pending 清空 | 修复执行环境不放宽内容归因守卫 | 链接 worktree 人工追加反例 |
+| 同上，台账删除已暂存 | 折并重建工作树文件后归因 | `GATE_HISTORY_STAGED_DELETION`，提交保留删除 | 空索引引导态只能来自「索引与 HEAD 都无该路径」的判定，不能来自读取失败 | 链接 worktree 已暂存删除用例（修复前读取失败被当作引导态，误判 attributed 并替换删除） |
 
 最初的索引修复只改变索引分类；并发排水仍由既有门禁互斥锁保护，锁超时与恢复继续由
 既有物化测试覆盖。sequencer 回退入口仍不调用物化。本地真实 Git 用例覆盖当前
@@ -300,6 +307,19 @@ EOF 归因修复由 `ledger_change_attribution` 负责，`pre-commit` 与
 `pre-merge-commit` 共用同一入口；不改变排水、锁超时或临时索引延后规则。
 比较时读取索引、工作树与折并捕获文件的原始字节，仅将折并内容解码后逐行
 验证 JSON；并发排水仍由既有互斥锁负责，不新增重试或恢复状态。
+
+链接 worktree 归因修复（issue #829）：`git worktree add` 的链接 worktree 中，
+Git 向提交钩子导出绝对 `GIT_DIR`（`.git/worktrees/<name>`）与绝对
+`GIT_INDEX_FILE`；显式 `GIT_DIR` 使 Git 把当前目录当作工作树根，
+`ledger_change_attribution` 的 `:./gate-history.jsonl` 与
+`HEAD:./gate-history.jsonl` 被解析为根级路径，两条读取都失败并落入空索引
+分支——字节匹配场景必然警告 `GATE_HISTORY_UNATTRIBUTED_CHANGE`、自动暂存
+退化为人工暂存；已暂存删除场景则反而被误判 attributed，把折并重建的台账暂存
+回去替换删除（评审 5542467935 的保护在该环境失效）。现在归因读取经
+`ledger_git` 清除 `GIT_DIR`，以台账目录为起点让 Git 自动发现 worktree 根
+（主 worktree 的钩子本就不导出 `GIT_DIR`，两种形态语义一致）；`GIT_INDEX_FILE`
+原样保留，仍读取钩子选定的索引。字节精确归因、EOF 换行、部分暂存、临时索引
+推迟与 `git add` 本身均不变。
 
 2026-10-16 索引分类修复的本地验证：Node 24.18.0、Git 2.48.1；当时的物化测试
 21/21 通过，`npm run check:size && npm test -- scripts` 的规模检查通过，完整
@@ -321,6 +341,14 @@ EOF 归因修复由 `ledger_change_attribution` 负责，`pre-commit` 与
 `npm run check:size && npm test -- scripts` 在沙箱外 360/360 通过，
 `sh scripts/check-static.sh`、`sh -n scripts/gate-history.sh` 与 diff 检查通过。
 文档及 AGENTS.md 已按路由结构化审阅，无配置的自动化文档检查。
+
+2026-10-25 链接 worktree 归因修复（issue #829）：先在夹具仓库内真实
+`git worktree add` 并经 pre-commit 钩子提交，复现字节匹配场景的
+`GATE_HISTORY_UNATTRIBUTED_CHANGE` 与已暂存删除被误自动暂存两个反例，再让
+归因读取清除 `GIT_DIR`。物化测试 34/34 通过；`sh scripts/check-static.sh` 通过，
+`npm test -- scripts` 514/514（28 个文件）通过，`sh -n scripts/gate-history.sh`
+通过。文档完成结构化审阅，无配置的自动化文档检查。平台验证边界仍为 macOS
+Git 2.48.1 / Node 24.18.0，未新增其他平台实测。
 
 ## Server-Side Evidence Verification (issue #548)
 
