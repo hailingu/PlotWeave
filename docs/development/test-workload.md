@@ -160,3 +160,18 @@
 五轮墙钟为 **82.87–114.98s**，中位数 **88.22s**。Rust 使用已预热的独立临时 target，负载轮只清理该临时 target 的 core 包，保留依赖与原工作区缓存；在混合场景开始时触发真实 `cargo check --locked --offline -p plotweave-core --lib --jobs 1`，记录实际重叠，不把整轮测试时长称作 Rust 共载时间。冷依赖构建、最坏负载、跨机器时延未验证，不声称统计显著性或永久无抖动。
 
 一次先导序列的首轮已通过，第二轮因执行服务器连接中断且监督进程／Vitest消失而未生成完整结果；该序列和中断日志保留，**未计入上面的连续五轮**。恢复后以独立进程会话执行同一固定源码，成功才计入，测试失败即停止；没有通过自动重试消除失败。五轮测试源 SHA-256 均为 `8dd0b5786bf12d243e2507ca0acee05c9066671fe319d1debc52d5bb5e501d3e`。文件1793行、实质修改的回调经人工复核均不超过80代码行；未新增检测器。CPU默认4、前端/Rust80%地板、native report-only与stress opt-in保持。
+
+## 提交门禁 hook 用例的预算对齐（2026-10-25，issue #827）
+
+[issue #827](https://github.com/hailingu/PlotWeave/issues/827) 与上面的 #681 同类，不重写其测量：`scripts/sonar-quality-gate.test.ts` 的 `describe('.githooks/pre-commit')` 是该文件 14 个 describe 中唯一没有 `{ timeout: 30_000 }` 的真实 spawn 块，其 `it.each` 每用例对 frontend／rust／native 三个 scope 各 spawn 一次真实 hook 脚本。空载隔离三个参数化用例即 **2387–3635 ms**（默认 5 秒的 48–73%），完整门禁 `npm run test:coverage` 的全量并行负载下 2026-10-24 实际发生 1 次 `pre-merge-commit` 用例超时，令本应通过的提交门禁退出 1。回归来源未知：用例引入时即为默认超时，非后续回归。
+
+修复（[PR #842](https://github.com/hailingu/PlotWeave/pull/842)，提交 `d135cfc7`）只改超时预算：该 describe 加 `{ timeout: 30_000 }`，并把同文件 4 个仍在默认预算下的顶层单 spawn 用例（issue #462／#498、评审 4162846722、PR #599，实测 734–1258 ms）按既有 `it.each(['OK','ERROR'])(…, 30_000)` 的形式追加尾随 `30_000`。`git diff` 5 行增／4 行删，不改任何断言、夹具、hook 或门禁脚本。未采用拆分 scope 的方案：显式预算已直接消除根因并留出约 8× 余量，拆分会把 3 例变 9 例而不增加断言。与 #681 一致，预算是既有 spawn 场景保护值，不是任意负载下的最坏时间保证。
+
+| 前置状态／动作 | 可观察结果与保留不变量 | 验证 |
+| --- | --- | --- |
+| 3-spawn hook 用例，空载隔离 | 通过；预算约为真实成本 8× | `--reporter=verbose`：3635／2497／2387 ms |
+| 同用例，完整提交与推送门禁的全量并行（#827 触发条件） | 通过，不再 `Test timed out in 5000ms` | 两次门禁各 272 文件／3613 项全通过、0 超时：2662／2660／2523 ms 与 2607／2645／2380 ms |
+| hook 脚本真实挂起 | 30 秒到期仍稳定失败 | 预算有界而非无限，与文件其余 13 个 describe 相同 |
+| 既有断言（status／log／pending／`scope: 'full'`／无 `xcodebuild`） | 语义不变 | diff 仅含超时参数 |
+
+两次完整门禁合计 544 文件／7226 项前端用例执行，该文件零超时，对应 issue 验收「连续数次完整门禁下该文件无超时失败」；未做多次统计复现率，不声称永久无抖动。`scripts/test-native.test.ts` 的顶层 `it` 仍在默认 5 秒下 spawn 真实 `test-native.sh`（其 `spawnSync` 的 `timeout: 10000` 是子进程 kill 超时而非用例超时，单例 1–2 秒量级），属已记录、未处理的同类风险，不在 #827 验收范围内。
