@@ -8,6 +8,7 @@ import {
 import { settingsStore } from './settingsStore'
 import { useSettingsSaver } from './useSettingsSaver'
 import { useNativeSettingsShell } from './useNativeSettingsShell'
+import { useProviderKeyForms } from './useProviderKeyForms'
 
 /** SettingsViewProps。 */
 interface SettingsViewProps {
@@ -124,50 +125,6 @@ function DefaultModelsSection({
       </div>
     </>
   )
-}
-
-/** Provider key 编辑表单族（SettingsView 拆分，issue #99）：草稿/错误
- * 态 + 提交（Rust 加密返回密文 envelope 合并进配置走防抖落盘）/清除。 */
-function useProviderKeyForms(
-  settings: AppSettings,
-  update: (next: AppSettings) => void,
-  trackPendingKey: (work: Promise<void>) => Promise<void>,
-) {
-  const [keyDraft, setKeyDraft] = useState<Record<string, string>>({})
-  const [keyError, setKeyError] = useState<Record<string, string>>({})
-  const patchProvider = (id: string, patch: Partial<ProviderConfig>) => {
-    update({
-      ...settings,
-      providers: settings.providers.map((p) =>
-        p.id === id ? { ...p, ...patch } : p,
-      ),
-    })
-  }
-  const submitKey = async (providerId: string) => {
-    const key = (keyDraft[providerId] ?? '').trim()
-    if (!key) return
-    try {
-      // Rust 加密返回密文 envelope → 合并进 provider 配置走防抖落盘
-      await trackPendingKey(
-        settingsStore.setProviderKey(settings, providerId, key).then(update),
-      )
-      setKeyDraft((d) => ({ ...d, [providerId]: '' }))
-      setKeyError((e) => ({ ...e, [providerId]: '' }))
-    } catch (err) {
-      setKeyError((e) => ({ ...e, [providerId]: String(err) }))
-    }
-  }
-  const removeKey = (providerId: string) => {
-    patchProvider(providerId, { keyEnc: undefined })
-  }
-  return {
-    keyDraft,
-    setKeyDraft,
-    keyError,
-    patchProvider,
-    submitKey,
-    removeKey,
-  }
 }
 
 /** 默认模型下拉选项（SettingsView 拆分）：启用且配 Base URL 的

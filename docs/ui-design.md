@@ -661,6 +661,8 @@ J13–J16 补齐 [issue #502](https://github.com/hailingu/PlotWeave/issues/502) 
 
 ### 8.2 设置页
 
+**Web 密钥并发编辑**（[#850](https://github.com/hailingu/PlotWeave/issues/850)）：加密期间仍可修改地址、模型、启用状态和默认模型；有效回执只合入目标密文，保留当前编辑。后续保存或清除使该 provider 的旧成功／失败回执失效，已清除的凭据不会被迟到结果恢复；其他 provider 的保存互不失效。保存后继续录入的新草稿不会被前一次成功清空。关闭继续等待加密与最终设置落盘。状态与验证边界见[Provider 设置](data-model/provider-settings.md#103-provider-与模型配置)。
+
 macOS 惯例 ⌘, 打开设置。当前实现为同一主窗口内切换的设置页，关闭后回到原界面；独立设置窗口是目标形态，尚未落地。以下为目标分段组织，当前 provider/模型配置采用数据模型 §10.3 注明的扁平设置，能力目录与三层过滤仍属演进：
 
 - **Provider 分段**：内置适配器列表（OpenAI 兼容 / 火山引擎 Ark / …）+ 自定义 provider。每 provider：Base URL（默认值可覆盖）、API key 状态、模型勾选清单（内置目录 + 自定义条目 + 禁用 = 三层过滤的界面化）。
