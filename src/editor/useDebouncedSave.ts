@@ -498,7 +498,7 @@ export function useDebouncedSave(
   // （issue #272）：gate refs 初值与置脏监听共用
   const sig = usePersistSignature(doc)
   const gates = useSaveGateRefs(doc, sig, setSaveStatus)
-  const { dirtyRef, inFlightRef } = gates
+  const { dirtyRef, inFlightRef, editSeqRef } = gates
   const { flushSave, markDirty, flushOnUnmount, flushForExit } = useSaveFlush(
     gates,
     onSave,
@@ -515,10 +515,11 @@ export function useDebouncedSave(
   useEffect(() => {
     registerCanvasFlushGate({
       hasPending: () => dirtyRef.current || inFlightRef.current,
+      revision: () => editSeqRef.current,
       flush: flushForExit,
     })
     return () => registerCanvasFlushGate(null)
-  }, [dirtyRef, inFlightRef, flushForExit])
+  }, [dirtyRef, inFlightRef, editSeqRef, flushForExit])
 
   // 链上重存成功清脏（issue #119，PR #174 评审）：闸冲刷失败后保存链会
   // 登记并重存同一文档，成功时登记持久化覆盖水位——同水位的冗余重复保

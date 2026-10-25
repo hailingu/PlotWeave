@@ -42,11 +42,13 @@ function hasPendingSaves(): boolean {
 
 /** 退出阻断诊断：按仍失败的数据源给出可读清单。 */
 function blockedMessage(
+  failedCanvas: boolean,
   failedProjects: number,
   failedSessions: number,
   failedSettings: number,
 ): string {
   const parts: string[] = []
+  if (failedCanvas && failedProjects === 0) parts.push('画布保存失败')
   if (failedProjects > 0) parts.push(`${failedProjects} 个项目的画布保存失败`)
   if (failedSessions > 0)
     parts.push(`${failedSessions} 个项目的 AI 会话保存失败`)
@@ -62,12 +64,27 @@ async function drainBeforeExit(
 ): Promise<boolean> {
   for (;;) {
     await fence?.wait()
-    await flushPendingCanvasSaves()
+    const canvasFailure = await flushPendingCanvasSaves()
     const projects = await flushPendingProjectSaves()
     const sessions = await flushPendingAiSessionSaves()
     const settings = await flushPendingSettingsSaves()
-    if (projects.length > 0 || sessions.length > 0 || settings > 0) {
-      onBlocked(blockedMessage(projects.length, sessions.length, settings))
+    // 冲刷后仍脏是画布失败；同轮项目重试可能已清脏，须复核后才阻断。
+    // 成功冲刷之后新增的编辑不属于失败，仍交下一轮固定点保存（#849）。
+    const canvasFailed = canvasFailure?.() ?? false
+    if (
+      canvasFailed ||
+      projects.length > 0 ||
+      sessions.length > 0 ||
+      settings > 0
+    ) {
+      onBlocked(
+        blockedMessage(
+          canvasFailed,
+          projects.length,
+          sessions.length,
+          settings,
+        ),
+      )
       return false
     }
     if (!hasPendingSaves() && (!fence || !hasPendingWebOperations())) break
