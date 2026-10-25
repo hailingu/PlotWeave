@@ -251,10 +251,12 @@ function applyUpdateMeta(
  * 零写入守卫不得以陈旧本地值放行。 */
 const lastPersistedAssets = new Map<string, LibraryAsset>()
 
-/** 库变更通知（issue #802）：put／元数据更新／删除每次成功落盘后发布，
- * 与 assetQueues／lastPersistedAssets 同层（会话级）。存活的面板实例
- * 订阅并重读列表——旧实例在面板重挂载后落定的成功结果无需再次失焦或
- * 重挂载即对当前实例可见；失败不发布（无新持久化状态）。 */
+/** 库变更通知（issue #802）：put 成功及 updateMeta／remove 落定（成功或
+ * 失败）后发布，与 assetQueues／lastPersistedAssets 同层（会话级）。存活
+ * 的面板实例订阅并失效重读列表——旧实例在面板重挂载后落定的成功结果
+ * 无需再次失焦或重挂载即对当前实例可见。失败也发布：失败自身不改存储，
+ * 但队列中前序成功可能仍被订阅方的在途投影保护挡住，队列清空的落定
+ * 通知让无未决意图的实例收敛到已落盘状态。 */
 const libraryChangeListeners = new Set<() => void>()
 
 /** 发布库变更：逐个同步通知（Set 迭代不受订阅方异步退订影响），单个
@@ -331,7 +333,8 @@ export const libraryStore = {
   /** 元数据补丁更新：门面层按资产串行（见 assetQueues）——跨面板挂载
    * 与跨消费方（改名/标签同走此口）保证到达存储的顺序与发起顺序一致；
    * 每次成功（含发起方实例已卸载）都推进 lastPersistedAssets 基线并
-   * 发布库变更通知（issue #802）。 */
+   * 发布库变更通知（issue #802，落定即发布，失败通知理由见
+   * notifyLibraryChange 文档）。 */
   updateMeta: (
     id: string,
     patch: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'groupId' | 'view'>>,
@@ -344,10 +347,7 @@ export const libraryStore = {
       lastPersistedAssets.set(id, { ...updated })
       return updated
     })
-    void run.then(
-      () => notifyLibraryChange(),
-      () => {},
-    )
+    void run.then(notifyLibraryChange, notifyLibraryChange)
     return run
   },
 
@@ -363,13 +363,10 @@ export const libraryStore = {
   hasPendingOperation: (id: string): boolean => assetQueues.has(id),
 
   /** 删除排在该资产的既有更新之后，避免抢先删除使排队更新失去目标；
-   * 成功落盘后发布库变更通知（issue #802，注册序同 updateMeta）。 */
+   * 落定（成功或失败）即发布库变更通知（issue #802，注册序同 updateMeta）。 */
   remove: (id: string): Promise<void> => {
     const run = enqueueAssetOperation(id, () => applyRemove(id))
-    void run.then(
-      () => notifyLibraryChange(),
-      () => {},
-    )
+    void run.then(notifyLibraryChange, notifyLibraryChange)
     return run
   },
 

@@ -301,6 +301,31 @@ describe('成功写入跨重挂载的即时收敛（issue #802）', () => {
   })
 })
 
+describe('浏览器预览导入的回执幂等（issue #802 评审）', () => {
+  it('通知重读先于导入回执落地时不重复显示', async () => {
+    // 纯浏览器预览（内存回退）：list() 即时 resolve，put 的通知重读可
+    // 先于导入回执追加落地——回执必须按资产 id 幂等合并。隐藏文件入口
+    // 的直选默认导入「其他」分类。
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__')
+    try {
+      await libraryStore.put(directFile('预览存量.png'), 'other')
+      render(<AssetsPanel />)
+      fireEvent.click(await screen.findByText('其他'))
+      await screen.findByRole('button', { name: '删除资产 预览存量.png' })
+      pickFiles(['预览新增.png'])
+      expect(
+        await screen.findAllByRole('button', { name: '预览新增.png' }),
+      ).toHaveLength(1)
+      expect(await libraryStore.list()).toHaveLength(2)
+    } finally {
+      Object.defineProperty(window, '__TAURI_INTERNALS__', {
+        configurable: true,
+        value: {},
+      })
+    }
+  })
+})
+
 describe('收敛重读的保留回归（issue #802）', () => {
   it('旧 B 落盘触发重读不抢占本实例在途草稿 C；C 落盘后收敛', async () => {
     const storage = remountStorage()
@@ -367,6 +392,32 @@ describe('收敛重读的保留回归（issue #802）', () => {
       { tags: ['B'] },
       { name: '旁路.png' },
     ])
+  })
+
+  it('B 落盘、C 失败后，新面板无未决意图即收敛到 B', async () => {
+    const storage = remountStorage()
+    const writingB = storage.holdUpdate('tags:B')
+    const writingC = storage.holdUpdate('tags:C')
+    const oldPanel = await mountCharacter()
+    await editTags('B')
+    await editTags('C')
+    oldPanel.unmount()
+
+    await mountCharacter()
+    const input = screen.getByLabelText<HTMLInputElement>('资产标签 角色')
+    expect(input.value).toBe('A')
+
+    await act(async () => {
+      writingB.resolve()
+    })
+    // B 落盘时 C 仍在途，新面板保留 A 投影；C 随后失败（队列清空）也
+    // 发布通知——新实例没有未决意图，收敛到已落盘的 B。
+    await act(async () => {
+      writingC.reject(new Error('保存失败'))
+    })
+    await waitFor(() => expect(input.value).toBe('B'))
+    expect(storage.readNames()).toEqual(['角色'])
+    expect((await libraryStore.list())[0]?.tags).toEqual(['B'])
   })
 
   it('乱序防护：迟到的初始读取不回退已收敛列表', async () => {

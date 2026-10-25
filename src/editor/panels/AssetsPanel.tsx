@@ -18,7 +18,6 @@ import {
   failRename,
   forgetRename,
   renameErrorsSnapshot,
-  renameBaselineSnapshot,
   subscribeRenameErrors,
 } from './assetsRenameState'
 import { PW_LIBRARY_ASSET_MIME } from '../dragDrop'
@@ -27,6 +26,7 @@ import { ConfirmDeleteDialog } from '../../home/Dialogs'
 import { LibraryWarnings } from './LibraryWarnings'
 import { useAssetImport } from './useAssetImport'
 import { useLibraryAssetList } from './useLibraryAssetList'
+import { useAssetRemoval, type AssetRemoval } from './useAssetRemoval'
 import {
   isWebExitPending,
   reportWebExitPending,
@@ -47,23 +47,6 @@ type AssetTagsIntent = 'edit' | 'draft' | 'none'
  * 与项目的流转（§7.3）：缩略图即拖拽把手，拖上画布分镜卡拷贝进项目
  * 并绑定引用位（dragDrop 协议 + useCanvasDrop 承接）。
  */
-/** Confirmation retains its displayed asset and an independently captured durable name for a rejected deletion. */
-interface AssetRemoval {
-  readonly asset: LibraryAsset
-  readonly fallbackName: string
-}
-
-/** Opening a dialog must not clear rename state; confirmed metadata can still advance before deletion finishes. */
-function assetRemovalTarget(asset: LibraryAsset): AssetRemoval {
-  return {
-    asset,
-    fallbackName:
-      libraryStore.persistedSnapshot(asset.id)?.name ??
-      renameBaselineSnapshot(asset.id) ??
-      asset.name,
-  }
-}
-
 /** 确认后执行删除（AssetsPanel 拆分，issue #99）：移除列表项并回收缩
  * 略 URL（blob: 回收防长会话内存泄漏）；落盘删除交给库门面。仅在
  * ConfirmDeleteDialog 确认后调用。行先乐观隐藏，拒绝恢复最近落盘条目；
@@ -503,8 +486,6 @@ export function AssetsPanel() {
     releaseProjection,
   } = useLibraryAssetList()
   const [selectedKind, setSelectedKind] = useState<LibraryKind | null>(null)
-  /** 待删除资产（非 null 时弹应用内确认框）。 */
-  const [pendingRemove, setPendingRemove] = useState<AssetRemoval | null>(null)
   const count = (kind: LibraryKind) =>
     assets.filter((a) => a.kind === kind).length
   const { busy, fileRef, importFiles, onPick } = useAssetImport(
@@ -519,20 +500,17 @@ export function AssetsPanel() {
     releaseProjection,
   )
   const { rename, renameError, forgetRename } = useAssetRename(setAssets)
-
-  const remove = ({ asset, fallbackName }: AssetRemoval) => {
-    forgetTags(asset.id)
-    forgetRename(asset.id)
-    const fallback = { ...asset, name: fallbackName }
+  const removeAsset = (asset: LibraryAsset) =>
     removeLibraryAsset(
-      fallback,
+      asset,
       hideAsset,
       unhideAsset,
       setAssets,
       forgetUrl,
       setError,
     )
-  }
+  const { pendingRemove, requestRemove, confirmRemove, closeRemove } =
+    useAssetRemoval(forgetTags, forgetRename, removeAsset)
 
   return (
     <div className="pw-assets">
@@ -541,30 +519,21 @@ export function AssetsPanel() {
         fileRef={fileRef}
         onFiles={(files) => void importFiles(files)}
       />
-      {selectedKind === null ? (
-        <AssetKindGrid
-          busy={busy}
-          count={count}
-          onOpen={setSelectedKind}
-          onPick={onPick}
-        />
-      ) : (
-        <AssetKindList
-          kind={selectedKind}
-          assets={assets}
-          urls={urls}
-          busy={busy}
-          onBack={() => setSelectedKind(null)}
-          onPick={onPick}
-          thumbErrors={thumbErrors}
-          onVisible={refreshUrl}
-          onRename={rename}
-          onTagsBlur={commitTags}
-          onRequestRemove={(asset) =>
-            setPendingRemove(assetRemovalTarget(asset))
-          }
-        />
-      )}
+      <AssetsPanelMain
+        kind={selectedKind}
+        assets={assets}
+        urls={urls}
+        busy={busy}
+        thumbErrors={thumbErrors}
+        count={count}
+        onOpenKind={setSelectedKind}
+        onBack={() => setSelectedKind(null)}
+        onPick={onPick}
+        onRename={rename}
+        onTagsBlur={commitTags}
+        onRequestRemove={requestRemove}
+        onVisible={refreshUrl}
+      />
       {busy && !loading && <div className="pw-assets-hint">导入中…</div>}
       <AssetFeedback
         loading={loading}
@@ -574,10 +543,71 @@ export function AssetsPanel() {
       />
       <RemoveAssetDialog
         target={pendingRemove}
-        onClose={() => setPendingRemove(null)}
-        onConfirm={remove}
+        onClose={closeRemove}
+        onConfirm={confirmRemove}
       />
     </div>
+  )
+}
+
+/** 面板主视图切换（AssetsPanel 拆分，issue #802 评审）：分类网格与
+ * 类别内列表的二选一渲染——纯展示编排，状态与操作均由 AssetsPanel 持有。 */
+function AssetsPanelMain({
+  kind,
+  assets,
+  urls,
+  busy,
+  thumbErrors,
+  count,
+  onOpenKind,
+  onBack,
+  onPick,
+  onRename,
+  onTagsBlur,
+  onRequestRemove,
+  onVisible,
+}: {
+  readonly kind: LibraryKind | null
+  readonly assets: LibraryAsset[]
+  readonly urls: Record<string, string>
+  readonly busy: boolean
+  readonly thumbErrors: Record<string, string>
+  readonly count: (kind: LibraryKind) => number
+  readonly onOpenKind: (kind: LibraryKind) => void
+  readonly onBack: () => void
+  readonly onPick: (kind: LibraryKind) => void
+  readonly onRename: (asset: LibraryAsset, name: string) => void
+  readonly onTagsBlur: (
+    asset: LibraryAsset,
+    raw: string,
+    intent: AssetTagsIntent,
+  ) => void
+  readonly onRequestRemove: (asset: LibraryAsset) => void
+  readonly onVisible: (asset: LibraryAsset) => void
+}) {
+  if (kind === null)
+    return (
+      <AssetKindGrid
+        busy={busy}
+        count={count}
+        onOpen={onOpenKind}
+        onPick={onPick}
+      />
+    )
+  return (
+    <AssetKindList
+      kind={kind}
+      assets={assets}
+      urls={urls}
+      busy={busy}
+      onBack={onBack}
+      onPick={onPick}
+      thumbErrors={thumbErrors}
+      onVisible={onVisible}
+      onRename={onRename}
+      onTagsBlur={onTagsBlur}
+      onRequestRemove={onRequestRemove}
+    />
   )
 }
 
