@@ -16,9 +16,9 @@
 | 变更范围 | 判定 | 推送门禁行为 |
 | --- | --- | --- |
 | docs-only | 所有变更路径为 `docs/**`、根 Markdown 或 `LICENSE` | 只运行 `scripts/check-docs.sh`（`git diff --check`）；跳过静态检查、覆盖率、Sonar 与推送台账记录。commit 钩子的完整门禁记录仍是证据。 |
-| frontend | 非文档路径只落在 `src/**` 与前端专属根配置 | 全量前端测试 + 前端覆盖率；Rust 复用主工作树最近 LCOV；Sonar 导入两侧报告。 |
-| rust | 非文档路径只落在 `src-tauri/**`、`crates/**`、`rust-toolchain.toml` | 全量 Rust 测试 + `rust-coverage.sh`；前端复用最近 LCOV；Sonar 导入两侧报告。 |
-| native | 非文档路径只落在 `native/**` | `sh scripts/test-native.sh` 构建画布并串行运行功能回归；压力测量按需运行（见下节）。前端/Rust 复用最近 LCOV；Sonar 导入两侧报告。原生代码不在 Sonar 源码范围，记录 `scope: native`。 |
+| frontend | 非文档路径只落在 `src/**` 与前端专属根配置 | 快路径：全量前端测试 + 前端覆盖率，Rust 复用主工作树最近 LCOV；慢路径自动提升为 full（见下）。Sonar 导入两侧报告。 |
+| rust | 非文档路径只落在 `src-tauri/**`、`crates/**`、`rust-toolchain.toml` | 快路径：全量 Rust 测试 + `rust-coverage.sh`，前端复用最近 LCOV；慢路径自动提升为 full（见下）。Sonar 导入两侧报告。 |
+| native | 非文档路径只落在 `native/**` | 快路径：`sh scripts/test-native.sh` 构建画布并串行运行功能回归，压力测量按需运行（见下节），前端/Rust 复用最近 LCOV；慢路径自动提升为 full（见下）。Sonar 导入两侧报告。原生代码不在 Sonar 源码范围，快路径记录 `scope: native`。 |
 | full | 跨栈、工具（`scripts/**`、`.githooks/**`、`.github/**`、根 linter/配置）、未知路径、空差异或无法确定基线 | 完整推送门禁：静态检查 + 前端/Rust 全量覆盖率 + native 功能回归 + Sonar；压力测量仍按需运行。 |
 
 实现与边界：
@@ -32,27 +32,57 @@
   交换 ref 顺序不改变最终范围。三个提交创建入口显式设置
   `PLOTWEAVE_GATE_SCOPE=full PLOTWEAVE_GATE_FULL_NATIVE=0`，外部环境不能把提交门禁降为推送单栈路径，也不能继承推送专属成本。
 - `full` 推送显式设置 `PLOTWEAVE_GATE_FULL_NATIVE=1`，保守执行三栈检查，
-  包括合并范围、工具变更和无法确定基线；调用方的 `0` 不能降级。共享门禁
-  只接受 `0`/`1`，非法值以 `[GATE_FULL_NATIVE_INVALID]` 阻断。直接调用默认
-  `0`，保持既定提交门禁成本；手动验证完整推送须显式设为 `1`。
+  包括合并范围、工具变更、无法确定基线，以及慢路径单栈提升而来的 full
+  （issue #805）；调用方的 `0` 不能降级。共享门禁只接受 `0`/`1`，非法值
+  以 `[GATE_FULL_NATIVE_INVALID]` 阻断。直接调用默认 `0`，保持既定提交
+  门禁成本；手动验证完整推送须显式设为 `1`。
 - `pre-push` 把范围经 `PLOTWEAVE_GATE_SCOPE` 传给
   `scripts/sonar-quality-gate.sh`；未变更栈的 LCOV 经
   `PLOTWEAVE_REUSED_FRONTEND_LCOV` / `PLOTWEAVE_REUSED_RUST_LCOV` 指向
-  主工作树最近产物。缺文件、报告为空/无源文件/无覆盖行时 fail-closed，
-  禁止 Sonar 在缺少一侧报告时静默降级。
+  主工作树最近产物。该分派只在快路径（被推提交即 `HEAD` 且当前工作树
+  可证等价）下发；慢路径不下发范围与复用环境（见下条）。快路径下缺
+  文件、报告为空/无源文件/无覆盖行时 fail-closed，禁止 Sonar 在缺少
+  一侧报告时静默降级。
 - 单栈只跑该栈的全量回归与覆盖率；“代码覆盖率全量更新”指变更栈的完整
   栈内覆盖率，不是只测变更文件；未变更栈复用最近 LCOV，不重跑其测试。
-- 原生功能回归采集独立的 Swift App 行覆盖率报告（[#601](https://github.com/hailingu/PlotWeave/issues/601)，[报告与阈值规则](native-coverage.md)），默认先报告、不设百分比下限；显式下限低于要求或源文件清单不完整时失败。采集无效与原生测试失败同样阻断推送。前端/Rust LCOV 按上述复用；Sonar 对原生源码不建模，台账的 `scope: native` 明示该边界。
+- 原生功能回归采集独立的 Swift App 行覆盖率报告（[#601](https://github.com/hailingu/PlotWeave/issues/601)，[报告与阈值规则](native-coverage.md)），默认先报告、不设百分比下限；显式下限低于要求或源文件清单不完整时失败。采集无效与原生测试失败同样阻断推送。前端/Rust LCOV 按上述复用；Sonar 对原生源码不建模，快路径台账的 `scope: native` 明示该边界。
 - docs-only 不写推送台账；普通 commit 钩子已产生的全量记录继续作为
   gate-evidence 证据。若 docs-only 提交绕过 commit 钩子创建，则没有该
   记录——这与既有 hook 覆盖边界一致，不是新豁免。
-- 单栈慢路径在临时 worktree 中运行，复用的 LCOV 来自主工作树最近门禁；
-  若未变更栈代码已相对该报告变化，复用值可能陈旧。此时应运行完整门禁；
-  该边界不改变“变更栈覆盖率必须刷新”的要求。
+- **慢路径单栈自动提升为 full（[issue #805](https://github.com/hailingu/PlotWeave/issues/805)，2026-10-25）。**
+  单栈复用 LCOV 只在快路径成立：快路径证明当前工作树与被推提交等价，
+  主工作树最近报告与被推树同源。慢路径（临时 worktree）此前仍把复用
+  报告指向主工作树，而主工作树源码可以与被推树的未变更栈不同——旧
+  报告无法证明属于被推树，曾被登记为「此时应运行完整门禁」的人工
+  边界；该提升现由钩子自动执行：单栈慢路径以稳定诊断代码
+  `PRE_PUSH_SCOPE_ESCALATED` 输出后按 full 执行，两栈覆盖率在被推树
+  内刷新，`PLOTWEAVE_GATE_FULL_NATIVE=1` 照常下发，主工作树旧报告不
+  进入 Sonar 或推送台账（台账如实记录 `scope: full`）。快路径的复用
+  值仍以「主工作树最近一次门禁产物」为界——报告相对当前树自身的
+  陈旧性是既有残余（上次门禁后经未覆盖路径产生的提交等），不因本次
+  修复改变。
 
 回归：`scripts/gate-scope.test.ts` 覆盖分类与 CLI；`scripts/pre-push-refs.test.ts`
-覆盖 docs-only 跳过、单栈分派与复用路径；`scripts/sonar-quality-gate.test.ts`
-覆盖 frontend/rust/native 分流、缺 LCOV fail-closed 与 native 失败阻断。
+覆盖 docs-only 跳过、快路径单栈分派与复用路径，以及慢路径单栈提升为
+full、不向门禁下发复用环境、在被推树内刷新两栈覆盖率与原生回归
+（issue #805）；`scripts/sonar-quality-gate.test.ts` 覆盖 frontend/rust/native
+分流、缺 LCOV fail-closed 与 native 失败阻断。
+
+### 慢路径单栈提升矩阵（issue #805）
+
+`pre-push` 拥有快/慢判定与范围提升；共享门禁拥有覆盖率生成与台账记录。
+提升只改变单栈慢路径的范围环境，不新增异步状态；信号清理、临时树管理
+与监督语义沿用既有契约。
+
+| 前置状态 | 动作/顺序 | 预期可观察结果 | 跨转换不变量 | 验证 |
+| --- | --- | --- | --- | --- |
+| 单栈提交 = `HEAD` 且工作树可证等价 → 推送 | 快路径下发单栈范围与复用 LCOV | 变更栈全量覆盖率刷新，另一栈复用主工作树报告 | 快路径的单栈成本决策与缺报告 fail-closed 不变 | pre-push-refs 既有「单栈 %s 只分派 %s 范围并复用另一侧 LCOV」回归 |
+| 单栈提交非 `HEAD` 或工作树不可证等价，主工作树未变更栈源码与被推树不同 → 推送 | 快/慢判定先于范围环境设置；提升 full 后临时 worktree 安装并执行完整门禁 | `PRE_PUSH_SCOPE_ESCALATED` 诊断；门禁收不到范围与复用环境；两栈覆盖率在被推树内刷新；台账 `scope: full` 且 `head` 为被推提交 | 被推树的 Sonar 与台账只消费按该树生成的覆盖率；主工作树 LCOV 不进入慢路径扫描；docs-only、同提交多 ref 去重与变更栈全量刷新保留 | pre-push-refs 慢路径提升回归（探针断言无复用环境）与完整门禁集成回归（npm/cargo/xcodebuild 均执行） |
+| full / 跨栈 / 工具 / 无法确定基线 → 推送 | 行为不变 | 完整推送门禁，`PLOTWEAVE_GATE_FULL_NATIVE=1` | 提升逻辑不削弱既有 full 行为 | pre-push-refs 既有混合范围与 missing-tip 回归 |
+| docs-only → 推送 | 行为不变 | 仅 `check-docs.sh`，无门禁与台账 | docs 分流先于快/慢判定与提升 | pre-push-refs 既有 docs-only 回归 |
+
+残余边界：快路径复用报告相对当前树自身的陈旧性（上次门禁后被推入的
+提交未刷新主工作树报告）不属于本矩阵修复范围，沿用上一条的既有登记。
 
 ### PR #604 修复状态与不变量矩阵
 
@@ -178,7 +208,10 @@ The issue #405 fix, wired 2026-09-30, closes it:
   input equality (PR #442 review 5361127076). Untracked documentation also
   triggers isolation; ignored generated artifacts retain the existing fast
   path behavior.
-  For a `full`-scope push the gate runs fresh frontend/Rust coverage and native functional regression before Sonar; the scoped routes above select a single stack.
+  For a `full`-scope push the gate runs fresh frontend/Rust coverage and native functional regression before Sonar; the scoped routes above select a single stack — but only on this fast path, where the current working tree is provably identical to the pushed commit, so the main worktree's reused LCOV is same-origin. A scoped range that takes the slow path escalates to the complete gate before dispatch, because the main worktree's reports cannot be proven to belong to the pushed tree
+  ([issue #805](https://github.com/hailingu/PlotWeave/issues/805);
+  the escalation matrix is recorded under
+  [Scoped Push Routing](#scoped-push-routing-2026-10-18)).
 - **Slow path — temporary worktree.** Every other commit — a non-checked-out
   ref, a dirty worktree, or an additional distinct commit in a multi-ref
   push — is checked out with

@@ -83,6 +83,7 @@ export default defineConfig({
         'scripts/gate-routing-probe.ts',
         'scripts/git-scenario-fixture.ts',
         'scripts/native-coverage-fixture.ts',
+        'scripts/pre-push-scenario-fixture.ts',
         'scripts/fixtures/**',
       ],
     },

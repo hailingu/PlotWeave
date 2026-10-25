@@ -42,6 +42,7 @@ const testFacilities = [
   'scripts/gate-routing-probe.ts',
   'scripts/git-scenario-fixture.ts',
   'scripts/native-coverage-fixture.ts',
+  'scripts/pre-push-scenario-fixture.ts',
   'scripts/fixtures/library-import-probe.ts',
 ] as const
 
