@@ -215,10 +215,12 @@ pub fn verify_asset_real_path(
     id: &str,
     rel_path: &str,
 ) -> Result<cap_std::fs::File, StoreError> {
-    // 历史行为：资产根元数据读取的任何失败（含权限等 I/O 错误）一律按
-    // 「资产文件不存在」上报——无底层来源可保留，语义保持不变
-    let root_md = root.symlink_metadata(id).map_err(|_| {
-        StoreError::missing(format!("项目资产根不存在，资产文件不存在：{rel_path}"))
+    let root_md = root.symlink_metadata(id).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            StoreError::missing(format!("项目资产根不存在，资产文件不存在：{rel_path}"))
+        } else {
+            StoreError::io(format!("读取项目资产根元数据失败（{rel_path}）"), e)
+        }
     })?;
     if root_md.file_type().is_symlink() {
         return Err(StoreError::refused(format!(
@@ -286,8 +288,46 @@ pub(crate) fn verify_save_asset_files(
     assets: &serde_json::Value,
 ) -> Result<Vec<cap_std::fs::File>, StoreError> {
     let mut handles = Vec::new();
-    let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
+    if assets
+        .get("byId")
+        .and_then(serde_json::Value::as_object)
+        .is_none_or(serde_json::Map::is_empty)
+    {
         return Ok(handles);
+    }
+    // cap-std 逐组件打开、原子写与目录 fsync 均短暂需要额外句柄。
+    // 在持有全部资产时仍验证这份余量；释放后才允许提交，避免先写后耗尽。
+    // 额度由内核的当前进程限制实际裁决，不修改 RLIMIT_NOFILE。
+    const SAVE_IO_HEADROOM: usize = 8;
+    let _headroom = (0..SAVE_IO_HEADROOM)
+        .map(|_| {
+            root.try_clone()
+                .map_err(|e| StoreError::io("预留保存 I/O 文件描述符失败", e))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    visit_save_asset_files(root, id, assets, |file| handles.push(file))?;
+    Ok(handles)
+}
+
+/// 写后逐项复验并立即释放临时句柄；调用方仍持有第一轮全部已绑定实体，
+/// 第二轮额外描述符数不随资产数增长（issue #848）。
+pub(crate) fn recheck_save_asset_files(
+    root: &CapDir,
+    id: &str,
+    assets: &serde_json::Value,
+) -> Result<(), StoreError> {
+    visit_save_asset_files(root, id, assets, drop)
+}
+
+/// 两轮共用同一 no-follow 校验入口；句柄的生命周期由本轮消费者决定。
+fn visit_save_asset_files(
+    root: &CapDir,
+    id: &str,
+    assets: &serde_json::Value,
+    mut accept: impl FnMut(cap_std::fs::File),
+) -> Result<(), StoreError> {
+    let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
+        return Ok(());
     };
     for (key, entry) in by_id {
         let Some(rel) = entry.get("relPath").and_then(|v| v.as_str()) else {
@@ -298,9 +338,9 @@ pub(crate) fn verify_save_asset_files(
         }
         let handle =
             verify_asset_real_path(root, id, rel).map_err(|e| e.prefixed(format!("资产 {key}")))?;
-        handles.push(handle);
+        accept(handle);
     }
-    Ok(handles)
+    Ok(())
 }
 /// §7.1/§10.5 加载侧资产实路径复验内核：返回文档 assets.byId 中词法合法、
 /// 但以受信资产根 no-follow 验证失败（缺失/符号链接/非普通文件/逃逸）的
