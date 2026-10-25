@@ -58,7 +58,7 @@ Useful direct checks:
 - Frontend and shared static checks: `npm run format:check && npm run lint && npm run typecheck:strict && npm run build`
 - Frontend tests: `npm test`
 - Maintained source size: `npm run check:size` (includes extracted Rust crates and native Swift sources).
-- Rust checks from either `src-tauri/` or `crates/`: `npm --prefix .. run check:size && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`
+- Rust checks from either `src-tauri/` or `crates/`: `npm --prefix .. run check:size && npm --prefix .. run check:workspace-drift && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (the same command set and order as the `src-tauri/**` and `crates/**` Scope Routing rows in `AGENTS.md`; `check:workspace-drift` is the dual-workspace dependency drift guard from [issue #549](https://github.com/hailingu/PlotWeave/issues/549), which the hosted Rust CI job also runs before its Cargo checks).
 - Complete local quality gate: `npm run sonar:gate`
 
 Gate-workflow regression imports the explicitly approved historical Git objects from the local repository and requires a full Git clone, as used by frontend CI. Source archives remain usable for the source-build commands; the history-dependent regression requires the clone's Git objects.
