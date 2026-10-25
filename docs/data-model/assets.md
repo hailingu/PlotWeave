@@ -107,7 +107,7 @@ interface AssetGroup {
 - **旧库索引兼容迁移（已实现）**：当前 `library.json` 使用 `assets.byId`/`groups.byId` Record；旧格式使用 `assets: LibraryAsset[]`/`groups: AssetGroup[]`，条目 `createdAt` 是 epoch 毫秒、`source` 缺失，且可选 `view`/`groupId` 用 `null` 表示。读取旧格式时先安全预检两个数组及普通对象成员，按 §11.1 键控桶同款的数组键化规则校验 id：重复 id 保留文档序首项、后续项重发本域未占用 id，缺失/非字符串/空白 id 同样重发，最后才键化为 `assets.byId`/`groups.byId`。组 id 重复时既有 `groupId` 引用本就解析到首项，不随后续项重发而改接；仅一个空白原 id 组时建立映射并同步改写精确匹配的 `groupId`，多个同值空白组则映射歧义，删除相关 `groupId` 并警告。当前库资产均由本地导入产生，缺失 `source` 确定性补为 `upload`，非负安全整数且能表示有效日期的毫秒时间戳转为 UTC ISO 8601，`null` 可选字段删除，旧 `prop` kind 按上条改写。完成这些兼容改写及 Record 键/id 引用同步后才按上一条顺序执行完整 `AssetGroup`、`LibraryAsset` 与跨条目 groupId/kind 校验；缺失/异型时间戳或显式未知 source 不得猜测，隔离条目并警告。不得把目标校验直接套在旧数组成员上，否则所有缺 source、数字时间戳的现有库资产都会被误删。
 - **迁移身份稳定性**：检测到迁移/修复即耐久回写，保证重发 id 跨读取稳定。只读告警态、迁移挂起态或损坏索引的局部视图不暴露未落定的新身份；不能在每次列表时再次产生漂移 id。
 - **绑定方式**：分类信息写在 `library.json` 索引项里、以资产 id 为键；改标签、换组、改视角只更新索引，不动媒体文件。
-- **快速读取**：`library.json` 启动时全量载入内存（桌面量级，数千条索引项仅数百 KB），列表页筛选/搜索全走内存过滤，媒体文件懒加载。规模失控时再迁 SQLite（见十三）。Swift 原生侧目前每次库操作重读并逐条规范化索引（而非仅启动时载入），实测 ≈ 530 µs/资产且约 85% 来自时间戳规范化：规模-耗时基线、归因与处置见[持久化 §10.2](persistence.md#102-写入安全)（[issue #730](https://github.com/hailingu/PlotWeave/issues/730)），时间戳规范化成本由 [issue #824](https://github.com/hailingu/PlotWeave/issues/824) 跟踪。
+- **快速读取**：`library.json` 启动时全量载入内存（桌面量级，数千条索引项仅数百 KB），列表页筛选/搜索全走内存过滤，媒体文件懒加载。规模失控时再迁 SQLite（见十三）。Swift 原生侧目前每次库操作重读并逐条规范化索引（而非仅启动时载入）：时间戳规范化成本已由 [issue #824](https://github.com/hailingu/PlotWeave/issues/824) 消除（严格快路径 + 共享缓存格式器，复测 ≈ 63 µs/资产、1600 资产列表中位 ≈ 100 ms），每次操作重读整份索引的设计层边界与完整规模-耗时基线见[持久化 §10.2](persistence.md#102-写入安全)（[issue #730](https://github.com/hailingu/PlotWeave/issues/730)）。
 
 #### 删除日志联合统计状态与不变量矩阵（issue #421）
 

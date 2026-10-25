@@ -27,24 +27,10 @@ enum NativeAssetContract {
     static func canonicalUTC(_ value: String) -> Bool { normalizedTimestamp(value) == value }
 
     /// Read normalization accepts explicit UTC offsets, while rejecting timezone-free and unsupported year shapes.
-    static func normalizedTimestamp(_ value: String) -> String? {
-        guard value.range(of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"#, options: .regularExpression) != nil else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let basic = ISO8601DateFormatter()
-        basic.formatOptions = [.withInternetDateTime]
-        guard let date = fractional.date(from: value) ?? basic.date(from: value) else { return nil }
-        let normalized = timestamp(date)
-        return normalized.range(of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"#, options: .regularExpression) != nil ? normalized : nil
-    }
+    static func normalizedTimestamp(_ value: String) -> String? { NativeTimestampParsing.normalizedTimestamp(value) }
 
     /// Newly materialized native assets always use explicit UTC milliseconds.
-    static func timestamp(_ date: Date = Date()) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return formatter.string(from: date)
-    }
+    static func timestamp(_ date: Date = Date()) -> String { NativeTimestampParsing.canonicalTimestamp(date) }
 
     /// Internal library callers use the same path rule rather than maintaining a second lexical grammar.
     static func validPath(_ value: String) -> Bool { activeRelPath(value) }

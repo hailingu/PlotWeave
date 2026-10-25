@@ -25,6 +25,56 @@ struct NativeAssetContractVectorTests {
         }
     }
 
+    /// Issue #824: timestamp accept/reject verdicts and normalized outputs are contract vectors that the
+    /// cached-tooling rewrite (strict fast path plus shared legacy formatters) must reproduce byte-for-byte.
+    @Test func timestampNormalizationVectors() throws {
+        let accepted: [(String, String)] = [
+            ("2026-10-04T00:00:00.000Z", "2026-10-04T00:00:00.000Z"),
+            ("2026-10-04T00:00:00Z", "2026-10-04T00:00:00.000Z"),
+            ("2026-10-04T00:00:00.5Z", "2026-10-04T00:00:00.500Z"),
+            ("2026-10-04T00:00:00.12Z", "2026-10-04T00:00:00.120Z"),
+            ("2026-10-04T00:00:00.123456Z", "2026-10-04T00:00:00.123Z"),
+            ("2026-10-04T08:00:00.000+08:00", "2026-10-04T00:00:00.000Z"),
+            ("2026-10-04T00:00:00-05:30", "2026-10-04T05:30:00.000Z"),
+            ("1969-12-31T23:59:59.999Z", "1969-12-31T23:59:59.999Z"),
+            ("2024-02-29T12:00:00.000Z", "2024-02-29T12:00:00.000Z"),
+            ("2026-10-04T00:00:00+00:00", "2026-10-04T00:00:00.000Z"),
+            ("2026-10-04T24:00:00.000Z", "2026-10-05T00:00:00.000Z"),
+            ("2023-02-29T00:00:00.000Z", "2023-03-01T00:00:00.000Z")
+        ]
+        for (input, expected) in accepted {
+            #expect(NativeAssetContract.normalizedTimestamp(input) == expected, "normalize \(input)")
+            if input == expected { #expect(NativeAssetContract.canonicalUTC(input)) }
+        }
+        let rejected = ["2026-13-01T00:00:00.000Z", "2026-00-04T00:00:00.000Z", "2026-10-00T00:00:00.000Z",
+                        "2026-10-04T00:60:00.000Z", "2026-10-04T00:00:60.000Z", "2026-10-04T00:00:00",
+                        "2026-10-04 00:00:00.000Z", "2026-10-04t00:00:00.000Z", "not-a-date", ""]
+        for input in rejected {
+            #expect(NativeAssetContract.normalizedTimestamp(input) == nil, "reject \(input)")
+            #expect(!NativeAssetContract.canonicalUTC(input), "not canonical \(input)")
+        }
+    }
+
+    /// Issue #824: envelope parsing accepts the same timestamp forms and resolves the same millisecond
+    /// instants as the library normalization contract.
+    @Test func envelopeParseTimeVectors() throws {
+        let accepted: [(String, Double)] = [
+            ("2026-10-04T00:00:00.000Z", 1_791_072_000.0),
+            ("2026-10-04T00:00:00Z", 1_791_072_000.0),
+            ("2026-10-04T00:00:00.5Z", 1_791_072_000.5),
+            ("2026-10-04T08:00:00+08:00", 1_791_072_000.0),
+            ("1969-12-31T23:00:00.000Z", -3_600.0)
+        ]
+        for (input, expected) in accepted {
+            let parsed = try #require(NativeProjectEnvelope.parseTime(input), "parse \(input)")
+            #expect(parsed.timeIntervalSince1970 == expected, "\(input) instant")
+        }
+        let rejected = ["", "not-a-date", "2026-10-04T00:00:00", "2026-10-04t00:00:00.000Z", "2026-10-04"]
+        for input in rejected {
+            #expect(NativeProjectEnvelope.parseTime(input) == nil, "reject \(input)")
+        }
+    }
+
     /// Real host I/O reports reserved entries, refuses an unrepaired save and preserves all quarantine bytes.
     @Test func quarantineAssetReferencesRecoverWithoutTouchingBytes() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("pw-active-contract-" + UUID().uuidString)
