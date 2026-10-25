@@ -300,12 +300,14 @@ function runStageMaterialize(
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
 
-/** 在真实 Git 提交钩子中运行物化，验证 Git 自身选择的索引及最终提交/索引状态。 */
+/** 在真实 Git 提交钩子中运行物化，验证 Git 自身选择的索引及最终提交/索引状态。
+ * root 可为链接 worktree：其检出不含未跟踪的空 scripts/ 目录，先补建再放脚本。 */
 function commitWithMaterialize(
   root: string,
   pendingPath: string,
   args: string[],
 ) {
+  mkdirSync(resolve(root, 'scripts'), { recursive: true })
   cpSync(
     resolve(repositoryRoot, 'scripts/gate-history.sh'),
     resolve(root, 'scripts/gate-history.sh'),
@@ -372,6 +374,38 @@ function isolatedGit(root: string, ...args: string[]): string {
   })
   expect(result.status, result.stderr).toBe(0)
   return result.stdout
+}
+
+/** 在夹具仓库内添加链接 worktree（issue #829 的触发路径）：Git 在其中运行提交
+ * 钩子时导出绝对 GIT_DIR 与 GIT_INDEX_FILE。worktree 置于仓库根下的子目录，
+ * 随夹具一并清理。 */
+function addLinkedWorktree(root: string): string {
+  const worktreeRoot = resolve(root, 'linked-worktree')
+  isolatedGit(root, 'worktree', 'add', '-b', 'task', worktreeRoot, 'main')
+  return worktreeRoot
+}
+
+const ledgerRelativePath = 'docs/development/gate-history.jsonl'
+
+/** 在链接 worktree 内按 prepare 布置台账形态，暂存一处无关改动并写入 pending，
+ * 再经真实 pre-commit 钩子提交（Git 向钩子导出绝对 GIT_DIR，issue #829）。 */
+function commitInLinkedWorktree(
+  pending: string,
+  prepare: (worktreeRoot: string) => void = () => {},
+) {
+  const { root, pendingPath } = prepareIsolatedRepository(`${seedRecord}\n`)
+  const worktreeRoot = addLinkedWorktree(root)
+  prepare(worktreeRoot)
+  writeFileSync(resolve(worktreeRoot, 'docs/development/.keepme'), 'changed\n')
+  isolatedGit(worktreeRoot, 'add', '--', 'docs/development/.keepme')
+  writeFileSync(pendingPath, pending)
+  const result = commitWithMaterialize(worktreeRoot, pendingPath, [])
+  return {
+    ledgerPath: resolve(worktreeRoot, ledgerRelativePath),
+    pendingPath,
+    result,
+    worktreeRoot,
+  }
 }
 
 describe(
@@ -846,6 +880,85 @@ describe(
         expect(state.stdout).toBe('')
       },
     )
+  },
+)
+
+describe(
+  '链接 worktree 钩子环境中的归因（issue #829）',
+  { timeout: 30_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
+    })
+
+    it('字节匹配的折并行自动暂存入库：HEAD 与工作树一致、pending 清空、无索引残留', () => {
+      const { ledgerPath, pendingPath, result, worktreeRoot } =
+        commitInLinkedWorktree(`${secondRecord}\n`)
+      const committed = isolatedGit(
+        worktreeRoot,
+        'show',
+        `HEAD:${ledgerRelativePath}`,
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).not.toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+      expect(committed).toBe(`${seedRecord}\n${secondRecord}\n`)
+      expect(readFileSync(ledgerPath, 'utf8')).toBe(committed)
+      expect(readFileSync(pendingPath, 'utf8')).toBe('')
+      expect(
+        isolatedGit(
+          worktreeRoot,
+          'status',
+          '--porcelain',
+          '--',
+          ledgerRelativePath,
+        ),
+      ).toBe('')
+    })
+
+    it('折并之外的人工追加仍不可归因：警告、不暂存，提交只含开发者的选择', () => {
+      const manualRecord = JSON.stringify({
+        tree: 'e'.repeat(40),
+        qualityGate: 'OK',
+        newCodeUnresolvedIssues: 0,
+      })
+      const { ledgerPath, pendingPath, result, worktreeRoot } =
+        commitInLinkedWorktree(`${secondRecord}\n`, (worktreeRoot) =>
+          appendFileSync(
+            resolve(worktreeRoot, ledgerRelativePath),
+            `${manualRecord}\n`,
+          ),
+        )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+      expect(
+        isolatedGit(worktreeRoot, 'show', `HEAD:${ledgerRelativePath}`),
+      ).toBe(`${seedRecord}\n`)
+      expect(readFileSync(ledgerPath, 'utf8')).toBe(
+        `${seedRecord}\n${manualRecord}\n${secondRecord}\n`,
+      )
+      expect(readFileSync(pendingPath, 'utf8')).toBe('')
+    })
+
+    it('已暂存的台账删除不被折并重建的台账替换：警告 GATE_HISTORY_STAGED_DELETION，提交保留删除', () => {
+      const { ledgerPath, pendingPath, result, worktreeRoot } =
+        commitInLinkedWorktree(`${secondRecord}\n`, (worktreeRoot) =>
+          isolatedGit(worktreeRoot, 'rm', '-q', '--', ledgerRelativePath),
+        )
+      const committed = spawnSync(
+        'git',
+        ['cat-file', '-e', `HEAD:${ledgerRelativePath}`],
+        { cwd: worktreeRoot, encoding: 'utf8', env: gitFixtureEnvironment() },
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).toContain('GATE_HISTORY_STAGED_DELETION')
+      // 删除随提交入库：HEAD 中没有台账路径，折并只重建了工作树文件
+      expect(committed.status).not.toBe(0)
+      expect(readFileSync(ledgerPath, 'utf8')).toBe(`${secondRecord}\n`)
+      expect(readFileSync(pendingPath, 'utf8')).toBe('')
+    })
   },
 )
 
