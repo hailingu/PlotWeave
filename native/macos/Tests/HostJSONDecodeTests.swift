@@ -4,9 +4,10 @@ import Testing
 
 /// Issue #825: `HostJSON.decode` is a drop-in for `JSONDecoder().decode(HostJSON.self, from:)` on the storage
 /// and WebKit hot paths. Its contract is equivalence — the same value for every document Codable accepts and
-/// rejection for every document Codable rejects — with `HostJSONParser` carrying canonical input and everything
-/// else falling back to Codable. Vectors run through both entries and compare bit-for-bit, so no assertion
-/// depends on Foundation's error prose.
+/// rejection for every document Codable rejects — with one owner-approved narrowing (issue #840): documents
+/// nesting deeper than `HostJSON.maxNestingDepth` are rejected up front with `PW_JSON_DEPTH_LIMIT`.
+/// `HostJSONParser` carries canonical input and everything else falls back to Codable. Vectors run through both
+/// entries and compare bit-for-bit, so no assertion depends on Foundation's error prose.
 struct HostJSONDecodeTests {
     /// Encoder output — what the store, the Web session and the fixtures write — takes the strict path and
     /// reproduces the original tree exactly under compact, pretty-printed and key-sorted formatting alike.
@@ -102,16 +103,78 @@ struct HostJSONDecodeTests {
         Data([0xEF, 0xBB, 0xBF, 0x7B, 0x7D]), Data([0xFF, 0xFE, 0x7B, 0x00, 0x7D, 0x00]), Data([0x7B, 0x00, 0x7D, 0x00]),
     ]
 
-    /// Nesting: documents up to `HostJSONParser.maxDepth` are decoded on the strict path, deeper ones are handed
-    /// to Codable, and both entries agree at every depth. Depths stay below Foundation's own recursion limit on
-    /// a 512 KiB test thread so the comparison exercises values, not stack exhaustion.
-    @Test(arguments: [1, 16, 64, 127, 128, 129, 160])
-    func nestingDepthMatchesCodable(depth: Int) throws {
+    /// Nesting within the owner-approved acceptance boundary (issue #840: real documents nest under 20, the
+    /// boundary is 32) decodes on the strict path at every depth up to and including the limit itself.
+    @Test(arguments: [1, 2, 16, 31, 32])
+    func nestingAtOrBelowTheLimitDecodesOnTheStrictPath(depth: Int) throws {
         let arrays = Data((String(repeating: "[", count: depth) + String(repeating: "]", count: depth)).utf8)
         let objects = Data((String(repeating: "{\"a\":", count: depth) + "1" + String(repeating: "}", count: depth)).utf8)
-        let strictHandles = depth <= HostJSONParser.maxDepth
-        try #require(expectEquivalent(arrays, strict: strictHandles) != nil)
-        try #require(expectEquivalent(objects, strict: strictHandles) != nil)
+        #expect(HostJSONParser.parse(arrays) != nil)
+        #expect(HostJSONParser.parse(objects) != nil)
+        try #require(expectEquivalent(arrays, strict: true) != nil)
+        try #require(expectEquivalent(objects, strict: true) != nil)
+    }
+
+    /// Nesting beyond the boundary is a structured rejection delivered before any recursive decode (issue #840),
+    /// so a deep control file can no longer exhaust a 512 KiB cooperative-thread stack. Vectors cover depths
+    /// Foundation itself used to accept (33–512) and depths its scan rejects outright (2000), pinning the
+    /// owner-approved acceptance-set narrowing. `PW_JSON_DEPTH_LIMIT` is the machine-readable contract.
+    @Test(arguments: [33, 34, 64, 128, 129, 160, 400, 512, 2000])
+    func nestingBeyondTheLimitIsRejectedBeforeRecursiveDecode(depth: Int) throws {
+        let arrays = Data((String(repeating: "[", count: depth) + String(repeating: "]", count: depth)).utf8)
+        let objects = Data((String(repeating: "{\"a\":", count: depth) + "1" + String(repeating: "}", count: depth)).utf8)
+        for data in [arrays, objects] {
+            do {
+                _ = try HostJSON.decode(data)
+                Issue.record("超过深度上限的文档应被拒绝：\(depth) 层")
+            } catch let failure as HostFailure {
+                #expect(failure.code == HostJSON.depthLimitCode)
+            }
+        }
+    }
+
+    /// The parser's own ceiling equals the acceptance boundary, so the strict path never returns a document
+    /// `decode` would then have to reject (issue #840).
+    @Test func parserCeilingMatchesTheAcceptanceBoundary() throws {
+        let limit = HostJSON.maxNestingDepth
+        let atLimit = Data((String(repeating: "[", count: limit) + String(repeating: "]", count: limit)).utf8)
+        let beyond = Data((String(repeating: "[", count: limit + 1) + String(repeating: "]", count: limit + 1)).utf8)
+        #expect(HostJSONParser.parse(atLimit) != nil)
+        #expect(HostJSONParser.parse(beyond) == nil)
+    }
+
+    /// The depth pre-scan on the fallback path is string-aware: brackets inside string values never count
+    /// toward depth, whatever their number (issue #840). The lenient vector carries a trailing comma so the
+    /// document actually reaches the scan instead of the strict parser.
+    @Test func bracketsInsideStringsNeverCountTowardDepth() throws {
+        let inner = String(repeating: "[{", count: 64)
+        let strict = Data(("[\"" + inner + "\"]").utf8)
+        #expect(try HostJSON.decode(strict) == .array([.string(inner)]))
+        let lenient = Data(("[\"" + inner + "\",1,]").utf8)
+        #expect(try HostJSON.decode(lenient) == .array([.string(inner), .number(1)]))
+    }
+
+    /// An escaped quote must not close the string mid-value: the scan keeps its string state aligned through
+    /// `\"` sequences, so brackets after an escaped quote still sit inside the value and stay uncounted (#840).
+    @Test func escapedQuotesKeepTheDepthScanInsideStrings() throws {
+        let tail = String(repeating: "[", count: 64)
+        let strict = Data(("[\"a\\\"b" + tail + "\"]").utf8)
+        #expect(try HostJSON.decode(strict) == .array([.string("a\"b" + tail)]))
+        let lenient = Data(("[\"a\\\"b" + tail + "\",1,]").utf8)
+        #expect(try HostJSON.decode(lenient) == .array([.string("a\"b" + tail), .number(1)]))
+    }
+
+    /// The WebKit boundary shares the storage boundary: a projection tree nested beyond the limit fails
+    /// structurally instead of entering the app (issue #840).
+    @Test func webValueBeyondTheLimitFailsStructured() throws {
+        var deep: HostJSON = .number(1)
+        for _ in 0..<(HostJSON.maxNestingDepth + 8) { deep = .object(["a": deep]) }
+        do {
+            _ = try HostJSON(webValue: deep.webValue)
+            Issue.record("超过深度上限的 WebKit 载荷应被拒绝")
+        } catch let failure as HostFailure {
+            #expect(failure.code == HostJSON.depthLimitCode)
+        }
     }
 
     /// Seeded random trees — every value kind, awkward keys, empty containers — round-trip through

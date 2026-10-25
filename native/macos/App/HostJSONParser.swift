@@ -4,17 +4,19 @@ import Foundation
 /// per-type `try` cascade on the storage and WebKit hot paths (issue #825; ≈ 400 MiB/s against ≈ 47 MiB/s).
 /// It is deliberately narrower than Foundation: anything it does not handle — a BOM or non-UTF-8 encoding,
 /// trailing commas, duplicate keys, nesting beyond `maxDepth`, numbers that overflow or underflow `Double` —
-/// yields `nil` so `HostJSON.decode` can hand the bytes to `JSONDecoder`, which stays the single authority on
-/// acceptance and error text. Its one obligation is therefore: every document it does accept decodes to the
-/// value Codable would produce, bit for bit (`HostJSONDecodeTests`).
+/// yields `nil` so `HostJSON.decode` can decide the fallback; depth beyond its ceiling is a structured
+/// rejection at that boundary (issue #840), and everything else is decided by `JSONDecoder`, which stays the
+/// authority on acceptance and error text. Its one obligation is therefore: every document it does accept
+/// decodes to the value Codable would produce, bit for bit (`HostJSONDecodeTests`).
 struct HostJSONParser {
     /// Internal rejection marker; it never escapes `parse`, which reports every rejection as `nil`.
     private struct Rejected: Error {}
 
-    /// Recursion ceiling for this descent. Real documents nest under 20 levels; 128 keeps the parser far inside
-    /// a 512 KiB cooperative-thread stack in every build configuration (measured: the optimized parser survives
-    /// 512 levels there, the debug build 256). Deeper input is Codable's decision — Foundation accepts 512.
-    static let maxDepth = 128
+    /// Recursion ceiling for this descent; it equals `HostJSON.maxNestingDepth` because the strict path must
+    /// never return a document the depth boundary would then reject (issue #840 owner decision: real documents
+    /// nest under 20 levels, 32 is accepted with headroom, deeper is rejected before any recursive decode).
+    /// The parser stays far inside a 512 KiB cooperative-thread stack in every build configuration.
+    static let maxDepth = HostJSON.maxNestingDepth
 
     private let bytes: [UInt8]
     private var index = 0
