@@ -109,13 +109,7 @@ enum NativeProjectEnvelope {
     }
 
     /// ISO timestamps with timezone offsets/fractions sort by their actual instant.
-    static func parseTime(_ text: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let value = formatter.date(from: text) { return value }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: text)
-    }
+    static func parseTime(_ text: String) -> Date? { NativeTimestampParsing.parseTime(text) }
 
     /// Read-side extraction retains malformed/missing fields for the frontend's explicit repair and warning.
     private static func modernEnvelope(_ fields: [String: HostJSON], version: Double, versionless: Bool) -> HostJSON {

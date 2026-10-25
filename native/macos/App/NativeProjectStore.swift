@@ -155,7 +155,7 @@ actor NativeProjectStore {
     }
 
     /// Home order: newest instant first, unparsable stamps as oldest, ties by id. Each row's stamp is parsed
-    /// once up front because `parseTime` builds a formatter per call and the comparator runs O(N log N) times.
+    /// once up front so the O(N log N) comparator never re-parses the same stamp (issue #730).
     private static func newestFirst(_ metas: [HostJSON]) -> [HostJSON] {
         let keyed = metas.map { row in
             (row: row, updated: NativeProjectEnvelope.parseTime(row["updated_at"]?.string ?? "") ?? Date.distantPast, id: row["id"]?.string ?? "")
