@@ -227,7 +227,9 @@ describe('成功写入跨重挂载的即时收敛（issue #802）', () => {
     expect(screen.queryByRole('button', { name: '删除资产 角色' })).toBeNull()
     expect(storage.readNames()).toEqual(['新名'])
   })
+})
 
+describe('导入与删除的跨重挂载收敛（issue #802）', () => {
   it('导入落盘后，新面板无需额外交互即显示新资产且不重复', async () => {
     const storage = remountStorage()
     const importing = storage.holdImport('迟到导入.png')
@@ -392,6 +394,42 @@ describe('收敛重读的保留回归（issue #802）', () => {
       { tags: ['B'] },
       { name: '旁路.png' },
     ])
+  })
+})
+
+describe('终态与乱序的收敛（issue #802）', () => {
+  it('失败标签意图不冻结他实例改名：名称收敛、草稿保留（PR #835 评审）', async () => {
+    const storage = remountStorage()
+    const renaming = storage.holdUpdate('name:新名')
+    const oldPanel = await mountCharacter()
+    fireEvent.doubleClick(screen.getByRole('button', { name: '角色' }))
+    const nameInput = screen.getByRole('textbox', { name: '资产名 角色' })
+    fireEvent.change(nameInput, { target: { value: '新名' } })
+    fireEvent.keyDown(nameInput, { key: 'Enter' })
+    fireEvent.blur(nameInput)
+    await act(async () => {})
+    oldPanel.unmount()
+
+    await mountCharacter()
+    const writingC = storage.holdUpdate('tags:C')
+    await editTags('C')
+    await act(async () => {
+      renaming.resolve()
+    })
+    await act(async () => {
+      writingC.reject(new Error('保存失败'))
+    })
+    // C 失败后的重读只保留本地 tags 字段：他实例已落盘的改名收敛显示，
+    // 失败草稿 C 与错误仍保留。
+    expect(
+      await screen.findByRole('button', { name: '删除资产 新名' }),
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '删除资产 角色' })).toBeNull()
+    expect(screen.getByLabelText<HTMLInputElement>('资产标签 新名').value).toBe(
+      'C',
+    )
+    expect(screen.getByText(/保存失败/)).toBeTruthy()
+    expect(await libraryStore.list()).toMatchObject([{ name: '新名' }])
   })
 
   it('B 落盘、C 失败后，新面板无未决意图即收敛到 B', async () => {

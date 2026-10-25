@@ -23,9 +23,10 @@ export function useLibraryAssetList() {
   /** 本实例已确认删除、删除仍在途的资产：重读时不得让存储残影复活该行
    * （issue #802）；删除失败恢复时解除。 */
   const hiddenRemovals = useRef(new Set<string>())
-  /** 投影仍被本实例占有的资产（在途提交或未解决失败的标签重试意图）：
-   * 重读时保留本地投影（issue #802），由占有的提交钩子显式解除。 */
-  const ownedProjections = useRef(new Set<string>())
+  /** tags 投影被本实例占有的资产（在途提交或未解决失败的标签重试意图）：
+   * 重读时只保留本地 tags 字段（PR #835 评审：失败草稿可无限期占有，
+   * 不得冻结 name 等无关字段），由标签提交钩子显式解除。 */
+  const ownedTagsProjections = useRef(new Set<string>())
   useEffect(() => {
     let alive = true
     let latestLoad = 0
@@ -40,7 +41,7 @@ export function useLibraryAssetList() {
               local,
               fresh,
               hiddenRemovals.current,
-              ownedProjections.current,
+              ownedTagsProjections.current,
             ),
           )
         })
@@ -65,11 +66,11 @@ export function useLibraryAssetList() {
   const unhideAsset = (id: string) => {
     hiddenRemovals.current.delete(id)
   }
-  const ownProjection = (id: string) => {
-    ownedProjections.current.add(id)
+  const ownTagsProjection = (id: string) => {
+    ownedTagsProjections.current.add(id)
   }
-  const releaseProjection = (id: string) => {
-    ownedProjections.current.delete(id)
+  const releaseTagsProjection = (id: string) => {
+    ownedTagsProjections.current.delete(id)
   }
   return {
     assets,
@@ -79,8 +80,8 @@ export function useLibraryAssetList() {
     loading,
     hideAsset,
     unhideAsset,
-    ownProjection,
-    releaseProjection,
+    ownTagsProjection,
+    releaseTagsProjection,
     ...thumbnails,
   }
 }

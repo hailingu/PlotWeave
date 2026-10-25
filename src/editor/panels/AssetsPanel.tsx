@@ -294,13 +294,13 @@ function useAssetTagsErrors() {
  * 成功响应字段级合并同步，以及独立的标签错误横幅——按资产
  * 逐个记录未解决失败、自持展示状态，与导入/列表错误分属两行互不覆盖
  * （同文案也不误清）；任一资产成功或无写入的回退（放弃该次修改）都只
- * 解除自身错误。issue #802：提交即占有该行的列表投影，成功或终结时
- * 释放；未解决失败保留占有——收敛重读不得推进 saved 而清除保留的
- * 失败草稿显示。 */
+ * 解除自身错误。issue #802：提交即占有该行的 tags 投影，成功或终结时
+ * 释放；未解决失败保留占有——收敛重读不得推进 saved tags 而清除保留
+ * 的失败草稿显示（仅 tags 字段，见 assetsListReconciliation）。 */
 function useAssetTagsCommit(
   setAssets: (fn: (list: LibraryAsset[]) => LibraryAsset[]) => void,
-  ownProjection: (id: string) => void,
-  releaseProjection: (id: string) => void,
+  ownTagsProjection: (id: string) => void,
+  releaseTagsProjection: (id: string) => void,
 ) {
   /** 提交代际（issue #124）：assetId → 最新已发起提交的序号。 */
   const tagsCommitSeq = useRef(new Map<string, number>())
@@ -315,7 +315,7 @@ function useAssetTagsCommit(
     tagsCommitSeq.current.set(id, (tagsCommitSeq.current.get(id) ?? 0) + 1)
     pendingTags.current.delete(id)
     resolveTagsError(id)
-    releaseProjection(id)
+    releaseTagsProjection(id)
   }
 
   /** 排队一次标签写入：立即进入门面队列 + 代际守卫取用响应；成功只合并
@@ -328,14 +328,14 @@ function useAssetTagsCommit(
     const seq = (tagsCommitSeq.current.get(assetId) ?? 0) + 1
     tagsCommitSeq.current.set(assetId, seq)
     pendingTags.current.set(assetId, tags)
-    ownProjection(assetId)
+    ownTagsProjection(assetId)
     runWebOperation(() =>
       libraryStore.updateMeta(assetId, { tags }).then((updated) => {
         // 持久化基线由门面快照推进（跨挂载共享）：被取代的成功也落盘
         if (tagsCommitSeq.current.get(assetId) !== seq) return
         pendingTags.current.delete(assetId)
         resolveTagsError(assetId)
-        releaseProjection(assetId)
+        releaseTagsProjection(assetId)
         setAssets((list) => mergeAssetTags(list, assetId, updated.tags))
       }),
     ).catch((err) => {
@@ -482,8 +482,8 @@ export function AssetsPanel() {
     refreshUrl,
     hideAsset,
     unhideAsset,
-    ownProjection,
-    releaseProjection,
+    ownTagsProjection,
+    releaseTagsProjection,
   } = useLibraryAssetList()
   const [selectedKind, setSelectedKind] = useState<LibraryKind | null>(null)
   const count = (kind: LibraryKind) =>
@@ -496,8 +496,8 @@ export function AssetsPanel() {
   )
   const { commitTags, tagsError, forgetTags } = useAssetTagsCommit(
     setAssets,
-    ownProjection,
-    releaseProjection,
+    ownTagsProjection,
+    releaseTagsProjection,
   )
   const { rename, renameError, forgetRename } = useAssetRename(setAssets)
   const removeAsset = (asset: LibraryAsset) =>
