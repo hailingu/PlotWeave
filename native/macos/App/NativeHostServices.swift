@@ -8,8 +8,11 @@ import OSLog
 final class NativeHostServices {
     /// Native destination selection is test-injectable; production always presents the actual NSSavePanel.
     typealias SaveDestination = @MainActor (String) async throws -> URL?
+    /// Native export byte delivery is test-injectable; production always awaits the same detached atomic write.
+    typealias SaveWrite = @MainActor (Data, URL) async throws -> Void
     private let pasteboard: NSPasteboard
     private let saveDestination: SaveDestination
+    private let saveWrite: SaveWrite
     /// Production root is separate from Tauri's com.plotweave.app data and opens only on the first request.
     static let shared = NativeHostServices(dataRoot: developmentRoot())
     /// Host-injected app-data root; no Web payload can select a filesystem root.
@@ -24,15 +27,24 @@ final class NativeHostServices {
     let quit: HostQuitController
     /// App-level quit eligibility also covers direct native library writes, not only cross-bridge intents (issue #529).
     let libraryQuitWork = NativeLibraryQuitWork()
+    /// Direct native system deliveries (export save/copy) join the same quit fixed point (issue #804).
+    let systemQuitWork = NativeSystemQuitWork()
     /// Only the currently connected page may revoke the shared listener's pending quit decision.
     private weak var quitPage: WebCanvasCoordinator?
 
     /// Injectable construction gives real tests isolated storage without opening any directory.
-    init(dataRoot: URL?, quit: HostQuitController? = nil, pasteboard: NSPasteboard? = nil, saveDestination: SaveDestination? = nil) {
+    init(
+        dataRoot: URL?,
+        quit: HostQuitController? = nil,
+        pasteboard: NSPasteboard? = nil,
+        saveDestination: SaveDestination? = nil,
+        saveWrite: SaveWrite? = nil
+    ) {
         self.dataRoot = dataRoot
         self.quit = quit ?? .shared
         self.pasteboard = pasteboard ?? .general
         self.saveDestination = saveDestination ?? Self.chooseSaveDestination
+        self.saveWrite = saveWrite ?? Self.writeExportAtomically
         if let dataRoot {
             let projects = NativeProjectStore(root: dataRoot)
             let library = NativeLibrary(root: dataRoot)
@@ -55,11 +67,12 @@ final class NativeHostServices {
     func connect(_ coordinator: WebCanvasCoordinator) {
         quit.resetListener()
         quitPage = coordinator
-        quit.sendEvent = { [weak coordinator, libraryQuitWork] name, payload in
+        quit.sendEvent = { [weak coordinator, libraryQuitWork, systemQuitWork] name, payload in
             guard let coordinator else { throw HostFailure(code: "PW_PAGE_UNAVAILABLE", message: "画布页面不可用") }
             if name == "app-quit-requested" {
                 try await coordinator.drainNativeIntents?()
                 try await libraryQuitWork.drain()
+                try await systemQuitWork.drain()
             }
             try Task.checkCancellation()
             try await coordinator.dispatchEvent(name, payload: payload)
@@ -133,6 +146,9 @@ final class NativeHostServices {
             guard !libraryQuitWork.hasPendingBatches else {
                 throw HostFailure(code: "PW_NATIVE_LIBRARY_PENDING", message: "原生素材库写入尚未完成，已阻止退出；请等待后重试。")
             }
+            guard !systemQuitWork.hasPendingDeliveries else {
+                throw HostFailure(code: "PW_NATIVE_SYSTEM_PENDING", message: "原生导出交付尚未完成，已阻止退出；请等待后重试。")
+            }
             try quit.approve()
         case .bool(true): quit.cancel()
         default: throw HostFailure(code: "PW_INVALID_REQUEST", message: "退出 cancel 必须为布尔值")
@@ -185,9 +201,14 @@ final class NativeHostServices {
             throw invalidSystemArguments()
         }
         guard let url = try await saveDestination(name) else { return .object(["cancelled": .bool(true)]) }
-        do { try await Task.detached { try Data(text.utf8).write(to: url, options: .atomic) }.value }
+        do { try await saveWrite(Data(text.utf8), url) }
         catch { throw HostFailure(code: "PW_SAVE_FAILED", message: "导出文件写入失败：\(error.localizedDescription)") }
         return .object(["cancelled": .bool(false)])
+    }
+
+    /// Production keeps file I/O off the UI actor; the write gate stays injectable for deterministic quit timing (issue #804).
+    private static func writeExportAtomically(_ bytes: Data, to url: URL) async throws {
+        try await Task.detached { try bytes.write(to: url, options: .atomic) }.value
     }
 
     /// Production selection waits for the user's sheet decision without inventing an automatic timeout or retry.
