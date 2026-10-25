@@ -33,8 +33,12 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       # #618：high/critical 漏洞或审计执行失败均阻断；保留全量锁文件口径。
-      - name: npm audit --audit-level=high（issue #618；阻断）
-        run: npm audit --audit-level=high
+      # #741 方案 A：registry 审计端点的瞬时网络故障（超时/5xx/连接被拒/DNS）
+      # 先做有限次指数退避重试（默认 3 次），耗尽仍 fail-closed；真实发现
+      # 第一次即阻断、不重试。判别与重试逻辑在版本化脚本中，由
+      # scripts/ci-npm-audit.test.ts 以真实 npm + 本地 registry 替身回归。
+      - name: npm audit --audit-level=high（issues #618/#741；阻断）
+        run: sh scripts/ci-npm-audit.sh
       - run: npm ci
       - name: format:check（src 行）
         run: npm run format:check
