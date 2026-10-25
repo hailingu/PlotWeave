@@ -75,8 +75,13 @@ struct NativeExportView: View {
         // The user's immutable delivery request owns this adapter through the system service's
         // actual panel decision and awaited atomic write. It may complete after preview dismissal;
         // dismissal is not an I/O cancellation or a success receipt, and no editor write is owned here.
+        // Acceptance joins the app-level quit work set before the delivery task can start, so quit
+        // cannot pass an empty delivery window between the click and the task's first suspension (issue #804).
+        let quitWork = services.systemQuitWork
+        let delivery = UUID()
+        quitWork.accept(delivery)
         Task { @MainActor in
-            defer { delivering = false }
+            defer { quitWork.retire(delivery); delivering = false }
             do {
                 let result = try await services.perform(HostRequest(protocolVersion: 1, sessionId: "native-system", requestId: UUID().uuidString,
                     command: command, args: ["text": .string(text), "fileName": .string(name)]))

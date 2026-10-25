@@ -17,7 +17,10 @@
 # 变更范围（owner 指示 2026-10-18，见 quality-gate-push.md「Scoped Push
 # Routing」）：先按 base..commit 分类。docs-only 只跑 check-docs.sh，不
 # 安装依赖、不做覆盖率/Sonar、不写推送台账；单栈只跑该栈全量回归与覆盖
-# 率，另一栈复用主工作树最近 LCOV；跨栈/工具/未知/无基线走完整门禁。
+# 率，另一栈复用主工作树最近 LCOV——该复用仅限快路径（当前工作树可证
+# 等价被推提交）：慢路径无法证明主工作树报告属于被推树的未变更栈，单栈
+# 自动提升为 full，两栈覆盖率在临时 worktree 内按被推树刷新（issue #805，
+# 诊断代码 PRE_PUSH_SCOPE_ESCALATED）；跨栈/工具/未知/无基线走完整门禁。
 # commit-creating 钩子仍是完整统一门禁，不受此分派影响。
 # 同一提交被多个 ref 引用（分支 + 标签）只分析一次；删除 ref（本地
 # sha 全零）不导出代码，跳过。末行缺尾随换行的清单按字段残留检测并
@@ -356,43 +359,59 @@ while read -r commit ref_scope local_ref; do
   analyzed_commits="$analyzed_commits,$commit"
   short=$(git rev-parse --short "$commit")
   # 每次 ref 重置范围环境，避免同次多 ref 推送互相继承（owner 指示
-  # 2026-10-18：文档/单栈分流；docs 不跑代码回归/覆盖率，单栈只跑
-  # 该栈全量覆盖率，另一栈复用最近 LCOV）。
+  # 2026-10-18：文档/单栈分流；docs 不跑代码回归/覆盖率，单栈只跑该栈
+  # 全量覆盖率，另一栈复用最近 LCOV——复用仅限快路径，见下）。
   unset PLOTWEAVE_GATE_SCOPE PLOTWEAVE_REUSED_FRONTEND_LCOV \
     PLOTWEAVE_REUSED_RUST_LCOV 2>/dev/null || :
   gate_scope=$(aggregate_commit_scope "$commit")
-  # full 范围可能含原生变更或无法确定的路径，保守跑三栈；覆盖调用方环境。
-  PLOTWEAVE_GATE_FULL_NATIVE=0
-  if [ "$gate_scope" = 'full' ]; then
-    PLOTWEAVE_GATE_FULL_NATIVE=1
-  fi
-  export PLOTWEAVE_GATE_FULL_NATIVE
-  printf '[pre-push] 变更范围：%s（%s）\n' "$gate_scope" "$short"
   if [ "$gate_scope" = 'docs' ]; then
-    printf '[pre-push] 仅文档变更：跳过代码回归、覆盖率与 Sonar；commit 钩子的门禁记录保持不变。\n'
+    printf '[pre-push] 变更范围：%s（%s）\n' "$gate_scope" "$short"
+    printf '%s\n' '[pre-push] 仅文档变更：跳过代码回归、覆盖率与 Sonar；commit 钩子的门禁记录保持不变。\n'
     continue
   fi
-  if [ "$gate_scope" != 'full' ]; then
-    PLOTWEAVE_GATE_SCOPE=$gate_scope
-    PLOTWEAVE_REUSED_FRONTEND_LCOV=$main_root/coverage/lcov.info
-    PLOTWEAVE_REUSED_RUST_LCOV=$main_root/src-tauri/target/coverage/lcov-rust.info
-    export PLOTWEAVE_GATE_SCOPE PLOTWEAVE_REUSED_FRONTEND_LCOV \
-      PLOTWEAVE_REUSED_RUST_LCOV
-  fi
+  # 快/慢判定先于范围环境设置（issue #805）：单栈复用 LCOV 指向主工作树
+  # 固定路径，只有当前工作树可证等价被推提交（快路径）时，该报告才可
+  # 证明与被推树同源；慢路径无法证明来源，单栈自动提升为 full——两栈
+  # 覆盖率在临时 worktree 内按被推树刷新，主工作树旧报告不进入 Sonar
+  # 或台账，消除「单栈推送按另一棵树的未变更栈覆盖率放行」的缺口。
   head_commit=$(git rev-parse --verify --quiet HEAD 2>/dev/null || printf x)
   # 慢路径触发原因（issue #463）：被推提交非 HEAD 用缺省值；被推提交即
   # HEAD 但不可证等价时取 working_tree_represents_head 记录的首个失败
   # 前提。原因只用于诊断输出，不参与快/慢判定本身。
   slow_code=PRE_PUSH_SLOW_NOT_HEAD
   slow_detail='被推提交不是当前 HEAD'
+  fast_path_eligible=0
   if [ "$commit" = "$head_commit" ] && working_tree_represents_head; then
+    fast_path_eligible=1
+  elif [ "$commit" = "$head_commit" ]; then
+    slow_code=$fast_path_block_code
+    slow_detail=$fast_path_block_detail
+  fi
+  effective_scope=$gate_scope
+  if [ "$gate_scope" != 'full' ] && [ "$fast_path_eligible" -ne 1 ]; then
+    effective_scope=full
+    printf '[pre-push] 范围提升（PRE_PUSH_SCOPE_ESCALATED）：慢路径无法证明复用 LCOV 属于被推树，%s 提升为 full——两栈覆盖率在被推树内刷新（issue #805）\n' \
+      "$gate_scope"
+  fi
+  # full 推送保守覆盖全部实现栈（PR #604 评审 5560989008），提升而来的
+  # full 同样执行三栈；pre-push 强制为 1，三个提交入口强制为 0。
+  PLOTWEAVE_GATE_FULL_NATIVE=0
+  if [ "$effective_scope" = 'full' ]; then
+    PLOTWEAVE_GATE_FULL_NATIVE=1
+  fi
+  export PLOTWEAVE_GATE_FULL_NATIVE
+  printf '[pre-push] 变更范围：%s（%s）\n' "$effective_scope" "$short"
+  if [ "$effective_scope" != 'full' ]; then
+    PLOTWEAVE_GATE_SCOPE=$effective_scope
+    PLOTWEAVE_REUSED_FRONTEND_LCOV=$main_root/coverage/lcov.info
+    PLOTWEAVE_REUSED_RUST_LCOV=$main_root/src-tauri/target/coverage/lcov-rust.info
+    export PLOTWEAVE_GATE_SCOPE PLOTWEAVE_REUSED_FRONTEND_LCOV \
+      PLOTWEAVE_REUSED_RUST_LCOV
+  fi
+  if [ "$fast_path_eligible" -eq 1 ]; then
     printf '[pre-push] 门禁对象：%s（%s，当前工作树）\n' "$local_ref" "$short"
     supervise_child_process run_gate_for_current_tree
   else
-    if [ "$commit" = "$head_commit" ]; then
-      slow_code=$fast_path_block_code
-      slow_detail=$fast_path_block_detail
-    fi
     printf '[pre-push] 快路径不可达（%s）：%s——改用临时 worktree 分析被推提交\n' \
       "$slow_code" "$slow_detail"
     printf '[pre-push] 门禁对象：%s（%s，临时 worktree）\n' "$local_ref" "$short"
