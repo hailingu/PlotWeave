@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Native AI conversation controls present the existing single-owner session and validated command previews.
@@ -6,8 +7,8 @@ struct NativeAiView: View {
     let projectId: String
     @State private var draft = ""
     @State private var confirmClear = false
-    /// This presentation token permits only the current submission to consume an unchanged draft.
-    @State private var pendingSend: UUID?
+    /// This submission permits only the current in-flight send to consume an unchanged draft.
+    @State private var pending: PendingSubmission?
     private var ai: HostJSON { state.ai }
     private var busy: Bool { ai["busy"]?.bool == true }
     private var ready: Bool { ai["ready"]?.bool == true }
@@ -30,7 +31,7 @@ struct NativeAiView: View {
             composer
         }
         .padding(14)
-        .onDisappear { pendingSend = nil }
+        .onDisappear { pending = nil }
         .confirmationDialog("清空当前 AI 会话？", isPresented: $confirmClear) {
             Button("清空会话", role: .destructive) { send("ai.clear", args: ["confirmed": .bool(true)]) }
         } message: { Text("未确认的改动预览也会清除，此操作无法撤销。") }
@@ -79,8 +80,14 @@ struct NativeAiView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextEditor(text: $draft).frame(minHeight: 60, maxHeight: 120)
-                .scrollContentBackground(.hidden).padding(6)
-                .background(.background, in: .rect(cornerRadius: 6)).disabled(!ready || busy)
+                .scrollContentBackground(.hidden)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    Color.clear.frame(height: 6).allowsHitTesting(false)
+                }
+                .padding(6)
+                .background(.background, in: .rect(cornerRadius: 6)).disabled(!ready)
+                .onKeyPress(.return, phases: .down) { submitFromKeyboard($0) }
+                .onChange(of: ai["thread"]?.array.count) { _, _ in consumeAdmittedDraft() }
             modelPicker
             HStack {
                 Toggle("了解当前画布", isOn: Binding(get: { ai["knowsCanvas"]?.bool != false }, set: {
@@ -94,23 +101,64 @@ struct NativeAiView: View {
                         sendDraft()
                     }
                     .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(!ready || pendingSend != nil || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!ready || pending != nil || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
+    }
+
+    /// One in-flight submission owns its exact submitted snapshot; receipts and thread admission
+    /// may consume only that snapshot, never text typed afterwards.
+    private struct PendingSubmission: Equatable {
+        let token = UUID()
+        let text: String
+        let snapshot: String
+    }
+
+    /// Plain Return submits like the send button; Shift+Return and other modifiers keep AppKit's
+    /// newline editing, and an active input-method composition keeps Return for candidate
+    /// confirmation instead of sending (issue #744).
+    private func submitFromKeyboard(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.subtracting(.capsLock).isEmpty, !inputMethodComposing else { return .ignored }
+        guard pending == nil, ready, !busy,
+              !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .ignored }
+        sendDraft()
+        return .handled
+    }
+
+    /// The composer can only receive this press while focused, so the composing input, if any,
+    /// is the focused text input; its marked text marks Return as input-method-owned.
+    private var inputMethodComposing: Bool {
+        NSApp.windows.contains { ($0.firstResponder as? NSTextInputClient)?.hasMarkedText() == true }
     }
 
     /// Rejected sends retain their prompt; a successful Web acknowledgment consumes only the exact submitted snapshot.
     private func sendDraft() {
         let submitted = draft
         let text = submitted.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard pendingSend == nil, ready, !busy, !text.isEmpty else { return }
-        let token = UUID()
-        pendingSend = token
+        guard pending == nil, ready, !busy, !text.isEmpty else { return }
+        let submission = PendingSubmission(text: text, snapshot: submitted)
+        pending = submission
         state.send("ai.send", args: ["projectId": .string(projectId), "text": .string(text)]) { result in
-            guard pendingSend == token else { return }
-            pendingSend = nil
-            if case .success = result, draft == submitted { draft = "" }
+            guard pending == submission else { return }
+            pending = nil
+            if case .success = result, draft == submission.snapshot { draft = "" }
+        }
+    }
+
+    /// The Web owner appends the user message at dispatch; that admission consumes the draft
+    /// without waiting for the full model round, while the round receipt remains the rejection
+    /// fallback and late receipts cannot touch later drafts (issue #744).
+    private func consumeAdmittedDraft() {
+        guard let submission = pending, threadAdmitsUserText(submission.text) else { return }
+        pending = nil
+        if draft == submission.snapshot { draft = "" }
+    }
+
+    /// Admission is observable as the live projection containing the submitted user entry itself.
+    private func threadAdmitsUserText(_ text: String) -> Bool {
+        (ai["thread"]?.array ?? []).contains {
+            $0["role"]?.string == "user" && $0["text"]?.string == text
         }
     }
 
