@@ -824,31 +824,66 @@ describe('AssetsPanel 标签提交：多资产与跨操作错误（PR #176 评�
   })
 })
 
+/** 标题首帧就存在；导入按钮解除禁用才表明首读完成（#844）。 */
+async function waitForImportReady() {
+  await waitFor(() =>
+    expect(
+      (screen.getByRole('button', { name: '导入其他' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  )
+}
+
 describe('AssetsPanel 导入', () => {
   it('选择文件逐个写库并追加到列表；busy 期间禁用导入按钮', async () => {
     const spies = mockStore([])
-    spies.put.mockResolvedValue(
-      asset({ id: 'a9', name: '新图.png', kind: 'other' }),
+    // #844：首读跨任务完成，保留可使旧标题等待稳定失败的夹具（远小于 1 s）。
+    spies.list.mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(() => resolve([]), 25)),
+    )
+    let finishPut!: (value: LibraryAsset) => void
+    spies.put.mockImplementation(
+      () => new Promise((resolve) => (finishPut = resolve)),
     )
     render(<AssetsPanel />)
-    await screen.findByText('个人资产库 · 跨项目')
+    expect(screen.getByText('个人资产库 · 跨项目')).toBeTruthy()
+    expect(
+      (screen.getByRole('button', { name: '导入其他' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+    await waitForImportReady()
 
     const input = document.querySelector('input[type=file]') as HTMLInputElement
     const file = new File(['x'], '新图.png', { type: 'image/png' })
     // happy-dom 的 files 只有 getter，fireEvent 的 target 注入写不进，直接定义属性
     Object.defineProperty(input, 'files', { value: [file], configurable: true })
     fireEvent.change(input)
+    expect(spies.put).toHaveBeenCalledWith(file, 'other')
+    expect(
+      screen
+        .getAllByRole<HTMLButtonElement>('button', { name: /^导入/ })
+        .every((button) => button.disabled),
+    ).toBe(true)
     // 导入从分类列表发起：importKind 默认为 other，资产落「其他」类
     fireEvent.click(screen.getByText('其他'))
+    const importButton = screen.getByRole<HTMLButtonElement>('button', {
+      name: '＋ 导入',
+    })
+    expect(importButton.disabled).toBe(true)
+    await act(async () =>
+      finishPut(asset({ id: 'a9', name: '新图.png', kind: 'other' })),
+    )
     expect(await screen.findByText('新图.png')).toBeTruthy()
     expect(spies.put).toHaveBeenCalledWith(file, 'other')
+    expect(spies.put).toHaveBeenCalledTimes(1)
+    expect(importButton.disabled).toBe(false)
   })
 
   it('写库失败显示错误', async () => {
     const spies = mockStore([])
     spies.put.mockRejectedValue(new Error('磁盘满'))
     render(<AssetsPanel />)
-    await screen.findByText('个人资产库 · 跨项目')
+    await waitForImportReady()
     const input = document.querySelector('input[type=file]') as HTMLInputElement
     Object.defineProperty(input, 'files', {
       value: [new File(['x'], 'f.png')],
@@ -868,7 +903,7 @@ describe('AssetsPanel 导入', () => {
           ),
     )
     render(<AssetsPanel />)
-    await screen.findByText('个人资产库 · 跨项目')
+    await waitForImportReady()
     const input = document.querySelector('input[type=file]') as HTMLInputElement
     const files = ['图1.png', '坏图.png', '图3.png'].map(
       (name) => new File(['x'], name, { type: 'image/png' }),
