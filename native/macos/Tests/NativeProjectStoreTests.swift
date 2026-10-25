@@ -113,6 +113,41 @@ struct NativeProjectStoreTests {
         #expect(try Data(contentsOf: file) == damaged)
     }
 
+    /// A deeply nested control file (issue #840) is an isolated diagnostic card like any other corruption:
+    /// the list keeps valid rows, load fails with the corrupt code, and the original file is never rewritten.
+    @Test func deeplyNestedControlFileIsAnIsolatedDiagnosticCard() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("good.json", Self.document("good", name: "正常"))
+        let deep = Data((String(repeating: "{\"a\":", count: 400) + "1" + String(repeating: "}", count: 400)).utf8)
+        try deep.write(to: fixture.projects.appendingPathComponent("deep.json"))
+        let listed = try await fixture.store.invoke(command: "list_projects", args: [:])
+        let rows = try #require(listed.arrayValue)
+        #expect(rows.count == 2)
+        #expect(rows.first { $0["id"]?.string == "good" }?["name"]?.string == "正常")
+        #expect(rows.first { $0["id"]?.string == "deep" }?["diagnostic"]?.string != nil)
+        do {
+            _ = try await fixture.store.invoke(command: "load_project", args: ["id": .string("deep")])
+            Issue.record("超深项目加载应返回结构化错误")
+        } catch let failure as HostFailure { #expect(failure.code == "PW_PROJECT_CORRUPT") }
+        #expect(try Data(contentsOf: fixture.projects.appendingPathComponent("deep.json")) == deep)
+    }
+
+    /// A deeply nested AI session file reports corruption instead of degrading to empty history or crashing
+    /// the actor's cooperative thread (issue #840).
+    @Test func deeplyNestedAiSessionReportsCorruptionWithoutRewrite() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("p-ai.json", Self.document("p-ai"))
+        let directory = fixture.projects.appendingPathComponent("p-ai")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let deep = Data((String(repeating: "[", count: 512) + String(repeating: "]", count: 512)).utf8)
+        try deep.write(to: directory.appendingPathComponent("ai-session.json"))
+        let reply = try await fixture.store.invoke(command: "load_ai_session", args: ["id": .string("p-ai")])
+        #expect(reply == .object(["session": .null, "corrupt": .bool(true)]))
+        #expect(try Data(contentsOf: directory.appendingPathComponent("ai-session.json")) == deep)
+    }
+
     /// Asset verification and copying keep real bytes within an independent, still-existing destination project.
     @Test func assetCopyAndVerificationFollowProjectIdentity() async throws {
         let fixture = try Fixture()

@@ -9,6 +9,13 @@ indirect enum HostJSON: Codable, Sendable, Equatable {
     case array([HostJSON])
     case object([String: HostJSON])
 
+    /// Owner decision (issue #840, 2026-10-25): acceptance boundary for JSON nesting depth. Real documents nest
+    /// under 20 levels across the Web, Rust and Swift encoders; 32 keeps headroom while staying far inside the
+    /// crash zone of recursive decoding on a 512 KiB cooperative-thread stack (≈ 400 levels Release, ≈ 256 Debug).
+    static let maxNestingDepth = 32
+    /// Machine-readable failure code for documents nesting deeper than `maxNestingDepth` (issue #840).
+    static let depthLimitCode = "PW_JSON_DEPTH_LIMIT"
+
     /// Codable entry kept for nested conformance and as the fallback authority behind `decode`. Probing each
     /// scalar type in turn makes Foundation throw once per mismatch, so this path runs near 47 MiB/s; callers
     /// holding raw bytes use `decode`, which only returns to this path for input the strict parser declines.
@@ -22,12 +29,45 @@ indirect enum HostJSON: Codable, Sendable, Equatable {
         else { self = .object(try container.decode([String: HostJSON].self)) }
     }
 
-    /// Decodes wire bytes with the same acceptance set, values and errors as `JSONDecoder().decode(HostJSON.self,
-    /// from:)`: `HostJSONParser` handles canonical UTF-8 documents directly (issue #825), and everything it
-    /// declines — exotic encodings, Foundation's leniencies, unrepresentable numbers, malformed input — is decided
-    /// by Codable, so a corrupt file still surfaces Foundation's diagnostic.
+    /// Decodes wire bytes with Codable's acceptance set except for one owner-approved narrowing (issue #840):
+    /// documents nesting deeper than `maxNestingDepth` are rejected up front, before any recursive decode can
+    /// exhaust a 512 KiB cooperative-thread stack. `HostJSONParser` handles canonical UTF-8 documents directly
+    /// (issue #825); everything it declines — exotic encodings, Foundation's leniencies, unrepresentable
+    /// numbers, malformed input — passes the depth pre-scan and is decided by Codable, so a corrupt file still
+    /// surfaces Foundation's diagnostic.
     static func decode(_ data: Data) throws -> HostJSON {
-        try HostJSONParser.parse(data) ?? JSONDecoder().decode(HostJSON.self, from: data)
+        if let value = HostJSONParser.parse(data) { return value }
+        try Self.rejectNestingBeyondLimit(data)
+        return try JSONDecoder().decode(HostJSON.self, from: data)
+    }
+
+    /// Iterative depth pre-scan for the fallback path (issue #840): counts brackets only outside strings, so it
+    /// uses constant stack regardless of input. Exact for UTF-8, where quotes, escapes and structural bytes are
+    /// unambiguous; a crafted document in an exotic multi-byte encoding whose string bytes collide with
+    /// structural ASCII could still be miscounted — a recorded boundary outside the local single-user threat
+    /// model, with Foundation's own 512-level scan limit as the remaining backstop.
+    private static func rejectNestingBeyondLimit(_ data: Data) throws {
+        var depth = 0
+        var insideString = false
+        var escaped = false
+        for byte in data {
+            if insideString {
+                if escaped { escaped = false }
+                else if byte == 0x5C { escaped = true }
+                else if byte == 0x22 { insideString = false }
+                continue
+            }
+            switch byte {
+            case 0x22: insideString = true
+            case 0x5B, 0x7B:
+                depth += 1
+                guard depth <= maxNestingDepth else {
+                    throw HostFailure(code: depthLimitCode, message: "JSON 嵌套深度超过 \(maxNestingDepth) 层上限，拒绝解码")
+                }
+            case 0x5D, 0x7D: if depth > 0 { depth -= 1 }
+            default: break
+            }
+        }
     }
 
     /// Encodes the same JSON shape for Rust and WebKit consumers.
