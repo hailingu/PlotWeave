@@ -81,15 +81,28 @@ generation.
   `?: T` no longer accepts an explicit `undefined` — "absent" and "explicitly
   undefined" are distinct, so every optional field states which side of that
   line it is on.
-- **Scope**: all production source under `src/` plus `vite.config.ts`, and
-  the compile-time contract probes `src/**/*.test-d.ts` (these are excluded
+- **Scope**: all production source under `src/` plus the root Vite build
+  configs `vite.config.ts` and `vite.native-canvas.config.ts`, and the
+  compile-time contract probes `src/**/*.test-d.ts` (these are excluded
   from the main build via `tsconfig.json` `exclude` and compiled only by the
   strict entry — probe assertions evaluate differently under the flags).
   **Out of scope**: `*.test.ts` / `*.test.tsx` — test fixtures build values
   locally where shapes are known by construction; the strictly mechanical
   widening pass there is large and low-value, while production code is where
   dirty data and missing keys matter. Test files stay on the plain `strict`
-  baseline.
+  baseline: `src/**` runtime tests arrive through the `src` include, and the
+  root-level `vite.native-canvas.test.ts` through an explicit `tsconfig.json`
+  include entry; `tsconfig.strict.json` declares its own `include` (it
+  overrides rather than merges the base), so the root runtime test is simply
+  absent there. Issue [#806](https://github.com/hailingu/PlotWeave/issues/806)
+  brought both root native-canvas files into these entries after neither
+  `tsc` entry had compiled them; the first pass surfaced a latent
+  `publicDir: false` widening in the function-form `defineConfig` (a
+  zero-parameter factory is not context-sensitive, so its returned literal
+  lost contextual typing under the overloads), fixed by an explicit
+  `UserConfig` return type. `scripts/tsconfig-scope.test.ts` pins both file
+  sets through TypeScript's own config parser, root-level entries included,
+  so a regression of either include list fails `npm test`.
 
 **Satisfying the index-access check** (#230): for values that can genuinely be
 missing, handle the missing case explicitly with the same dirty-data

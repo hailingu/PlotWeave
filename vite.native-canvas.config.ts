@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, type Plugin, type UserConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 /**
@@ -30,8 +30,11 @@ function fileCanvasEntry(): Plugin {
  * 不受影响。PLOTWEAVE_CANVAS_PROFILE=1 显式启用生产 Profiler；
  * 只替换 React DOM client renderer；React 19 profiling 依赖根 react-dom
  * 的共享内部状态，根入口必须保持原样，避免循环引用并保证 flushSync 一致。
+ * 显式 UserConfig 返回类型让对象字面量获得上下文类型：无参工厂不是上下文
+ * 敏感表达式，在 defineConfig 多重重载下其返回字面量不获得上下文类型，
+ * `publicDir: false` 会拓宽为 boolean 而与 `string | false` 不兼容。
  */
-export default defineConfig(() => ({
+export default defineConfig((): UserConfig => ({
   plugins: [react(), fileCanvasEntry()],
   resolve: {
     alias:
