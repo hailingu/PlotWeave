@@ -220,7 +220,7 @@ actor NativeProjectStore {
         let directory = try projects.directory(id)
         guard try directory.metadata("ai-session.json") != nil else { return sessionCopy(nil, corrupt: false) }
         let data = try readControlFile(directory, "ai-session.json")
-        guard let session = try? JSONDecoder().decode(HostJSON.self, from: data), validSession(session) else {
+        guard let session = try? HostJSON.decode(data), validSession(session) else {
             return sessionCopy(nil, corrupt: true)
         }
         return sessionCopy(session, corrupt: false)
@@ -286,8 +286,10 @@ actor NativeProjectStore {
     }
 
     /// Storage parses no application prose; malformed wire bytes remain untouched and produce a structured failure.
+    /// `HostJSON.decode` keeps list/load throughput off the Codable cascade (issue #825) with Codable's own
+    /// acceptance set, so the diagnostic text for a corrupt file is unchanged.
     private func decodeProject(_ data: Data, id: String) throws -> HostJSON {
-        do { return try NativeProjectEnvelope.parse(JSONDecoder().decode(HostJSON.self, from: data), id: id) }
+        do { return try NativeProjectEnvelope.parse(HostJSON.decode(data), id: id) }
         catch { throw HostFailure(code: "PW_PROJECT_CORRUPT", message: "项目文件损坏：\(error.localizedDescription)") }
     }
 

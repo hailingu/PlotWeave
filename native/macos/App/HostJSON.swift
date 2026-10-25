@@ -9,7 +9,9 @@ indirect enum HostJSON: Codable, Sendable, Equatable {
     case array([HostJSON])
     case object([String: HostJSON])
 
-    /// Decodes JSON without moving Foundation's untyped objects between actors.
+    /// Codable entry kept for nested conformance and as the fallback authority behind `decode`. Probing each
+    /// scalar type in turn makes Foundation throw once per mismatch, so this path runs near 47 MiB/s; callers
+    /// holding raw bytes use `decode`, which only returns to this path for input the strict parser declines.
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() { self = .null }
@@ -18,6 +20,14 @@ indirect enum HostJSON: Codable, Sendable, Equatable {
         else if let value = try? container.decode(String.self) { self = .string(value) }
         else if let value = try? container.decode([HostJSON].self) { self = .array(value) }
         else { self = .object(try container.decode([String: HostJSON].self)) }
+    }
+
+    /// Decodes wire bytes with the same acceptance set, values and errors as `JSONDecoder().decode(HostJSON.self,
+    /// from:)`: `HostJSONParser` handles canonical UTF-8 documents directly (issue #825), and everything it
+    /// declines — exotic encodings, Foundation's leniencies, unrepresentable numbers, malformed input — is decided
+    /// by Codable, so a corrupt file still surfaces Foundation's diagnostic.
+    static func decode(_ data: Data) throws -> HostJSON {
+        try HostJSONParser.parse(data) ?? JSONDecoder().decode(HostJSON.self, from: data)
     }
 
     /// Encodes the same JSON shape for Rust and WebKit consumers.
@@ -33,10 +43,12 @@ indirect enum HostJSON: Codable, Sendable, Equatable {
         }
     }
 
-    /// Creates a JSON value at the WebKit boundary, rejecting non-JSON payloads.
+    /// Creates a JSON value at the WebKit boundary, rejecting non-JSON payloads. Serialization keeps Foundation's
+    /// validation of the untyped tree (non-string keys, NaN, dates); the bytes are then decoded without moving
+    /// those untyped objects between actors.
     init(webValue: Any) throws {
         let data = try JSONSerialization.data(withJSONObject: webValue, options: [.fragmentsAllowed])
-        self = try JSONDecoder().decode(Self.self, from: data)
+        self = try Self.decode(data)
     }
 
     /// Converts into the WebKit reply API's supported Foundation values on its caller's actor.
