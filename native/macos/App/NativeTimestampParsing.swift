@@ -70,7 +70,8 @@ enum NativeTimestampParsing {
         if bytes[index] == 90, index + 1 == bytes.count {
             // `Z` consumed to the end of the string.
         } else if (bytes[index] == 43 || bytes[index] == 45) && index + 6 == bytes.count {
-            guard let offsetHours = digits(index + 1, index + 3), let offsetMinutesValue = digits(index + 4, index + 6),
+            guard bytes[index + 3] == 58,
+                  let offsetHours = digits(index + 1, index + 3), let offsetMinutesValue = digits(index + 4, index + 6),
                   offsetHours <= 23, offsetMinutesValue <= 59 else { return nil }
             offsetMinutes = bytes[index] == 43 ? offsetHours * 60 + offsetMinutesValue : -(offsetHours * 60 + offsetMinutesValue)
         } else { return nil }

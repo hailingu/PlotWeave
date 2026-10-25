@@ -48,7 +48,8 @@ struct NativeAssetContractVectorTests {
         }
         let rejected = ["2026-13-01T00:00:00.000Z", "2026-00-04T00:00:00.000Z", "2026-10-00T00:00:00.000Z",
                         "2026-10-04T00:60:00.000Z", "2026-10-04T00:00:60.000Z", "2026-10-04T00:00:00",
-                        "2026-10-04 00:00:00.000Z", "2026-10-04t00:00:00.000Z", "not-a-date", ""]
+                        "2026-10-04 00:00:00.000Z", "2026-10-04t00:00:00.000Z", "not-a-date", "",
+                        "2026-10-04T00:00:00+08x00", "2026-10-04T00:00:00+08000", "2026-10-04T00:00:00-08x00"]
         for input in rejected {
             #expect(NativeAssetContract.normalizedTimestamp(input) == nil, "reject \(input)")
             #expect(!NativeAssetContract.canonicalUTC(input), "not canonical \(input)")
