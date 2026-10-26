@@ -68,15 +68,19 @@ extension NativeProjectStore {
     }
 
     /// Each media delivery owns a verified file; persisted entries win, then pending imports, then live aliases.
-    func openMedia(id: String, assetId: String) throws -> NativeMediaFile {
+    /// The optional document reader scopes failure injection to this actor-owned read, without replacing media I/O.
+    func openMedia(id: String, assetId: String, loadDocument: (@Sendable (String) throws -> HostJSON)? = nil) throws -> NativeMediaFile {
         guard !assetId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NativeProjectEnvelope.invalid("资产身份不能为空白")
         }
         let document: HostJSON
-        do { document = try loadProject(id: id) }
+        do { document = try loadDocument?(id) ?? loadProject(id: id) }
         catch {
-            pendingMedia.removeValue(forKey: id)
-            mediaAliases.removeValue(forKey: id)
+            if let failure = error as? HostFailure, failure.code == "project_not_found" {
+                pendingMedia.removeValue(forKey: id)
+                mediaAliases.removeValue(forKey: id)
+                importReceipts.removeValue(forKey: id)
+            }
             throw error
         }
         let entries = document["assets"]?["byId"]?.object ?? [:]
