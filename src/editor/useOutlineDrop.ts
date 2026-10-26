@@ -63,10 +63,54 @@ function resolveOutlineMove(
     dragged && typeof dragged.data.episodeNo === 'number'
       ? dragged.data.episodeNo
       : null
-  const noSplice = plan.removes.length === 0 && plan.adds.length === 0
   const episodeChanged = targetEpisode !== oldEpisode
-  if (noSplice && !episodeChanged) return null
   return { plan, targetEpisode, oldEpisode, episodeChanged }
+}
+
+/** 接缝与集归属共同提交一条命令，undo/redo 保留完整边对象。 */
+function applyOutlineMove(
+  deps: Pick<
+    OutlineDropDeps,
+    'edgesRef' | 'setEdges' | 'applyDataPatch' | 'pushHistory'
+  >,
+  dragged: Extract<
+    CanvasNode,
+    { type: 'scene' | 'beat' | 'dialogue' | 'branch' }
+  >,
+  resolved: NonNullable<ReturnType<typeof resolveOutlineMove>>,
+) {
+  const { edgesRef, setEdges, applyDataPatch, pushHistory } = deps
+  const { plan, targetEpisode, oldEpisode, episodeChanged } = resolved
+  const draggedId = dragged.id
+  // 3) 单命令执行：边手术 + episodeNo 补丁，一步撤销整批回滚
+  const stamp = Date.now().toString(36)
+  const removedEdges = (edgesRef.current ?? []).filter((e) =>
+    plan.removes.includes(e.id),
+  )
+  const addedEdges: Edge[] = plan.adds.map(({ source, target: t }, i) => ({
+    id: `e-${source}-out-${t}-mv-${stamp}-${i}`,
+    source,
+    target: t,
+    className: 'pw-edge-sequence',
+  }))
+  const applyEdges = (redo: boolean) => {
+    if (addedEdges.length === 0 && removedEdges.length === 0) return
+    setEdges((eds) => spliceEdgesWith(eds, removedEdges, addedEdges, redo))
+  }
+  const patchEp = (ep: number | null) =>
+    applyDataPatch(draggedId, episodeNoPatch(dragged.type, ep ?? undefined))
+  applyEdges(true)
+  if (episodeChanged) patchEp(targetEpisode)
+  pushHistory({
+    undo: () => {
+      applyEdges(false)
+      if (episodeChanged) patchEp(oldEpisode)
+    },
+    redo: () => {
+      applyEdges(true)
+      if (episodeChanged) patchEp(targetEpisode)
+    },
+  })
 }
 
 /** 大纲拖拽排序 hook（§3.5：拖拽 = 重排 sequence 边 + 改集归属）：
@@ -115,38 +159,26 @@ export function useOutlineDrop(deps: OutlineDropDeps) {
         draggedId,
         target,
       )
-      if (!resolved) return
-      const { plan, targetEpisode, oldEpisode, episodeChanged } = resolved
-
-      // 3) 单命令执行：边手术 + episodeNo 补丁，一步撤销整批回滚
-      const stamp = Date.now().toString(36)
-      const removedEdges = (edgesRef.current ?? []).filter((e) =>
-        plan.removes.includes(e.id),
-      )
-      const addedEdges: Edge[] = plan.adds.map(({ source, target: t }, i) => ({
-        id: `e-${source}-out-${t}-mv-${stamp}-${i}`,
-        source,
-        target: t,
-        className: 'pw-edge-sequence',
-      }))
-      const applyEdges = (redo: boolean) => {
-        if (addedEdges.length === 0 && removedEdges.length === 0) return
-        setEdges((eds) => spliceEdgesWith(eds, removedEdges, addedEdges, redo))
+      if (!resolved) {
+        if (target.kind !== 'row' || target.anchorId !== draggedId)
+          onError(
+            '大纲拖拽未执行：目标未接入剧情流、接缝不唯一或移动会形成环，请先在画布上调整连线',
+          )
+        return
       }
-      const patchEp = (ep: number | null) =>
-        applyDataPatch(draggedId, episodeNoPatch(dragged.type, ep ?? undefined))
-      applyEdges(true)
-      if (episodeChanged) patchEp(targetEpisode)
-      pushHistory({
-        undo: () => {
-          applyEdges(false)
-          if (episodeChanged) patchEp(oldEpisode)
-        },
-        redo: () => {
-          applyEdges(true)
-          if (episodeChanged) patchEp(targetEpisode)
-        },
-      })
+      const { plan, episodeChanged } = resolved
+      if (
+        !episodeChanged &&
+        plan.removes.length === 0 &&
+        plan.adds.length === 0
+      )
+        return
+
+      applyOutlineMove(
+        { edgesRef, setEdges, applyDataPatch, pushHistory },
+        dragged,
+        resolved,
+      )
     },
     [
       nodesRef,
