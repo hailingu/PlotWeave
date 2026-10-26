@@ -113,11 +113,12 @@ function parseArguments(argv: string[]): {
   let releaseBoundary = false
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
-    if (argument === '--base' && argv[index + 1] !== undefined) {
-      base = argv[index + 1]
+    const value = argv[index + 1]
+    if (argument === '--base' && value !== undefined) {
+      base = value
       index += 1
-    } else if (argument === '--head' && argv[index + 1] !== undefined) {
-      head = argv[index + 1]
+    } else if (argument === '--head' && value !== undefined) {
+      head = value
       index += 1
     } else if (argument === '--release-boundary') {
       releaseBoundary = true
@@ -303,8 +304,8 @@ function preservesLinearLedger(content: string, parent: string): boolean {
 /** 合并与跨提交恢复允许交织记录，但必须保留历史快照的记录字节与顺序。
  * 记录包含换行符；原末行无换行时允许补换行后再追加。 */
 function preservesLedgerRecords(content: string, parent: string): boolean {
-  const lines = content.match(/[^\n]*\n|[^\n]+$/g) ?? []
-  const parentLines = parent.match(/[^\n]*\n|[^\n]+$/g) ?? []
+  const lines: string[] = content.match(/[^\n]*\n|[^\n]+$/g) ?? []
+  const parentLines: string[] = parent.match(/[^\n]*\n|[^\n]+$/g) ?? []
   let cursor = 0
   return parentLines.every((line) => {
     let position = lines.indexOf(line, cursor)
@@ -341,6 +342,7 @@ function tipPreservesLedger(commit: RangeCommit): boolean {
  * 的基础上追加恢复旧快照；tip 自身仍受原先更严格的直接父守卫约束。 */
 function rangePreservesLedger(commits: RangeCommit[]): boolean {
   const tip = commits[commits.length - 1]
+  if (!tip) return false
   if (!tipPreservesLedger(tip)) return false
   const content = ledgerContentOf(tip.sha)
   const parents = new Set(
@@ -392,6 +394,8 @@ function verifyRange(
   const integratedTipWarnings: CommitFinding[] = []
   const preLedgerNotes: CommitFinding[] = []
   const tip = commits[commits.length - 1]
+  // main handles empty ranges before verification; reject invalid internal input.
+  if (!tip) throw new UsageError('没有可核验的提交')
   const { mergeShas, integratedTipShas } = releaseBoundary
     ? collectIntegrationBoundaries(commits)
     : { mergeShas: new Set<string>(), integratedTipShas: new Set<string>() }
