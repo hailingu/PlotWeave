@@ -16,14 +16,14 @@ function chain(): E[] {
 describe('planSpliceIntoSpine（§3.5 大纲拖拽 = 重排 sequence 边）', () => {
   it('后移语义精确：把 A 拖到 C 之后 = S→B 缝合缺口 + C→A→E 接回新位', () => {
     const plan = planSpliceIntoSpine(chain(), 'A', 'C', 'after')!
-    expect(plan.removes.sort()).toEqual(['e1', 'e2'])
+    expect(plan.removes.sort()).toEqual(['e1', 'e2', 'e4'])
     const pairs = plan.adds.map((a) => `${a.source}->${a.target}`).sort()
     expect(pairs).toEqual(['A->E', 'C->A', 'S->B'])
   })
 
   it('前移：把 C 拖到 A 之前 = S→C→A，缺口缝合 B→E', () => {
     const plan = planSpliceIntoSpine(chain(), 'C', 'A', 'before')!
-    expect(plan.removes.sort()).toEqual(['e3', 'e4'])
+    expect(plan.removes.sort()).toEqual(['e1', 'e3', 'e4'])
     const pairs = plan.adds.map((a) => `${a.source}->${a.target}`).sort()
     expect(pairs).toEqual(['B->E', 'C->A', 'S->C'])
   })
@@ -37,9 +37,9 @@ describe('planSpliceIntoSpine（§3.5 大纲拖拽 = 重排 sequence 边）', ()
       false,
     )
 
-    // 游离节点 D 拖到 B 之后 = 纯接入，两条新边，不删任何边
+    // 游离节点 D 拖到 B 之后 = 替换 B→C，两条新边
     const join = planSpliceIntoSpine(chain(), 'D', 'B', 'after')!
-    expect(join.removes).toEqual([])
+    expect(join.removes).toEqual(['e3'])
     expect(join.adds).toEqual([
       { source: 'B', target: 'D' },
       { source: 'D', target: 'C' },
