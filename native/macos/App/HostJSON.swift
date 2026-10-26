@@ -46,7 +46,7 @@ indirect enum HostJSON: Codable, Sendable, Equatable {
     /// unambiguous; a crafted document in an exotic multi-byte encoding whose string bytes collide with
     /// structural ASCII could still be miscounted — a recorded boundary outside the local single-user threat
     /// model, with Foundation's own 512-level scan limit as the remaining backstop.
-    private static func rejectNestingBeyondLimit(_ data: Data) throws {
+    static func rejectNestingBeyondLimit(_ data: Data) throws {
         var depth = 0
         var insideString = false
         var escaped = false

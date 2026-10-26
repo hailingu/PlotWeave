@@ -114,6 +114,7 @@ final class HostCommandRouter {
         let request: HostRequest
         do {
             let data = try JSONSerialization.data(withJSONObject: body)
+            try HostJSON.rejectNestingBeyondLimit(data)
             request = try JSONDecoder().decode(HostRequest.self, from: data)
         } catch {
             return failure("PW_INVALID_REQUEST", "宿主请求不是有效协议对象")
