@@ -11,7 +11,7 @@ struct NativeLibraryOperation {
     var migrationSuspended = false
 
     /// Migration capacity is checked before recovery so a suspended partial view cannot confirm a deletion.
-    init(directory: NativeDirectory, recovered: (NativeLibraryOperation) -> Void = { _ in }) throws {
+    init(directory: NativeDirectory, recovered: (NativeLibraryOperation) -> Void = { _ in }, validateMedia: (NativeDirectory, String, String) throws -> Void = { _ = try $0.media($1, mime: $2) }) throws {
         self.directory = directory
         original = try directory.metadata("library.json") == nil ? nil : directory.read("library.json", maxBytes: 1_048_576)
         journal = NativeLibraryJournal(directory: directory)
@@ -28,7 +28,7 @@ struct NativeLibraryOperation {
         }
         try journal.recover(directory: directory, index: index, complete: !migrationSuspended)
         recovered(self)
-        filterMedia()
+        filterMedia(validateMedia: validateMedia)
         if index.changed, !index.damaged, !journal.readOnly, !migrationSuspended, !journal.hasPendingImport {
             try directory.write(encodedIndex(), name: "library.json")
         }
@@ -86,11 +86,14 @@ struct NativeLibraryOperation {
     }
 
     /// Physically missing or untrusted entries are isolated independently; conflict evidence is retained.
-    private mutating func filterMedia() {
+    private mutating func filterMedia(validateMedia: (NativeDirectory, String, String) throws -> Void) {
         for (id, value) in index.assets where !journal.conflicted.contains(id) {
             do {
                 guard let path = value["relPath"]?.string, let mime = value["mime"]?.string else { throw NativeLibraryIndex.invalid("媒体字段无效") }
-                _ = try directory.media(path, mime: mime)
+                try validateMedia(directory, path, mime)
+            } catch let failure as HostFailure where failure.code == "PW_STORAGE_ERROR" {
+                index.warnings.append("素材 \(id) 的媒体暂时无法读取，已保留条目，请稍后重试")
+                NativeLog.library.error("PW_LIBRARY_MEDIA_UNAVAILABLE: transient media validation failure; index entry retained")
             } catch {
                 index.assets.removeValue(forKey: id)
                 index.warnings.append("素材 \(id) 的媒体缺失或不可用，已隔离")
