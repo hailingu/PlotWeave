@@ -8,7 +8,7 @@ import { filterProjects, type ProjectSummary } from './projects'
 
 interface HomePageProps {
   readonly projects: ProjectSummary[]
-  /** 列表首次加载中（持久化命令异步返回）；加载完前不显示空状态引导。 */
+  /** 无已知列表且读取中时显示加载提示；保留已有列表供刷新期间使用。 */
   readonly loading?: boolean
   /** 最近一次打开失败的可见反馈（issue #98）：非阻塞横幅展示，停留至
    * 下一次打开尝试或新建成功；null/缺省 = 无待展示错误。 */
@@ -132,8 +132,6 @@ function HomeTitlebar({
   )
 }
 
-/** 项目网格区（HomePage 拆分，issue #99）：空态引导、无匹配提示与
- * 项目卡网格（末尾常驻新建卡）。 */
 /** 列表读取失败的错误块（issue #133）：读取失败 ≠ 空列表——无已知列表
  * 时以错误态代替首次使用引导（诊断 + 重试），绝不让目录级故障伪装成
  * 「你的库是空的」。 */
@@ -182,6 +180,7 @@ function RefreshErrorBanner({
   )
 }
 
+/** 项目网格区：无已知列表时区分加载、失败与空库；已有列表保留搜索与卡片。 */
 function ProjectGrid({
   loading,
   projects,
@@ -207,7 +206,8 @@ function ProjectGrid({
     project: ProjectSummary,
   ) => void
 }) {
-  if (!loading && projects.length === 0) {
+  if (projects.length === 0) {
+    if (loading) return <output className="home-empty">正在加载项目…</output>
     if (loadError !== null)
       return <ListErrorState loadError={loadError} onRetry={onRetry} />
     return (
