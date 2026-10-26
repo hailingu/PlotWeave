@@ -148,10 +148,9 @@ enum NativeTimestampParsing {
         let fractional: ISO8601DateFormatter
         let basic: ISO8601DateFormatter
         let canonical: ISO8601DateFormatter
-        let inputShape: NSRegularExpression
-        let canonicalShape: NSRegularExpression
+        let shapes: LegacyTimestampShapes?
 
-        /// The two regex patterns are fixed literals whose compilation cannot fail at runtime.
+        /// Cache fixed ICU patterns once; an invalid future pattern fails closed with a stable diagnostic.
         init() {
             fractional = ISO8601DateFormatter()
             fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -160,23 +159,24 @@ enum NativeTimestampParsing {
             canonical = ISO8601DateFormatter()
             canonical.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             canonical.timeZone = TimeZone(secondsFromGMT: 0)
-            inputShape = try! NSRegularExpression(pattern: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"#)
-            canonicalShape = try! NSRegularExpression(pattern: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"#)
+            do {
+                shapes = try LegacyTimestampShapes()
+            } catch {
+                NativeLog.storage.error("PW_TIMESTAMP_PATTERN_INVALID: timestamp shape initialization failed")
+                shapes = nil
+            }
         }
 
         /// Mirrors the historical guard: only regex-shaped input reaches the formatters.
         func matchesInputShape(_ value: String) -> Bool {
-            firstMatch(of: inputShape, in: value)
+            shapes?.matchesInput(value) ?? false
         }
 
         /// The output must be the canonical UTC shape to count as normalized.
         func matchesCanonicalShape(_ value: String) -> Bool {
-            firstMatch(of: canonicalShape, in: value)
+            shapes?.matchesCanonical(value) ?? false
         }
 
-        private func firstMatch(of regex: NSRegularExpression, in value: String) -> Bool {
-            regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) != nil
-        }
     }
 
     private static let legacy = Mutex(LegacyTimestampTools())
