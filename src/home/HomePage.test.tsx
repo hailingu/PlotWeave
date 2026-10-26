@@ -108,6 +108,15 @@ describe('HomePage 列表与搜索', () => {
     ).toBeNull()
   })
 
+  it('工具栏「＋ 新建项目」与网格末尾「＋ 新剧」都走 onCreateProject', () => {
+    const spies = setup()
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新建项目' }))
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新剧' }))
+    expect(spies.onCreateProject).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('HomePage 首次列表加载', () => {
   it.each(['', '不存在'])(
     '首次加载中不显示空库或无匹配（搜索：%s）',
     (query) => {
@@ -149,7 +158,9 @@ describe('HomePage 列表与搜索', () => {
       ).toBeTruthy()
     }
   })
+})
 
+describe('HomePage 列表恢复与后台刷新', () => {
   it('失败后重试先显示加载态，再恢复列表与搜索结果', () => {
     const view = setup([], false, null, '读取目录失败')
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
@@ -181,13 +192,6 @@ describe('HomePage 列表与搜索', () => {
     })
     expect(screen.getByText(/没有匹配/)).toBeTruthy()
     expect(screen.getByRole('alert').textContent).toContain('刷新目录失败')
-  })
-
-  it('工具栏「＋ 新建项目」与网格末尾「＋ 新剧」都走 onCreateProject', () => {
-    const spies = setup()
-    fireEvent.click(screen.getByRole('button', { name: '＋ 新建项目' }))
-    fireEvent.click(screen.getByRole('button', { name: '＋ 新剧' }))
-    expect(spies.onCreateProject).toHaveBeenCalledTimes(2)
   })
 })
 
