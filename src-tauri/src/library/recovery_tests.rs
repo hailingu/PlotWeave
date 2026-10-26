@@ -73,6 +73,7 @@ fn damaged_index() -> String {
 #[test]
 fn corrupt_index_keeps_complete_records_and_media_without_rewriting() {
     let fixture = LibraryFixture::new();
+    fs::write(fixture.path.join("assets/b.png"), b"healthy-b").unwrap();
     let raw = damaged_index();
     fixture.write(&raw);
     fs::write(fixture.path.join("assets/a.png"), b"image-a").unwrap();
@@ -96,6 +97,8 @@ fn corrupt_index_keeps_complete_records_and_media_without_rewriting() {
 #[test]
 fn later_edit_backs_up_original_and_retains_healthy_data_across_reload() {
     let fixture = LibraryFixture::new();
+    fs::write(fixture.path.join("assets/a.png"), b"healthy-a").unwrap();
+    fs::write(fixture.path.join("assets/b.png"), b"healthy-b").unwrap();
     let raw = damaged_index();
     fixture.write(&raw);
     update_meta_with(&fixture.dir, "a", &json!({"name": "改名"}), &mut |_| {}).unwrap();
@@ -128,6 +131,7 @@ fn later_edit_backs_up_original_and_retains_healthy_data_across_reload() {
 #[test]
 fn truncated_index_keeps_finished_records_without_guessing_partial_record() {
     let fixture = LibraryFixture::new();
+    fs::write(fixture.path.join("assets/a.png"), b"healthy-a").unwrap();
     let raw = format!(
         r#"{{"assets":{{"byId":{{"a":{},"bad":{{"name":"unfinished"#,
         asset("a")
@@ -173,6 +177,7 @@ fn wholly_unreadable_index_allows_new_import_and_preserves_raw_bytes() {
 #[test]
 fn malformed_journal_still_blocks_writes_but_not_healthy_index_view() {
     let fixture = LibraryFixture::new();
+    fs::write(fixture.path.join("assets/a.png"), b"healthy-a").unwrap();
     let raw = damaged_index();
     fixture.write(&raw);
     fs::write(fixture.path.join("asset-delete-journal.json"), b"broken").unwrap();
@@ -286,6 +291,7 @@ fn oversized_uncertainty_journal_is_not_written() {
 fn healthy_asset_can_be_deleted_from_corrupt_index_without_losing_other_records() {
     for media_exists in [false, true] {
         let fixture = LibraryFixture::new();
+        fs::write(fixture.path.join("assets/b.png"), b"healthy-b").unwrap();
         let raw = damaged_index();
         fixture.write(&raw);
         if media_exists {
@@ -332,6 +338,7 @@ fn healthy_asset_imports_into_project_without_rewriting_corrupt_library() {
 #[test]
 fn mismatched_member_cannot_expose_or_persist_nested_asset() {
     let fixture = LibraryFixture::new();
+    fs::write(fixture.path.join("assets/a.png"), b"healthy-a").unwrap();
     let raw = format!(
         r#"{{"groups":{{"byId":{{"g":{{"id":"g","name":"组","kind":"other"}}}}}},"assets":{{"byId":{{"a":{},"bad":{{"nested":],"fake":{},"pad":[}}}}}}}}"#,
         asset("a"),

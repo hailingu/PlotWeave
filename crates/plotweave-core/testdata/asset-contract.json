@@ -218,5 +218,52 @@
       "input": "image/p\u0000ng",
       "accepted": false
     }
+  ],
+  "libraryMedia": [
+    {
+      "id": "regular",
+      "relPath": "assets/media.png",
+      "available": true
+    },
+    {
+      "id": "nested-regular",
+      "relPath": "assets/nested/media.png",
+      "available": true
+    },
+    {
+      "id": "missing",
+      "relPath": "assets/media.png",
+      "available": false
+    },
+    {
+      "id": "symlink",
+      "relPath": "assets/media.png",
+      "available": false
+    },
+    {
+      "id": "directory",
+      "relPath": "assets/media.png",
+      "available": false
+    },
+    {
+      "id": "fifo",
+      "relPath": "assets/media.png",
+      "available": false
+    },
+    {
+      "id": "parent-symlink",
+      "relPath": "assets/nested/media.png",
+      "available": false
+    },
+    {
+      "id": "parent-file",
+      "relPath": "assets/nested/media.png",
+      "available": false
+    },
+    {
+      "id": "parent-missing",
+      "relPath": "assets/nested/media.png",
+      "available": false
+    }
   ]
 }
