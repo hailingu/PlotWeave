@@ -176,3 +176,19 @@ it.each([
     }
   },
 )
+
+it.each([
+  ['after', [edge('P', 'X'), edge('P', 'Q')], 'P'],
+  ['before', [edge('X', 'N'), edge('Q', 'N')], 'N'],
+  ['after', [edge('P', 'X'), edge('X', 'N'), edge('P', 'Q')], 'P'],
+  ['before', [edge('P', 'X'), edge('X', 'N'), edge('Q', 'N')], 'N'],
+] as const)(
+  '相邻原位 %s 重放不改合法分叉/汇合（#894 review）',
+  (position, edges, anchor) => {
+    for (const ordered of [[...edges], [...edges].reverse()]) {
+      const result = move(ordered, 'X', anchor, position)
+      expect(result.plan).toEqual({ removes: [], adds: [] })
+      expect(result.after).toEqual(ordered)
+    }
+  },
+)

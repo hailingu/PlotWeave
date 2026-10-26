@@ -405,3 +405,27 @@ it.each([
   expect(h.pushHistory).not.toHaveBeenCalled()
   expect(h.onError).toHaveBeenCalledTimes(1)
 })
+
+it.each([
+  ['after', ['p->x', 'p->q'], 'p'],
+  ['before', ['x->n', 'q->n'], 'n'],
+  ['after', ['p->x', 'x->n', 'p->q'], 'p'],
+  ['before', ['p->x', 'x->n', 'q->n'], 'n'],
+] as const)(
+  '分支邻接原位 %s 不写状态、不提示、不入栈（#894 review）',
+  (position, pairs, anchor) => {
+    const nodes = ['p', 'x', 'q', 'n'].map((id, i) => sceneNode(id, 1, i * 100))
+    const edges = pairs.map((pair, i) => {
+      const [source, target] = pair.split('->')
+      return seq(`e${i}`, source, target)
+    })
+    const h = setup(nodes, edges)
+    const beforeNodes = h.result.current.doc.nodes
+    act(() => dropRow(h, 'x', anchor, position))
+    expect(h.result.current.doc.edges).toEqual(edges)
+    expect(h.result.current.doc.nodes).toBe(beforeNodes)
+    expect(h.pushHistory).not.toHaveBeenCalled()
+    expect(h.stack.canUndo).toBe(false)
+    expect(h.onError).not.toHaveBeenCalled()
+  },
+)

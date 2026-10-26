@@ -208,7 +208,7 @@ interface GeneratedOutput {
 - 连接校验做两层：前端交互层（`isValidConnection`）即时反馈；命令层（`connect_edge` 边界，§9.3）对同一不变量复核——禁止自环、禁止剧情流成环（sequence/branch 的 BFS 传递闭包检查；attach 垂直从属不参与）——Agent/导入绕过交互层直达命令通道，剧情流 DAG 不变量不能在命令层失守；漏网成环边由归一化隔离（§11.1 第 3 步）。
 大纲线性重排（[issue #879](https://github.com/hailingu/PlotWeave/issues/879)）在 sequence 子图中拔出节点并缝合原位，再移除目标接缝 upstream→downstream 的直连边、接入 upstream→节点→downstream。只变更该计划的边身份，不全局清理合法分支或 branch/attach 边；原位计划为空，既有分叉/汇合成员的拔出继续拒绝。完整边集与集归属经同一历史命令撤销/重做，并由当前编辑文档保存。
 
-大纲接缝边界（[issue #882](https://github.com/hailingu/PlotWeave/issues/882)、[issue #884](https://github.com/hailingu/PlotWeave/issues/884)、[issue #885](https://github.com/hailingu/PlotWeave/issues/885)）：拔出缝合遇既有直连时保留该边身份，不再新增重复边。插入方向的接缝在拔出并考虑缝合后必须唯一；after 多出边或 before 多入边锚点拒绝，不按边数组序选取。非剧情流锚点与其他无法安全执行的移动在共享 web／原生大纲入口给出可见提示，拒绝时不改图或历史；原位重放仍无提示、无命令。
+大纲接缝边界（[issue #882](https://github.com/hailingu/PlotWeave/issues/882)、[issue #884](https://github.com/hailingu/PlotWeave/issues/884)、[issue #885](https://github.com/hailingu/PlotWeave/issues/885)）：拔出缝合遇既有直连时保留该边身份，不再新增重复边。插入方向的接缝在拔出并考虑缝合后必须唯一；after 多出边或 before 多入边锚点拒绝，不按边数组序选取。非剧情流锚点与其他无法安全执行的移动在共享 web／原生大纲入口给出可见提示，拒绝时不改图或历史；原位重放仍无提示、无命令：已在原前邻之后或原后邻之前时，优先保留原邻接，不改选锚点旁支接缝（含分叉尾／汇合头）。
 
 ## 五、边模型
 

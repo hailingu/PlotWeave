@@ -73,6 +73,12 @@ function insertionNeighbors(
   prev: string | null,
   next: string | null,
 ): { upstream: string | null; downstream: string | null } | null {
+  // 已有前邻之后 / 后邻之前是原位重放，不能改选旁支接缝（#894 review）。
+  if (
+    (position === 'after' && anchorId === prev) ||
+    (position === 'before' && anchorId === next)
+  )
+    return { upstream: prev, downstream: next }
   const pairs = remaining.map(({ source, target }) => ({ source, target }))
   if (
     prev !== null &&
