@@ -16,7 +16,7 @@
 | 变更范围 | 判定 | 推送门禁行为 |
 | --- | --- | --- |
 | docs-only | 所有变更路径为 `docs/**`、根 Markdown 或 `LICENSE` | 只运行 `scripts/check-docs.sh`（`git diff --check`）；跳过静态检查、覆盖率、Sonar 与推送台账记录。commit 钩子的完整门禁记录仍是证据。 |
-| frontend | 非文档路径只落在 `src/**` 与前端专属根配置 | 快路径：全量前端测试 + 前端覆盖率，Rust 复用主工作树最近 LCOV；慢路径自动提升为 full（见下）。Sonar 导入两侧报告。 |
+| frontend | 非文档路径只落在 `src/**`、`public/**`（前端构建静态输入）与前端专属根配置 | 快路径：全量前端测试 + 前端覆盖率，Rust 复用主工作树最近 LCOV；慢路径自动提升为 full（见下）。Sonar 导入两侧报告。 |
 | rust | 非文档路径只落在 `src-tauri/**`、`crates/**`、`rust-toolchain.toml` | 快路径：全量 Rust 测试 + `rust-coverage.sh`，前端复用最近 LCOV；慢路径自动提升为 full（见下）。Sonar 导入两侧报告。 |
 | native | 非文档路径只落在 `native/**` | 快路径：`sh scripts/test-native.sh` 构建画布并串行运行功能回归，压力测量按需运行（见下节），前端/Rust 复用最近 LCOV；慢路径自动提升为 full（见下）。Sonar 导入两侧报告。原生代码不在 Sonar 源码范围，快路径记录 `scope: native`。 |
 | full | 跨栈、工具（`scripts/**`、`.githooks/**`、`.github/**`、根 linter/配置）、未知路径、空差异或无法确定基线 | 完整推送门禁：静态检查 + 前端/Rust 全量覆盖率 + native 功能回归 + Sonar；压力测量仍按需运行。 |

@@ -154,7 +154,7 @@ An isolated known-high lodash 4.17.20 lockfile ran the parsed workflow audit com
 The versioned commit-creating hooks (`pre-commit`, `pre-merge-commit`, `prepare-commit-msg`) run the complete quality gate. `pre-push` is scope-routed by owner decision 2026-10-18:
 
 - **docs-only** (`docs/**`, root Markdown, `LICENSE`): only `scripts/check-docs.sh`; no static checks, coverage, Sonar, or push ledger record. The commit-gate record remains the evidence.
-- **single implementation stack** (`frontend` = `src/**` and frontend-only root configs; `rust` = `src-tauri/**` + `crates/**` + `rust-toolchain.toml`; `native` = `native/**`): run that stack's full regression and full coverage; reuse the other frontend/Rust stack's most recent LCOV for Sonar. Native runs `sh scripts/test-native.sh` for serial functional regression, keeps stress measurements opt-in, and records that native code is outside Sonar.
+- **single implementation stack** (`frontend` = `src/**`, `public/**` (frontend build static inputs), and frontend-only root configs; `rust` = `src-tauri/**` + `crates/**` + `rust-toolchain.toml`; `native` = `native/**`): run that stack's full regression and full coverage; reuse the other frontend/Rust stack's most recent LCOV for Sonar. Native runs `sh scripts/test-native.sh` for serial functional regression, keeps stress measurements opt-in, and records that native code is outside Sonar.
 - **cross-stack, tooling (`.githooks/**`, `scripts/**`, `.github/**`, root linters), unknown paths, empty ranges, or an undeterminable base**: fresh frontend/Rust coverage plus native functional regression before Sonar.
 
 The complete gate at a high level:
