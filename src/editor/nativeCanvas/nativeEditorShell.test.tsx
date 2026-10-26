@@ -47,6 +47,61 @@ const PROJECT: EditorProjectContent = {
 }
 let requestNo = 0
 
+it('native outlineMove 拒绝分支 after 并保持保存载荷（#903）', async () => {
+  const project: EditorProjectContent = {
+    ...PROJECT,
+    nodes: [
+      ...['p', 'x', 'n', 'a'].map((id) => ({ ...SCENE, id })),
+      {
+        id: 'br',
+        type: 'branch',
+        position: { x: 500, y: 0 },
+        data: { prompt: '选择？', options: [] },
+      },
+    ],
+    edges: [
+      ['p', 'x'],
+      ['x', 'n'],
+      ['a', 'br'],
+    ].map(([source, target], i) => ({
+      id: `e${i}`,
+      source,
+      target,
+      className: 'pw-edge-sequence',
+    })),
+  }
+  const view = nativeEditorFixture(project)
+  const before = await exportedDocument()
+  await act(async () => {
+    await intent('editor.outlineMove', {
+      id: 'x',
+      target: { kind: 'row', anchorId: 'br', position: 'after' },
+    })
+  })
+  expect((await exportedDocument()).graph).toEqual(before.graph)
+  expect(view.getByRole('alert').textContent).toContain('大纲拖拽未执行')
+  await act(async () => {
+    await intent('editor.undo')
+  })
+  expect((await exportedDocument()).graph).toEqual(before.graph)
+})
+
+it('native outlineMove 同组全游离组尾静默无操作（#904）', async () => {
+  const view = nativeEditorFixture({
+    ...PROJECT,
+    nodes: [{ ...SCENE, data: { ...SCENE.data, episodeNo: 2 } }],
+  })
+  const before = await exportedDocument()
+  await act(async () => {
+    await intent('editor.outlineMove', {
+      id: SCENE.id,
+      target: { kind: 'groupEnd', episode: 2 },
+    })
+  })
+  expect((await exportedDocument()).graph).toEqual(before.graph)
+  expect(view.queryByRole('alert')).toBeNull()
+})
+
 /** Explicit project targeting prevents old native panels from editing a newer project. */
 function intent(command: string, args: Record<string, unknown> = {}) {
   return host.__pwNativeIntent?.({

@@ -102,13 +102,13 @@ describe('outlineSplicePlan（§3.5 大纲拖拽落点 → 锚点换算）', () 
     expect(got?.anchorId).toBe('s2')
   })
 
-  it('组尾落点排除被拖节点自身；目标组不存在 → null', () => {
+  it('同组仅自身返回空计划；目标组不存在 → null（#904）', () => {
     const got = outlineSplicePlan(nodes, edges, {}, 'x', {
       kind: 'groupEnd',
       episode: 2,
     })
-    // 组 2 只有 x 自己，被排除后无可锚行
-    expect(got).toBeNull()
+    // 组 2 只有 x 自己，无排序变化；与跨组无锚点的拒绝区分。
+    expect(got).toEqual({ anchorId: 'x', plan: { removes: [], adds: [] } })
     expect(
       outlineSplicePlan(nodes, edges, {}, 'x', {
         kind: 'groupEnd',
