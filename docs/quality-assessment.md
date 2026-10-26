@@ -1,14 +1,14 @@
 # PlotWeave 设计与实现质量评估
 
-评估日期：2026-10-26（同日第三轮）。本文评价软件架构、数据契约、状态与交互实现、可靠性及工程治理，不评价视觉美感，不新增产品合同。
+评估日期：2026-10-27（第四轮）。本文评价软件架构、数据契约、状态与交互实现、可靠性及工程治理，不评价视觉美感，不新增产品合同。
 
-**当前结论：9.6 / 10，A+（排除评估开始前全部已知 issue 的证据口径）。**
+**当前结论：9.5 / 10，A+（排除评估开始前全部已知 issue 的证据口径）。**
 
-- **代码基线**：最新 `origin/dev` @ [`4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b`](https://github.com/hailingu/PlotWeave/commit/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b)。取证和下文代码链接均固定于此版本；本次只改评估文档，不修复产品。
-- **tracker 基线**：2026-10-26 本轮开始时完成全量分页快照，排除 PR 后共有 **435 条 issue，开放 0 条**（较第二轮快照新增 #882–#892 共 11 条——第二轮发现已全部处置关闭：9 项经 PR #894/#895/#896/#897/#898/#899 修复，#886 以 known-boundary 登记保留边界）。已知集合包括关闭报告，状态变化不重新产生扣分。快照时最新 issue 为 #892。
-- **本轮新发现**：[#903](https://github.com/hailingu/PlotWeave/issues/903)–[#908](https://github.com/hailingu/PlotWeave/issues/908)，共 **6 项：2 项 P2、4 项 P3**；全部在起始快照之外建档，保留本轮扣分。
-- **方法**：前端、Swift 原生、Rust/Tauri、工程治理四域只读审查；主审先逐一复核第二轮 11 项发现的 7 个修复提交本体与周边（修复完备性），再对四域报告的全部候选发现独立复核关键代码、独立重跑纯函数探针并做 tracker 去重。没有把测试通过当作所有行为都已验证。
-- **历史**：上一轮（同日第二轮，[固定档案](https://github.com/hailingu/PlotWeave/blob/f87fa234a70de63db3557045747124225c74dfb3/docs/quality-assessment.md)）为 9.3/A，11 项发现 #882–#892 已全部处置并合入本基线；本轮逐项复核修复链完备后，在同一六维权重下评估当前基线的新缺口。
+- **代码基线**：最新 `origin/dev` @ [`098602b7bf48b34cffb17cc94e7a4532a4234730`](https://github.com/hailingu/PlotWeave/commit/098602b7bf48b34cffb17cc94e7a4532a4234730)。取证和下文代码链接均固定于此版本；本次只改评估文档，不修复产品。
+- **tracker 基线**：2026-10-27 本轮开始时完成全量分页快照，排除 PR 后共有 **441 条 issue，开放 0 条**（较第三轮快照新增 #903–#908 共 6 条——第三轮发现已全部处置关闭：#903/#904 经 PR #910（`c998e1d3`）修复，#905 经 PR #911（`0a7498ca`）修复，#906 经 PR #912（`8f324994`）以文档栈限定登记为 known-boundary，#907 经 PR #913（`2a03946c`）修复，#908 经 PR #914（`2918cb77`）以四处文档同步加测试钉住处置）。已知集合包括关闭报告，状态变化不重新产生扣分。快照时最新 issue 为 #908。
+- **本轮新发现**：[#915](https://github.com/hailingu/PlotWeave/issues/915)–[#919](https://github.com/hailingu/PlotWeave/issues/919)，共 **5 项：3 项 P2、2 项 P3**；全部在起始快照之外建档，保留本轮扣分。
+- **方法**：前端、Swift 原生、Rust/Tauri、工程治理四域只读审查（分域报告产出候选，全部候选须经主审复核方可计分）；主审先逐一复核第三轮 6 项发现的 5 个修复提交本体与配套测试/文档（修复完备性），再对全部候选发现独立复核关键代码、独立重跑纯函数探针、夹具与台账匹配，并做 tracker 去重（441 条全量快照）。没有把测试通过当作所有行为都已验证。
+- **历史**：上一轮（2026-10-26 第三轮，[固定档案](https://github.com/hailingu/PlotWeave/blob/28b66dda2102f49a3765d0de37cbec88f28c6744/docs/quality-assessment.md)）为 9.6/A+，6 项发现 #903–#908 已全部处置并合入本基线；本轮逐项复核修复链完备后，在同一六维权重下评估当前基线的新缺口。
 
 ## 一、评分口径
 
@@ -29,109 +29,128 @@
 
 | 维度 | 本轮实际审查范围 | 证据性质 |
 | --- | --- | --- |
-| 架构与模块边界 | 依赖图、模型纯度、shell→editor 方向、React 编辑 owner、Swift 投影、会话/缓存边界 | 代码／AST 守卫与路由器／状态机阅读；沿用基线 CI 的架构守卫 |
-| 前端状态与交互 | 大纲接缝计划器（含 #894 修复逐行复核与探针实测）、连线规则、加载归一化、历史栈、库资产导入撤销、面板状态机 | 主审独立探针（生产模块实测）＋代码追踪；未做桌面拖放 |
-| 原生桥接与生命周期 | 修复链复核（瞬时错误分流、导入回滚、深度预扫）、回执缓存双界、退出屏障、pending 态生命周期、库恢复窗口、网络信任边界 | 代码追踪；基线原生 CI；未重跑本机原生全套与运行时注入 |
-| 持久化、安全与契约 | #882–#892 修复完备性复核、原子写与清扫白名单、隔离区排除、操作锁序、谓词一致性、双栈导入凭据、库列表投影 | 双栈代码追踪；基线 Rust CI；未做 fd/IO 运行时注入 |
-| 测试与可靠性 | 修复回归覆盖审查、探针实测、覆盖率策略、契约测试钉住范围 | 断言审查与聚焦测试实跑，不把数量当行为验收 |
-| CI、门禁与文档 | hooks、scoped push 分类边界（实测分类函数）、台账与证据链、ci.yml、脚本/文档交叉引用与计数、基线四 job | 配置／脚本审查＋git 取证＋只读实测；远程保护状态仅文档可证 |
+| 架构与模块边界 | 模块图守卫沿用、shell→feature 方向、原生动作复用生产控制器（零第二文档存储）、会话/缓存边界 | CI 架构守卫 + 双栈代码阅读 |
+| 前端状态与交互 | 命令栈代次、大纲接缝计划器（含 #910 修复逐行复核与探针实测）、连线三层契约、加载归一化、保存管线水位、原生桥回执、面板/首页/设置/资产库/导出投影 | 分域探针（spine/outlineDrop 六场景、16 项聚焦测试）＋主审代码追踪；未做桌面拖放 |
+| 原生桥接与生命周期 | #905 修复邻接入口（discardImport/deleteProject/saveProject/registerAlias/validateAsset/copyAssets）、退出屏障登记/退休、路由器缓存双界、媒体投递粒度、下载栈逐跳复验、信封判型跨栈对照 | 静态代码追踪；基线原生 CI；未重跑本机原生全套与运行时注入 |
+| 持久化、安全与契约 | #906/#907 处置复核（含 #907 source() 链专项核查）、加载侧复验双栈、原子写/清扫/备份、列表抗脏、错误分类学、锁序、导入凭据生命周期 | 双栈代码追踪＋定向 cargo test（envelope 9 项、media_filter 6 项）＋serde_json 探针 |
+| 测试与可靠性 | 修复回归覆盖审查、探针实测、覆盖率策略与 scripts 登记表闭环 | 断言审查与聚焦测试实跑，不把数量当行为验收 |
+| CI、门禁与文档 | hooks/台账/证据链（台账匹配与核验器只读实测、worktree 夹具）、gate-scope 分类实测、ci.yml 供应链姿态、check:size、全仓链接检查、命令计数 | 配置／脚本审查＋git/GitHub 取证＋只读实测；远程保护状态仅文档可证 |
 
-未执行无关压力实验、付费 Provider、公网 TLS、运行时 EMFILE/EIO 注入或安装发行验收。第六节列出命令与未执行项；覆盖范围限制置信度，不自动扣分。
+未执行无关压力实验、付费 Provider、公网 TLS、运行时 EMFILE/EIO 注入、深嵌套崩溃复现或安装发行验收。第六节列出命令与未执行项；覆盖范围限制置信度，不自动扣分。
 
 ## 二、综合结果
 
 | 维度 | 权重 | 评分 | 评级 | 计分依据 |
 | --- | ---: | ---: | --- | --- |
 | 架构与模块边界 | 15% | 10.0 | A+ | 所有权和依赖守卫清楚；本轮合格新增扣分 0 |
-| 前端状态与交互实现 | 20% | 8.8 | A− | #903 P2 −1.0；#904 P3 −0.2 |
-| 原生 Swift 桥接与生命周期 | 20% | 9.5 | A+ | #905 P2 −0.5；修复链复核无新缺陷 |
-| 持久化、安全与数据契约 | 15% | 9.6 | A+ | #906/#907 P3 各 −0.2；#888 修复复核完备 |
+| 前端状态与交互实现 | 20% | 10.0 | A+ | 命令栈/保存/归一化/原生桥复核无新缺陷；本轮合格新增扣分 0 |
+| 原生 Swift 桥接与生命周期 | 20% | 9.5 | A+ | #916 P2 −0.5；#905 修复链与邻接入口复核无新缺陷 |
+| 持久化、安全与数据契约 | 15% | 8.8 | A− | #915 P2 −1.0；#918 P3 −0.2 |
 | 测试与可靠性工程 | 15% | 10.0 | A+ | 多层行为／合同／真实宿主回归；各缺口是根因解释，不重复扣测试分 |
-| CI、门禁与文档维护 | 15% | 9.8 | A+ | #908 P3 −0.2 |
-| **综合** | **100%** | **9.6** | **A+** | **已知问题全部排除后的本轮证据分，不是全量缺陷率或完整验收评级** |
+| CI、门禁与文档维护 | 15% | 8.8 | A− | #917 P2 −1.0；#919 P3 −0.2 |
+| **综合** | **100%** | **9.5** | **A+** | **已知问题全部排除后的本轮证据分，不是全量缺陷率或完整验收评级** |
 
-计算：`10×15% + 8.8×20% + 9.5×20% + 9.6×15% + 10×15% + 9.8×15% = 9.57 → 9.6`。
+计算：`10×15% + 10×20% + 9.5×20% + 8.8×15% + 10×15% + 8.8×15% = 9.54 → 9.5`。
 
-历史 2026-10-13 为 9.1/A，10-18 为 8.9/A−，10-21 为 9.2/A，10-24 为 8.7/A−，10-26 第一轮为 9.8/A+，第二轮为 9.3/A。不同轮次的已知集合、审查深度与计分细则不同，不能把 9.6 解释为相对第二轮上升 0.3 的全量质量测量：第二轮对拔出侧、库索引错误分流、导入事务等角落覆盖更深，本轮在其修复链复核之上把锚点类型契约、pending 态生命周期与跨栈一致性缺口纳入了审查面。产品没有在本次文档任务中获得修复。
+历史 2026-10-13 为 9.1/A，10-18 为 8.9/A−，10-21 为 9.2/A，10-24 为 8.7/A−，10-26 第一轮为 9.8/A+，第二轮为 9.3/A，第三轮为 9.6/A+。不同轮次的已知集合、审查深度与计分细则不同，不能把 9.5 解释为相对第三轮下降 0.1 的全量质量测量：本轮把加载侧资产复验的错误分类（第三轮只审了 `openMedia`/库列表两个入口）、控制文件深度边界的剩余裸 Codable 入口（#840/#863/#889 之后的收尾面）与门禁台账的跨环境生命周期纳入了审查面。产品没有在本次文档任务中获得修复。
 
 ## 三、主要质量优点
 
-### 3.1 第二轮 11 项发现的修复链完整、行为正确
+### 3.1 第三轮 6 项发现的修复链完整、行为正确
 
-- [#882/#884/#885](https://github.com/hailingu/PlotWeave/pull/894)（`10c59da9`/`42e32621`）：主审以 `npx tsx` 直接加载生产 `src/editor/spine.ts` 实测十组场景——干净图手绘捷径、#879 存量形状、多出边/多入边锚点、原位重放（前后两侧）、反向原位、游离插入、下游成环缝合——缝合查重、多接缝拒绝（不按数组序选边）、原位短路（不改选旁支接缝）逐项正确；`useOutlineDrop` 对 null 计划给出可见提示、接缝与集归属仍为单命令 undo/redo（`spliceEdgesWith` 两向保留完整边对象）。
-- [#883](https://github.com/hailingu/PlotWeave/pull/895)（`5d9b1834`）：`filterMedia` 按 `PW_STORAGE_ERROR` 分流保留条目、不设 changed、不重写 `library.json`；新增真实 chmod 注入与 ENOENT 仍隔离的回归。#883 的分流原则成为本轮 [#907](https://github.com/hailingu/PlotWeave/issues/907) 衡量 Rust 侧一致性的基准。
-- [#890](https://github.com/hailingu/PlotWeave/pull/897)（`a2c36f23`）：凭据登记失败在同一 actor 内回滚 `removeTree`，回滚失败返回 `PW_IMPORT_ROLLBACK_FAILED` 且不谎称已删除；`pendingMedia` 只在凭据成功后发布。#886 撤销保留边界在 [assets.md](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/docs/data-model/assets.md#L187) 显式记录保留理由与人工清理入口。
-- [#887/#888](https://github.com/hailingu/PlotWeave/pull/899)（`98eeb2ea`）：Rust `copy_dir_handles` 与 Swift `copyContents` 每层排除精确 `.trash`、不触碰源数据、`.trashcan` 等近似名保留，双栈同批并各有回归；`find_library_entry` 改用全体消费者一致的活跃谓词。
-- [#889](https://github.com/hailingu/PlotWeave/pull/898)（`4a33e65c`）：提供者网络响应改走 `HostJSON.decode` 共享深度预扫，恰在下限深度仍有效的边界有独立回归。
-- [#891/#892](https://github.com/hailingu/PlotWeave/pull/896)（`26573717`）：cost.md 表格补齐快/慢路径与 `PRE_PUSH_SCOPE_ESCALATED` 口径，门禁脚本注释不再引用已删除的覆盖率数字。
+- [#903/#904](https://github.com/hailingu/PlotWeave/pull/910)（`c998e1d3`）：[`planAt`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/src/editor/outlineDrop.ts#L24-L36) 对整份计划的**每条新增边**复用 `connectionEndpointIssue` 端点契约；同组无其他 sequence 成员的组尾落点返回空计划，[`useOutlineDrop.ts` L171–176](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/src/editor/useOutlineDrop.ts#L171-L176) 对空计划早退——不推历史、不改集、无横幅；原生 `editor.outlineMove` 与 web 拖放共用同一计划器，无旁路。分域以 `npx tsx` 加载生产 `spine.ts`/`outlineDrop.ts` 实测六场景（原位重放、分支锚点拒绝、同组空计划、跨组全游离组拒绝）逐项正确；`npx vitest run src/editor/outlineDrop.test.ts src/editor/spine.test.ts` 16 项全过。
+- [#905](https://github.com/hailingu/PlotWeave/pull/911)（`0a7498ca`）：[`openMedia`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/native/macos/App/NativeProjectMedia.swift#L72-L85) 仅在确证 `project_not_found` 时同时退役 pendingMedia/mediaAliases/importReceipts 三表，瞬时错误原样上抛；`NativeProjectMediaReadFailureTests` 以 `PW_STORAGE_ERROR`/`PW_STORAGE_LIMIT`/`PW_PROJECT_CORRUPT` 参数化钉住。主审复核同文件及邻接入口（`discardImport`、`verifySaveAssets`、`copyAssets`、`deleteProject`）均无同类吞没。
+- [#906](https://github.com/hailingu/PlotWeave/pull/912)（`8f324994`）：按验收方案 b 在 [assets.md](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/docs/data-model/assets.md#L193-L195) 显式登记 Tauri 历史路径「不回滚、保留字节优先」的栈限定边界，与 #890 的 Swift 回滚契约分栈记载——known-boundary 处置完整。
+- [#907](https://github.com/hailingu/PlotWeave/pull/913)（`2a03946c`）：[`transient_media_failure`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/src-tauri/src/library.rs#L137-L146) 沿 `std::error::Error::source()` 链取 `io::ErrorKind`，仅 `NotFound` 归缺失，其余以 `[PW_LIBRARY_MEDIA_TEMPORARILY_UNAVAILABLE]` 保留条目。主审专项核查 `LibraryError`/`StoreError`/`AssetsError` 全部变体的 `source()` 实现：均返回底层 `io::Error`/`serde_json::Error`，无构造器把 io 错误拍平成 String，分流链完整；`cargo test --lib media_filter` 6 项实测通过。
+- [#908](https://github.com/hailingu/PlotWeave/pull/914)（`2918cb77`）：AGENTS.md、cost.md、push.md、workflow.md 四处同步 `public/**` 归 frontend 的口径，[`gate-scope.test.ts` L21–22](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/scripts/gate-scope.test.ts#L21-L22) 以 `public/favicon.png` 钉住。
+- PR #910/#911/#913 正文含不变量矩阵与验证命令；#912/#914 为文档/测试钉住变更（无生产代码），按规则不要求矩阵。五个 PR 均在同一提交内同步对应设计文档，无漂移残留。
 
-### 3.2 端点契约多层一致（本轮扣分项即其唯一漏网入口）
+### 3.2 多层契约对等与状态机防护（前端复核无新缺陷）
 
-- sequence 边「不得以分支为 source」在交互层（[`connectionEndpointIssue`](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/src/editor/graphRules.ts#L70-L72)）、AI 批量层（`connectPlacementIssue`）、加载归一化（`normalizeEdges` 孤儿隔离）三处共用同一判定；大纲计划器是唯一未接线的入口（[#903](https://github.com/hailingu/PlotWeave/issues/903)）。
-- 撤销/重做跨边手术与集归属补丁保持原子；`edgeKindOf`/环检测/归一化对运行态与加载态对等（分域复核无分叉形态）。
+- 边契约三层对等：`graphRules.connectionEndpointIssue`（交互+AI）↔ `normalizeEdges` 孤儿隔离（加载）↔ 保存边界校验对同一批不变量逐条对齐，#903 后大纲接缝计划的新增边也纳入同一判定。
+- 命令栈代次防护：`CommandStack.revision` 使在途重做被任何穿插操作（含 ABA 往返）失效；拒绝路径不传播迟到的旧失败（`history.ts`）。
+- 「读到即最新」加载契约：`tauriLoad` 链静止/失败登记复验/读盘+链身份守卫三段循环，读盘后排队的新保存触发重启而非交付旧内容（`projectStore/tauri.ts`）。
+- 保存管线固定点协调：防抖→在途串行→编辑序号水位→外部重存覆盖水位→四源退出屏障失败归属逐一复核（#849 探针口径沿用）。
+- 原生意图传输防重放：SHA-256 指纹去重 + 序号退役水位 + 会话身份 + 处理器登记先于执行；原生编辑命令复用生产控制器的校验与历史，零第二文档存储，回执经 `flushSync` 确保下一条命令读到已提交状态。
 
-### 3.3 原生桥、退出与网络信任边界复核无新缺陷
+### 3.3 双栈持久化内核与信任链
 
-- [`HostCommandRouter.swift`](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/native/macos/App/HostCommandRouter.swift) 回执缓存双界淘汰不变量逐路径复核成立（`settle` 先退役再计预算、`makeRoom` 不驱逐结算中条目）；三类退出任务登记均在 `defer` 退休，取消路径不悬挂 quit。
-- 库删除/导入事务的每个崩溃窗口表推演收敛或保守挂起自愈；`NativeModels`/DNS/公网 IP/HTTP 帧上限逐项复核；#889 后两条解码路径均封顶。
+- 锚定句柄纪律彻底：`NativeDirectory` 全部子孙操作 descriptor 相对（`openat`/`fstatat`/`renameatx_np`），no-follow 归类 + `(dev,ino)` 身份绑定贯穿打开/删除/复制/导入复核；Rust 侧 `store/persist.rs` 同构。
+- 原子写阶段序完整且可注入：`O_EXCL` 临时文件→写+fsync→重归类→`beforeCommit`→rename→目录 fsync（`NativeDirectory` + `NativeAtomicWriteFaults`；`persist.rs` + `faults.rs` 逐阶段故障注入支撑回归）。
+- 损坏备份内核绝不覆盖证据：SHA-256 内容寻址、复用前身份+全字节比对、新建目标必须不存在（`damaged_backup.rs`，库/设置两域共用）。
+- 库身份日志先行：导入在最终 rename 前把 `(dev,ino)` 连同 `importPending` 耐久写入 journal，恢复对含糊形态一律保留证据并暂停写入而非删除；删除日志可恢复提交协议（日志先于移动耐久落盘、隔离目录先于原目录 fsync、回迁用 `hard_link` 表达 no-replace）。
+- 退出定点严密：库批次与导出交付均「accept 先于任务启动 + defer 无条件退休」，`finishQuit` 终批前复查三注册表；路由器回执缓存双界淘汰 + `retiredThrough` 单调防重放。
+- 下载栈纵深（两栈对等）：逐跳 DNS 固定/策略复验（含重定向）、仅数值 IP 连接、定界 HTTP 解析器拒绝歧义 framing；Rust 图像下载并发上界与作业总预算，诊断输出先脱敏后截断。
+- 信封判型对版本 0/未来值/规范整数串/异型值的接受集两栈逐例一致（#918 的浮点拼写是本轮发现的唯一分歧载体）。
 
 ### 3.4 工程约束有实际执行证据
 
-- [基线 CI 40334299512](https://github.com/hailingu/PlotWeave/actions/runs/40334299512) 精确绑定 `4e6a7dd8`，frontend、rust、native 成功；gate-evidence 在 dev push 按规则 skipped，不称为执行通过。
-- 原生命令计数 27+2 经本轮重新清点在四处文档一致；scripts 覆盖率地板注册表与磁盘清点守卫闭环；`verify-gate-evidence` 对真实历史范围只读实测（release-boundary 与 task-PR 两种形态）退出码符合文档矩阵。
-- #894–#899 六个修复 PR 均在同一提交内同步 graph-model.md/ui-design.md/assets.md/cost.md，修复与文档无漂移残留。
+- [基线 CI 40355863367](https://github.com/hailingu/PlotWeave/actions/runs/40355863367) 精确绑定 `098602b7`，frontend、rust、native 成功；gate-evidence 在 dev push 按规则 skipped，不称为执行通过。近 10 次 dev 运行无 job 失败（3 次 cancelled 均为并发取代）。
+- `gate-tree-marker` 精确实现 #404/#429 合同（PID+lstart 绑定、双向年龄界定、命中即删）；`pre-push` 的规范性句子逐条落地（`GIT_NO_REPLACE_OBJECTS=1`、按唯一提交去重、删除 ref 跳过、慢路径 `PRE_PUSH_SCOPE_ESCALATED` 自动提升 full）；复用 LCOV fail-closed（对复用报告也要求非空且含覆盖记录）；临时索引检测按 PR #581 评审口径实现。
+- CI 供应链姿态：全部 action 按 SHA 钉版、`permissions: contents: read`、gate-evidence 检出事件 base SHA 且不执行 PR-head 代码、`RELEASE_BOUNDARY` 仅在 base=main ∧ head=dev ∧ 同仓库时置位；`ci-npm-audit.sh` 与文档合同逐项一致。
+- 机械可验口径一致：Node `24.18.0`、Rust `1.95.0`、Xcode/SDK `27.0`、版本 `0.3.0` 各处吻合；原生命令数 27+2 与五个 `enum Command`（9/7/5/3/3）加两条退出命令精确吻合；`npm run check:size` 通过（895 检查/66 排除/祖父条目 0）；scripts 覆盖率登记表无悬空（4/4 用例实跑通过）；全仓 50 个 Markdown、617 条相对链接仅 1 条断链（见 #919）。
+- #903–#908 修复涉及的函数与文件均在 80 代码行/800 行/1800 行上限内（`outlineSplicePlan` 50 行、`list_assets_with_media` 55 行，主审清点）。
 
 ## 四、本轮扣分项与跟踪 issue
 
 | Issue | 严重度 | 维度 | 实际影响 | 扣分 |
 | --- | --- | --- | --- | ---: |
-| [#903](https://github.com/hailingu/PlotWeave/issues/903) | P2 | 前端状态与交互 | 分支行作锚点产出 source=分支的非法 sequence 边：会话内不可见、重开被隔离，被拖节点脱落剧情流 | 1.0 |
-| [#904](https://github.com/hailingu/PlotWeave/issues/904) | P3 | 前端状态与交互 | 组尾落点无可行锚点时对无操作弹出与事实不符的错误横幅 | 0.2 |
-| [#905](https://github.com/hailingu/PlotWeave/issues/905) | P2 | 原生 Swift 桥接与生命周期 | 控制文件瞬时读失败被并入项目消失，整项目待保存导入与别名的内存态被清空，预览批量 404 至下次保存 | 0.5 |
-| [#906](https://github.com/hailingu/PlotWeave/issues/906) | P3 | 持久化、安全与数据契约 | Rust 导入凭据登记失败不回滚已落位媒体，与 #890 文档契约的栈范围未界定 | 0.2 |
-| [#907](https://github.com/hailingu/PlotWeave/issues/907) | P3 | 持久化、安全与数据契约 | Tauri 库列表把瞬时打开失败并入缺失从投影剔除，与原生路径瞬时分流不一致 | 0.2 |
-| [#908](https://github.com/hailingu/PlotWeave/issues/908) | P3 | CI、门禁与文档维护 | 推送门禁把 `public/` 划入 frontend 单栈，三处治理文档未记载且无用例钉住 | 0.2 |
+| [#915](https://github.com/hailingu/PlotWeave/issues/915) | P2 | 持久化、安全与数据契约 | 加载侧资产复验把瞬时 I/O 失败并入坏资产键，前端隔离后条目随下次保存从 `project.json` 持久消失，引用悬空、媒体成孤儿 | 1.0 |
+| [#916](https://github.com/hailingu/PlotWeave/issues/916) | P2 | 原生 Swift 桥接与生命周期 | `library.json` 抢救解析与 `settings.json` 读取绕过 #840 深度预扫，400–512 层嵌套的脏文件在协作线程栈上令整个应用崩溃 | 0.5 |
+| [#917](https://github.com/hailingu/PlotWeave/issues/917) | P2 | CI、门禁与文档维护 | 门禁待物化记录绑定运行环境 gitdir，一次性工作环境使版本化台账对连续 7 个任务提交停更且无任何诊断 | 1.0 |
+| [#918](https://github.com/hailingu/PlotWeave/issues/918) | P3 | 持久化、安全与数据契约 | `schemaVersion` 浮点拼写（如 `1.0`）Rust 按表示拒绝、Swift 按值接受，同一文件两宿主行为相反 | 0.2 |
+| [#919](https://github.com/hailingu/PlotWeave/issues/919) | P3 | CI、门禁与文档维护 | `assets.md` 引用 `media_protocol.rs` 的相对链接多一级 `..`，GitHub 上 404（全仓唯一断链） | 0.2 |
 
-### 4.1 #903：分支锚点产出非法剧情流边（本轮唯一普通操作级 P2）
+### 4.1 #915：加载侧资产复验吞瞬时 I/O 失败（本轮唯一数据丢失级 P2）
 
-**代码事实**：锚点资格唯一检查是 [`isSpineMember`](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/src/editor/spine.ts#L132-L134)（是否 sequence 边端点），不查节点类型；分支持有 sequence 入边（[示例项目](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/src/editor/sampleGraph.ts#L280-L283)自带 `dialogue-1 → branch-1`，手绘也允许）即为合法锚点。[`insertionNeighbors`](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/src/editor/spine.ts#L90-L96) 只数 sequence 出边——分支的出边全是 branch 类型 → `adjacent` 为空 → `{upstream: 分支, downstream: null}` → [L166](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/src/editor/spine.ts#L166) 无条件加 `upstream→dragged`。计划器签名只收 edges，结构上无法查端点类型；`useOutlineDrop` 物化时无端点复核。该边形态被交互层、AI 批量层、加载归一化三方禁止，唯独计划器可产出；分支节点只有匿名 target 句柄与选项 source 句柄（[BranchNode.tsx](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/src/editor/nodes/BranchNode.tsx#L44-L47)），边会话内不可渲染。
+**代码事实**：Swift [`verifyAssets`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/native/macos/App/NativeProjectStore.swift#L252-L260) 第 258 行以 `(try? projectDirectory(id: id).media(...)) == nil` 判坏键——`try?` 把 `media()` 抛出的一切错误（含 `NativeDirectory.ioError` 映射的 `PW_STORAGE_ERROR`：EMFILE/EIO/EACCES）与确证缺失同列；Rust [`unverifiable_asset_keys`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/crates/plotweave-core/src/store/validate.rs#L349-L364) 第 361 行以 `verify_asset_real_path(...).is_err()` 同构折叠，**两栈一致地错**。前端 [`tauri.ts`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/src/projectStore/tauri.ts#L334-L350) 每次加载（含示例升级回写）调用 `verify_project_assets` 并交 `parseProject`；[`normalizeAssetRecords`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/src/model/normalizeAssets.ts#L134-L146) 对返回键执行 `delete byId[key]`，警告文案写「缺失/符号链接/逃逸/保留隔离区」——假定的正是确证缺失语义。归一化文档成为会话真源，下一次防抖保存把不含该条目的 `assets.byId` 写回 `project.json`。
 
-**主审独立实测**（Node 24.18.0，`npx tsx` 直接加载生产 `src/editor/spine.ts`）：`拖 X 到 BR(分支) 之后 → 删[P→X, X→N] 加[P→N, BR→X]`——缝合与非法边同计划产出；`before` 位置（多入边拒绝之外）产出合法替换。
+**对照与去重**：#883（库 `filterMedia`）、#905（`openMedia`）、#907（Tauri 库列表）已在三个入口确立并落地「瞬时失败不得并入缺失处置」，唯独加载侧复验双栈均未对齐——同一原则的第四个入口，按第三轮 #907 对 #883 的先例属新事实而非重复处罚。tracker 全量检索「verify_project_assets/复验/瞬时/invalidAssetKeys」无已知条目。
 
-**影响与计分**：大纲会话内把 X 排到分支后（inFlow 按端点计数驱动），画布无新连线；保存重开后 `BR→X` 被孤儿边规则隔离，而原位边已删并缝合——X 脱落剧情流成为游离节点，与 #879/#882 同类「会话内编辑被加载管线静默撤销」。保存前一步 undo 可恢复、重开后可手动重连，节点本体与文本不丢，按普通核心操作的可恢复 P2 扣 1.0。
+**影响与计分**：资产条目（id/relPath/mime/时间戳）从文档持久消失，分镜引用位悬空，媒体文件成无索引孤儿（#886 边界：无孤儿扫描，手动重导入是唯一恢复）。fd 压力态（#848 已证实现实可达）一次复验可把整项目全部资产一并上报，属单点环境故障放大。按「触发较窄但数据丢失类、可被单点环境故障放大且不可自愈」口径扣 1.0。**未验证**：运行时 EMFILE/EIO 注入（Swift→前端→保存三段代码链已闭合）。
 
-**去重与边界**：#884 是非剧情流锚点的静默无操作（分支持有 sequence 入边时恰是剧情流成员，判定相反）；#589/#885 是被拖成员侧与接缝选取；#340/#361 是导出投影。均不同根因。**未验证**：桌面拖放、磁盘重开与原生大纲实测（静态确认共用计划器）。
+### 4.2 #916：库索引抢救与设置读取绕过 #840 深度预扫
 
-### 4.2 #905：openMedia 把瞬时控制文件失败并入项目消失
+**代码事实**：[`NativeLibrarySalvage.parse`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/native/macos/App/NativeLibrarySalvage.swift#L5-L23) 第 7 行与 `bucket` 第 14/16/20 行、[`NativePreferences.load`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/native/macos/App/NativePreferences.swift#L74-L84) 第 79 行及 `backupDamaged` 第 110 行直接调用 `JSONDecoder().decode(HostJSON.self, …)`——不经 [`HostJSON.decode`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/native/macos/App/HostJSON.swift#L38-L42)（回退 Codable 前先迭代式 `rejectNestingBeyondLimit`），也不走自带 `maxDepth=32` 的 `HostJSONParser`。`HostJSON.init(from:)` 逐层递归，Foundation 扫描只拒绝 513 层以上，400–512 层进入递归解包并在 512 KiB 协作栈上 SIGBUS（#840 探针实测：Release ≈400 层）。调用链每次图库操作必经（`NativeLibraryOperation.init` → `NativeLibraryIndex.init` L20 → `Salvage.parse`），偏好读取在启动即触发；`NativeLibrary`/`NativePreferences` 均为 actor（协作线程池）。Rust 侧 `serde_json` 自带 128 层上限返回错误不崩溃——Swift 独有缺口。
 
-**代码事实**：[`NativeProjectMedia.swift L75–81`](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/native/macos/App/NativeProjectMedia.swift#L75-L81) 的 catch 不区分错误码，任何 `loadProject` 抛错都清空整项目 `pendingMedia`/`mediaAliases`；而 [`loadProject`](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/native/macos/App/NativeProjectStore.swift#L180-L187) 除 `project_not_found` 外还因 `PW_STORAGE_ERROR`（[`NativeDirectory`](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/native/macos/App/NativeDirectory.swift#L26-L27) 的 errno 路径统一映射）抛错——区分能力存在但未用。同文件 `discardImport`/`validateAsset`/`registerAlias` 失败时不清状态、`importReceipts` 却被保留，三处不一致可证非整体设计；现有测试仅覆盖项目删除路径。
+**归属与去重**：#840 修复 `a5ccb9bc` 把边界落在 `HostJSON.decode` 并宣称「512 KiB 协作线程栈上递归解包的栈溢出窗口由此关闭」，[persistence.md L83](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/docs/data-model/persistence.md#L83) 又明文列出「库索引、偏好…仍走 Codable 路径」；#863（桥信封）、#889（模型响应）是同族不同入口且均已单独立项处置——这两处用户控制文件是剩余未覆盖入口，且无任何文档把它们登记为保留边界。按 #889 先例属新入口事实。
 
-**影响与计分**：导入成功至防抖保存的窗口内，一次瞬时 I/O 失败清空整项目 pending 态——之后所有待保存资产的 pwmedia 加载返回 `PW_ASSET_NOT_FOUND`（预览批量 404），直至下一次成功保存从 `byId` 恢复。触发较窄（fd 压力窗口，#848 已证实同类压力现实可达）、影响局部且可自愈、无数据丢失，按 0.5 扣。**未验证**：运行时 EMFILE 注入。
+**影响与计分**：单个脏文件令整个应用进程崩溃；`settings.json` 变体每次启动必崩直至手动删除。触发与 #840 同类（约 400+ 层嵌套的脏文件，所有者已接受该类为 P2）。窄触发 P2 扣 0.5。**未验证**：本轮运行时复现（崩溃阈值与栈环境引用 #840 的实测记录）。
 
-### 4.3 P3 项摘要
+### 4.3 #917：门禁台账待物化记录随一次性工作环境搁浅
 
-- **#904（组尾落点横幅）**：[outlineDrop.ts L30–41](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/src/editor/outlineDrop.ts#L30-L41) 组尾回退耗尽返回 null，[useOutlineDrop L162–167](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/src/editor/useOutlineDrop.ts#L162-L167) 把 null 一律按拒绝上浮（`10c59da9` 引入）——行落点有「拖回自身」豁免、组尾落点没有；全游离组或单行组的组尾落点实为无操作，却弹出不成立的「接缝不唯一/形成环/请调整连线」持续性横幅。零状态写入，仅诊断与事实不符，P3 扣 0.2。
-- **#906/#907（跨栈导入与列表一致性）**：Rust [`import_asset_from_library`](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/src-tauri/src/assets.rs#L183-L191) 在 `register` 失败（`try_clone`/重开刚写入文件的瞬时错误）时不回滚已落位媒体，凭据未入表使 discard 亦不可达，最终名孤儿无清扫方——同日 #890 修复只改了 Swift 与文档，[assets.md L193](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/docs/data-model/assets.md#L193) 契约段未界定栈范围（同文件其他栈分歧处均有显式标注）；Rust [`list_assets_with`](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/src-tauri/src/library.rs#L97-L115) 把任意打开错误（含瞬时）从列表投影剔除（#851 修复 `282c7aa5` 引入的 retain 不分流错误类别），磁盘索引无损、可自愈，但与 #883 为原生确立的瞬时分流原则不一致。均按 P3 纵深/一致性记录，处置方向（补齐或显式栈限定）交所有者定夺。
-- **#908（门禁分类边界）**：[`gate-scope-core.ts L31–37`](https://github.com/hailingu/PlotWeave/blob/4e6a7dd8d975cfe94011b4102fe3f1d14c2f011b/scripts/gate-scope-core.ts#L31-L37) 把 `public/` 前缀划入 frontend（`0d408fea` 引入），三处治理文档（AGENTS.md、push.md L19/L22、cost.md L150）均写 frontend = `src/**` 与前端专属根配置且未知路径归 full，无一处记载 `public/**`，`gate-scope.test.ts` 亦无用例钉住；主审 node 实测分类函数 `public/favicon.png → frontend`。语义上分类合理、现实风险极低，属规格/行为分叉与欠测试，P3 扣 0.2。
+**代码事实**：[`gate-history.sh` L43](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/scripts/gate-history.sh#L43) 与 [`sonar-quality-gate.sh` L42](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/scripts/sonar-quality-gate.sh#L42) 的待物化路径按 `git rev-parse --git-path` 解析——链接 worktree 下落在该 worktree 私有 gitdir；[`.githooks/pre-push` L53–L63](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/.githooks/pre-push#L53-L63) 已显式按 `$main_root` 补全并经 `PLOTWEAVE_GATE_PENDING_PATH` 把推送记录导回主队列（#405，证明「记录必须进主队列」是设计意图），提交侧没有同款对齐。`1a20f0f5`（PR #581）使推送不再物化，折并完全依赖同一 gitdir 的后继普通提交——单提交任务分支合并后即无后继，环境被丢弃时记录永久搁浅。
+
+**主审实测**：台账匹配——最近 8 个本地任务提交（`98eeb2ea`→`2918cb77`）中仅 `4a33e65c` 有记录，其余 7 个 tree/head 零命中、台账行数恒 867；本克隆待物化文件仅 1 条推送记录（14:39:52Z，`head=4e6a7dd8`），7 个提交的记录从未进入本克隆。夹具实测——链接 worktree 中 `--git-path` 解析到 `.git/worktrees/<name>/`，`worktree remove` 后记录随 gitdir 删除。`node scripts/verify-gate-evidence.ts --base 343c3ab8 --head 2918cb77` 输出「范围 1 个提交，0 个有台账证据，tip 状态 lagging」并以 0 退出。
+
+**影响与计分**：文档承诺「版本化台账滞后一个普通提交」、记录「仍在开发者机器上物化」（[quality-gate-evidence.md L46/L193/L546](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/docs/development/quality-gate-evidence.md#L46)），实测为无界滞后且无诊断。单提交 PR 的服务端核验空转是 L583–584 已记录边界，不重复计分，但也意味着没有任何机制能察觉停更。影响限于证据工件，产品代码与 CI 回归不受影响，可经原环境手工物化恢复。按普通路径 P2 扣 1.0（与 10-24 轮 #805 同量级）。**未验证**：7 个提交的实际来源环境（推测为另一克隆或已移除的 worktree）。
+
+### 4.4 P3 项摘要
+
+- **#918（schemaVersion 浮点拼写跨栈分歧）**：Rust [`parse_explicit_envelope`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/crates/plotweave-core/src/store/list.rs#L230-L241) 以 `n.as_u64()` 按表示判型——serde_json 把 `1.0`/`100.0`/`1e2` 解析为 f64 载荷，`as_u64()` 返回 `None` 即拒绝（仓库外探针以同版 serde_json 1.0.154 实测）；Swift [`NativeProjectEnvelope.parse`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/native/macos/App/NativeProjectEnvelope.swift#L25-L31) 以 `rounded() == version` 按值接受；前端 `JSON.parse` 亦按值。normalization.md 第 0 步「非安全整数」措辞按值读法与 Swift 一致，而 #650 又裁定 Rust 为磁盘合同基线——具体分歧实例未被 #338（异型非数值）或 #650（元问题）记录。同一文件 Tauri 显示损坏占位卡、Swift 正常打开，无数据丢失，P3 扣 0.2。
+- **#919（唯一断链）**：[assets.md L187](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/docs/data-model/assets.md#L187) 的 `[media_protocol](../../../src-tauri/src/media_protocol.rs)` 多一级 `..`，GitHub 404（`9833adf1` 引入）；全仓 617 条相对链接中唯一断链，主审 `test -f` 两种路径对照确认，P3 扣 0.2。
 
 ## 五、排除项与未计分候选
 
 ### 5.1 已知报告全部排除
 
-起始全量为 435 条、开放 0；“已知”不等于“开放”。包括 #801–#809、#829、#840、#844、#848–#866、#879 及 #882–#892 及其处置在内的历史报告均排除，不能因仍有保留边界或换措辞再扣分。全量快照请求与前两轮相同：
+起始全量为 441 条、开放 0；“已知”不等于“开放”。包括 #801–#809、#829、#840、#844、#848–#866、#879、#882–#892 及 #903–#908 及其处置在内的历史报告均排除，不能因仍有保留边界或换措辞再扣分。全量快照请求与前三轮相同：
 
 ```sh
 gh api --paginate --slurp 'repos/hailingu/PlotWeave/issues?state=all&per_page=100&sort=created&direction=asc'
 ```
 
-原始快照 SHA-256：`5987d0a568643d5389a198e55d07374a4209b5b2a82ffc6e7de2f89b3bd3117a`。它标识当时取证文件，不把本地路径写成公开附件。#903–#908 创建晚于快照，属于本轮发现记录，不构成循环扣分。
+原始快照 SHA-256：`81d00d902b2be76f155628bafb0329b68f34019553efdfd5a8a3d2b481dea3e6`。它标识当时取证文件，不把本地路径写成公开附件。#915–#919 创建晚于快照，属于本轮发现记录，不构成循环扣分。
 
 ### 5.2 有文档化处置、所有者范围与证据不足候选
 
-- **导入凭据持有文件描述符直至保存/丢弃**：#886 报告正文已明言「会话内每个此类凭据还持有 1 个打开的文件描述符直至下次保存」，属已知集合内的既记录事实；本轮对「无上限累计触发 EMFILE」的机制推演因需要千次级未保存导入、无普通操作下的现实路径，按口径不从机制推导扣分，不再立新项。
-- **中间提交 `137e3506` 的 native job 失败**（run [40308144750](https://github.com/hailingu/PlotWeave/actions/runs/40308144750)）：失败步骤为「Upload native Swift coverage」artifact 上传，该次运行 438 项测试全部通过，后续基线运行全绿；原生覆盖率 report-only 是所有者决策，一次性 runner 上传故障不构成缺陷。
-- 第二轮已排除的候选（`projects/{id}/assets/` 媒体临时文件不清扫的文档化处置、本地小载荷直解 `Codable`、`NativeProjectEnvelope.now()` 格式器重建、`copyContents` 整文件进内存、`removeTree` 逐条 fsync、gate-scope 根配置集合未逐一枚举）本轮维持排除；其中根配置枚举排除不覆盖 [#908](https://github.com/hailingu/PlotWeave/issues/908)——那是目录前缀级的实现/文档分叉且无测试钉住，属不同事实。
-- TypeScript／Rust／Swift 共存、双宿主、原生覆盖率 report-only、统一提交门禁成本、文档化 hook 覆盖边界、工具链钉版：所有者决策，不扣分。
+- **同一库资产重复拖上同一分镜卡逐次全量拷贝**：[`bindAssetRefPatch`](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/src/editor/assetDrop.ts#L25-L32) 的去重域是项目资产 id（graph-model §4.2「引用位的唯一真相是 assetId」），而 ui-design.md §7.3 明文「拖上画布 = 拷贝进项目（新 id）」——每次 drop 铸新 id 后绑定，去重分支仅在命令重放时命中，与文档语义一致；姊妹路径 `entityDrop` 按 label 去重是因设定实体没有资产 id，两域不同不构成不一致。是否按库源去重属产品决策，不计分、不立项。
+- **项目复制原样复制 `projects/{id}/assets/` 内崩溃遗留的媒体原子写临时文件**：[persistence.md L84](https://github.com/hailingu/PlotWeave/blob/098602b7bf48b34cffb17cc94e7a4532a4234730/docs/data-model/persistence.md#L84) 已把「媒体临时文件暂不清扫，积累速率低」登记为记录边界；复制传播是该边界的下游后果，不再立新项。
+- **Rust 导入凭据（每凭据 2 个 fd）在保存持续失败的会话中随导入累积**：与第三轮 5.2 对 #886「凭据 fd 常驻」的排除同口径——需要多批次未保存导入叠加保存持续失败，无普通操作下的现实路径，不从机制推导扣分。
+- **#917 的「单提交 PR 服务端核验空转」部分**：quality-gate-evidence.md L583–L584 已明文「A single-commit bypass PR that preserves its parent ledger surfaces only the tip warning」，属已记录边界；本项只对未记录的「记录搁浅 + 台账停更 + 无诊断」计分。
+- **`NativeLibrary.execute` 只读列表也无条件确保 `library/assets/` 存在**：与 Rust 侧「读不创建」存在跨栈差异，但 assets.md L135 明文两栈不统一索引持久化策略，且该创建是 journal 恢复的前置条件、无数据危害——已文档化跨栈差异，不立发现。
+- 其余经完整读函数复核排除的分域候选：`atomicWrite` 非替换竞态错误码分类（仅外部并发可达，出威胁模型）、媒体方案瞬时打开失败显示 404（展示级可重试，弱于 #907 已计分口径）、`NativeSeal.probeMachineMaterial` 失败不缓存重复 spawn（性能债无现实痛点）、`read_index_capped` 读路径回写归一化结果（PR #33 评审确立的刻意设计）、清扫误删在途临时文件（三条件 + 操作锁串行）、`damaged_backup` 覆盖旧备份（目标必须不存在）、库锁/项目锁死锁（全仓单向获取）、生产路径 `unwrap/expect`（均在构建期配置或定形响应）、provider 响应 Rust 深度（serde_json 自带 128 层上限）、`aiRevision` 浮点拼写（经 webview JSON 往返自愈）、连线确定性 id 复用（undo/redo 序列推演一致）、`useNodePatch` 级联 undo 整组恢复（LIFO 前态恰等于快照）、`EpisodeField` 输入 `0` 瞬时钳位（中间值合并同一撤销步）。
+- TypeScript／Rust／Swift 共存、双宿主、原生覆盖率 report-only、统一提交门禁成本、文档化 hook 覆盖边界、工具链钉版、80 代码行评审制：所有者决策，不扣分。
 - **UI 自动化方案不足完全不扣分**，不通过“测试成熟度”“发布信心”等同义理由间接扣减。真实 IME、系统面板、视觉、签名公证、安装包、付费模型、公网 TLS 未测只列限制。
 - 没有因本轮未执行某套测试、没有新 issue，或历史抖动已经修复而扣分。
 
@@ -139,29 +158,36 @@ gh api --paginate --slurp 'repos/hailingu/PlotWeave/issues?state=all&per_page=10
 
 ### 6.1 本轮实际执行
 
-除只读 Git／tracker 查询外，验证均在主工作树只读执行（未改源文件、索引与 pending），Node 为 **24.18.0**：
+除只读 Git／tracker／GitHub 查询外，验证均在主工作树只读执行（未改源文件、索引与 pending；唯一写入为仓库外 `/tmp` 探针与夹具），Node 为 **24.18.0**：
 
 | 命令／检查 | 实际结果与边界 |
 | --- | --- |
-| `gh api --paginate --slurp`（issue 全量快照） | 435 条非 PR、开放 0、最大 #892；SHA-256 见 5.1；6 项发现的去重检索基于该快照全文 |
-| `git show`（7 个修复提交逐项复核） | `10c59da9`/`42e32621`/`5d9b1834`/`98eeb2ea`/`a2c36f23`/`4a33e65c`/`26573717` 的代码与配套测试/文档变更全部主审阅读；修复本体完备，#904 是其中 #884 修复的上浮分支缺口 |
-| `npx tsx` 加载生产 `src/editor/spine.ts` 探针 | 两组共十场景（八组拓扑 + 分支锚点 after/before）：缝合查重、多接缝拒绝、原位重放、游离插入、成环缝合逐项输出完整最终边集；#903 的 `BR→X` 非法加边由探针直接产出 |
-| `npx vitest run src/editor/spine.test.ts src/editor/outlineDrop.topology.test.ts src/editor/useOutlineDrop.test.tsx` | 3 文件、53 项全部通过（较第二轮 36 项增加 #894 修复回归）——修复自身用例为绿，扣分项均为未覆盖场景 |
-| node 只读调用 `scripts/gate-scope-core.ts` 分类函数 | `public/favicon.png → frontend`、`vite.native-canvas.config.ts`/`tsconfig.scripts.json` → full——#908 实测依据 |
-| `git log -S` 定位回归来源 | `282c7aa5`（#851 retain 引入）、`0d408fea`（public/ 前缀引入）、`10c59da9`（null 上浮引入）；`#903`/`#905` 的引入提交未定位 |
-| [CI 40334299512](https://github.com/hailingu/PlotWeave/actions/runs/40334299512) | headSha 与代码基线完全一致，frontend/rust/native 成功；gate-evidence 在 dev push 按规则 skipped |
-| 原生命令清点 | Swift 各服务 `enum Command` 手工清点 27+2，与 overview.md/ui-design.md/feature-parity/上一轮评估四处一致 |
+| `gh api --paginate --slurp`（issue 全量快照） | 441 条非 PR、开放 0、最大 #908；SHA-256 见 5.1；5 项发现的去重检索基于该快照全文 |
+| `git show`（5 个处置提交逐项复核） | `c998e1d3`/`0a7498ca`/`8f324994`/`2a03946c`/`2918cb77` 的代码与配套测试/文档变更全部主审阅读；修复本体完备，#906 为文档栈限定处置 |
+| `gh pr view` #910–#914 | PR 正文验证命令齐全；#910/#911/#913 含不变量矩阵；#912/#914 无生产代码变更不要求矩阵 |
+| `npx tsx` 加载生产 `spine.ts`/`outlineDrop.ts`/`assetDrop.ts` 探针 | 六组拓扑场景（原位重放、分支锚点 #903 校验拒绝、#904 同组空计划、跨组全游离组拒绝、`bindAssetRefPatch` 新副本/同 id）输出逐项符合预期 |
+| `npx vitest run src/editor/outlineDrop.test.ts src/editor/spine.test.ts` | 2 文件、16 项全部通过——#910 修复回归为绿 |
+| `cargo test -p plotweave-core envelope`／`cargo test --lib media_filter` | 9 项与 6 项全部通过（信封判型现向量、#907 分流回归） |
+| serde_json 行为探针（`/tmp` 临时工程，1.0.154 同版） | `1.0`/`100.0`/`1e2` 的 `as_u64()` 均为 `None`——#918 实测依据 |
+| 台账匹配（node 探针 + `git rev-parse <c>^{tree}`） | 最近 12 个非合并提交逐个比对 tree/head；7 个任务提交零命中、台账行数恒 867——#917 实测依据 |
+| worktree 夹具（`/tmp` 新建仓库） | 链接 worktree 中 `--git-path` 解析到 `.git/worktrees/<name>/`，`worktree remove` 后记录消失——#917 机制实测 |
+| `node scripts/verify-gate-evidence.ts`（只读） | PR #914 范围「0 个有台账证据，tip 状态 lagging」退出码 0；多提交历史范围同形 |
+| node 只读调用 `scripts/gate-scope-core.ts` 分类函数 | `src/**`/`public/**`/前端根配置 → frontend；`docs/**`/README/AGENTS/LICENSE/台账 → docs；`native/**` → native；Rust 双仓 → rust；混合/未知/根配置 → full——与 AGENTS.md 逐条一致，`public/` 钉住用例在位 |
+| [CI 40355863367](https://github.com/hailingu/PlotWeave/actions/runs/40355863367) | headSha 与代码基线完全一致，frontend/rust/native 成功；gate-evidence 在 dev push 按规则 skipped；近 10 次 dev 运行无 job 失败 |
+| `npm run check:size`、`npx vitest run scripts/scripts-coverage-scope.test.ts` | 895 检查/66 排除/0 祖父通过；登记表 4/4 无悬空 |
+| 全仓链接检查（node，50 文件/617 链接） | 唯一断链即 #919；锚点按 GitHub slug 规则核验 |
+| Sonar 服务可达性 | `http://localhost:9000` 状态 UP（26.8.0）——后续提交门禁前提 |
 
-未执行：桌面拖放与磁盘重开链路（#903/#904 的 UI 接线为静态确认，计划层已探针实测）、运行时 EMFILE/EIO 注入（#905/#906/#907 代码链已闭合）、本机原生全套与 Sonar 重跑（沿用基线 CI 与提交门禁）。四域审查覆盖面广，但 6 项发现的可信度分级以各 issue 的「验证情况」为准。
+未执行：桌面拖放与磁盘重开链路（#915/#916 的 UI 接线为静态确认，计划层/解码层已探针或代码闭合）、运行时 EMFILE/EIO 注入（#915 代码链闭合）、深嵌套崩溃运行时复现（#916 引用 #840 实测）、本机原生全套与全量 `npm test`/`cargo test`（沿用基线 CI 与提交门禁）。四域审查覆盖面广，但 5 项发现的可信度分级以各 issue 的「验证情况」为准。
 
 提交仍须由正常 hooks 完整执行静态检查、新前端／Rust 覆盖率和 Sonar；文档 push 按既有路由执行 `check-docs.sh`。提交、最终 PR head、required CI、review 和合并结果由该 PR 的实际记录提供，本文不提前写成通过。没有新增或实质修改可执行单元，80 代码行规则不适用于本文档改动；台账只允许正常钩子附加。
 
 ### 6.2 汇总来源、分歧与限制
 
-四域审查来源为 `frontend`（前端状态与交互）、`native`（Swift 桥／生命周期／服务）、`rust`（Rust/Tauri／持久化）、`tooling`（CI／门禁／文档），主审对 6 项计分发现全部独立复核代码并重跑探针/实测分类函数，无仅凭分域报告采信的扣分；分域另报的「导入凭据 fd 常驻」经查为 #886 已记录事实而排除。#903 为高置信度（探针实测＋三方契约引文）；#905 机制确定、触发概率中低；#906/#907 的处置方向含所有者裁量（补齐或栈限定），立 P3 而非直接认定修复方案。事实与覆盖见第一、三、六节；用户排除条件属于项目约束，不当作测试结果。不以投票平均产生结论，不把缺少新问题改写为“证明没有问题”。
+四域审查来源为 `frontend`（前端状态与交互）、`native`（Swift 桥／生命周期／服务）、`rust`（Rust/Tauri／持久化）、`tooling`（CI／门禁／文档），主审对 5 项计分发现全部独立复核代码并重跑探针/夹具/台账匹配，无仅凭分域报告采信的扣分；分域另报的 11 项候选经主审复核排除（见 5.2，其中「重复拖入逐次拷贝」「复制传播临时文件」「凭据 fd 累积」三项为文档化语义/边界或机制推导）。#915/#916/#917 机制均代码链闭合（#915 双栈折叠点与前端删除点、#916 四处裸解码与调用链、#917 路径解析与台账/夹具实测）；#915/#916 的触发概率为低但现实可达（#848/#840 分别背书 fd 压力与深嵌套脏数据的可触达性）。#917 的成因环境属推测，可证事实（台账停更、pending 单条、夹具机制）不受影响。事实与覆盖见第一、三、六节；用户排除条件属于项目约束，不当作测试结果。不以投票平均产生结论，不把缺少新问题改写为“证明没有问题”。
 
 ## 七、后续处理与 issue 标准
 
-1. 建议处置顺序：[#903](https://github.com/hailingu/PlotWeave/issues/903)（P2，普通操作触发、拓扑脱落）优先，[#905](https://github.com/hailingu/PlotWeave/issues/905)（P2，瞬时失败放大）次之；P3 项按所有者排期，其中 #906/#907 需先定「补齐对齐」还是「显式栈限定」再动代码，#908 建议走文档三处同步的最小处置。
-2. `issue-standard.md` 的通用验收标准要求经本轮继续核实有效：6 个新 issue 均按缺陷六标题建档并附可验证验收标准与去重说明。
-3. 下一轮重新固定代码与已知集合，#903–#908 全部作为已知项排除；修复后引用实际提交及验证，不直接推算分数。历史档案和本轮取证边界继续保留。
+1. 建议处置顺序：[#915](https://github.com/hailingu/PlotWeave/issues/915)（P2，持久化丢失、双栈对齐）优先，[#917](https://github.com/hailingu/PlotWeave/issues/917)（P2，需先定记录队列对齐或替代诊断的设计，属所有者决策）次之，[#916](https://github.com/hailingu/PlotWeave/issues/916)（P2，崩溃类窄触发，改走 `HostJSON.decode` 即可收口）随后；P3 项按所有者排期，其中 #918 需先定「按值」还是「按表示」口径再动代码，#919 为最小文档修复。
+2. `issue-standard.md` 的通用验收标准要求经本轮继续核实有效：5 个新 issue 均按缺陷六标题建档并附可验证验收标准与去重说明，标签与标题严重度一致。
+3. 下一轮重新固定代码与已知集合，#915–#919 全部作为已知项排除；修复后引用实际提交及验证，不直接推算分数。历史档案和本轮取证边界继续保留。
