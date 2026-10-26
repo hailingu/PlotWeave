@@ -109,6 +109,23 @@ interface AssetGroup {
 - **绑定方式**：分类信息写在 `library.json` 索引项里、以资产 id 为键；改标签、换组、改视角只更新索引，不动媒体文件。
 - **快速读取**：`library.json` 启动时全量载入内存（桌面量级，数千条索引项仅数百 KB），列表页筛选/搜索全走内存过滤，媒体文件懒加载。规模失控时再迁 SQLite（见十三）。Swift 原生侧目前每次库操作重读并逐条规范化索引（而非仅启动时载入）：时间戳规范化成本已由 [issue #824](https://github.com/hailingu/PlotWeave/issues/824) 消除（严格快路径 + 共享缓存格式器，复测 ≈ 63 µs/资产、1600 资产列表中位 ≈ 100 ms），每次操作重读整份索引的设计层边界与完整规模-耗时基线见[持久化 §10.2](persistence.md#102-写入安全)（[issue #730](https://github.com/hailingu/PlotWeave/issues/730)）。
 
+#### 库列表媒体可用性校验（issue #851）
+
+Rust `list_assets_with` 在日志恢复、索引归一化之后，对非冲突活动条目复用 `open_library_asset` 校验：从既有 `library/assets/` 受信根逐组件 no-follow 定位，终点必须为普通文件，打开的句柄与归类身份一致。缺失、symlink、目录、FIFO 或不可访问条目逐项从返回的内存索引隔离，并在 `warnings` 中携带资产 id 和原因；健康项继续返回。媒体校验不读取内容，不创建缺失目录，也不覆写索引或移动／删除媒体。后续重新列表会再次检查，文件恢复后可重新显示；Rust 删除入口仍坚持原身份绑定事务，不对异型目标降级按名删除。Swift 既有 `filterMedia()` 继续按原有可写性条件持久化过滤结果，两侧共用 `asset-contract.json` 的 `libraryMedia` 磁盘状态向量校验可用性。
+
+日志恢复的 `conflicted` 条目保留在投影中并显式标记，不因媒体缺失被过滤，`cleanupPending` 与警告仍可见；媒体服务与项目导入继续拒绝冲突身份。索引损坏、只读日志和迁移挂起的既有只读边界保持。列表隔离使不可用条目不再呈现为可正常操作的资产，不宣称已修复磁盘媒体或完成物理清理。
+
+| 前置／状态 | 动作及顺序 | 可观察结果 | 不变量与 owner | 回归／缺口 |
+| --- | --- | --- | --- | --- |
+| 普通或嵌套普通媒体 | 恢复→列表→重复列表 | 条目可用、无媒体警告 | `library_fs` 保持真实文件、no-follow、句柄身份一致 | Rust／Swift 共用 `libraryMedia` 正向量 |
+| 媒体缺失、symlink、目录、FIFO；父 symlink、普通文件或缺失 | 恢复→逐项打开→列表 | 坏项隐藏并警告，健康项和库外字节保持 | `list_assets_with` 只过滤投影，不改媒体或原始索引 | `shared_library_media_vectors_isolate_only_unavailable_entries`；`sharedLibraryMediaVectors` |
+| `assets/` 根缺失 | 列表 | 隔离条目，目录仍缺失 | 读侧不创建目录，错误不放大成整库失败 | `listing_missing_assets_root_does_not_create_it` |
+| 普通文件列出后被替换为目录，再恢复成文件 | 再列表→恢复文件→再列表→删除 | 替换后隐藏并警告，恢复后可见且正常删除 | 每次列表复核，删除仍由原日志协议绑定身份 | `listing_rechecks_media_and_restored_asset_can_be_deleted` |
+| 未决删除事务且媒体已缺失 | 恢复→过滤→重复列表 | 保留 `conflicted` 和待清理证据 | 恢复 owner 的证据不能被列表吞掉；冲突媒体仍不可用 | `listing_preserves_conflicted_transaction_with_missing_media` 及既有媒体／导入恢复回归 |
+| 只读日志、损坏索引、迁移挂起 | 恢复→列表 | 局部可用列表，原件仍受既有保护 | 不越过归一化／日志的写入资格 | 既有 `read_only_tests`／`recovery_tests`；健康项夹具现在包含真实媒体 |
+
+本次不增加并发入口或修改锁；主动同用户攻击者替换目录树的残余窗口沿用现有威胁模型。真实损坏用户库、Tauri UI 手工操作、物理断电未实测；共享向量验证两宿主的可用性判定，不声称统一其索引持久化策略。
+
 #### 删除日志联合统计状态与不变量矩阵（issue #421）
 
 `journal_io` 拥有完整日志快照的形状与原子读写，`recover` 拥有折叠判定与归零，`transaction` 拥有删除追加及成功退役。列表、库写入、库媒体 URL/打开和库资产导入项目共用恢复入口；进程内库锁与跨进程文件锁覆盖所有日志读写，不增加并发入口，前端诊断序号规则见 [UI 设计 §8.1](../ui-design.md#81-资产库面板按影视美术部门分类)。下表列出所选风险及验证结果，物理验证边界单独标注；在 `src-tauri/` 执行的 Rust 路由检查 `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` 已通过。

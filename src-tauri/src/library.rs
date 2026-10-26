@@ -93,6 +93,27 @@ pub(crate) fn list_assets_with(
         }
         warnings.push(format!("资产 {id} 处于删除事务冲突期，暂不可用"));
     }
+    // 过滤仅作用于列表投影，不改写媒体或索引；冲突项保留事务证据和可见标记。
+    if let Some(entries) = index["assets"]["byId"].as_object_mut() {
+        entries.retain(|id, entry| {
+            if recovery.conflicted.contains(id) {
+                return true;
+            }
+            let result = entry["relPath"]
+                .as_str()
+                .ok_or_else(|| LibraryError::invalid("资产路径缺失"))
+                .and_then(|path| crate::library_fs::open_library_asset(library, path));
+            match result {
+                Ok(_) => true,
+                Err(error) => {
+                    warnings.push(format!(
+                        "资产 {id} 的媒体缺失或不可用，已从列表隔离：{error}"
+                    ));
+                    false
+                }
+            }
+        });
+    }
     index["cleanupPending"] = json!(recovery.cleanup_pending);
     Ok((index, warnings))
 }
@@ -513,6 +534,8 @@ pub(crate) mod diagnostics;
 pub(crate) mod error;
 pub(crate) mod group_commands;
 mod import_bytes;
+#[cfg(test)]
+mod media_filter_tests;
 #[cfg(test)]
 mod read_only_tests;
 #[cfg(test)]
