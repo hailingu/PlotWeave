@@ -33,16 +33,13 @@ function setup(
     onDeleteProject: vi.fn(),
     onRetryLoad: vi.fn(),
   }
-  render(
-    <HomePage
-      projects={projects}
-      loading={loading}
-      openError={openError}
-      loadError={loadError}
-      {...spies}
-    />,
-  )
-  return spies
+  const props = { projects, loading, openError, loadError, ...spies }
+  const view = render(<HomePage {...props} />)
+  return {
+    ...spies,
+    rerender: (next: Partial<typeof props>) =>
+      view.rerender(<HomePage {...props} {...next} />),
+  }
 }
 
 describe('HomePage 列表与搜索', () => {
@@ -109,6 +106,81 @@ describe('HomePage 列表与搜索', () => {
     expect(
       screen.queryByRole('button', { name: '＋ 创建你的第一部短剧' }),
     ).toBeNull()
+  })
+
+  it.each(['', '不存在'])(
+    '首次加载中不显示空库或无匹配（搜索：%s）',
+    (query) => {
+      setup([], true)
+      fireEvent.change(screen.getByRole('searchbox', { name: '搜索项目' }), {
+        target: { value: query },
+      })
+      expect(screen.getByRole('status').textContent).toMatch(/加载项目/)
+      expect(screen.queryByText(/没有匹配/)).toBeNull()
+      expect(
+        screen.queryByRole('button', { name: '＋ 创建你的第一部短剧' }),
+      ).toBeNull()
+      expect(screen.getByRole('button', { name: '＋ 新建项目' })).toBeTruthy()
+    },
+  )
+
+  it.each([
+    { label: '成功空库', projects: [], loadError: null },
+    { label: '成功有项目', projects: [mk()], loadError: null },
+    { label: '读取失败', projects: [], loadError: '读取目录失败' },
+  ])('首次加载结束进入$label', ({ projects, loadError }) => {
+    const view = setup([], true)
+    view.rerender({ projects, loading: false, loadError })
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText(/没有匹配/)).toBeNull()
+    if (loadError !== null) {
+      expect(screen.getByRole('alert').textContent).toContain(loadError)
+      expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
+      expect(
+        screen.queryByRole('button', { name: '＋ 创建你的第一部短剧' }),
+      ).toBeNull()
+    } else if (projects.length === 0) {
+      expect(
+        screen.getByRole('button', { name: '＋ 创建你的第一部短剧' }),
+      ).toBeTruthy()
+    } else {
+      expect(
+        screen.getByRole('button', { name: '打开项目 都市奇缘' }),
+      ).toBeTruthy()
+    }
+  })
+
+  it('失败后重试先显示加载态，再恢复列表与搜索结果', () => {
+    const view = setup([], false, null, '读取目录失败')
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(view.onRetryLoad).toHaveBeenCalledTimes(1)
+    view.rerender({ loading: true, loadError: null })
+    expect(screen.getByRole('status')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    view.rerender({ projects: [mk()], loading: false, loadError: null })
+    expect(screen.queryByRole('status')).toBeNull()
+    fireEvent.change(screen.getByRole('searchbox', { name: '搜索项目' }), {
+      target: { value: '不存在' },
+    })
+    expect(screen.getByText(/没有匹配/)).toBeTruthy()
+    expect(
+      screen.queryByRole('button', { name: '打开项目 都市奇缘' }),
+    ).toBeNull()
+  })
+
+  it('已有列表刷新中保留卡片、搜索与失败横幅', () => {
+    const view = setup([mk()])
+    view.rerender({ loading: true, loadError: '刷新目录失败' })
+    expect(
+      screen.getByRole('button', { name: '打开项目 都市奇缘' }),
+    ).toBeTruthy()
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('刷新目录失败')
+    fireEvent.change(screen.getByRole('searchbox', { name: '搜索项目' }), {
+      target: { value: '不存在' },
+    })
+    expect(screen.getByText(/没有匹配/)).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toContain('刷新目录失败')
   })
 
   it('工具栏「＋ 新建项目」与网格末尾「＋ 新剧」都走 onCreateProject', () => {
