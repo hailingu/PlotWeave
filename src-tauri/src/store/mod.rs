@@ -101,11 +101,14 @@ pub async fn save_project(
 ) -> Result<ProjectMeta, String> {
     crate::blocking::run("save_project", move || {
         let root = projects_dir(&app).map_err(to_ipc_text)?;
-        match expect_existing.unwrap_or(false) {
+        let assets = doc.assets.clone();
+        let metadata = match expect_existing.unwrap_or(false) {
             false => persist_project(&root, &id, doc),
             true => persist_project_expect_existing(&root, &id, doc, true),
         }
-        .map_err(to_ipc_text)
+        .map_err(to_ipc_text)?;
+        crate::assets::import_discard::retire(&app.state(), &id, &assets);
+        Ok(metadata)
     })
     .await
 }
@@ -118,7 +121,10 @@ pub async fn save_project(
 pub async fn delete_project(app: AppHandle, id: String) -> Result<(), String> {
     crate::blocking::run("delete_project", move || {
         let root = projects_dir(&app).map_err(to_ipc_text)?;
-        delete_project_files(&root, &id).map_err(to_ipc_text)
+        delete_project_files(&root, &id).map_err(to_ipc_text)?;
+        app.state::<crate::assets::project_media::PendingProjectAssets>()
+            .drain_project(&id);
+        Ok(())
     })
     .await
 }

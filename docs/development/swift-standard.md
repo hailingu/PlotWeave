@@ -90,7 +90,7 @@ root `AGENTS.md`, this file is written in English for agent interoperability.
   graph commands, history, and canvas. Native forms submit editing intents and
   consume read-only projections, never independently writable document copies.
   The default Web entry is the production application; `#fixture` selects the
-  isolated memory demo. Swift implements 26 business and two quit commands
+  isolated memory demo. Swift implements 27 business and two quit commands
   using the existing snake_case IPC names, plus `system.copyText` and
   `system.saveText` for native text delivery.
 

@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 
 /// 本测试专用的登记表实例（应用状态语义，非共享全局）。
-fn pending() -> project_media::PendingProjectAssets {
+pub(super) fn pending() -> project_media::PendingProjectAssets {
     project_media::PendingProjectAssets::new()
 }
 
@@ -20,7 +20,7 @@ fn seed_project(projects: &Path, id: &str) {
 }
 
 /// 库索引 + 媒体文件的最小合法 fixture（索引条目按 §7.2 Record 形状）。
-fn seed_library(library: &Path, id: &str, file: &str, bytes: &[u8], mime: &str) {
+pub(super) fn seed_library(library: &Path, id: &str, file: &str, bytes: &[u8], mime: &str) {
     fs::write(library.join("assets").join(file), bytes).expect("写入库媒体文件");
     let index = json!({
         "assets": library_by_id([library_entry(id, file, "character", mime, &format!("assets/{file}"))]),

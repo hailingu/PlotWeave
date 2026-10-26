@@ -3,7 +3,7 @@ import Foundation
 /// Media changes share the project actor's save/delete barrier and keep pending refs separate from the document.
 extension NativeProjectStore {
     /// Imports bytes only after project/control validation and checks cancellation again at atomic commit.
-    func importMedia(id: String, bytes: Data, mime: String, source: String, extension fileExtension: String, isCancelled: @Sendable () -> Bool = { false }) throws -> HostJSON {
+    func importMedia(id: String, bytes: Data, mime: String, source: String, extension fileExtension: String, discardable: Bool = false, isCancelled: @Sendable () -> Bool = { false }) throws -> HostJSON {
         try checkMediaCancellation(isCancelled)
         let normalizedMIME = mime.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard NativeAssetContract.mime(normalizedMIME), source == "upload" || source == "generated",
@@ -21,6 +21,9 @@ extension NativeProjectStore {
             "source": .string(source), "createdAt": .string(NativeAssetContract.timestamp())
         ])
         pendingMedia[id, default: [:]][assetId] = asset
+        if discardable {
+            importReceipts[id, default: [:]][assetId] = try NativeProjectImportReceipt(directory: directory, name: name, asset: asset)
+        }
         return asset
     }
 

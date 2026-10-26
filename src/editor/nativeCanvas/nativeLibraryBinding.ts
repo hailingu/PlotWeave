@@ -3,6 +3,7 @@ import { libraryStore } from '../../library/libraryStore'
 import { bindAssetRefPatch, shotRefKindForAsset } from '../assetDrop'
 import { projectAssets } from '../projectAssets'
 import type { NativeEditorActionOwner } from './nativeEditorOwner'
+import type { AssetRef } from '../../model/document'
 
 /** Per-document import admission shares current node identity across native controller rerenders. */
 const pending = new WeakMap<object, Set<string>>()
@@ -20,6 +21,8 @@ export async function nativeLibraryBinding(
   pending.set(doc.nodesRef, locks)
   if (locks.has(nodeId)) throw new Error('此分镜卡正在导入素材。')
   locks.add(nodeId)
+  let unbound: AssetRef | undefined
+  let failure: unknown
   try {
     const library = (await libraryStore.list()).find(
       (entry) => entry.id === args.assetId,
@@ -37,6 +40,7 @@ export async function nativeLibraryBinding(
       owner.project.id,
       library.id,
     )
+    unbound = asset
     if (shotRefKindForAsset({ kind: library.kind, mime: asset.mime }) !== kind)
       throw new Error('素材实际类型与分类不符。')
     if (owner.isCurrent?.() === false)
@@ -52,6 +56,7 @@ export async function nativeLibraryBinding(
       graph.assets.addAsset(asset)
       graph.patch.applyDataPatch(nodeId, { nodeType: 'shot', patch })
     }
+    unbound = undefined
     flushSync(() => {
       apply()
       history.push({
@@ -67,7 +72,15 @@ export async function nativeLibraryBinding(
       })
     })
     return null
+  } catch (error) {
+    failure = error
+    throw error
   } finally {
-    locks.delete(nodeId)
+    try {
+      if (unbound)
+        await projectAssets.discardImport(owner.project.id, unbound.id, failure)
+    } finally {
+      locks.delete(nodeId)
+    }
   }
 }

@@ -156,3 +156,33 @@ describe('projectAssets Tauri 路径：mediaUrl', () => {
     ])
   })
 })
+
+describe('projectAssets failed preflight rollback（issue #864）', () => {
+  it('quarantines the host-minted import after preflight rejects', async () => {
+    const original = new Error('preflight rejected')
+    invoke
+      .mockResolvedValueOnce(assetRef())
+      .mockRejectedValueOnce(original)
+      .mockResolvedValueOnce(null)
+    const { projectAssets } = await load()
+    await expect(projectAssets.importFromLibrary('p-1', 'la-1')).rejects.toBe(
+      original,
+    )
+    expect(invoke.mock.calls[2]).toEqual([
+      'discard_project_asset_import',
+      { id: 'p-1', assetId: 'pa-1' },
+    ])
+  })
+  it('preserves preflight and quarantine failures together', async () => {
+    const original = new Error('preflight rejected')
+    const cleanup = new Error('disk refused')
+    invoke
+      .mockResolvedValueOnce(assetRef())
+      .mockRejectedValueOnce(original)
+      .mockRejectedValueOnce(cleanup)
+    const { projectAssets } = await load()
+    await expect(
+      projectAssets.importFromLibrary('p-1', 'la-1'),
+    ).rejects.toMatchObject({ cause: original, cleanupError: cleanup })
+  })
+})

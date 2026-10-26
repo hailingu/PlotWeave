@@ -561,6 +561,7 @@ it('native library binding and undo keep project index and shot references toget
 
 it('late native library completion cannot bind a deleted target', async () => {
   const asset = libraryAssetFixture()
+  const discard = vi.spyOn(projectAssets, 'discardImport').mockResolvedValue()
   let complete!: (value: typeof asset) => void
   vi.spyOn(projectAssets, 'importFromLibrary').mockImplementation(
     () =>
@@ -595,6 +596,11 @@ it('late native library completion cannot bind a deleted target', async () => {
   const document = await exportedDocument()
   expect(document.assets.byId.asset).toBeUndefined()
   expect(document.graph.nodes).toEqual([])
+  expect(discard).toHaveBeenCalledWith(
+    'native-project',
+    asset.id,
+    expect.any(Error),
+  )
 })
 
 it('native optional fields clear through the existing serialization contract', async () => {

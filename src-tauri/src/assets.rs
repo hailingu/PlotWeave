@@ -25,6 +25,7 @@ use crate::store::{
 };
 
 pub(crate) mod error;
+pub(crate) mod import_discard;
 pub(crate) mod project_media;
 
 /// 新资产 id：`pa-{ms:x}{rnd:x}-{seq:x}`——以自身前缀直接走 store 的防碰撞
@@ -180,6 +181,14 @@ pub(crate) fn import_asset_from_library(
     let asset_id = new_asset_id();
     let final_name = format!("{asset_id}.{}", ext_for(&name, &mime));
     copy_into_dir(&mut src, &assets_dir, &final_name)?;
+    import_discard::register(
+        pending,
+        id,
+        &asset_id,
+        &project_dir,
+        &assets_dir,
+        &final_name,
+    )?;
     // 防抖落盘窗口内协议解析可见（issue #31 评审修复）：文档尚未收录该
     // 条目前，pwmedia 项目 scope 经会话登记项解析
     project_media::register_pending_project_asset(
@@ -355,3 +364,6 @@ pub async fn validate_project_asset(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod import_discard_tests;

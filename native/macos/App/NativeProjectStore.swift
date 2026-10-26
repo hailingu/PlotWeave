@@ -24,6 +24,8 @@ actor NativeProjectStore {
     private var closed = false
     /// Imported bytes are addressable before the Web's next debounced document save.
     var pendingMedia: [String: [String: HostJSON]] = [:]
+    /// Only fresh library imports carry rollback authority; generated and accepted assets never do.
+    var importReceipts: [String: [String: NativeProjectImportReceipt]] = [:]
     /// Repair aliases store only identity mappings; authoritative paths always come from the current document.
     var mediaAliases: [String: [String: String]] = [:]
 
@@ -71,6 +73,7 @@ actor NativeProjectStore {
         closed = true
         projects = nil
         pendingMedia.removeAll()
+        importReceipts.removeAll()
         mediaAliases.removeAll()
     }
 
@@ -198,6 +201,9 @@ actor NativeProjectStore {
         try verifySaveAssets(id: id, assets: document["assets"] ?? .null)
         if let entries = document["assets"]?["byId"]?.object {
             for key in entries.keys { pendingMedia[id]?.removeValue(forKey: key) }
+            importReceipts[id] = importReceipts[id]?.filter { key, receipt in
+                entries[key] == nil && !entries.values.contains { $0["relPath"]?.string == receipt.record.relPath }
+            }
         }
         return NativeProjectEnvelope.metadata(document, id: id)
     }
@@ -209,6 +215,7 @@ actor NativeProjectStore {
         try directory.removeTree(id)
         try directory.removeTree(id + ".json")
         pendingMedia.removeValue(forKey: id)
+        importReceipts.removeValue(forKey: id)
         mediaAliases.removeValue(forKey: id)
     }
 
