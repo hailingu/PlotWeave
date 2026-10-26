@@ -65,29 +65,49 @@ function uniqueSuccessor(seq: SpliceEdge[], id: string): string | null {
   return only === undefined ? null : only.target
 }
 
-/** 拔出 dragged 后锚点前/后插入位的实际邻居：
- * 锚点恰是原前邻时，X 的新后继仍是原后继（其余边已随拔出移除），余同理。 */
+/** 拔出后以实际接缝判定锚点，多个相邻接缝拒绝而不按数组序选择（#885）。 */
 function insertionNeighbors(
   remaining: SpliceEdge[],
   anchorId: string,
   position: 'before' | 'after',
   prev: string | null,
   next: string | null,
-): { upstream: string | null; downstream: string | null } {
-  if (position === 'after') {
-    const upstream = anchorId
-    const downstream =
-      upstream === prev
-        ? next
-        : (remaining.find((e) => e.source === upstream)?.target ?? null)
-    return { upstream, downstream }
+): { upstream: string | null; downstream: string | null } | null {
+  const pairs = remaining.map(({ source, target }) => ({ source, target }))
+  if (
+    prev !== null &&
+    next !== null &&
+    !pairs.some((e) => e.source === prev && e.target === next)
+  ) {
+    pairs.push({ source: prev, target: next })
   }
-  const downstream = anchorId
-  const upstream =
-    downstream === next
-      ? prev
-      : (remaining.find((e) => e.target === downstream)?.source ?? null)
-  return { upstream, downstream }
+  const adjacent = pairs.filter((e) =>
+    position === 'after' ? e.source === anchorId : e.target === anchorId,
+  )
+  if (adjacent.length > 1) return null
+  return position === 'after'
+    ? { upstream: anchorId, downstream: adjacent[0]?.target ?? null }
+    : { upstream: adjacent[0]?.source ?? null, downstream: anchorId }
+}
+
+/** 所有新增边逐条参与环检测，接缝替换后的保留图是唯一检查基线。 */
+function introducesCycle(
+  remaining: SpliceEdge[],
+  removedIds: Set<string>,
+  adds: SplicePlan['adds'],
+): boolean {
+  // 防御性环检测基于真正保留的边（剧情流理应无环；带外状态兜底）
+  const flow: Array<{ source: string; target: string }> = remaining
+    .filter((e) => !removedIds.has(e.id))
+    .map((e) => ({
+      source: e.source,
+      target: e.target,
+    }))
+  for (const a of adds) {
+    if (wouldCreateCycle(flow, a.source, a.target)) return true
+    flow.push(a)
+  }
+  return false
 }
 
 /**
@@ -117,7 +137,7 @@ export function planSpliceIntoSpine(
   // 原位前邻/后邻（恰各一条时才可缝合；多出口的分叉不擅自直连）
   const prev = uniquePredecessor(seq, draggedId)
   const next = uniqueSuccessor(seq, draggedId)
-  const { upstream, downstream } = insertionNeighbors(
+  const neighbors = insertionNeighbors(
     remaining,
     anchorId,
     position,
@@ -125,10 +145,17 @@ export function planSpliceIntoSpine(
     next,
   )
 
+  if (!neighbors) return null
+  const { upstream, downstream } = neighbors
   const adds: Array<{ source: string; target: string }> = []
   // 新位恰为原位时不缝合（否则会给 A→X→C 平行一条 A→C 捷径）
   const inPlace = upstream === prev && downstream === next
-  if (!inPlace && prev !== null && next !== null)
+  if (
+    !inPlace &&
+    prev !== null &&
+    next !== null &&
+    !remaining.some((e) => e.source === prev && e.target === next)
+  )
     adds.push({ source: prev, target: next })
   if (upstream !== null) adds.push({ source: upstream, target: draggedId })
   if (downstream !== null) adds.push({ source: draggedId, target: downstream })
@@ -151,16 +178,6 @@ export function planSpliceIntoSpine(
   ]
   const removedIds = new Set(removed.map((e) => e.id))
 
-  // 防御性环检测基于真正保留的边（剧情流理应无环；带外状态兜底）
-  const flow: Array<{ source: string; target: string }> = remaining
-    .filter((e) => !removedIds.has(e.id))
-    .map((e) => ({
-      source: e.source,
-      target: e.target,
-    }))
-  for (const a of adds) {
-    if (wouldCreateCycle(flow, a.source, a.target)) return null
-    flow.push(a)
-  }
+  if (introducesCycle(remaining, removedIds, adds)) return null
   return { removes: removed.map((e) => e.id), adds }
 }

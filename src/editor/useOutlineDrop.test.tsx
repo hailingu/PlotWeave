@@ -172,7 +172,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
     expect(seqPairs(h)).toEqual(['s1->s2'])
     expect(h.pushHistory).not.toHaveBeenCalled()
   })
+})
 
+describe('useOutlineDrop（拒绝与历史不变量：不存在的节点 id）', () => {
   it('不存在的节点 id：不入栈不写状态', () => {
     const h = setup(
       [sceneNode('s1', 1, 0), sceneNode('s2', 1, 100)],
@@ -184,7 +186,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
     expect(h.result.current.doc.nodes.map((n) => n.id)).toEqual(['s1', 's2'])
     expect(seqPairs(h)).toEqual(['s1->s2'])
   })
+})
 
+describe('useOutlineDrop（拒绝与历史不变量：原位重放）', () => {
   it('原位重放（无可执行变化）：不入栈不写状态', () => {
     const h = setup(
       [sceneNode('s1', 1, 0), sceneNode('s2', 1, 100), sceneNode('s3', 1, 200)],
@@ -196,7 +200,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
     expect(episodeNoOf(h, 's2')).toBe(1)
     expect(h.pushHistory).not.toHaveBeenCalled()
   })
+})
 
+describe('useOutlineDrop（分叉汇合拒绝）', () => {
   it.each([
     ['分叉成员（多出边）', ['a->x', 'x->b', 'x->c'], 'x', 'a'],
     ['汇合成员（多入边）', ['p->x', 'q->x', 'x->r'], 'x', 'p'],
@@ -224,7 +230,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
       expect(seqPairs(h)).toEqual(pairs)
     },
   )
+})
 
+describe('useOutlineDrop（拒绝与历史不变量：拒绝同样覆盖组尾）', () => {
   it('拒绝同样覆盖组尾落点：分叉成员拖入组尾不删边、给提示', () => {
     const h = setup(
       [
@@ -243,7 +251,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
     expect(h.pushHistory).not.toHaveBeenCalled()
     expect(h.onError).toHaveBeenCalledTimes(1)
   })
+})
 
+describe('useOutlineDrop（拒绝与历史不变量：分叉目标的下游）', () => {
   it('分叉目标的下游行不受影响：线性成员仍可正常重排', () => {
     const h = setup(
       [
@@ -361,4 +371,37 @@ it('中段跨集接入完整替换接缝，重复移动邻居仍可一步 undo/r
   act(() => dropRow(h, 'c', 'a', 'before'))
   expect([...seqPairs(h)].sort()).toEqual(['a->x', 'b->d', 'c->a', 'x->b'])
   expect(h.onError).not.toHaveBeenCalled()
+})
+
+it.each(['before', 'after'] as const)(
+  '非剧情流行 %s 落点可见拒绝（#884，共享 web/native hook）',
+  (position) => {
+    const h = setup(
+      ['a', 'b', 'x'].map((id, i) => sceneNode(id, 1, i * 100)),
+      [seq('ab', 'a', 'b')],
+    )
+    act(() => dropRow(h, 'a', 'x', position))
+    expect(seqPairs(h)).toEqual(['a->b'])
+    expect(h.pushHistory).not.toHaveBeenCalled()
+    expect(h.onError).toHaveBeenCalledTimes(1)
+    expect(h.onError.mock.calls[0]?.[0]).toContain('未接入剧情流')
+  },
+)
+
+it.each([
+  ['after', ['a->b', 'b->c', 'b->q'], 'b'],
+  ['before', ['a->c', 'b->c', 'c->d'], 'c'],
+] as const)('多接缝 %s 锚点可见拒绝（#885）', (position, pairs, anchor) => {
+  const nodes = ['a', 'b', 'c', 'd', 'q', 'x'].map((id, i) =>
+    sceneNode(id, 1, i * 100),
+  )
+  const edges = pairs.map((p, i) => {
+    const [source, target] = p.split('->')
+    return seq(`e${i}`, source, target)
+  })
+  const h = setup(nodes, edges)
+  act(() => dropRow(h, 'x', anchor, position))
+  expect(h.result.current.doc.edges).toEqual(edges)
+  expect(h.pushHistory).not.toHaveBeenCalled()
+  expect(h.onError).toHaveBeenCalledTimes(1)
 })

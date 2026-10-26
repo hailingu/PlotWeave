@@ -2,6 +2,7 @@ import { expect, it } from 'vitest'
 import type { Edge } from '@xyflow/react'
 import { outlineSplicePlan, spliceEdgesWith } from './outlineDrop'
 import { isForkOrMergeMember } from './spine'
+import { isolateDuplicateEdges } from '../model/normalizeEdges'
 
 /** 固定边身份使 undo 同时验证完整连线数据，而非仅比新增计划。 */
 const edge = (source: string, target: string, extra = {}): Edge => ({
@@ -79,8 +80,7 @@ it.each(['before', 'after'] as const)(
   '仅替换选定接缝 %s：保留其他合法 sequence 分支、branch 与 attach 对象',
   (position) => {
     const kept = [
-      edge('B', 'Q'),
-      edge('R', 'C'),
+      position === 'after' ? edge('R', 'C') : edge('B', 'Q'),
       edge('choice', 'option', {
         sourceHandle: 'option-yes',
         className: 'pw-edge-branch',
@@ -114,3 +114,65 @@ it('接缝移除后仍拒绝会闭合现有路径的新增边', () => {
   ).toBeNull()
   expect(pairs(cycle)).toEqual(['C->D', 'D->E', 'E->C'])
 })
+
+it.each(['before', 'after'] as const)(
+  '既有拔出直连保持唯一，%s 移动后 undo/redo 保留全部边身份（#882）',
+  (position) => {
+    const shortcut = edge('P', 'N')
+    const original = [edge('P', 'X'), edge('X', 'N'), shortcut, edge('Q', 'M')]
+    const result = move(original, 'X', 'M', position)
+    expect(pairs(result.after)).toEqual(
+      (position === 'after'
+        ? ['M->X', 'P->N', 'Q->M']
+        : ['P->N', 'Q->X', 'X->M']
+      ).sort(),
+    )
+    const warnings: string[] = []
+    const saved = JSON.parse(JSON.stringify(result.after)).map((e: Edge) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      data: { kind: 'sequence' as const },
+    }))
+    expect(isolateDuplicateEdges(saved, warnings)).toEqual(saved)
+    expect(warnings).toEqual([])
+    expect(result.after).toContain(shortcut)
+    expect(new Set(pairs(result.after)).size).toBe(result.after.length)
+    const undo = spliceEdgesWith(
+      result.after,
+      result.removed,
+      result.added,
+      false,
+    )
+    expect(new Set(undo)).toEqual(new Set(original))
+    expect(spliceEdgesWith(undo, result.removed, result.added, true)).toEqual(
+      result.after,
+    )
+  },
+)
+
+it('旧 #879 捷径项目重排不新增重复边（#882）', () => {
+  const shortcut = edge('B', 'C')
+  const original = [...base, edge('B', 'X'), edge('X', 'C')]
+  const result = move(original, 'X', 'C', 'after')
+  expect(pairs(result.after)).toEqual(['A->B', 'B->C', 'C->X', 'X->D'])
+  expect(result.after.find((e) => e.id === shortcut.id)).toBe(original[1])
+})
+
+it.each([
+  ['after', [edge('A', 'B'), edge('B', 'C'), edge('B', 'Q')], 'B'],
+  ['before', [edge('A', 'C'), edge('B', 'C'), edge('C', 'D')], 'C'],
+] as const)(
+  '拒绝 %s 多接缝锚点，不按边数组序选取（#885）',
+  (position, edges, anchorId) => {
+    for (const ordered of [edges, [...edges].reverse()]) {
+      expect(
+        outlineSplicePlan([], [...ordered], {}, 'X', {
+          kind: 'row',
+          anchorId,
+          position,
+        }),
+      ).toBeNull()
+    }
+  },
+)
