@@ -171,7 +171,9 @@ describe('资产列表读取恢复（#853）', () => {
     await store.succeed(1)
     expect(screen.getByText('Error: 最新读取失败')).toBeTruthy()
   })
+})
 
+describe('资产列表与操作错误隔离（#853）', () => {
   it('列表恢复只清读取错误，保留同时发生的导入错误', async () => {
     const store = storage()
     render(<AssetsPanel />)
@@ -229,7 +231,9 @@ describe('资产列表读取恢复（#853）', () => {
     await store.fail(1, '列表仍失败')
     expect(screen.getByText('Error: 列表仍失败')).toBeTruthy()
   })
+})
 
+describe('资产列表读取生命周期（#853）', () => {
   it('卸载后的旧成功不影响新面板的读取错误', async () => {
     const store = storage()
     const old = render(<AssetsPanel />)
