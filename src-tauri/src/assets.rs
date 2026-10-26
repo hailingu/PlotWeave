@@ -20,8 +20,8 @@ use crate::isotime::{is_canonical_utc_timestamp, now_iso};
 use crate::library_fs::{atomic_write_with, library_root, open_library_asset};
 use crate::media_format::{ext_for, ext_for_mime};
 use crate::store::{
-    is_canonical_mime, is_valid_active_asset_rel_path, is_valid_asset_rel_path, new_id_with_prefix,
-    open_dir_bound, projects_dir, to_ipc_text, validate_id, verify_asset_real_path,
+    is_canonical_mime, is_valid_active_asset_rel_path, new_id_with_prefix, open_dir_bound,
+    projects_dir, to_ipc_text, validate_id, verify_asset_real_path,
 };
 
 pub(crate) mod error;
@@ -71,7 +71,7 @@ fn find_library_entry(
     let rel_path = entry
         .get("relPath")
         .and_then(Value::as_str)
-        .filter(|p| is_valid_asset_rel_path(p))
+        .filter(|p| is_valid_active_asset_rel_path(p))
         .ok_or_else(|| {
             AssetsError::invalid(format!(
                 "库资产 {library_asset_id} 的 relPath 非法，拒绝导入"

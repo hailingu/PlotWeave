@@ -583,3 +583,39 @@ fn asset_admission_refuses_existing_quarantine_file() {
     assert!(result.is_err(), "reserved reference admitted: {result:?}");
     assert_eq!(bytes, b"private quarantine");
 }
+
+/// Active-namespace protection applies before copying library bytes; similarly named active folders remain valid (#887).
+#[test]
+fn library_import_rejects_quarantine_and_accepts_trashcan() {
+    for folder in [".trash", ".trashcan"] {
+        let (projects, library, root) = temp_fixture();
+        seed_project(&projects, "p-1");
+        fs::create_dir_all(library.join("assets").join(folder)).unwrap();
+        let name = format!("{folder}/held.png");
+        seed_library(&library, "la-1", &name, b"PNGDATA", "image/png");
+        let result = import_asset_from_library(
+            &cap(&projects),
+            &cap(&library),
+            "p-1",
+            "la-1",
+            &pending(),
+            &mut |_| {},
+        );
+        if folder == ".trash" {
+            assert!(result.is_err());
+            assert!(!projects.join("p-1/assets").exists());
+        } else {
+            let asset = result.unwrap();
+            let path = asset["relPath"].as_str().unwrap();
+            assert_eq!(
+                fs::read(projects.join("p-1").join(path)).unwrap(),
+                b"PNGDATA"
+            );
+        }
+        assert_eq!(
+            fs::read(library.join("assets").join(name)).unwrap(),
+            b"PNGDATA"
+        );
+        cleanup(&root);
+    }
+}

@@ -170,6 +170,27 @@ struct NativeProjectStoreTests {
         }
     }
 
+    /// Project copies keep active bytes but exclude quarantine at every depth without changing the source (#888).
+    @Test func copyExcludesQuarantineWithoutTouchingSource() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("source.json", Self.document("source"))
+        try fixture.write("destination.json", Self.document("destination"))
+        let source = fixture.projects.appendingPathComponent("source/assets")
+        for path in [".trash/import-token/media", "sub/.trash/receipt.json", ".trashcan/active.png", "active.png"] {
+            let file = source.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([7]).write(to: file)
+        }
+        _ = try await fixture.store.invoke(command: "copy_project_assets", args: ["fromId": .string("source"), "toId": .string("destination")])
+        let target = fixture.projects.appendingPathComponent("destination/assets")
+        #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent(".trash").path))
+        #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent("sub/.trash").path))
+        #expect(try Data(contentsOf: target.appendingPathComponent(".trashcan/active.png")) == Data([7]))
+        #expect(try Data(contentsOf: target.appendingPathComponent("active.png")) == Data([7]))
+        #expect(try Data(contentsOf: source.appendingPathComponent(".trash/import-token/media")) == Data([7]))
+    }
+
     /// Save rejects a missing bucket as a whole instead of turning absent data into empty settings.
     @Test func malformedSaveCannotOverwriteExistingProject() async throws {
         let fixture = try Fixture()
