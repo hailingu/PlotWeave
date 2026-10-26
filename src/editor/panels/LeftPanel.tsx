@@ -409,6 +409,7 @@ export function LeftPanel({
       style={{ width: open ? width : 0 }}
       aria-label="边栏"
       aria-hidden={!open}
+      inert={!open}
     >
       <div className="pw-panel-inner" style={{ width }}>
         <div className="pw-panel-head">
