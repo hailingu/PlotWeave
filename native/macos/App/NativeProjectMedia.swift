@@ -3,7 +3,7 @@ import Foundation
 /// Media changes share the project actor's save/delete barrier and keep pending refs separate from the document.
 extension NativeProjectStore {
     /// Imports bytes only after project/control validation and checks cancellation again at atomic commit.
-    func importMedia(id: String, bytes: Data, mime: String, source: String, extension fileExtension: String, discardable: Bool = false, isCancelled: @Sendable () -> Bool = { false }) throws -> HostJSON {
+    func importMedia(id: String, bytes: Data, mime: String, source: String, extension fileExtension: String, discardable: Bool = false, isCancelled: @Sendable () -> Bool = { false }, prepareReceipt: @Sendable (NativeDirectory, String, HostJSON) throws -> NativeProjectImportReceipt = { try NativeProjectImportReceipt(directory: $0, name: $1, asset: $2) }) throws -> HostJSON {
         try checkMediaCancellation(isCancelled)
         let normalizedMIME = mime.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard NativeAssetContract.mime(normalizedMIME), source == "upload" || source == "generated",
@@ -20,10 +20,21 @@ extension NativeProjectStore {
             "id": .string(assetId), "relPath": .string("assets/" + name), "mime": .string(normalizedMIME),
             "source": .string(source), "createdAt": .string(NativeAssetContract.timestamp())
         ])
-        pendingMedia[id, default: [:]][assetId] = asset
         if discardable {
-            importReceipts[id, default: [:]][assetId] = try NativeProjectImportReceipt(directory: directory, name: name, asset: asset)
+            do {
+                importReceipts[id, default: [:]][assetId] = try prepareReceipt(directory, name, asset)
+            } catch {
+                let receiptFailure = error
+                do { try directory.removeTree(name) }
+                catch {
+                    let cause = (receiptFailure as? HostFailure)?.message ?? receiptFailure.localizedDescription
+                    let cleanup = (error as? HostFailure)?.message ?? error.localizedDescription
+                    throw HostFailure(code: "PW_IMPORT_ROLLBACK_FAILED", message: "导入凭据登记失败且副本回滚未完成，请备份项目后检查资产目录：\(cause)；\(cleanup)")
+                }
+                throw receiptFailure
+            }
         }
+        pendingMedia[id, default: [:]][assetId] = asset
         return asset
     }
 
