@@ -87,6 +87,36 @@ struct HostCommandRouterTests {
         #expect(nextPage["ok"] == .number(4097))
     }
 
+    /// The shared nesting limit precedes service execution and request identity admission (issue #863).
+    @Test func nestingBoundaryRejectsBeforeServiceAndKeepsIdentityReusable() async {
+        var executions = 0
+        let router = HostCommandRouter(service: { _ in
+            executions += 1
+            return .number(Double(executions))
+        })
+        // Envelope root and args consume two levels; the nested arrays consume the rest.
+        for depth in [33, 64, 200] {
+            let result = await router.handle(request(router, id: "depth-\(depth)", command: "write",
+                args: ["value": nestedArrays(depth - 2)]), trustedMainFrame: true)
+            #expect(result["error"]?["code"]?.string == "PW_INVALID_REQUEST")
+            #expect(executions == 0)
+        }
+        let accepted = await router.handle(request(router, id: "depth-33", command: "write",
+            args: ["value": nestedArrays(30)]), trustedMainFrame: true)
+        #expect(accepted["ok"] == .number(1))
+        let quoted = await router.handle(request(router, id: "quoted", command: "write",
+            args: ["value": String(repeating: "[\\\"{", count: 100)]), trustedMainFrame: true)
+        #expect(quoted["ok"] == .number(2))
+        #expect(executions == 2)
+    }
+
+    /// Builds the untyped WebKit input iteratively so the fixture itself never recursively decodes JSON.
+    private func nestedArrays(_ levels: Int) -> Any {
+        var value: Any = "leaf"
+        for _ in 0..<levels { value = [value] }
+        return value
+    }
+
     /// Produces protocol fixtures directly from independently known field values.
     private func request(_ router: HostCommandRouter, id: String, command: String, args: [String: Any] = [:]) -> [String: Any] {
         ["protocolVersion": 1, "sessionId": router.sessionId, "requestId": id, "command": command, "args": args]
