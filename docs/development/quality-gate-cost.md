@@ -46,7 +46,8 @@ conditions maintained in the push-gating topic doc (see
 [快路径可达性与恢复条件](quality-gate-push.md#快路径可达性与恢复条件issue-463));
 extended 2026-10-16 by the **gate CPU budget** (owner direction, recorded
 here rather than via a tracker issue): coverage-phase parallelism is capped
-at one third of the machine's logical cores — a scheduling change only; the
+at a fixed default of 4, overridable with a positive integer
+`PLOTWEAVE_GATE_CPU_BUDGET` — a scheduling change only; the
 check set, sequence, thresholds, and failure semantics are unchanged (see
 [Gate CPU Budget](#gate-cpu-budget-2026-10-16-owner-direction) and the
 re-measured [CPU-Budget Baseline](#cpu-budget-baseline-2026-10-16)).
@@ -1027,7 +1028,8 @@ Run from the repository root with `SONAR_HOST_URL` set and a token available as
 
 Take at least three complete runs and compare medians — a single run is not
 a distribution (the founding caveat 3 / refresh caveat 3). The gate resolves
-its CPU budget from the machine it runs on; record the budget value
+its CPU budget as fixed default 4 or an explicit positive-integer
+`PLOTWEAVE_GATE_CPU_BUDGET` override; record the actual budget value
 alongside the environment table so two measurements stay comparable. To
 measure an uncapped comparison run (not the daily schedule), set
 `PLOTWEAVE_GATE_CPU_BUDGET` to the full logical-core count for that run

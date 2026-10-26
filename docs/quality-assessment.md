@@ -1,14 +1,31 @@
-# PlotWeave 设计与实现质量评估
+# PlotWeave 设计与实现质量评估（2026-10-24 历史快照）
 
-本文记录 PlotWeave 当前的设计与实现质量结论，给出分维度评分、综合评级、证据、排除口径和后续 issue。它不是工程门禁，不新增产品规范或数据契约；缺陷修复与验收以所链接 issue 为准。
+本文记录 PlotWeave 在 2026-10-24 评估基线的设计与实现质量结论，给出分维度评分、综合评级、证据、排除口径和后续 issue。它不是工程门禁，不新增产品规范或数据契约；缺陷修复与验收以所链接 issue 为准。
 
-**当前结论（2026-10-24）：8.7 / 10，A−。**
+**历史结论（2026-10-24）：8.7 / 10，A−。**
 
-- **当前代码基线**：`dev` @ [`1332debe2ba7c4edd579d753045e894f33cfb298`](https://github.com/hailingu/PlotWeave/commit/1332debe2ba7c4edd579d753045e894f33cfb298)。
+- **评估代码基线**：`dev` @ [`1332debe2ba7c4edd579d753045e894f33cfb298`](https://github.com/hailingu/PlotWeave/commit/1332debe2ba7c4edd579d753045e894f33cfb298)。
 - **评估方式**：前端/React、Rust/Tauri、Swift 原生、测试与工程治理分域只读审查，直接复核关键代码、配置、tracker 和 GitHub Actions；随后仅为建档与更新本文，不夹带实现修复。
-- **本轮 issue**：新建 [#801](https://github.com/hailingu/PlotWeave/issues/801)–[#809](https://github.com/hailingu/PlotWeave/issues/808)，共 6 项 P2、3 项 P3。它们在评分时尚未登记，因此计入本轮；后续复评作为已知 issue 不重复扣分，只跟踪修复和验证。
+- **本轮 issue**：新建 [#801](https://github.com/hailingu/PlotWeave/issues/801)–[#809](https://github.com/hailingu/PlotWeave/issues/809)，共 6 项 P2、3 项 P3。它们在评分时尚未登记，因此计入本轮；后续复评作为已知 issue 不重复扣分，只跟踪修复和验证。
 - **历史档案**：本轮之前的完整评估保留在[固定版本档案](https://github.com/hailingu/PlotWeave/blob/1332debe2ba7c4edd579d753045e894f33cfb298/docs/quality-assessment.md)。历史 8.9/A−、9.2/A 等结论不再与“当前评分”混写。
 - **基线一致性**：评估从 `42863bef` 开始，最终在 `1332debe` 复核；两版差异仅涉及已排除的 #717、#729 和门禁台账。本文所有扣分路径均在最终基线上重新确认。
+
+
+## 后续修复状态（2026-10-26，issue #861）
+
+下列九项已在 `dev@a014236e` 的历史中修复并合并。下文的评分、扣分表、测量和建议均是 `1332debe` 历史快照，不表示当前缺陷或待办；保留原始 8.7 / A−，本次文档同步没有重新评分，也不推算修复后的分数。未验证边界仍按原记录保留。
+
+| Issue | 修复提交 |
+| --- | --- |
+| #801 | [`e4a4faa6`](https://github.com/hailingu/PlotWeave/commit/e4a4faa6) |
+| #802 | [`3424527a`](https://github.com/hailingu/PlotWeave/commit/3424527a)（PR #835 含后续评审修复） |
+| #803 | [`9d044436`](https://github.com/hailingu/PlotWeave/commit/9d044436) |
+| #804 | [`a0403070`](https://github.com/hailingu/PlotWeave/commit/a0403070) |
+| #805 | [`d6464241`](https://github.com/hailingu/PlotWeave/commit/d6464241) |
+| #806 | [`dfeac3e2`](https://github.com/hailingu/PlotWeave/commit/dfeac3e2) |
+| #807 | [`093ccc35`](https://github.com/hailingu/PlotWeave/commit/093ccc35) |
+| #808 | [`874fc63e`](https://github.com/hailingu/PlotWeave/commit/874fc63e) |
+| #809 | [`0b1eb037`](https://github.com/hailingu/PlotWeave/commit/0b1eb037) |
 
 ## 一、评分口径
 
@@ -34,7 +51,7 @@
 
 不同轮次的维度、权重和已知 issue 集合不同，分数只描述各自基线，不能单独解释为产品质量线性上升或下降。
 
-## 二、当前综合结果
+## 二、当时综合结果
 
 | 维度 | 权重 | 评分 | 评级 | 核心判断 |
 | --- | ---: | ---: | --- | --- |
@@ -209,10 +226,10 @@ tsconfig.strict.json:
 - 未执行真实 Sonar 推送来证明 #805 曾造成误放行；该 issue 是门禁输入保证缺口，不是事故报告。
 - 各审查角色对初筛候选是否计分曾有差异；按第五节的排除规则过滤后，最终引用的事实证据无冲突，无阻断性开放问题。
 
-## 七、下一轮开发基线与建议顺序
+## 七、当时建议顺序（已完成修复）
 
 1. **优先保护用户意图和可见结果**：#801、#802。验收应落到最终持久化值和当前视图，而不只检查错误横幅或存储内部状态。
 2. **收口直接原生交付与键盘路径**：#804、#803。分别补退出工作集合和焦点契约，不扩大到已取消的 VoiceOver/UI 自动化范围。
 3. **恢复门禁输入保证与执行确定性**：#805、#809。分别处理覆盖率来源绑定和 TLS 夹具有界等待；优先选择简单、可证明的方案，不增加不可验证的自述元数据或固定 sleep。
 4. **消除静态与文档盲区**：#806、#807、#808 可随同相关工程改动处理，保持单项 issue 的独立验收。
-5. 新一轮功能开发应以本文当前评分和 tracker 的实际状态为基线；修复后更新对应 issue 的 resolving commit、验证命令和剩余边界，不回填或伪造本轮历史评分。
+5. 上述建议对应的 #801–#809 已完成修复，提交对照见开头后续状态。新一轮开发以当前代码和 tracker 实际状态为准；本文评分仅供历史参考，不回填或伪造本轮历史评分。
