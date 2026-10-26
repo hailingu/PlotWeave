@@ -73,6 +73,15 @@ pub(crate) fn list_assets_with(
     library: &cap_std::fs::Dir,
     report: &mut dyn FnMut(&crate::library_journal::Recovery),
 ) -> Result<(Value, Vec<String>), LibraryError> {
+    list_assets_with_media(library, report, crate::library_fs::open_library_asset)
+}
+
+/// 列表快照保留真实索引与恢复路径；媒体打开器单独注入以验证暂时失败的投影语义。
+fn list_assets_with_media(
+    library: &cap_std::fs::Dir,
+    report: &mut dyn FnMut(&crate::library_journal::Recovery),
+    open_media: impl Fn(&cap_std::fs::Dir, &str) -> Result<cap_std::fs::File, LibraryError>,
+) -> Result<(Value, Vec<String>), LibraryError> {
     // 崩溃遗留孤儿临时文件清扫（issue #148，§10.2 资源回收边界）：
     // 库根 + assets/，fail-soft 不阻断列表，进行中写入不受影响
     crate::library_fs::sweep_library_temp_files(library);
@@ -102,9 +111,15 @@ pub(crate) fn list_assets_with(
             let result = entry["relPath"]
                 .as_str()
                 .ok_or_else(|| LibraryError::invalid("资产路径缺失"))
-                .and_then(|path| crate::library_fs::open_library_asset(library, path));
+                .and_then(|path| open_media(library, path));
             match result {
                 Ok(_) => true,
+                Err(error) if transient_media_failure(&error) => {
+                    warnings.push(format!(
+                        "[PW_LIBRARY_MEDIA_TEMPORARILY_UNAVAILABLE] 资产 {id} 的媒体暂时无法读取，已保留列表项：{error}"
+                    ));
+                    true
+                }
                 Err(error) => {
                     warnings.push(format!(
                         "资产 {id} 的媒体缺失或不可用，已从列表隔离：{error}"
@@ -116,6 +131,18 @@ pub(crate) fn list_assets_with(
     }
     index["cleanupPending"] = json!(recovery.cleanup_pending);
     Ok((index, warnings))
+}
+
+/// 保留包装错误的 IO 根因：仅确证 NotFound 可作缺失处置，其他 IO 失败允许下次列表恢复。
+fn transient_media_failure(error: &LibraryError) -> bool {
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            return io.kind() != std::io::ErrorKind::NotFound;
+        }
+        source = cause.source();
+    }
+    false
 }
 
 /// 导入资产内核（句柄域）：mime 信任边界（trim + 小写后必须规范形）、媒体

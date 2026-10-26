@@ -220,3 +220,40 @@ fn listing_isolates_untrusted_assets_roots_without_mutation() {
         cleanup(&root);
     }
 }
+/// EMFILE/EIO/EACCES are transient media checks, never evidence that an indexed asset disappeared (#907).
+#[test]
+fn transient_media_errors_preserve_projection_and_disk() {
+    use crate::store::error::StoreError;
+    use std::io;
+    for reason in [libc::EMFILE, libc::EIO, libc::EACCES] {
+        for wrapped in [false, true] {
+            let (library, root) = temp_fixture();
+            let asset = entry("a", "assets/a.png");
+            write_index_raw(
+                &library,
+                &json!({"assets": by_id([asset.clone()]), "groups": by_id([])}),
+            );
+            fs::write(library.join("assets/a.png"), b"media").unwrap();
+            let before = fs::read(library.join("library.json")).unwrap();
+            let (index, warnings) =
+                super::list_assets_with_media(&cap(&library), &mut |_| {}, |_, _| {
+                    let error = io::Error::from_raw_os_error(reason);
+                    Err(if wrapped {
+                        LibraryError::from(StoreError::io("injected", error))
+                    } else {
+                        LibraryError::io("injected", error)
+                    })
+                })
+                .unwrap();
+            assert_eq!(index["assets"]["byId"]["a"], asset);
+            assert_eq!(warnings.len(), 1);
+            assert!(warnings[0].contains("PW_LIBRARY_MEDIA_TEMPORARILY_UNAVAILABLE"));
+            assert_eq!(fs::read(library.join("library.json")).unwrap(), before);
+            assert_eq!(fs::read(library.join("assets/a.png")).unwrap(), b"media");
+            let (retry, warnings) = list_assets_with(&cap(&library), &mut |_| {}).unwrap();
+            assert_eq!(retry["assets"]["byId"]["a"], asset);
+            assert!(warnings.is_empty());
+            cleanup(&root);
+        }
+    }
+}
