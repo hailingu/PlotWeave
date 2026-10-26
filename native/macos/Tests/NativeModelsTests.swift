@@ -261,6 +261,57 @@ struct NativeModelsTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("projects/" + id).path))
     }
 
+    /// Provider response extras are untrusted too; depth 33 safely reproduces bypass without crashing the runner (#889).
+    @Test(arguments: ["chat", "b64", "url"])
+    func providerResponseDepthIsBounded(mode: String) async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        try await fixture.configure()
+        let id = try await fixture.createProject()
+        let response = try Self.providerReply(depth: HostJSON.maxNestingDepth + 1, mode: mode)
+        let models = fixture.models(post: { _ in response })
+        var rejected = false
+        do {
+            _ = try await models.invoke(command: mode == "chat" ? "llm_chat" : "llm_image_generate", args: mode == "chat" ? Self.chatArgs : Self.imageArgs(id))
+        } catch let failure as HostFailure {
+            rejected = true
+            #expect(failure.code == "PW_MODEL_ERROR")
+        }
+        #expect(rejected)
+    }
+
+    /// Exactly the shared depth limit remains valid for chat and both image result shapes.
+    @Test(arguments: ["chat", "b64", "url"])
+    func providerResponseAtDepthLimitRemainsValid(mode: String) async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        try await fixture.configure()
+        let id = try await fixture.createProject()
+        let response = try Self.providerReply(depth: HostJSON.maxNestingDepth, mode: mode)
+        let downloads = Mutex(0)
+        let models = NativeModels(preferences: fixture.preferences, projects: fixture.projects, post: { _ in response }, download: { _, _, _ in
+            downloads.withLock { $0 += 1 }
+            return Self.png
+        })
+        let result = try await models.invoke(command: mode == "chat" ? "llm_chat" : "llm_image_generate", args: mode == "chat" ? Self.chatArgs : Self.imageArgs(id))
+        if mode == "chat" { #expect(result["content"]?.string == "ok") }
+        else { #expect(result["mime"]?.string == "image/png") }
+        #expect(downloads.withLock { $0 } == (mode == "url" ? 1 : 0))
+    }
+
+    /// Raw ignored provider fields carry depth through the real production decoder, independently of Codable construction.
+    private static func providerReply(depth: Int, mode: String) throws -> NativeHTTPReply {
+        let value = HostJSON.object([
+            "choices": .array([.object(["message": .object(["role": .string("assistant"), "content": .string("ok")])])]),
+            "data": .array([.object(mode == "url" ? ["url": .string("https://image.fixture.invalid/image.png")] : ["b64_json": .string(Self.png.base64EncodedString())])])
+        ])
+        let encoded = try JSONEncoder().encode(value)
+        let levels = depth - 1
+        let nested = String(repeating: "[", count: levels) + "0" + String(repeating: "]", count: levels)
+        let bytes = Data(encoded.dropLast()) + Data((",\"padding\":" + nested + "}").utf8)
+        return NativeHTTPReply(status: 200, headers: [:], body: bytes)
+    }
+
     /// Invariant request fixtures describe the unchanged camelCase IPC shape, not source-text structure.
     private static let chatArgs: [String: HostJSON] = ["providerId": .string("openai"), "baseUrl": .string("https://provider.example/v1"), "model": .string("fixture-model"), "messages": .array([.object(["role": .string("user"), "content": .string("测试")])])]
     /// A magic-byte PNG fixture suffices because the existing image contract validates signatures, not decoding.

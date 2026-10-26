@@ -169,7 +169,7 @@ actor NativeModels {
         guard (200...299).contains(response.status) else {
             throw HostFailure(code: "PW_MODEL_STATUS", message: "服务返回 \(response.status)：" + NativeModelDiagnostic.excerpt(response.body, key: key, url: url))
         }
-        do { return try JSONDecoder().decode(HostJSON.self, from: response.body) }
+        do { return try HostJSON.decode(response.body) }
         catch { throw invalid("响应不是有效 JSON") }
     }
 

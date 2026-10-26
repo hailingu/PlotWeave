@@ -170,6 +170,10 @@ Tauri的导入参数借用框架已解析的 `InvokeBody::Json` 先取数组长�
   截断源名至可容纳后缀再拼接——直接追加后缀会让接近上限的合法源名复制即被
   持久化层拒绝，复制操作必须总能成功。
 
+### 模型提供者响应的 JSON 深度（issue #889）
+
+`llm_chat` 与 `llm_image_generate` 在状态码和响应字节预算之后，经 `HostJSON.decode` 执行同一 32 层深度限制；超过限制映射为稳定的 `PW_MODEL_ERROR`，不进入递归 Codable 解码。图像 b64 与 URL 两种响应均先受该限制，URL 下载不会先于 JSON 验证。忽略字段仍属于不可信响应并计入深度；合法 32 层响应及原有大小、取消、下载校验保持。
+
 ### 媒体响应的文档隔离（#654）
 
 `pwmedia` 的响应层保留规范的图片／音频／视频类型，其他声明仅以 `application/octet-stream` 交付原字节；磁盘 `AssetRef.mime` 和共享词法规则不变。SVG 继续以图片类型交付，媒体响应统一附带强制 sandbox／禁脚本 CSP 与 nosniff；404 保持固定纯文本。读取授权、描述符身份、容量和取消仍由原 owner 负责。真实 WK 正向对照、SVG 文档／图片回归及限制见[媒体响应边界](../development/media-response-boundary.md)。
