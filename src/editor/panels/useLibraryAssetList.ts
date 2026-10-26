@@ -14,10 +14,12 @@ import { useAssetThumbnails } from './useAssetThumbnails'
  * 面板实例（含已卸载实例的排队写入）落定的结果即时失效重读，当前实例
  * 无需再次失焦或重挂载即收敛到最新持久化状态；重读合并保留被占有的
  * 投影与乐观隐藏（assetsListReconciliation），仅采纳最新一次发出的
- * 读取，迟到的旧响应丢弃。 */
+ * 读取，迟到的旧响应丢弃。issue #853：读取错误由有效读取成功解除；
+ * setError 仅持有导入/删除错误，列表恢复不得代替操作恢复。 */
 export function useLibraryAssetList() {
   const [assets, setAssets] = useState<LibraryAsset[]>([])
-  const [error, setError] = useState<string | null>(null)
+  const [operationError, setOperationError] = useState<string | null>(null)
+  const [listError, setListError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const thumbnails = useAssetThumbnails()
   /** 本实例已确认删除、删除仍在途的资产：重读时不得让存储残影复活该行
@@ -36,6 +38,7 @@ export function useLibraryAssetList() {
         .list()
         .then((fresh) => {
           if (!alive || seq !== latestLoad) return
+          setListError(null)
           setAssets((local) =>
             reconcileReloadedAssets(
               local,
@@ -47,7 +50,7 @@ export function useLibraryAssetList() {
         })
         .catch((err) => {
           if (!alive || seq !== latestLoad) return
-          setError(String(err))
+          setListError(String(err))
         })
         .finally(() => {
           if (alive && seq === latestLoad) setLoading(false)
@@ -75,8 +78,8 @@ export function useLibraryAssetList() {
   return {
     assets,
     setAssets,
-    error,
-    setError,
+    error: [listError, operationError].filter(Boolean).join('；') || null,
+    setError: setOperationError,
     loading,
     hideAsset,
     unhideAsset,
