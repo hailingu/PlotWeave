@@ -101,8 +101,8 @@ lcov_line_coverage_percent() {
 # 覆盖率下限（issue #393）：整体行覆盖率 ≥ 80%——与本机 SonarQube 服务端
 # Quality Gate 的 80% 条件对齐的仓库侧可失败下限，不依赖服务端条件存在
 # 或未被改动；按与门禁台账相同的 LCOV DA 口径在扫描前复核两份报告。
-# 数值不追踪实测基线（Rust 82.6%/前端 98.13%，见 rust-standard.md 与
-# typescript-standard.md），差额留作余量。恰等于下限通过（与服务端
+# 数值不追踪实测基线；当次 LCOV 与 docs/development/gate-history.jsonl
+# 提供覆盖率及余量依据（口径见两栈 standard.md）。恰等于下限通过（与服务端
 # 「低于才失败」语义一致）；达标不得靠扩充排除清单（scripts/
 # sonar-test-scope.test.ts 双向核验）。前端另有 vitest thresholds
 #（vite.config.ts）在 npm run test:coverage 内先行失败。

@@ -147,10 +147,10 @@ is a deliberate gate-strength change, not an optimization hidden in a script.
 | Push range | Checks | Coverage | Expected cost relative to full |
 | --- | --- | --- | --- |
 | docs-only (`docs/**`, root Markdown, `LICENSE`) | `scripts/check-docs.sh` (`git diff --check`) only | none | near-zero; no npm install, tests, Rust, or Sonar |
-| single frontend (`src/**`, frontend-only root configs) | static checks + full frontend suite | frontend full; Rust reuses the most recent LCOV | one stack's coverage + Sonar |
-| single Rust (`src-tauri/**`, `crates/**`, `rust-toolchain.toml`) | static checks + full Rust suite | Rust full; frontend reuses the most recent LCOV | one stack's coverage + Sonar |
-| single native (`native/**`) | static checks + `sh scripts/test-native.sh` (canvas build + serial functional regression; stress measurements opt in) | no native LCOV; frontend/Rust reuse the most recent LCOV | functional regression time + Sonar |
-| cross-stack / tooling / unknown / empty / no baseline | static checks + frontend/Rust suites + native functional regression + Sonar | frontend + Rust full | existing baseline plus native functional regression |
+| single frontend (`src/**`, frontend-only root configs), clean checked-out head | static checks + full frontend suite | frontend full; Rust reuses the most recent LCOV | one stack's coverage + Sonar |
+| single Rust (`src-tauri/**`, `crates/**`, `rust-toolchain.toml`), clean checked-out head | static checks + full Rust suite | Rust full; frontend reuses the most recent LCOV | one stack's coverage + Sonar |
+| single native (`native/**`), clean checked-out head | static checks + `sh scripts/test-native.sh` (canvas build + serial functional regression; stress measurements opt in) | no native LCOV; frontend/Rust reuse the most recent LCOV | functional regression time + Sonar |
+| single-stack temporary-worktree slow path; cross-stack / tooling / unknown / empty / no baseline | static checks + frontend/Rust suites + native functional regression + Sonar | frontend + Rust full | existing baseline plus native functional regression |
 
 Boundaries:
 
@@ -162,8 +162,14 @@ Boundaries:
   Existing refs require their remote old tip locally; a missing tip runs `full`.
   Only new refs fall back to local `dev` merge-base, `origin/dev`, or the commit
   parent. All ranges for a shared commit are combined before deduplication;
-  different implementation stacks require `full`. If the unchanged stack is
-  not actually unchanged, use a full push.
+  different implementation stacks require `full`. Single-stack LCOV reuse is
+  limited to the fast path: the pushed commit is checked out and the index,
+  tracked files and all untracked non-ignored inputs match it. A non-checked-out
+  ref or dirty worktree takes the temporary-worktree slow path; the hook emits
+  `PRE_PUSH_SCOPE_ESCALATED` and automatically runs `full`, including native
+  functional regression, because reused LCOV cannot be attributed to that tree
+  ([issue #805](https://github.com/hailingu/PlotWeave/issues/805)). The single-stack
+  cost rows therefore apply only to the fast path.
 - Every `full` push conservatively runs native functional regression, so adding
   another stack or losing the baseline cannot remove native checks. `pre-push`
   forces `PLOTWEAVE_GATE_FULL_NATIVE=1`; all three commit-creating entry points
