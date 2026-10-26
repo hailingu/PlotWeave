@@ -350,6 +350,41 @@ describe('RightPanel ✦AI 对话', () => {
 })
 
 describe('RightPanel ✦AI 会话历史保持', () => {
+  it('折叠使整栏 inert，展开保留 AI 输入实例、草稿和宽度', async () => {
+    vi.spyOn(settingsStore, 'load').mockResolvedValue(APP_WITH_KEY)
+    const props = {
+      open: false,
+      width: 300,
+      tab: 'ai' as const,
+      settings: SETTINGS,
+      onResize: vi.fn(),
+      onTabChange: vi.fn(),
+      ai: { projectId: 'p-right-panel-collapse' },
+    }
+    const view = render(<RightPanel {...props} />)
+    const aside = view.container.querySelector<HTMLElement>('aside')!
+    expect(aside.hasAttribute('inert')).toBe(true)
+    expect(aside.getAttribute('aria-hidden')).toBe('true')
+    const input = await screen.findByLabelText('AI 对话输入')
+    view.rerender(<RightPanel {...props} open />)
+    expect(aside.hasAttribute('inert')).toBe(false)
+    fireEvent.change(input, { target: { value: '保留的草稿' } })
+
+    view.rerender(<RightPanel {...props} />)
+    expect(aside.hasAttribute('inert')).toBe(true)
+    expect(aside.style.width).toBe('0px')
+    expect(aside.contains(input)).toBe(true)
+    expect(aside.querySelector('.pw-panel-resizer')).toBeNull()
+
+    view.rerender(<RightPanel {...props} open />)
+    expect(aside.hasAttribute('inert')).toBe(false)
+    expect(aside.style.width).toBe('300px')
+    expect(screen.getByLabelText('AI 对话输入')).toBe(input)
+    expect((input as HTMLTextAreaElement).value).toBe('保留的草稿')
+    fireEvent.click(screen.getByRole('button', { name: '检查器' }))
+    expect(props.onTabChange).toHaveBeenCalledWith('inspector')
+  })
+
   it('切到检查器再返回时保留同一项目的会话历史', async () => {
     vi.spyOn(settingsStore, 'load').mockResolvedValue(APP_WITH_KEY)
     llmChatMock.mockResolvedValue(reply({ content: '先让人物目标相撞。' }))
