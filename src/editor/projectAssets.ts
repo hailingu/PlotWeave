@@ -23,6 +23,19 @@ import { uid } from '../uid'
  * 源 blob，脱离库内条目存活；会话内有效，重载即失效）。 */
 const memoryUrls = new Map<string, string>()
 
+/** Preserve both the rejected import and cleanup failure when rollback cannot complete. */
+class ProjectAssetCleanupError extends Error {
+  readonly cause: unknown
+  readonly cleanupError: unknown
+  constructor(cause: unknown, cleanupError: unknown) {
+    super(
+      `导入失败：${String(cause)}；副本隔离也失败：${String(cleanupError)}，请保留项目现场`,
+    )
+    this.cause = cause
+    this.cleanupError = cleanupError
+  }
+}
+
 interface RawAssetRef {
   id?: unknown
   relPath?: unknown
@@ -95,12 +108,17 @@ async function tauriImport(
     }),
   )
   // §9.3：入索引前过 Rust 预检，使用预检返回的规范化条目
-  return normalizeAssetRef(
-    await ipcInvoke<RawAssetRef>(IPC_COMMANDS.validateProjectAsset, {
-      id: projectId,
-      asset: imported,
-    }),
-  )
+  try {
+    return normalizeAssetRef(
+      await ipcInvoke<RawAssetRef>(IPC_COMMANDS.validateProjectAsset, {
+        id: projectId,
+        asset: imported,
+      }),
+    )
+  } catch (error) {
+    await projectAssets.discardImport(projectId, imported.id, error)
+    throw error
+  }
 }
 
 // 浏览器预览无项目目录：projectId 仅保持与 Tauri 路径接口同形，不参与逻辑
@@ -152,6 +170,28 @@ export function tauriInvoke<T>(
 
 /** 统一门面：两种环境同签名。 */
 export const projectAssets = {
+  /** Only host-minted unaccepted imports may be quarantined; clients never supply a filesystem path. */
+  discardImport: async (
+    projectId: string,
+    assetId: string,
+    cause?: unknown,
+  ): Promise<void> => {
+    if (isBrowserPreviewHost()) {
+      const url = memoryUrls.get(assetId)
+      if (url) URL.revokeObjectURL(url)
+      memoryUrls.delete(assetId)
+      return
+    }
+    try {
+      await ipcInvoke(IPC_COMMANDS.discardProjectAssetImport, {
+        id: projectId,
+        assetId,
+      })
+    } catch (error_) {
+      if (cause !== undefined) throw new ProjectAssetCleanupError(cause, error_)
+      throw error_
+    }
+  },
   /** 库资产拷贝进项目（§7.3）：返回项目级 AssetRef（新 id）。 */
   importFromLibrary: (
     projectId: string,

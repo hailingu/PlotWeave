@@ -296,7 +296,7 @@ N71 最小回归先红：1 test／1 suite、5 项预期失败，日志 `/private
 
 ## 差异与实施范围
 
-比较起点：生产 React 项目管理、六类节点编辑、历史、大纲、设定、资产、设置、AI 与导出均已在分支中，但原生入口只有内存演示，服务和正常退出未接通。当前已实现 SwiftUI 首页、设置、大纲、检查器、设定、图库、AI 与导出，26 条业务命令和两条退出命令由 Swift 承接，另提供两条系统文本交付命令。默认入口运行真实编辑会话，`#fixture` 仅用于隔离演示。补齐复用既有编辑动作，不升级磁盘 schema；视频制作、JSON 导入和资产收藏回库等 dev 尚未实现的规划功能不计入差异。
+比较起点：生产 React 项目管理、六类节点编辑、历史、大纲、设定、资产、设置、AI 与导出均已在分支中，但原生入口只有内存演示，服务和正常退出未接通。当前已实现 SwiftUI 首页、设置、大纲、检查器、设定、图库、AI 与导出，27 条业务命令和两条退出命令由 Swift 承接，另提供两条系统文本交付命令。默认入口运行真实编辑会话，`#fixture` 仅用于隔离演示。补齐复用既有编辑动作，不升级磁盘 schema；视频制作、JSON 导入和资产收藏回库等 dev 尚未实现的规划功能不计入差异。
 
 所有者于 2026-10-04 明确选择“存储、素材和模型服务也用 Swift 实现”。服务改为 Swift 原生实现，旧 Tauri/Rust 作为行为与磁盘合同回归基线；新宿主不链接 Rust，事件、媒体资源及系统交付由 Swift 管理。React 保持唯一文档写入者和保存协调者。界面全部使用 SwiftUI，React Flow 保留画布和单一编辑会话；沿用原计划的独立数据／测试身份，不访问真实 Tauri 项目或历史 Keychain。
 
@@ -339,7 +339,7 @@ F05 还覆盖 [PR #526 R29](swiftui-react-flow-pr526-fixes.md#原生意图进入
 
 `settings.setDefaults` 的原生→Web 意图接受 `defaultChat`、`defaultImage` 中至少一个字段，每个存在的字段必须是字符串或 null；未知字段、空补丁及类型非法拒绝。缺席字段保留 Web owner 当前同步快照，null 只清指定项，旧式双字段提交保持有效；原生 Picker 只发送自身选择。普通服务草稿当前按前一权威值比较决定跟随，已覆盖新稿与该值不同的旧回执；模型使用逐行规范化语义且保留相同确认的输入原文。名称／地址／模型 A→B→A 回改的旧 B 投影仍可能覆盖新 A，后续键入会以 B 为基底；第25条转 [issue #527](https://github.com/hailingu/PlotWeave/issues/527) 待修复，当前没有逐字段编辑确认身份。命令名称、版本、磁盘 schema 和唯一 saver 不变，已实现范围见 [R33–R34](swiftui-react-flow-pr526-fixes.md#设置字段与投影回执)，所有者延期决定及验证缺口见 [R39](swiftui-react-flow-pr526-fixes.md#服务文字回改缺陷的后续修复r39)。
 
-命令通道使用 WebKit 带回执 handler `plotweaveHost`。文档开始时注入 `__pwNativeHost={kind:"swift",protocolVersion:1,sessionId:…}`，会话身份随每次加载更新。请求包含 `protocolVersion`、`sessionId`、`requestId`、`command` 与可选参数对象 `args`；回执为 `{ok:…}` 或 `{error:{code,message}}`。25 条既有业务 snake_case 命令及两条退出命令保持载荷语义；新增 `import_library_asset_chunk` 是有界 Web 上传入口（issue #716），不改变磁盘格式；系统文本交付为 `system.copyText` 和 `system.saveText`。
+命令通道使用 WebKit 带回执 handler `plotweaveHost`。文档开始时注入 `__pwNativeHost={kind:"swift",protocolVersion:1,sessionId:…}`，会话身份随每次加载更新。请求包含 `protocolVersion`、`sessionId`、`requestId`、`command` 与可选参数对象 `args`；回执为 `{ok:…}` 或 `{error:{code,message}}`。25 条既有业务 snake_case 命令及两条退出命令保持载荷语义；新增 `import_library_asset_chunk` 是有界 Web 上传入口（issue #716）；`discard_project_asset_import`（issue #864）仅隔离宿主尚未被保存接受的本次库导入副本，当前共 27 条业务命令；系统文本交付为 `system.copyText` 和 `system.saveText`。
 
 同一会话请求去重覆盖在途和完成结果，不自动重试删除、复制或计费请求。媒体字节通过 Swift 资源服务／`WKURLSchemeHandler`，不进入 JSON 或 base64 命令回执。宿主事件由 `__pwDispatchHostEvent` 投递 `app-quit-requested`、`library-diagnostics`，监听建立后才确认退出就绪。Swift 的 `app_exit` 可选布尔 `cancel:true` 是幂等失败回执，不要求监听就绪；缺省／`false` 保持批准，非法类型返回 `PW_INVALID_REQUEST`。只有 Swift 失败路径发送该参数，Tauri 保持原有载荷。
 

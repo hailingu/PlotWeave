@@ -221,6 +221,7 @@ pub fn app_builder() -> tauri::Builder<tauri::Wry> {
             library::group_commands::delete_library_group,
             media_protocol::get_asset_media_url,
             assets::import_project_asset_from_library,
+            assets::import_discard::discard_project_asset_import,
             assets::validate_project_asset,
             assets::project_media::register_project_asset_alias,
             imagegen::llm_image_generate,

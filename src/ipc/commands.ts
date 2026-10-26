@@ -45,6 +45,7 @@ export const IPC_COMMANDS = {
   getAssetMediaUrl: 'get_asset_media_url',
   // ── assets：项目资产管线（docs/data-model/assets.md §7.3/§9.3）──
   importProjectAssetFromLibrary: 'import_project_asset_from_library',
+  discardProjectAssetImport: 'discard_project_asset_import',
   validateProjectAsset: 'validate_project_asset',
   registerProjectAssetAlias: 'register_project_asset_alias',
   // ── imagegen：画布内 AI 图像生成（docs/data-model/ai-integration.md §13）──

@@ -84,3 +84,25 @@ describe('projectAssets 内存回退：revalidate', () => {
     ).resolves.toBeUndefined()
   })
 })
+
+describe('projectAssets discarded preview imports（issue #864）', () => {
+  it('revokes only the imported URL and leaves the source library readable', async () => {
+    const { libraryStore, projectAssets } = await load()
+    const lib = await libraryStore.put(
+      new File(['source'], 'a.png', { type: 'image/png' }),
+      'character',
+    )
+    const asset = await projectAssets.importFromLibrary('p-1', lib.id)
+    const url = await projectAssets.mediaUrl('p-1', asset.id)
+    const revoke = vi.spyOn(URL, 'revokeObjectURL')
+    await projectAssets.discardImport('p-1', asset.id)
+    expect(revoke).toHaveBeenCalledExactlyOnceWith(url)
+    await expect(projectAssets.mediaUrl('p-1', asset.id)).rejects.toThrow(
+      /不在本会话内存/,
+    )
+    await expect(
+      libraryStore.mediaUrl({ id: lib.id, conflicted: false }),
+    ).resolves.toMatch(/^blob:/)
+    revoke.mockRestore()
+  })
+})

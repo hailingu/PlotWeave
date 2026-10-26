@@ -6,6 +6,7 @@ actor NativeAssets {
     /// Single wire-name registry; exhaustive dispatch makes a missing command handler a compile error.
     enum Command: String, CaseIterable, Sendable {
         case importProjectAssetFromLibrary = "import_project_asset_from_library"
+        case discardProjectAssetImport = "discard_project_asset_import"
         case validateProjectAsset = "validate_project_asset"
         case registerProjectAssetAlias = "register_project_asset_alias"
         case getAssetMediaUrl = "get_asset_media_url"
@@ -29,7 +30,10 @@ actor NativeAssets {
             try Task.checkCancellation()
             guard let mime = entry["mime"]?.string, let path = entry["relPath"]?.string else { throw NativeLibraryIndex.invalid("源素材字段无效") }
             return try await projects.importMedia(id: project, bytes: bytes, mime: mime, source: "upload",
-                extension: NativeAssetContract.fileExtension(name: path, mime: mime))
+                extension: NativeAssetContract.fileExtension(name: path, mime: mime), discardable: true)
+        case .discardProjectAssetImport:
+            try await projects.discardImport(id: args.requiredString("id", domain: .asset), assetId: args.requiredString("assetId", domain: .asset))
+            return .null
         case .validateProjectAsset:
             guard let asset = args["asset"] else { throw NativeLibraryIndex.invalid("缺少资产对象") }
             return try await projects.validateAsset(id: args.requiredString("id", domain: .asset), asset: asset)

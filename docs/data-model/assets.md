@@ -173,3 +173,11 @@ Tauri的导入参数借用框架已解析的 `InvokeBody::Json` 先取数组长�
 ### 原生投递粒度（#718）
 
 Swift `NativeMediaScheme` 的 WKURLSchemeTask 回调受 WebKit 框架约束只能在主线程执行（[WKURLSchemeTask](https://developer.apple.com/documentation/webkit/wkurlschemetask) 协议方法由主线程调用），因此大媒体的响应性由**投递粒度**决定，而非后台读取：投递循环以 **4 MiB**（`NativeMediaScheme.deliveryChunkBytes`）为一个「后台 pread + 主线程 `didReceive`」单元——256 MiB 项目媒体上限只产生 64 次主线程投递（64 KiB 粒度需 4096 次，issue #718 修复前），单次投递为亚毫秒级数据搬运，主线程在加载期间保持可响应；后台读取、取消传播、身份绑定与并发闸门契约不变，瞬时读取缓冲峰值由闸门约束为 ≤ 4 并发 × 4 MiB。Tauri 侧 `pwmedia` 处理器在阻塞线程整包缓冲读取、经异步 Responder 单次 respond 交付（协议 API 无流式 body，见 [media_protocol](../../../src-tauri/src/media_protocol.rs)），主线程不参与媒体字节搬运，无对应问题。
+
+### 未绑定库导入副本的隔离（issue #864）
+
+Web 拖放与原生库绑定均在导入返回后复核权威 MIME、目标节点类型及会话所有权；失败时调用 `discard_project_asset_import(id, assetId)`，前端导入后的预检失败也走同一路径。成功绑定及其撤销/重做保留原有媒体生命周期，不随撤销删除字节。
+
+Swift 项目 actor / Rust 项目操作锁只接受本宿主为本次库拷贝登记的身份凭据，不接受客户端 `relPath`，不操作源库。已保存文档接受过的资产永久退役该回收资格；正在被文档以 id/路径引用、身份改变或无凭据的文件均拒绝隔离。未绑定副本放入项目 `assets/.trash/import-…/`，保留 `receipt.json`（逻辑身份、原路径、设备/inode）与 `media` 原字节；先持久化凭据，再隔离并按目标→源目录顺序同步。活动资产准入继续拒绝 `.trash`。
+
+隔离是可回收记录，不代表物理删除或空间已释放。清理失败保留现场和凭据并向调用方显式报错；自动崩溃恢复扫描及物理释放尚未实现。人工处理前完全退出应用、备份项目并逐项核对隔离凭据；此目录不得作为活动资产索引使用。浏览器预览只移除独立内存映射，不声称磁盘回收。
