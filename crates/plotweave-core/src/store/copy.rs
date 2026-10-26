@@ -147,11 +147,15 @@ fn copy_dir_handles(src: &CapDir, dst: &CapDir, dst_label: &str) -> Result<(), S
         .map_err(|e| StoreError::io("扫描源资产目录失败", e))?;
     for entry in entries {
         let entry = entry.map_err(|e| StoreError::io("扫描源资产目录失败", e))?;
+        let name = entry.file_name();
+        // 隔离证据不属于活动资产；每层均排除精确 .trash，源数据保持原状（#888）。
+        if name == std::ffi::OsStr::new(".trash") {
+            continue;
+        }
         // DirEntry::metadata 取 lstat 语义，不跟随符号链接
         let md = entry
             .metadata()
             .map_err(|e| StoreError::io("读取源资产条目元数据失败", e))?;
-        let name = entry.file_name();
         let shown = name.to_string_lossy();
         let ft = md.file_type();
         if ft.is_symlink() {
@@ -330,6 +334,37 @@ mod tests {
         assert_eq!(
             fs::read(dst.join("sub").join("b.png")).expect("子目录副本缺失"),
             b"B"
+        );
+        cleanup_temp(&projects);
+    }
+
+    /// Active copies exclude quarantine at every component while preserving similarly named active folders (#888).
+    #[test]
+    fn copy_excludes_quarantine_without_touching_source() {
+        let projects = temp_projects_dir();
+        copy_fixture(&projects);
+        let source = projects.join("p-1/assets");
+        for path in [
+            ".trash/import-token/media",
+            "sub/.trash/receipt.json",
+            ".trashcan/active.png",
+        ] {
+            let file = source.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, b"retained").unwrap();
+        }
+        copy_assets_tree(&cap(&projects), "p-1", "p-2").unwrap();
+        let target = projects.join("p-2/assets");
+        assert!(!target.join(".trash").exists());
+        assert!(!target.join("sub/.trash").exists());
+        assert_eq!(
+            fs::read(target.join(".trashcan/active.png")).unwrap(),
+            b"retained"
+        );
+        assert_eq!(fs::read(target.join("a.png")).unwrap(), b"A");
+        assert_eq!(
+            fs::read(source.join(".trash/import-token/media")).unwrap(),
+            b"retained"
         );
         cleanup_temp(&projects);
     }

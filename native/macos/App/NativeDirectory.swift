@@ -191,6 +191,8 @@ final class NativeDirectory: Sendable {
     /// Copies regular files and real subdirectories only; callers own rollback of the new destination.
     func copyContents(to destination: NativeDirectory) throws {
         for name in try entries() {
+            // Reserved quarantine is not active media; leave source evidence untouched (#888).
+            if name == ".trash" { continue }
             guard let kind = try metadata(name) else { throw Self.refused("源条目在复制时消失") }
             if Self.isDirectory(kind) {
                 try directory(name).copyContents(to: destination.directory(name, create: true))
