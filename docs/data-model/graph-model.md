@@ -206,6 +206,8 @@ interface GeneratedOutput {
 - `branch`：一个 `input`（target）+ 多个出口 source handle（`option-<选项 id>`，动态增删；用稳定 id 而非数组下标，删除任一选项不影响其余出口的连线归属）。
 - `scene`：额外带底部 source handle（`shots`），经 attach 边垂直下挂分镜卡——**横向 = 剧情顺序，垂直 = 派生从属**（一对多合法，attach 不参与剧情流环检测）。
 - 连接校验做两层：前端交互层（`isValidConnection`）即时反馈；命令层（`connect_edge` 边界，§9.3）对同一不变量复核——禁止自环、禁止剧情流成环（sequence/branch 的 BFS 传递闭包检查；attach 垂直从属不参与）——Agent/导入绕过交互层直达命令通道，剧情流 DAG 不变量不能在命令层失守；漏网成环边由归一化隔离（§11.1 第 3 步）。
+大纲线性重排（[issue #879](https://github.com/hailingu/PlotWeave/issues/879)）在 sequence 子图中拔出节点并缝合原位，再移除目标接缝 upstream→downstream 的直连边、接入 upstream→节点→downstream。只变更该计划的边身份，不全局清理合法分支或 branch/attach 边；原位计划为空，既有分叉/汇合成员的拔出继续拒绝。完整边集与集归属经同一历史命令撤销/重做，并由当前编辑文档保存。
+
 ## 五、边模型
 
 ```ts

@@ -54,6 +54,85 @@ struct NativeProductionLifecycleTests {
         await fixture.services.close()
     }
 
+    /// Outline insertion replaces the real canvas seam and survives undo/redo, disk save and reopening (#879).
+    @Test func outlineInsertionPersistsExactTopology() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("大纲接缝回归")])
+        let id = try #require(created["id"]?.string)
+        var doc = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        doc["graph"] = outlineGraph()
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(doc), "expectExisting": .bool(true)])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let webView = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(webView)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.editor["nodes"]?.arrayValue?.count == 5 }
+        _ = try await mounted.state.request("editor.outlineMove", args: [
+            "projectId": .string(id), "id": .string("X"),
+            "target": .object(["kind": .string("row"), "anchorId": .string("B"), "position": .string("after")])
+        ])
+        let inserted = ["A->B", "B->X", "C->D", "X->C"]
+        #expect(try await outlinePairs(mounted.state, id: id) == inserted)
+        #expect(try await webView.evaluateJavaScript("document.querySelectorAll('.react-flow__edge').length") as? Int == 4)
+        _ = try await mounted.state.request("editor.undo", args: ["projectId": .string(id)])
+        #expect(try await outlinePairs(mounted.state, id: id) == ["A->B", "B->C", "C->D"])
+        _ = try await mounted.state.request("editor.redo", args: ["projectId": .string(id)])
+        #expect(try await outlinePairs(mounted.state, id: id) == inserted)
+        try await waitForOutlineDisk(projects, id: id, expected: inserted)
+        _ = try await mounted.state.request("app.home")
+        try await wait { mounted.state.route == "home" }
+        let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+        #expect(edgePairs(saved) == inserted)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        #expect(try await outlinePairs(mounted.state, id: id) == inserted)
+        await fixture.services.close()
+    }
+
+    /// Route changes do not acknowledge the asynchronous save; observe the actual debounce completion on disk.
+    private func waitForOutlineDisk(_ projects: NativeProjectStore, id: String, expected: [String]) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+        while ContinuousClock.now < deadline {
+            let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+            if edgePairs(saved) == expected { return }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        Issue.record("大纲重排未将完整边集保存到真实项目文件")
+    }
+
+    /// Seed only valid current-schema scenes and sequence edges into the fixture's private storage.
+    private func outlineGraph() -> HostJSON {
+        let nodes: [HostJSON] = ["A", "B", "C", "D", "X"].enumerated().map { index, id in
+            .object(["id": .string(id), "type": .string("scene"),
+                     "layout": .object(["position": .object(["x": .number(Double(index * 200)), "y": .number(0)])]),
+                     "ui": .object(["selected": .bool(false), "expanded": .bool(true)]),
+                     "data": .object(["meta": .object(["label": .string(id), "episodeNo": .number(1)]),
+                                      "spec": .object(["sceneNo": .number(Double(index + 1)), "interior": .bool(true),
+                                                       "time": .string("夜"), "synopsis": .string("回归"), "characterIds": .array([])])])])
+        }
+        let edges: [HostJSON] = [("A", "B"), ("B", "C"), ("C", "D")].map { source, target in
+            .object(["id": .string(source + target), "source": .string(source), "target": .string(target), "data": .object(["kind": .string("sequence")])])
+        }
+        return .object(["nodes": .array(nodes), "edges": .array(edges)])
+    }
+
+    /// Read the real production serializer after the native intent has completed its React update.
+    private func outlinePairs(_ state: NativeApplicationState, id: String) async throws -> [String] {
+        let result = try await state.request("editor.exportPreview", args: ["projectId": .string(id), "format": .string("json")])
+        let text = try #require(result["text"]?.string)
+        return edgePairs(try JSONDecoder().decode(HostJSON.self, from: Data(text.utf8)))
+    }
+
+    /// Exact complete edge sets detect a bypass even when every newly added edge is correct.
+    private func edgePairs(_ document: HostJSON) -> [String] {
+        (document["graph"]?["edges"]?.arrayValue ?? []).map {
+            ($0["source"]?.string ?? "?") + "->" + ($0["target"]?.string ?? "?")
+        }.sorted()
+    }
+
     /// Native production intents change the real React Flow port DOM before deleting its owning branch.
     private func exerciseDynamicPorts(_ state: NativeApplicationState, webView: WKWebView, projectId: String) async throws {
         _ = try await state.request("editor.create", args: ["projectId": .string(projectId), "nodeType": .string("branch")])

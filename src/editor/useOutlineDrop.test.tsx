@@ -326,3 +326,39 @@ describe('useOutlineDrop（§3.5 跨集与未分集移动单命令）', () => {
     expect(episodeNoOf(h, 's1')).toBe(1)
   })
 })
+
+it('中段跨集接入完整替换接缝，重复移动邻居仍可一步 undo/redo（#879）', () => {
+  const nodes = ['a', 'b', 'c', 'd', 'x'].map((id, i) =>
+    sceneNode(id, id === 'x' ? 2 : 1, i * 100),
+  )
+  const original = [
+    seq('ab', 'a', 'b'),
+    seq('bc', 'b', 'c'),
+    seq('cd', 'c', 'd'),
+  ]
+  const h = setup(nodes, original)
+  act(() => dropRow(h, 'x', 'b', 'after'))
+  const inserted = h.result.current.doc.edges
+  expect([...seqPairs(h)].sort()).toEqual(['a->b', 'b->x', 'c->d', 'x->c'])
+  expect(episodeNoOf(h, 'x')).toBe(1)
+  expect(h.pushHistory).toHaveBeenCalledTimes(1)
+  act(() => h.stack.undo())
+  expect(
+    [...h.result.current.doc.edges].sort((a, b) => a.id.localeCompare(b.id)),
+  ).toEqual(original)
+  expect(episodeNoOf(h, 'x')).toBe(2)
+  act(() => h.stack.redo())
+  expect(h.result.current.doc.edges).toEqual(inserted)
+  expect(episodeNoOf(h, 'x')).toBe(1)
+  act(() => dropRow(h, 'b', 'c', 'after'))
+  expect([...seqPairs(h)].sort()).toEqual(['a->x', 'b->d', 'c->b', 'x->c'])
+  expect(h.pushHistory).toHaveBeenCalledTimes(2)
+  expect(h.onError).not.toHaveBeenCalled()
+  act(() => h.stack.undo())
+  expect(new Set(h.result.current.doc.edges)).toEqual(new Set(inserted))
+  act(() => h.stack.redo())
+  expect([...seqPairs(h)].sort()).toEqual(['a->x', 'b->d', 'c->b', 'x->c'])
+  act(() => dropRow(h, 'c', 'a', 'before'))
+  expect([...seqPairs(h)].sort()).toEqual(['a->x', 'b->d', 'c->a', 'x->b'])
+  expect(h.onError).not.toHaveBeenCalled()
+})

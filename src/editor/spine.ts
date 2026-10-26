@@ -141,16 +141,26 @@ export function planSpliceIntoSpine(
     return { removes: [], adds: [] }
   }
 
-  // 防御性环检测（剧情流理应无环；带外状态兜底）
-  const flow: Array<{ source: string; target: string }> = remaining.map(
-    (e) => ({
+  // 插入必须替换目标接缝的旧直连（#879），只移除选定端点对，
+  // 其余合法 sequence 分支及 branch/attach 保持原状。
+  const removed = [
+    ...mine,
+    ...remaining.filter(
+      (e) => e.source === upstream && e.target === downstream,
+    ),
+  ]
+  const removedIds = new Set(removed.map((e) => e.id))
+
+  // 防御性环检测基于真正保留的边（剧情流理应无环；带外状态兜底）
+  const flow: Array<{ source: string; target: string }> = remaining
+    .filter((e) => !removedIds.has(e.id))
+    .map((e) => ({
       source: e.source,
       target: e.target,
-    }),
-  )
+    }))
   for (const a of adds) {
     if (wouldCreateCycle(flow, a.source, a.target)) return null
     flow.push(a)
   }
-  return { removes: mine.map((e) => e.id), adds }
+  return { removes: removed.map((e) => e.id), adds }
 }
