@@ -75,6 +75,21 @@ invokes the strict entry alongside Prettier and ESLint so the local Git gate,
 the Sonar gate, and CI (`ci.yml`) all reject violations before coverage
 generation.
 
+The same command also runs `tsc --noEmit -p tsconfig.scripts.json`
+(issue [#855](https://github.com/hailingu/PlotWeave/issues/855)). This separate
+program checks all non-test `scripts/**/*.ts`, including test facilities,
+with Node types, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
+Its ES2023 library matches the pinned Node runtime; DOM libraries remain
+available because the browser import probe and its frontend imports are
+also compiled. Runtime scripts tests retain their existing behavior-test
+coverage. `scripts/static-tooling-config.test.ts` uses the compiler config
+parser to guard the complete non-test script inventory.
+
+Production `scripts/**/*.mjs` uses ESLint's recommended JavaScript rules
+with Node globals (issue [#856](https://github.com/hailingu/PlotWeave/issues/856)).
+The same configuration guard verifies an undefined identifier is rejected
+for every existing script and a future nested script path.
+
 - **`noUncheckedIndexedAccess`** (#230): Record and array index reads carry
   `undefined` at the type level.
 - **`exactOptionalPropertyTypes`** (#231): an optional property declared
