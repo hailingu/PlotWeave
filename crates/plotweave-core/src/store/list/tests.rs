@@ -8,6 +8,73 @@ use crate::store::types::new_project_file;
 use serde_json::json;
 use std::fs;
 
+/// The raw-number corpus is shared with Swift so integer-valued float/exponent spelling cannot diverge (#918).
+#[test]
+fn schema_version_shared_number_vectors() {
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../testdata/schema-version-contract.json"
+    ))
+    .unwrap();
+    let rows = vectors["cases"].as_array().unwrap();
+    assert!(!rows.is_empty());
+    for row in rows {
+        let text = format!(
+            r#"{{"schemaVersion":{},"project":{{"id":"p1","name":"vector"}},"graph":{{"nodes":[],"edges":[]}},"assets":{{"byId":{{}}}}}}"#,
+            row["raw"].as_str().unwrap()
+        );
+        let parsed = parse_file(&text);
+        assert_eq!(
+            parsed.is_ok(),
+            row["accepted"].as_bool().unwrap(),
+            "{}",
+            row["id"]
+        );
+        if let Ok(file) = parsed {
+            assert_eq!(
+                u64::from(file.schema_version),
+                row["version"].as_u64().unwrap(),
+                "{}",
+                row["id"]
+            );
+            assert_eq!(
+                file.versionless,
+                row["versionless"].as_bool().unwrap(),
+                "{}",
+                row["id"]
+            );
+        }
+    }
+}
+
+/// Actual list/load share the numeric contract and never rewrite an accepted or rejected source file.
+#[test]
+fn numeric_schema_spelling_preserves_file_bytes() {
+    let projects = temp_projects_dir();
+    let root = cap(&projects);
+    let path = projects.join("p1.json");
+    for (raw, accepted, version) in [
+        ("1.0", true, 1),
+        ("1e2", true, 100),
+        ("1.5", false, 0),
+        ("-1.0", false, 0),
+    ] {
+        let text = format!(
+            r#"{{"schemaVersion":{raw},"project":{{"id":"p1","name":"vector"}},"graph":{{"nodes":[],"edges":[]}},"assets":{{"byId":{{}}}}}}"#
+        );
+        fs::write(&path, &text).unwrap();
+        let loaded = load_project_file(&root, "p1");
+        assert_eq!(loaded.is_ok(), accepted, "{raw}");
+        if let Ok(file) = loaded {
+            assert_eq!(file.schema_version, version, "{raw}");
+        }
+        let rows = list_project_metas(&root).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].diagnostic.is_none(), accepted, "{raw}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+    }
+    cleanup_temp(&projects);
+}
+
 /// issue #592 回归用的控制文件超限长度：越过 64 MiB 上限一字节。
 const OVERSIZE_BYTES: u64 = crate::store::persist::CONTROL_FILE_MAX_BYTES as u64 + 1;
 

@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "integer",
+      "raw": "1",
+      "accepted": true,
+      "version": 1,
+      "versionless": false
+    },
+    {
+      "id": "decimal-integer",
+      "raw": "1.0",
+      "accepted": true,
+      "version": 1,
+      "versionless": false
+    },
+    {
+      "id": "decimal-future",
+      "raw": "100.0",
+      "accepted": true,
+      "version": 100,
+      "versionless": false
+    },
+    {
+      "id": "exponent-future",
+      "raw": "1e2",
+      "accepted": true,
+      "version": 100,
+      "versionless": false
+    },
+    {
+      "id": "exponent-current",
+      "raw": "1e0",
+      "accepted": true,
+      "version": 1,
+      "versionless": false
+    },
+    {
+      "id": "u32-max",
+      "raw": "4294967295.0",
+      "accepted": true,
+      "version": 4294967295,
+      "versionless": false
+    },
+    {
+      "id": "fraction",
+      "raw": "1.5",
+      "accepted": false
+    },
+    {
+      "id": "negative",
+      "raw": "-1.0",
+      "accepted": false
+    },
+    {
+      "id": "zero",
+      "raw": "0.0",
+      "accepted": false
+    },
+    {
+      "id": "negative-zero",
+      "raw": "-0.0",
+      "accepted": false
+    },
+    {
+      "id": "above-u32",
+      "raw": "4294967296.0",
+      "accepted": false
+    },
+    {
+      "id": "unsafe-integer",
+      "raw": "9007199254740992.0",
+      "accepted": false
+    },
+    {
+      "id": "tiny-fraction",
+      "raw": "1e-100",
+      "accepted": false
+    },
+    {
+      "id": "overflow",
+      "raw": "1e999",
+      "accepted": false
+    },
+    {
+      "id": "canonical-string",
+      "raw": "\"1\"",
+      "accepted": false
+    },
+    {
+      "id": "noncanonical-string",
+      "raw": "\"1.0\"",
+      "accepted": true,
+      "version": 1,
+      "versionless": true
+    },
+    {
+      "id": "null",
+      "raw": "null",
+      "accepted": true,
+      "version": 1,
+      "versionless": true
+    },
+    {
+      "id": "boolean",
+      "raw": "true",
+      "accepted": true,
+      "version": 1,
+      "versionless": true
+    },
+    {
+      "id": "array",
+      "raw": "[]",
+      "accepted": true,
+      "version": 1,
+      "versionless": true
+    }
+  ]
+}
