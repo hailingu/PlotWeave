@@ -4,20 +4,20 @@ import Foundation
 enum NativeLibrarySalvage {
     /// Healthy JSON is authoritative; malformed syntax never authorizes media cleanup.
     static func parse(_ bytes: Data) -> (HostJSON, Bool) {
-        if let value = try? JSONDecoder().decode(HostJSON.self, from: bytes), value.object != nil { return (value, false) }
+        if let value = try? HostJSON.decode(bytes), value.object != nil { return (value, false) }
         let fields = objectFields(Array(bytes))
         return (.object(["assets": bucket(fields["assets"] ?? []), "groups": bucket(fields["groups"] ?? [])]), true)
     }
 
     /// Recovers legacy arrays or Record entries without synthesizing missing asset fields.
     private static func bucket(_ bytes: [UInt8]) -> HostJSON {
-        if let value = try? JSONDecoder().decode(HostJSON.self, from: Data(bytes)) { return value }
+        if let value = try? HostJSON.decode(Data(bytes)) { return value }
         if trimmed(bytes).first == 91 {
-            return .array(parts(bytes).compactMap { try? JSONDecoder().decode(HostJSON.self, from: Data($0)) })
+            return .array(parts(bytes).compactMap { try? HostJSON.decode(Data($0)) })
         }
         let fields = objectFields(bytes)
         let recovered = objectFields(fields["byId"] ?? []).compactMapValues {
-            try? JSONDecoder().decode(HostJSON.self, from: Data($0))
+            try? HostJSON.decode(Data($0))
         }
         return .object(["byId": .object(recovered)])
     }
