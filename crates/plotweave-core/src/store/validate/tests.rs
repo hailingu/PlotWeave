@@ -6,6 +6,61 @@ use crate::store::types::new_project_file;
 use serde_json::json;
 use std::fs;
 
+/// Any transient error wins over earlier missing entries; contextual errors retain their root classification.
+#[cfg(unix)]
+#[test]
+fn transient_verification_never_delivers_partial_quarantine_keys() {
+    let assets = json!({"byId": {
+        "a-missing": {"relPath": "assets/missing.png"},
+        "z-transient": {"relPath": "assets/valid.png"}
+    }});
+    for (kind, reason) in [
+        (std::io::ErrorKind::PermissionDenied, "EACCES"),
+        (std::io::ErrorKind::Other, "EMFILE"),
+        (std::io::ErrorKind::Other, "EIO"),
+    ] {
+        let error = collect_unverifiable_asset_keys(&assets, |rel| {
+            if rel.ends_with("missing.png") {
+                return Err(StoreError::missing("confirmed missing"));
+            }
+            Err(
+                StoreError::io("injected open", std::io::Error::new(kind, reason))
+                    .prefixed("scoped verification"),
+            )
+        })
+        .expect_err("transient failure must suppress partial delivery");
+        assert!(matches!(error.root(), StoreError::Io { source, .. }
+            if source.kind() == kind && source.to_string() == reason));
+    }
+}
+
+/// A real EACCES open failure must never become a key that normalization will delete (#915).
+#[cfg(unix)]
+#[test]
+fn unverifiable_asset_keys_does_not_quarantine_permission_denied() {
+    use std::os::unix::fs::PermissionsExt;
+    let projects = temp_projects_dir();
+    let media = projects.join("p-1/assets/ok.png");
+    fs::create_dir_all(media.parent().expect("media parent")).expect("create assets");
+    fs::write(&media, b"retained media").expect("seed media");
+    fs::set_permissions(&media, fs::Permissions::from_mode(0o0)).expect("deny read");
+    let root = cap(&projects);
+    let error = verify_asset_real_path(&root, "p-1", "assets/ok.png").unwrap_err();
+    assert!(matches!(error.root(), StoreError::Io { source, .. }
+        if source.kind() == std::io::ErrorKind::PermissionDenied));
+    let assets = json!({"byId": {"a-ok": {"relPath": "assets/ok.png"}}});
+    let error =
+        unverifiable_asset_keys(&root, "p-1", &assets).expect_err("transient I/O must reject");
+    fs::set_permissions(&media, fs::Permissions::from_mode(0o600)).expect("restore read");
+    assert!(matches!(error.root(), StoreError::Io { source, .. }
+        if source.kind() == std::io::ErrorKind::PermissionDenied));
+    assert!(unverifiable_asset_keys(&root, "p-1", &assets)
+        .expect("retry")
+        .is_empty());
+    assert_eq!(fs::read(&media).expect("retained media"), b"retained media");
+    cleanup_temp(&projects);
+}
+
 #[test]
 fn episode_titles_accept_frontend_canonical_set() {
     // issue #122 共享边界夹具：前端规范裁剪（trimTitleWhitespace，
@@ -383,7 +438,7 @@ fn unverifiable_asset_keys_reports_real_path_failures_only() {
         "a-bad": { "relPath": "../evil.png" },
         "a-noshape": {},
     }});
-    let keys = unverifiable_asset_keys(&cap(&projects), "p-1", &assets);
+    let keys = unverifiable_asset_keys(&cap(&projects), "p-1", &assets).expect("verify assets");
     assert_eq!(keys, vec!["a-miss".to_string()]);
     cleanup_temp(&projects);
 }
@@ -398,7 +453,7 @@ fn unverifiable_asset_keys_reports_symlinked_entries() {
     fs::write(&outside, b"s").expect("写根外文件");
     std::os::unix::fs::symlink(&outside, assets_dir.join("link.png")).expect("建符号链接");
     let assets = json!({ "byId": { "a-link": { "relPath": "assets/link.png" } } });
-    let keys = unverifiable_asset_keys(&cap(&projects), "p-1", &assets);
+    let keys = unverifiable_asset_keys(&cap(&projects), "p-1", &assets).expect("verify assets");
     assert_eq!(keys, vec!["a-link".to_string()]);
     cleanup_temp(&projects);
 }
@@ -484,7 +539,7 @@ fn quarantine_asset_references_recover_without_touching_bytes() {
     let root = cap(&projects);
     let loaded = load_project_file(&root, "p-1").unwrap();
     assert_eq!(
-        unverifiable_asset_keys(&root, "p-1", &loaded.assets),
+        unverifiable_asset_keys(&root, "p-1", &loaded.assets).expect("verify assets"),
         vec!["held", "missing"]
     );
     assert!(matches!(

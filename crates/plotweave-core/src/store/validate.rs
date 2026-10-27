@@ -345,11 +345,25 @@ fn visit_save_asset_files(
 /// §7.1/§10.5 加载侧资产实路径复验内核：返回文档 assets.byId 中词法合法、
 /// 但以受信资产根 no-follow 验证失败（缺失/符号链接/非普通文件/逃逸）的
 /// 记录键；保留 `.trash` 命名空间无论实文件是否存在均报告，且不打开其字节。
+/// 瞬时 I/O 失败返回错误，不向归一化交付部分隔离键，防止下次保存丢失元数据（#915）。
 /// 基础词法非法或形状缺失的条目不在此报告——前端形状归一化负责隔离。
-pub fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Value) -> Vec<String> {
+pub fn unverifiable_asset_keys(
+    root: &CapDir,
+    id: &str,
+    assets: &serde_json::Value,
+) -> Result<Vec<String>, StoreError> {
+    collect_unverifiable_asset_keys(assets, |rel| {
+        verify_asset_real_path(root, id, rel).map(drop)
+    })
+}
+/// Only proven absence or unsafe paths authorize quarantine; transient I/O aborts the whole delivery.
+fn collect_unverifiable_asset_keys(
+    assets: &serde_json::Value,
+    mut verify: impl FnMut(&str) -> Result<(), StoreError>,
+) -> Result<Vec<String>, StoreError> {
     let mut bad = Vec::new();
     let Some(by_id) = assets.get("byId").and_then(|v| v.as_object()) else {
-        return bad;
+        return Ok(bad);
     };
     for (key, entry) in by_id {
         let Some(rel) = entry.get("relPath").and_then(|v| v.as_str()) else {
@@ -358,11 +372,25 @@ pub fn unverifiable_asset_keys(root: &CapDir, id: &str, assets: &serde_json::Val
         if !is_valid_asset_rel_path(rel) {
             continue;
         }
-        if !is_valid_active_asset_rel_path(rel) || verify_asset_real_path(root, id, rel).is_err() {
+        if !is_valid_active_asset_rel_path(rel) {
             bad.push(key.clone());
+            continue;
+        }
+        if let Err(error) = verify(rel) {
+            match error.root() {
+                StoreError::NotFound { .. } | StoreError::Refused { .. } => bad.push(key.clone()),
+                StoreError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
+                    bad.push(key.clone());
+                }
+                _ => {
+                    return Err(
+                        error.prefixed(format!("资产 {key} 暂时无法验证，已保留条目，请稍后重试"))
+                    )
+                }
+            }
         }
     }
-    bad
+    Ok(bad)
 }
 /// save_project 的信封校验与规范化（§10.5）：在创建临时文件、生成保存时间
 /// 或更新索引之前完成——任一校验失败整次拒绝，不得静默剥离。全部通过后
