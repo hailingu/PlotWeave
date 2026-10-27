@@ -19,6 +19,22 @@ const environment = gitFixtureEnvironment()
 
 const fixtures: Array<ReturnType<typeof gitScenarioFixture>> = []
 
+it('warns about multiple missing base-ancestry records without changing single-tip acceptance (#917)', () => {
+  const root = createSeeded((root) => {
+    writeFile(root, 'src/app.txt', 'older task\n')
+    commitAll(root, 'older task')
+    writeFile(root, 'src/app.txt', 'base task\n')
+    const base = commitAll(root, 'base task')
+    git(root, 'tag', 'task-base', base)
+    writeFile(root, 'src/app.txt', 'current task\n')
+    commitAll(root, 'current task')
+  })
+  const result = runVerifier(root, ['--base', 'task-base'])
+  expect(result.status).toBe(0)
+  expect(result.output).toContain('[GATE_EVIDENCE_HISTORY_LAG]')
+  expect(result.output).toContain('[GATE_EVIDENCE_TIP_LAG]')
+})
+
 /** 在隔离环境中执行真实 git；失败即抛出，夹具播种不应有 git 错误。 */
 function git(root: string, ...args: string[]): string {
   const result = spawnSync('git', args, {

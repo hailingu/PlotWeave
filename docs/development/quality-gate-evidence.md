@@ -36,14 +36,14 @@ checks, the changed stack's full coverage (or the reused unchanged-stack
 reports), native functional regression for `native` and every `full` push,
 the scanner, Quality Gate `OK`, and zero new-code unresolved issues —
 `scripts/sonar-quality-gate.sh` appends exactly one JSON line to a pending
-file inside `.git`
-(`plotweave-gate-history.pending`), never to the tracked file mid-gate
+file inside the common Git directory
+(`git rev-parse --path-format=absolute --git-common-dir` / `plotweave-gate-history.pending`), never to the tracked file mid-gate
 (PR #415 评审 5338815626: a gate-side write to the tracked file leaves an
 unstaged change that aborts the next rebase replay, checkout, or merge
 updating that file). Since issue #548, `pre-commit` and `pre-merge-commit` run
 `gate-history.sh materialize --stage-for-commit` before their gate: they
 fold pending lines into the versioned ledger and `git add` it into the
-commit being created, so the versioned ledger lags one commit (the
+commit being created. Since owner decision #917 (2026-10-27), linked worktrees share this queue and `plotweave-sonar-gate.lock`; a successful eligible next ordinary commit in any worktree carries the records. Deferrals can extend that lag (the
 `prepare-commit-msg` fallback gate — revert, cherry-pick, rebase replays —
 deliberately does not touch the ledger; see the timing property below).
 Since PR #581 评审 5537970549, `pre-push` does not materialize either:
@@ -190,8 +190,8 @@ NODE
   开发者补换行并暂存后可重试；Node 或读取不可用时输出
   `[GATE_HISTORY_BOUNDARY_UNAVAILABLE]` 并同样保留输入。裸物化和提交入口共用此规则，
   空文件与无文件引导态不受阻止。
-- *Materialize timing and the one-commit lag.* Gate runs write only to the
-  pending file inside `.git`, so they never dirty the tracked file mid-gate
+- *Materialize timing and conditional next-commit lag.* Gate runs write only to the
+  pending file inside the common Git directory, so they never dirty the tracked file mid-gate
   and never interfere with subsequent Git steps. The pending file drains
   **only at commit-creation folds**: `pre-commit` and `pre-merge-commit` —
   the ordinary commit and merge paths, which reliably adopt hook staging —
@@ -219,8 +219,8 @@ NODE
   (issue #829). The lines are carried by that commit, so no unstaged residue
   remains while the operation proceeds — the PR #415 breakage was an
   *unstaged* write; this path folds and stages into the same commit. The
-  record for commit C's own gate run is therefore versioned in the **next**
-  ordinary commit (C's tree contains the staged lines, so it cannot contain
+  record for commit C's own gate run is therefore versioned in the **next eligible successful**
+  ordinary commit in the same repository (any linked worktree) (C's tree contains the staged lines, so it cannot contain
   its own record — self-reference). The `prepare-commit-msg` fallback gate
   — automatic `git revert` / `git cherry-pick` commits and every
   `git rebase` replay — deliberately does **not** materialize: sequencer
@@ -349,6 +349,15 @@ Git 向提交钩子导出绝对 `GIT_DIR`（`.git/worktrees/<name>`）与绝对
 `npm test -- scripts` 514/514（28 个文件）通过，`sh -n scripts/gate-history.sh`
 通过。文档完成结构化审阅，无配置的自动化文档检查。平台验证边界仍为 macOS
 Git 2.48.1 / Node 24.18.0，未新增其他平台实测。
+
+
+### Shared worktree state and history diagnostics (issue #917)
+
+Owner decision (2026-10-27): `gate-history.sh`, `sonar-quality-gate.sh` and `pre-push` resolve the same absolute common Git directory before changing checkout. The default queue is `plotweave-gate-history.pending`, and the default mutex is `plotweave-sonar-gate.lock` in that directory. A linked checkout can be deleted after its records are archived or confirmed in this shared queue without deleting the queue itself. Gate append and materialization use the same mutex; `[GATE_HISTORY_LOCK_TIMEOUT]` preserves pending bytes for retry. Explicit pending/mutex overrides remain supported and callers must coordinate the pair. This does not merge independent clones, change thresholds or push cleanliness, or weaken byte-exact attribution, staged-deletion, temporary-index and #829 localization protections.
+
+The verifier additionally inspects at most eight recent non-merge ancestors of the PR merge base. More than one missing tree self-report (excluding pre-ledger and pure ledger-append commits) emits `[GATE_EVIDENCE_HISTORY_LAG]`; unavailable supplemental diagnostics emit `[GATE_EVIDENCE_HISTORY_UNAVAILABLE]`. Both are warning-only. Existing non-tip missing-record and destructive-ledger failures, and single-tip lag tolerance, stay unchanged. This bounded diagnostic is visibility, not complete historical coverage or proof of gate execution.
+
+Existing checkouts running older scripts retain their private queues until updated. Historic private gitdir queues and independent-clone archives are not automatically imported. Preserve their original bytes, hashes and logs before cleanup; any proposed historic backfill needs separately verified provenance and approval. A ledger miss does not prove missing CI or that all evidence was lost. Recounting the eight hashes listed in #917 finds `28b66dda` with one tree match and seven others without a tree/head match; `4a33e65c` is outside that list and has two tree matches / one head match at the inspected `9540bf7f` baseline. Existing archived closeout evidence remains independent of these ledger observations.
 
 ## Server-Side Evidence Verification (issue #548)
 
@@ -543,8 +552,7 @@ two complementary backstops (方案 1 + 方案 2):
    **Release-PR integration boundary (PR #581 评审 5542207474/5542342537).**
    A `dev → main` release PR's range enumerates GitHub-created merge commits
    and every integrated task branch — including each task's tip, whose
-   records by the one-commit-lag design are still materializing on the
-   developer's machine when the release opens. The verifier therefore
+   records may still be pending in that repository when the release opens. Linked worktree removal now preserves the common queue; an independently discarded clone or an older private gitdir has no automatic migration guarantee. The verifier therefore
    recognizes the integration boundary instead of demanding impossible
    records: merge commits in the range are skipped (server integration
    points never ran a local gate; their content was covered by the
@@ -581,7 +589,7 @@ unchanged: the ledger is unsigned, so the check raises the cost of
 bypassing from "push with `--no-verify`" to "actively falsify the versioned
 ledger inside a pushed commit", and does not authenticate that the gate
 executed. A single-commit bypass PR that preserves its parent ledger surfaces
-only the tip warning — it is visible at merge time but not blocking.
+the tip warning (plus the bounded #917 ancestry warning when applicable) — visible at merge time but not blocking.
 Destructive ledger changes fail even in a single-commit PR. The uncovered
 creation paths
 (`git am`, plumbing, history rewriters) produce commits without records and

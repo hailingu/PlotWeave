@@ -32,15 +32,16 @@ script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_root=$(CDPATH= cd -- "$script_directory/.." && pwd)
 
 history_path=${PLOTWEAVE_GATE_HISTORY_PATH:-$repository_root/docs/development/gate-history.jsonl}
-lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$repository_root/.sonar-gate.lock}
 materialize_lock_timeout=${PLOTWEAVE_GATE_MATERIALIZE_LOCK_TIMEOUT:-300}
 node_bin=${PLOTWEAVE_NODE_BIN:-node}
 
 cd "$repository_root"
 
-# 待物化路径在 cd 之后解析：git-path 的输出相对当前目录，须在仓库根下
-# 取值；非仓库环境回退到仓库根下的 .git。
-pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-$(git rev-parse --git-path plotweave-gate-history.pending 2>/dev/null || printf '%s' "$repository_root/.git/plotweave-gate-history.pending")}
+# #917 owner decision: linked worktrees share durable pending bytes and the same mutex.
+# Git returns an absolute common directory; standalone/non-Git fixtures keep their local fallback.
+shared_git_directory=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || printf '%s' "$repository_root/.git")
+pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-$shared_git_directory/plotweave-gate-history.pending}
+lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$shared_git_directory/plotweave-sonar-gate.lock}
 
 # 归因读取的 Git 环境（issue #829）：链接 worktree（git worktree add）的提交
 # 钩子导出绝对 GIT_DIR（.git/worktrees/<name>），显式 GIT_DIR 使 Git 把当前目
@@ -254,7 +255,7 @@ case ${1:-} in
         ;;
     esac
     if ! wait_for_gate_lock; then
-      printf 'gate-history 警告：物化等待门禁锁超时（%s 秒），待物化行保留至下次物化；不阻塞推送。\n' \
+      printf 'gate-history 警告：[GATE_HISTORY_LOCK_TIMEOUT] 物化等待门禁锁超时（%s 秒），待物化行保留至下次物化；不阻塞推送。\n' \
         "$materialize_lock_timeout" >&2
       exit 0
     fi
