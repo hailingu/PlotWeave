@@ -27,6 +27,8 @@
  *   合法纯追加（删除/截断/重写失败，PR #581 评审 5543678876），豁免
  *   （提示）。
  * - [GATE_EVIDENCE_MALFORMED_LINE]：台账中无法解析的行被跳过（告警）。
+ * - [GATE_EVIDENCE_HISTORY_LAG]：最多8个最近非合并基线祖先中超过1项无记录（仅告警）。
+ * - [GATE_EVIDENCE_HISTORY_UNAVAILABLE]：附加历史诊断不可用（仅告警，不改变原核验）。
  * 集成边界豁免（合并提交跳过、INTEGRATED_TIP_LAG、PRE_LEDGER_COMMIT）
  * 仅在 --release-boundary 时启用——ci.yml 只在 dev → main 发布 PR
  * （base 为 main）传入；普通 task PR 中合并提交与其非首父同样必须留证
@@ -450,6 +452,40 @@ function emitWarning(message: string): void {
   }
 }
 
+/** Detects cross-PR ledger stagnation without changing any existing gate or claiming a gate did not run (#917). */
+function warnHistoricalLag(
+  base: string,
+  head: string,
+  trees: Set<string>,
+): void {
+  try {
+    const boundary = runGit(['merge-base', base, head]).trim()
+    const history = runGit([
+      'rev-list',
+      '--no-merges',
+      '--max-count=8',
+      boundary,
+    ]).trim()
+    const missing = (history === '' ? [] : history.split('\n'))
+      .map((sha) => describeCommit(sha))
+      .filter(
+        (commit) =>
+          !trees.has(commit.tree) &&
+          !commitPredatesLedger(commit.sha) &&
+          !isLedgerOnlyTip(commit),
+      )
+    if (missing.length > 1) {
+      emitWarning(
+        `[GATE_EVIDENCE_HISTORY_LAG] 最近最多8个非合并基线祖先有${missing.length}项无tree自述记录：${missing.map((commit) => commit.short).join(',')}；仅提示台账滞后，不改变本范围核验，也不证明门禁未执行。`,
+      )
+    }
+  } catch {
+    emitWarning(
+      '[GATE_EVIDENCE_HISTORY_UNAVAILABLE] 附加历史诊断不可用；本范围原有核验继续，退出条件不变。',
+    )
+  }
+}
+
 /** 核验主流程：参数解析 → 范围枚举 → 台账比对 → 结论输出与退出码。 */
 function main(): number {
   const { base, head, releaseBoundary } = parseArguments(process.argv.slice(2))
@@ -459,6 +495,7 @@ function main(): number {
     return 0
   }
   const { trees, malformedLines } = readEvidenceTrees(head)
+  warnHistoricalLag(base, head, trees)
   if (malformedLines > 0) {
     emitWarning(
       `[GATE_EVIDENCE_MALFORMED_LINE] 台账有 ${malformedLines} 行无法解析，已跳过（日志语义，不阻塞）。`,

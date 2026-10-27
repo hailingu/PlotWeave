@@ -242,12 +242,14 @@ The issue #405 fix, wired 2026-09-30, closes it:
   terminated line, because a field-less line carries no ref record. Every
   ref line is analyzed or rejected — none is silently ignored.
 - **Evidence and serialization.** Slow-path runs write their gate-history
-  record through the main worktree's pending file and take the main
-  worktree's gate lock, so fast path, slow path, and `materialize` stay
-  serialized on one mutex and the record's `tree`/`head` are the pushed
-  commit's (issue #355 semantics unchanged). All refs must pass before
-  `materialize` runs; a failure blocks the push with earlier passing records
-  left pending for the next successful push.
+  record through the common Git directory's `plotweave-gate-history.pending`
+  and take its `plotweave-sonar-gate.lock` (owner decision #917, 2026-10-27).
+  Fast path, slow path, all linked worktrees and `materialize` share one mutex;
+  the record's `tree`/`head` remain the pushed commit's. A push never materializes
+  or changes the tracked ledger. Earlier passing records survive a later ref
+  failure and drain at the next eligible ordinary commit in this repository;
+  removing a linked checkout does not remove the common queue. Independent
+  clones and historical private gitdir archives are not automatically merged.
 - **Original object identity.** The hook exports `GIT_NO_REPLACE_OBJECTS=1`
   before any Git command. Resolution (including annotated-tag peeling),
   fast-path comparisons, temporary checkout, and descendant gate records

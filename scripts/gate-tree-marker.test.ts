@@ -40,6 +40,93 @@ function repositoryFixture(fullGate: boolean) {
 const repositories = repositoryFixture(false)
 const fullRepositories = repositoryFixture(true)
 
+/** A real linked checkout uses copied production hooks and shared Git state; external tools remain fixture stubs. */
+function prepareSharedGateScenario() {
+  const scenario = prepareHookScenario('OK', true)
+  for (const key of [
+    'PLOTWEAVE_GATE_PENDING_PATH',
+    'PLOTWEAVE_SONAR_LOCK_DIRECTORY',
+    'PLOTWEAVE_GATE_HISTORY_PATH',
+    'PLOTWEAVE_GATE_REPOSITORY_ROOT',
+  ]) {
+    delete scenario.env[key]
+  }
+  const linked = resolve(scenario.root, 'linked')
+  expect(
+    scenario.git(['worktree', 'add', '-b', 'linked-task', linked]).status,
+  ).toBe(0)
+  copyScenarioFiles(linked)
+  mkdirSync(resolve(scenario.root, 'docs/development'), { recursive: true })
+  mkdirSync(resolve(linked, 'docs/development'), { recursive: true })
+  expect(scenario.git(['config', 'core.hooksPath', '.githooks']).status).toBe(0)
+  const run = (root: string, args: string[]) =>
+    spawnSync('git', args, { cwd: root, encoding: 'utf8', env: scenario.env })
+  writeFileSync(resolve(linked, 'task.txt'), 'task\n')
+  expect(run(linked, ['add', 'task.txt']).status).toBe(0)
+  const commit = run(linked, ['commit', '-m', 'linked passing gate'])
+  expect(commit.status, commit.stderr).toBe(0)
+  return {
+    scenario,
+    linked,
+    run,
+    pending: resolve(scenario.root, '.git/plotweave-gate-history.pending'),
+  }
+}
+
+it('linked pre-commit records survive worktree deletion and fold into another ordinary commit (#917)', () => {
+  const { scenario, linked, run, pending } = prepareSharedGateScenario()
+  expect(existsSync(pending)).toBe(true)
+  const bytes = readFileSync(pending, 'utf8')
+  const records = bytes
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { tree: string })
+  expect(records.length).toBeGreaterThan(0)
+  const tree = run(linked, ['rev-parse', 'HEAD^{tree}']).stdout.trim()
+  expect(records.every((record) => record.tree === tree)).toBe(true)
+  expect(scenario.git(['worktree', 'remove', '--force', linked]).status).toBe(0)
+  expect(readFileSync(pending, 'utf8')).toBe(bytes)
+  writeFileSync(resolve(scenario.root, 'main.txt'), 'next ordinary commit\n')
+  expect(scenario.git(['add', 'main.txt']).status).toBe(0)
+  const next = scenario.git(['commit', '-m', 'fold durable record'])
+  expect(next.status, next.stderr).toBe(0)
+  const ledger = 'docs/development/gate-history.jsonl'
+  expect(run(scenario.root, ['show', `HEAD:${ledger}`]).stdout).toBe(bytes)
+  expect(run(scenario.root, ['diff', '--', ledger]).stdout).toBe('')
+}, 30_000)
+
+it('a shared gate mutex preserves another worktree record until materialization can retry (#917)', () => {
+  const { scenario, pending } = prepareSharedGateScenario()
+  const bytes = readFileSync(pending, 'utf8')
+  const lock = resolve(scenario.root, '.git/plotweave-sonar-gate.lock')
+  mkdirSync(lock)
+  const result = spawnSync('sh', ['scripts/gate-history.sh', 'materialize'], {
+    cwd: scenario.root,
+    encoding: 'utf8',
+    env: { ...scenario.env, PLOTWEAVE_GATE_MATERIALIZE_LOCK_TIMEOUT: '0' },
+  })
+  expect(result.status).toBe(0)
+  expect(result.stderr).toContain('[GATE_HISTORY_LOCK_TIMEOUT]')
+  expect(readFileSync(pending, 'utf8')).toBe(bytes)
+  expect(
+    existsSync(resolve(scenario.root, 'docs/development/gate-history.jsonl')),
+  ).toBe(false)
+  rmSync(lock, { recursive: true })
+  const retry = spawnSync('sh', ['scripts/gate-history.sh', 'materialize'], {
+    cwd: scenario.root,
+    encoding: 'utf8',
+    env: scenario.env,
+  })
+  expect(retry.status, retry.stderr).toBe(0)
+  expect(
+    readFileSync(
+      resolve(scenario.root, 'docs/development/gate-history.jsonl'),
+      'utf8',
+    ),
+  ).toBe(bytes)
+  expect(readFileSync(pending, 'utf8')).toBe('')
+}, 30_000)
+
 afterAll(() => {
   repositories.dispose()
   fullRepositories.dispose()
