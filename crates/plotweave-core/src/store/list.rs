@@ -181,7 +181,8 @@ fn parse_project_info(v: Option<&serde_json::Value>) -> ProjectInfo {
 fn parse_v1_envelope(value: &serde_json::Value) -> ProjectFile {
     let schema_version = value
         .get("schemaVersion")
-        .and_then(|v| v.as_u64())
+        .and_then(|v| v.as_number())
+        .and_then(integer_version_value)
         .and_then(|v| u32::try_from(v).ok())
         .unwrap_or(1);
     ProjectFile {
@@ -218,6 +219,13 @@ fn is_canonical_integer_string(s: &str) -> bool {
     }
     bytes.len() == 1 || bytes[0] != b'0'
 }
+/// Owner decision #918: numeric values, not spelling, define safe-integer version claims.
+/// The later u32 width guard remains stricter; future-version values must never fall back to v1.
+fn integer_version_value(number: &serde_json::Number) -> Option<u64> {
+    let value = number.as_f64()?;
+    (value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= 9_007_199_254_740_991.0)
+        .then_some(value as u64)
+}
 /// 显式 schemaVersion 键的判型（§11 第 0 步）：按值是否构成版本主张分派——
 /// 数值主张定族：0 属旧扁平家族、≥1 属 v1 家族，版本号与信封形状两族矛盾
 /// 即拒绝并保留原文件——否则 v1 StoryNode 会被误当旧版交付，且每次加载都
@@ -234,7 +242,7 @@ fn parse_explicit_envelope(
 ) -> Result<ProjectFile, StoreError> {
     match value.get("schemaVersion") {
         Some(serde_json::Value::Number(n)) => {
-            let Some(version) = n.as_u64() else {
+            let Some(version) = integer_version_value(n) else {
                 return Err(StoreError::CorruptEnvelope(
                     "schemaVersion 是非法数值（负数/小数/越界），无法判别文档信封（已保留原文件）",
                 ));
