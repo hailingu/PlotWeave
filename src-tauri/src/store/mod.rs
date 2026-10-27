@@ -168,7 +168,7 @@ pub async fn verify_project_assets(
     crate::blocking::run("verify_project_assets", move || {
         validate_id(&id)?;
         let root = projects_dir(&app).map_err(to_ipc_text)?;
-        Ok(unverifiable_asset_keys(&root, &id, &assets))
+        unverifiable_asset_keys(&root, &id, &assets).map_err(to_ipc_text)
     })
     .await
 }

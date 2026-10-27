@@ -248,14 +248,22 @@ actor NativeProjectStore {
         try directory.write(encoded, name: "ai-session.json")
     }
 
-    /// Verification reports reserved quarantine references without opening them, plus unsafe or missing active files.
-    private func verifyAssets(id: String, assets: HostJSON) throws -> HostJSON {
+    /// Only confirmed missing/unsafe paths authorize quarantine; transient I/O aborts delivery before normalization.
+    /// The scoped verifier supports error-boundary regression without replacing document or directory I/O.
+    func verifyAssets(id: String, assets: HostJSON, validateMedia: @Sendable (NativeDirectory, String, String) throws -> Void = { directory, path, mime in
+        _ = try directory.media(path, mime: mime)
+    }) throws -> HostJSON {
         try NativeProjectEnvelope.validateID(id)
         let fields = assets["byId"]?.object ?? [:]
-        let bad = fields.keys.sorted().filter { key in
+        let bad = try fields.keys.sorted().filter { key in
             guard let path = fields[key]?["relPath"]?.string, NativeAssetContract.lexicalRelPath(path) else { return false }
             guard NativeAssetContract.activeRelPath(path) else { return true }
-            return (try? projectDirectory(id: id).media(path, mime: fields[key]?["mime"]?.string ?? "application/octet-stream")) == nil
+            do {
+                try validateMedia(projectDirectory(id: id), path, fields[key]?["mime"]?.string ?? "application/octet-stream")
+                return false
+            } catch let failure as HostFailure where failure.code == "PW_STORAGE_REFUSED" {
+                return true
+            }
         }
         return .array(bad.map(HostJSON.string))
     }
