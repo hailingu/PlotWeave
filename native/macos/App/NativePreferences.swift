@@ -76,7 +76,7 @@ actor NativePreferences {
         guard try root.metadata(Self.file) != nil else { return .object([:]) }
         let bytes = try root.read(Self.file, maxBytes: Self.maximum)
         do {
-            let value = try JSONDecoder().decode(HostJSON.self, from: bytes)
+            let value = try HostJSON.decode(bytes)
             guard value.object != nil else { throw invalid() }
             return value
         }
@@ -107,7 +107,7 @@ actor NativePreferences {
     private func backupDamaged(_ root: NativeDirectory) throws {
         guard try root.metadata(Self.file) != nil else { return }
         let bytes = try root.read(Self.file, maxBytes: Self.maximum)
-        if let decoded = try? JSONDecoder().decode(HostJSON.self, from: bytes), decoded.object != nil { return }
+        if let decoded = try? HostJSON.decode(bytes), decoded.object != nil { return }
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         let name = "settings-corrupt-" + digest + ".bak"
         if try root.metadata(name) == nil { try root.writeNew(bytes, name: name); return }
