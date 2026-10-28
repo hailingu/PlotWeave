@@ -3,8 +3,10 @@ import type { AiEpisodeScope, ThreadEntry } from '../../ai/session'
 import type { BatchValidation } from './commands'
 
 const EPISODE_WORDS = ['分集', '归集', '集归属', '集号']
-const NUMBERED_EPISODE = /第\s*[\d一二三四五六七八九十百零〇两]+\s*集/
+/** 数字片段有界扫描（安全整数最多 16 位十进制），中文表达预留空间；「第」可省略。 */
+const NUMBERED_EPISODE = /(?:第\s*)?[\d一二三四五六七八九十百零〇两]{1,32}\s*集/
 const ENGLISH_EPISODE = /\bepisode(?:s|No)?\b/i
+const EPISODE_ADDITIONS = ['新增', '增加', '添加']
 const EPISODE_ASSIGNMENTS = [
   '安排',
   '创建',
@@ -62,6 +64,7 @@ function keepsEpisodes(request: string): boolean {
     const action = clause.slice(negative + 1).trimStart()
     return [
       ...EPISODE_ASSIGNMENTS,
+      ...EPISODE_ADDITIONS,
       '分集',
       '归集',
       '恢复',
@@ -87,6 +90,14 @@ function isDirectEpisodeArrangement(text: string): boolean {
   )
 }
 
+/** 新增动作必须紧接集目标；「增加节拍参考第一集」不能因此扩大范围。 */
+function isDirectEpisodeAddition(before: string): boolean {
+  return (
+    EPISODE_ADDITIONS.some((term) => before.trimEnd().endsWith(term)) ||
+    /\badd\s*$/i.test(before)
+  )
+}
+
 /** 提及旧集号不等于分集：只认分配动作与目标集的组合，含糊表达保留归属。 */
 function requestsEpisodeChange(request: string): boolean {
   return request.split(/[，。；\n,;.!]/).some((clause) => {
@@ -103,6 +114,7 @@ function requestsEpisodeChange(request: string): boolean {
     return indices.some((index) => {
       if (index < 0) return false
       const before = text.slice(Math.max(0, index - 16), index)
+      if (isDirectEpisodeAddition(before)) return true
       if (
         EPISODE_ASSIGNMENTS.some((term) => before.includes(term)) ||
         /\b(?:create|assign|move|set|split|group|organize)\b/i.test(before)

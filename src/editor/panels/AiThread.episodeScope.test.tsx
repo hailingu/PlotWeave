@@ -202,6 +202,10 @@ it.each([
   [true, '不修改现有集号，只增加节拍'],
   [false, '保留现有分集，增加节拍'],
   [true, '保留现有分集，增加节拍'],
+  [false, '不增加第 2 集，只增加节拍'],
+  [true, '不增加第 2 集，只增加节拍'],
+  [false, '增加节拍参考第一集'],
+  [true, '增加节拍参考第一集'],
 ] as const)(
   '清除分集→新增→确认→保存重开→撤销重做保持未分集，围栏=%s，请求=%s',
   async (fenced, request) => {
@@ -311,48 +315,157 @@ it('明确分集仍需预览确认，执行后一步撤销/重做', async () => 
   ])
 })
 
-it('超过 200 条时原始请求被裁掉，合法分集卡仍可重开确认', async () => {
-  const h = await setup()
-  chat.mockResolvedValue(
-    reply([{ op: 'update_node', nodeId: 's', patch: { episodeNo: 2 } }]),
-  )
-  await send('把场景归入第 2 集')
-  await waitFor(() =>
+it.each(
+  [
+    '新增第 2 集并添加节拍',
+    '请新增第 2 集',
+    '增加第 2 集',
+    '添加第 2 集',
+  ].flatMap((request) => [[request, false] as const, [request, true] as const]),
+)(
+  '明确创建请求可预览、确认、保存重开和撤销重做：%s，围栏=%s',
+  async (request, fenced) => {
+    const h = await setup()
+    chat.mockResolvedValue(
+      reply(
+        [
+          {
+            op: 'create_node',
+            nodeType: 'beat',
+            data: { name: '第二集的开始', episodeNo: 2 },
+          },
+        ],
+        fenced,
+      ),
+    )
+    await send(request)
+    expect(h.hook.result.current.doc.nodes).toEqual(project.nodes)
+    await waitFor(() =>
+      expect(
+        h.saved[h.saved.length - 1]?.entries.find((entry) => entry.card)?.card
+          ?.episodeScope,
+      ).toBe('allow'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /执行改动/ }))
+    const doc = h.hook.result.current.doc
+    expect(doc.nodes.slice(0, project.nodes.length)).toEqual(project.nodes)
+    const created = doc.nodes.find(
+      (node) => node.type === 'beat' && node.data.name === '第二集的开始',
+    )!
+    expect(created.data.episodeNo).toBe(2)
+    const stored = JSON.parse(
+      JSON.stringify(
+        serializeProject({ ...doc, name: project.name }, project.id),
+      ),
+    )
+    const reopened = parseProject(stored, { projectId: project.id }).content
     expect(
-      h.saved[h.saved.length - 1]?.entries.some((entry) => entry.card),
-    ).toBe(true),
-  )
-  const saved = h.saved[h.saved.length - 1]!
-  const expanded: AiSession = {
-    ...saved,
-    entries: [
-      ...saved.entries,
-      ...Array.from({ length: 205 }, (_, i) => ({
-        id: i + 10,
-        kind: 'note' as const,
-        text: `回执 ${i}`,
-      })),
-    ],
-  }
-  const disk = normalizeAiSession(
-    JSON.parse(JSON.stringify(diskSessionOf(expanded))),
-  ).session
-  expect(disk.entries).toHaveLength(200)
-  expect(disk.entries.some((entry) => entry.role === 'user')).toBe(false)
-  cleanup()
-  const restored = await setup(disk)
-  const execute = screen.getByRole('button', {
-    name: /执行改动/,
-  }) as HTMLButtonElement
-  expect(execute.disabled).toBe(false)
-  fireEvent.click(execute)
-  expect(episodes(restored.hook.result.current.doc.nodes)).toEqual([
-    1,
-    2,
-    undefined,
-    undefined,
-  ])
-})
+      reopened.nodes.find((node) => node.id === created.id)?.data.episodeNo,
+    ).toBe(2)
+    expect(
+      buildOutlineGroups(reopened.nodes, reopened.edges, {}).map(
+        (group) => group.episode,
+      ),
+    ).toEqual([1, 2, null])
+    act(() => h.history.undo())
+    expect(h.hook.result.current.doc.nodes).toEqual(project.nodes)
+    await act(() => h.history.redo())
+    expect(h.hook.result.current.doc.nodes).toHaveLength(
+      project.nodes.length + 1,
+    )
+    expect(
+      h.hook.result.current.doc.nodes.find((node) => node.id === created.id)
+        ?.data.episodeNo,
+    ).toBe(2)
+  },
+)
+
+it.each(['新增第 2 集并添加节拍', '请新增第 2 集'])(
+  '恢复原请求可见的旧 allow 卡仍可确认：%s',
+  async (request) => {
+    const initial = await setup()
+    const v = initial.hook.result.current.ai.validateCommands([
+      {
+        op: 'create_node',
+        nodeType: 'beat',
+        data: { name: '第二集的开始', episodeNo: 2 },
+      },
+    ])!
+    cleanup()
+    const restored = await setup({
+      schemaVersion: 1,
+      entries: [
+        { id: 1, kind: 'msg', role: 'user', text: request },
+        {
+          id: 2,
+          kind: 'msg',
+          role: 'assistant',
+          text: '旧合法预览',
+          card: { v, status: 'pending', episodeScope: 'allow' },
+        },
+      ],
+    })
+    const execute = screen.getByRole('button', {
+      name: /执行改动/,
+    }) as HTMLButtonElement
+    expect(execute.disabled).toBe(false)
+    fireEvent.click(execute)
+    expect(restored.hook.result.current.doc.nodes).toHaveLength(
+      project.nodes.length + 1,
+    )
+    expect(
+      restored.hook.result.current.doc.nodes.find(
+        (node) => node.type === 'beat' && node.data.name === '第二集的开始',
+      )?.data.episodeNo,
+    ).toBe(2)
+  },
+)
+
+it.each(['把场景归入第 2 集', '请新增第 2 集'])(
+  '超过 200 条时原始请求被裁掉，合法分集卡仍可重开确认：%s',
+  async (request) => {
+    const h = await setup()
+    chat.mockResolvedValue(
+      reply([{ op: 'update_node', nodeId: 's', patch: { episodeNo: 2 } }]),
+    )
+    await send(request)
+    await waitFor(() =>
+      expect(
+        h.saved[h.saved.length - 1]?.entries.some((entry) => entry.card),
+      ).toBe(true),
+    )
+    const saved = h.saved[h.saved.length - 1]!
+    const expanded: AiSession = {
+      ...saved,
+      entries: [
+        ...saved.entries,
+        ...Array.from({ length: 205 }, (_, i) => ({
+          id: i + 10,
+          kind: 'note' as const,
+          text: `回执 ${i}`,
+        })),
+      ],
+    }
+    const disk = normalizeAiSession(
+      JSON.parse(JSON.stringify(diskSessionOf(expanded))),
+    ).session
+    expect(disk.entries).toHaveLength(200)
+    expect(disk.entries.some((entry) => entry.role === 'user')).toBe(false)
+    cleanup()
+    const restored = await setup(disk)
+    const execute = screen.getByRole('button', {
+      name: /执行改动/,
+    }) as HTMLButtonElement
+    expect(execute.disabled).toBe(false)
+    fireEvent.click(execute)
+    expect(episodes(restored.hook.result.current.doc.nodes)).toEqual([
+      1,
+      2,
+      undefined,
+      undefined,
+    ])
+  },
+)
 
 it('模型持续夹带集号时耗尽预算，整批不可执行且不修改图', async () => {
   const h = await setup()

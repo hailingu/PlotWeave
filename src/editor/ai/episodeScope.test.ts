@@ -28,6 +28,16 @@ describe('本轮分集范围', () => {
     '保留现有分集，增加节拍',
     '现有集号不变，增加节拍',
     '根据第一集的剧情增加节拍',
+    '新增节拍参考第一集',
+    '增加节拍参考第一集',
+    '添加对白参考第 2 集',
+    '不新增第 2 集，只增加节拍',
+    '不增加第 2 集，只增加节拍',
+    '不添加第 2 集，只增加节拍',
+    '保留现有分集，不新增第 2 集',
+    '不新增两集，只增加节拍',
+    'Add a beat based on episode 2',
+    'Do not add episode 2; add a beat',
     'Keep existing episodes and add beats',
     '为现有节拍解释分集，增加节拍',
     '增加未分集节拍',
@@ -51,6 +61,15 @@ describe('本轮分集范围', () => {
   })
   it.each([
     '创建第一集并安排节拍',
+    '新增第 2 集并添加节拍',
+    '请新增第 2 集',
+    '增加第 2 集',
+    '添加第 2 集并创建节拍',
+    '请帮我新增第 2 集',
+    '新增 2 集并添加节拍',
+    '增加两集',
+    '新增第 9007199254740991 集',
+    'Add episode 2 and create a beat',
     '为现有节奏卡安排合适的分集',
     '把场景归入第 1 集',
     '把未分集场景归入第 1 集',
@@ -65,6 +84,7 @@ describe('本轮分集范围', () => {
   ])('保留明确分集操作：%s', (request) => {
     const batch = proposal()
     expect(validateEpisodeScope(batch, request)).toBe(batch)
+    expect(validateEpisodeScope(batch, request, 'allow')).toBe(batch)
   })
   it('普通批次可保持未分集，模型文案中的第一集不构成授权', () => {
     const batch = validateAiBatch(
