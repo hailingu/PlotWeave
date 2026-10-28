@@ -2,30 +2,118 @@
 import type { AiEpisodeScope, ThreadEntry } from '../../ai/session'
 import type { BatchValidation } from './commands'
 
+const EPISODE_WORDS = ['分集', '归集', '集归属', '集号']
+const NUMBERED_EPISODE = /第\s*[\d一二三四五六七八九十百零〇两]+\s*集/
+const ENGLISH_EPISODE = /\bepisode(?:s|No)?\b/i
+const EPISODE_ASSIGNMENTS = [
+  '安排',
+  '创建',
+  '新建',
+  '建立',
+  '分配',
+  '划分',
+  '归入',
+  '归到',
+  '归属',
+  '划入',
+  '设为',
+  '设置',
+  '设定',
+  '修改',
+  '更改',
+  '改为',
+  '改成',
+  '放入',
+  '放到',
+  '移到',
+  '移入',
+  '调整',
+  '重分',
+]
+
 /** 明确的分集词或目标集号；不把普通「集」「集合」当作分集请求。 */
 function mentionsEpisode(text: string): boolean {
   const assigned = text.replace(/未分集/g, '')
   return (
-    ['分集', '归集', '集归属', '集号'].some((term) =>
-      assigned.includes(term),
-    ) ||
-    /第\s*[\d一二三四五六七八九十百零〇两]+\s*集/.test(assigned) ||
-    /\bepisode(?:s|No)?\b/i.test(assigned)
+    EPISODE_WORDS.some((term) => assigned.includes(term)) ||
+    NUMBERED_EPISODE.test(assigned) ||
+    ENGLISH_EPISODE.test(assigned)
   )
 }
 
 /** 否定直接作用于同一分句的分集动作时保留归属，不否决「不要解释，安排分集」。 */
 function keepsEpisodes(request: string): boolean {
   return request.split(/[，。；\n,;.!]/).some((clause) => {
-    const negation =
-      /不要|不用|无需|不必|别|勿|保持|不(?=分集|归集)|\bdo not\b|\bdon't\b|\bwithout\b|\bno\b/i.exec(
+    if (!mentionsEpisode(clause) && !clause.includes('未分集')) return false
+    if (
+      /保持|保留|维持|沿用|照旧|不变|不动|原样|\b(?:keep|preserve|retain|unchanged)\b/i.test(
         clause,
       )
-    return (
-      negation !== null &&
-      (mentionsEpisode(clause.slice(negation.index + negation[0].length)) ||
-        clause.includes('未分集'))
     )
+      return true
+    if (
+      /不要|不用|无需|无须|不必|不需要|不再|别|勿|禁止|\b(?:do not|don't|without|no|never)\b/i.test(
+        clause,
+      )
+    )
+      return true
+    const negative = clause.indexOf('不')
+    if (negative < 0) return false
+    const action = clause.slice(negative + 1).trimStart()
+    return [
+      ...EPISODE_ASSIGNMENTS,
+      '分集',
+      '归集',
+      '恢复',
+      '改变',
+      '变动',
+      '动',
+      '改',
+      '重新',
+      '随意',
+      '擅自',
+      '自行',
+      '自动',
+    ].some((term) => action.startsWith(term))
+  })
+}
+
+/** 「为/给…分集」是直接操作；讲解、讨论或建议中的分集词不授予写入范围。 */
+function isDirectEpisodeArrangement(text: string): boolean {
+  return (
+    /^请?[为给]/.test(text) &&
+    /(?:分集|归集)$/.test(text) &&
+    !/解释|讨论|描述|介绍|讲解|建议/.test(text)
+  )
+}
+
+/** 提及旧集号不等于分集：只认分配动作与目标集的组合，含糊表达保留归属。 */
+function requestsEpisodeChange(request: string): boolean {
+  return request.split(/[，。；\n,;.!]/).some((clause) => {
+    const text = clause.replace(/未分集/g, '').trim()
+    if (text === '分集' || text === '归集' || isDirectEpisodeArrangement(text))
+      return true
+    const numbered = NUMBERED_EPISODE.exec(text)
+    const english = ENGLISH_EPISODE.exec(text)
+    const indices = [
+      ...EPISODE_WORDS.map((term) => text.indexOf(term)),
+      numbered?.index ?? -1,
+      english?.index ?? -1,
+    ]
+    return indices.some((index) => {
+      if (index < 0) return false
+      const before = text.slice(Math.max(0, index - 16), index)
+      if (
+        EPISODE_ASSIGNMENTS.some((term) => before.includes(term)) ||
+        /\b(?:create|assign|move|set|split|group|organize)\b/i.test(before)
+      )
+        return true
+      return (
+        numbered?.index === index &&
+        /^请?[在为给向往]\s*$/.test(text.slice(0, index)) &&
+        /新增|增加|创建|添加/.test(text.slice(index + numbered[0].length))
+      )
+    })
   })
 }
 /** 询问分集知识不授权模型改分集；不确定的表达由模型澄清具体请求。 */
@@ -35,7 +123,7 @@ const DISCUSS_EPISODES =
 /** 只从本轮原始请求提取固定大小的分集范围，供卡片跨裁剪保留。 */
 export function episodeScopeForRequest(request: string): AiEpisodeScope {
   if (
-    mentionsEpisode(request) &&
+    requestsEpisodeChange(request) &&
     !keepsEpisodes(request) &&
     !DISCUSS_EPISODES.test(request)
   )
@@ -50,7 +138,10 @@ export function validateEpisodeScope(
   recordedScope?: AiEpisodeScope,
 ): BatchValidation | null {
   if (!validation?.ok) return validation
-  if ((recordedScope ?? episodeScopeForRequest(request)) === 'allow')
+  if (
+    (recordedScope ?? episodeScopeForRequest(request)) === 'allow' &&
+    (request === '' || episodeScopeForRequest(request) === 'allow')
+  )
     return validation
   const issues = validation.commands.flatMap((command, index) => {
     let fields: Record<string, unknown> | undefined

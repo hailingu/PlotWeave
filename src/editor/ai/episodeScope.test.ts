@@ -21,6 +21,15 @@ function proposal() {
 describe('本轮分集范围', () => {
   it.each([
     '根据剧情增加新的节拍',
+    '不修改现有集号，只增加节拍',
+    '集号不修改，新增节拍',
+    '不需要分集，只补充对白',
+    '沿用当前集号新增节拍',
+    '保留现有分集，增加节拍',
+    '现有集号不变，增加节拍',
+    '根据第一集的剧情增加节拍',
+    'Keep existing episodes and add beats',
+    '为现有节拍解释分集，增加节拍',
     '增加未分集节拍',
     '新增节拍，不分集',
     '保持未分集，增加节拍',
@@ -45,6 +54,11 @@ describe('本轮分集范围', () => {
     '为现有节奏卡安排合适的分集',
     '把场景归入第 1 集',
     '把未分集场景归入第 1 集',
+    '在第 1 集新增节拍',
+    '为第 2 集增加场景',
+    '剧情不错，在第 1 集新增节拍',
+    '给不错的节拍安排分集',
+    '为现有节拍安排分集，不修改剧情',
     '不要解释，为现有节拍分集',
     'Create episode 1 and add beats',
     'Set episodeNo to 1',
@@ -67,6 +81,13 @@ describe('本轮分集范围', () => {
     expect(batch.ok).toBe(true)
     expect(validateEpisodeScope(batch, '根据剧情增加新的节拍')).toBe(batch)
   })
+
+  it.each(['不修改现有集号，只增加节拍', '保留现有分集，增加节拍'])(
+    '可见原始请求的保留要求优先于旧卡范围：%s',
+    (request) => {
+      expect(validateEpisodeScope(proposal(), request, 'allow')?.ok).toBe(false)
+    },
+  )
   it('不把缺失或形状校验失败的批次变成可执行', () => {
     expect(validateEpisodeScope(null, '创建第一集')).toBeNull()
     const invalid = validateAiBatch(
@@ -74,6 +95,17 @@ describe('本轮分集范围', () => {
       snap(),
     )
     expect(validateEpisodeScope(invalid, '创建第一集')).toBe(invalid)
+  })
+
+  it('缺失原请求时可用保存范围，有原请求时范围不能放宽其限制', () => {
+    const batch = proposal()
+    expect(validateEpisodeScope(batch, '', 'allow')).toBe(batch)
+    expect(
+      validateEpisodeScope(batch, '根据剧情增加新的节拍', 'allow')?.ok,
+    ).toBe(false)
+    expect(validateEpisodeScope(batch, '创建第一集', 'preserve')?.ok).toBe(
+      false,
+    )
   })
   it('卡片只认所属请求，忽略后续分集请求、助手和 note', () => {
     const thread = [

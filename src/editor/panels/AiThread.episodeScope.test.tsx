@@ -195,9 +195,16 @@ function expectUnassignedReload(doc: EditorDocument) {
   ).toEqual([null])
 }
 
-it.each([false, true])(
-  '清除分集→新增→确认→保存重开→撤销重做保持未分集，围栏=%s',
-  async (fenced) => {
+it.each([
+  [false, '根据剧情增加新的节拍'],
+  [true, '根据剧情增加新的节拍'],
+  [false, '不修改现有集号，只增加节拍'],
+  [true, '不修改现有集号，只增加节拍'],
+  [false, '保留现有分集，增加节拍'],
+  [true, '保留现有分集，增加节拍'],
+] as const)(
+  '清除分集→新增→确认→保存重开→撤销重做保持未分集，围栏=%s，请求=%s',
+  async (fenced, request) => {
     const h = await setup()
     act(() =>
       h.hook.result.current.patch.patchNode('b', {
@@ -236,7 +243,7 @@ it.each([false, true])(
           fenced,
         ),
       )
-    await send('根据剧情增加新的节拍')
+    await send(request)
     expect(chat).toHaveBeenCalledTimes(2)
     await waitFor(() =>
       expect(
@@ -428,36 +435,43 @@ it('旧卡首次恢复即补齐分集范围，后续裁剪不失去原请求', a
   ])
 })
 
-it('恢复旧的新增节拍卡不能借后续分集请求执行旧集号', async () => {
-  const h = await setup()
-  const v = h.hook.result.current.ai.validateCommands([
-    { op: 'update_node', nodeId: 's', patch: { episodeNo: 1 } },
-  ])!
-  cleanup()
-  const restored = await setup({
-    schemaVersion: 1,
-    entries: [
-      { id: 1, kind: 'msg', role: 'user', text: '根据剧情增加新的节拍' },
-      {
-        id: 2,
-        kind: 'msg',
-        role: 'assistant',
-        text: '旧预览',
-        card: { v, status: 'pending' },
-      },
-      { id: 3, kind: 'msg', role: 'user', text: '创建第一集' },
-    ],
-  })
-  expect(
-    (screen.getByRole('button', { name: /执行改动/ }) as HTMLButtonElement)
-      .disabled,
-  ).toBe(true)
-  fireEvent.click(screen.getByRole('button', { name: /执行改动/ }))
-  expect(screen.getByText(/本轮未明确要求分集/)).toBeTruthy()
-  expect(episodes(restored.hook.result.current.doc.nodes)).toEqual([
-    1,
-    undefined,
-    undefined,
-    undefined,
-  ])
-})
+it.each([undefined, 'allow'] as const)(
+  '恢复旧的新增节拍卡（范围=%s）不能借后续请求执行旧集号',
+  async (episodeScope) => {
+    const h = await setup()
+    const v = h.hook.result.current.ai.validateCommands([
+      { op: 'update_node', nodeId: 's', patch: { episodeNo: 1 } },
+    ])!
+    cleanup()
+    const restored = await setup({
+      schemaVersion: 1,
+      entries: [
+        { id: 1, kind: 'msg', role: 'user', text: '根据剧情增加新的节拍' },
+        {
+          id: 2,
+          kind: 'msg',
+          role: 'assistant',
+          text: '旧预览',
+          card: {
+            v,
+            status: 'pending',
+            ...(episodeScope ? { episodeScope } : {}),
+          },
+        },
+        { id: 3, kind: 'msg', role: 'user', text: '创建第一集' },
+      ],
+    })
+    expect(
+      (screen.getByRole('button', { name: /执行改动/ }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /执行改动/ }))
+    expect(screen.getByText(/本轮未明确要求分集/)).toBeTruthy()
+    expect(episodes(restored.hook.result.current.doc.nodes)).toEqual([
+      1,
+      undefined,
+      undefined,
+      undefined,
+    ])
+  },
+)
