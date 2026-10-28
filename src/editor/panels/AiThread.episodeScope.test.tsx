@@ -1,0 +1,347 @@
+// @vitest-environment happy-dom
+/** #929：真实文档、补丁、工厂、AI 面板、批次执行、历史与序列化共同运行。 */
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from '@testing-library/react'
+import { AiThread } from './AiThread'
+import { stubElementScrollTo } from './testDomStubs'
+import { settingsStore } from '../../settings/settingsStore'
+import { llmChat, type AssistantMessage } from '../ai/chat'
+import { normalizeAiSession, type AiSession } from '../../ai/session'
+import {
+  useEditorDocument,
+  type EditorProjectContent,
+} from '../useEditorDocument'
+import { useNodePatch } from '../useNodePatch'
+import { useAiBridge } from '../useAiBridge'
+import { buildCanvasNode } from '../nodeFactory'
+import { CommandStack } from '../history'
+import { parseProject, serializeProject } from '../../model/convert'
+import { buildOutlineGroups } from '../outline'
+import type { AiCommand } from '../ai/commands'
+import type { CanvasNode } from '../nodes/types'
+
+vi.mock('../ai/chat', () => ({ llmChat: vi.fn() }))
+const chat = vi.mocked(llmChat)
+const project: EditorProjectContent = {
+  id: 'episode-project',
+  name: '分集回归',
+  settings: { characters: [], locations: [] },
+  nodes: [
+    {
+      id: 'b',
+      type: 'beat',
+      position: { x: 0, y: 0 },
+      data: { name: '开端', tone: '紧张', episodeNo: 1 },
+    },
+    {
+      id: 's',
+      type: 'scene',
+      position: { x: 100, y: 0 },
+      data: {
+        name: '天台',
+        sceneNo: 1,
+        interior: false,
+        time: '夜',
+        synopsis: '',
+        characterIds: [],
+      },
+    },
+    {
+      id: 'd',
+      type: 'dialogue',
+      position: { x: 200, y: 0 },
+      data: { name: '争执', lines: [] },
+    },
+    {
+      id: 'r',
+      type: 'branch',
+      position: { x: 300, y: 0 },
+      data: { prompt: '留下？', options: [{ id: 'yes', label: '留下' }] },
+    },
+  ],
+  edges: [
+    { id: 'bs', source: 'b', target: 's', type: 'sequence' },
+    { id: 'sd', source: 's', target: 'd', type: 'sequence' },
+    { id: 'dr', source: 'd', target: 'r', type: 'sequence' },
+  ],
+}
+
+beforeEach(() => {
+  stubElementScrollTo()
+  chat.mockReset()
+  vi.spyOn(settingsStore, 'load').mockResolvedValue({
+    providers: [
+      {
+        id: 'test',
+        label: '测试',
+        baseUrl: 'https://example.test/v1',
+        enabled: true,
+        models: ['m'],
+        keyEnc: 'fixture',
+      },
+    ],
+    defaultChat: 'test:m',
+    defaultImage: null,
+  })
+})
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
+
+/** 供应商响应只有传输替换，命令解析/校验和画布落地保持真实。 */
+function reply(commands: AiCommand[], fenced = false): AssistantMessage {
+  const args = JSON.stringify({ commands })
+  return fenced
+    ? { role: 'assistant', content: `方案\n\`\`\`json\n${args}\n\`\`\`` }
+    : {
+        role: 'assistant',
+        content: '方案',
+        tool_calls: [
+          {
+            id: 'batch',
+            type: 'function',
+            function: { name: 'batch', arguments: args },
+          },
+        ],
+      }
+}
+
+/** 以生产文档镜像和写通道装配，refresh 对应编辑器随文档变化重渲染。 */
+async function setup(initialSession?: AiSession) {
+  const history = new CommandStack()
+  const hook = renderHook(() => {
+    const doc = useEditorDocument(project)
+    const patch = useNodePatch(doc, (command) => history.push(command))
+    const ai = useAiBridge({
+      ...doc,
+      ...patch,
+      buildNewNode: (type, opts) =>
+        buildCanvasNode(type, opts, {
+          against: opts?.against ?? doc.nodesRef.current,
+          characters: [],
+          center: null,
+        }),
+      pushHistory: (command) => history.push(command),
+      closeSettings: () => undefined,
+    })
+    return { doc, patch, ai }
+  })
+  const saved: AiSession[] = []
+  const props = () => ({
+    projectId: project.id,
+    initialSession,
+    canvasDigest: hook.result.current.ai.canvasDigest,
+    onValidateCommands: hook.result.current.ai.validateCommands,
+    onValidateAi: hook.result.current.ai.validateAiReply,
+    onReadNode: hook.result.current.ai.readNode,
+    onApplyAiBatch: hook.result.current.ai.applyAiBatch,
+    onSaveSession: async (session: AiSession) => {
+      saved.push(
+        normalizeAiSession(JSON.parse(JSON.stringify(session))).session,
+      )
+    },
+  })
+  const view = render(<AiThread {...props()} />)
+  await screen.findByLabelText('AI 对话输入')
+  const refresh = () => view.rerender(<AiThread {...props()} />)
+  return { hook, history, saved, refresh }
+}
+
+/** 真实发送入口，等待模型回合落定再操作预览。 */
+async function send(text: string) {
+  fireEvent.change(screen.getByLabelText('AI 对话输入'), {
+    target: { value: text },
+  })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await waitFor(() =>
+    expect(screen.queryByRole('button', { name: '取消' })).toBeNull(),
+  )
+}
+
+/** 分集归属取生产节点字段，包含节拍、场、对白和分支。 */
+function episodes(nodes: CanvasNode[]) {
+  return nodes.map((node) => node.data.episodeNo)
+}
+
+it.each([false, true])(
+  '清除分集→新增→确认→保存重开→撤销重做保持未分集，围栏=%s',
+  async (fenced) => {
+    const h = await setup()
+    act(() =>
+      h.hook.result.current.patch.patchNode('b', {
+        nodeType: 'beat',
+        patch: { episodeNo: undefined },
+      }),
+    )
+    h.refresh()
+    expect(episodes(h.hook.result.current.doc.nodes)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ])
+    expect(h.hook.result.current.ai.canvasDigest).toContain('b 未分集')
+    expect(
+      JSON.parse(h.hook.result.current.ai.readNode('b')!).data,
+    ).not.toHaveProperty('episodeNo')
+    const stale: AiCommand[] = [
+      {
+        op: 'create_node',
+        nodeType: 'beat',
+        data: { name: '新转折', episodeNo: 1 },
+      },
+      ...['s', 'd', 'r'].map((nodeId): AiCommand => ({
+        op: 'update_node',
+        nodeId,
+        patch: { episodeNo: 1 },
+      })),
+    ]
+    chat
+      .mockResolvedValueOnce(reply(stale, fenced))
+      .mockResolvedValueOnce(
+        reply(
+          [{ op: 'create_node', nodeType: 'beat', data: { name: '新转折' } }],
+          fenced,
+        ),
+      )
+    await send('根据剧情增加新的节拍')
+    expect(chat).toHaveBeenCalledTimes(2)
+    expect(h.hook.result.current.doc.nodes).toHaveLength(4)
+    fireEvent.click(screen.getByRole('button', { name: /执行改动/ }))
+    h.refresh()
+    const doc = h.hook.result.current.doc
+    expect(doc.nodes).toHaveLength(5)
+    expect(episodes(doc.nodes)).toEqual(Array(5).fill(undefined))
+    const stored = JSON.parse(
+      JSON.stringify(
+        serializeProject({ ...doc, name: project.name }, project.id),
+      ),
+    )
+    const loaded = parseProject(stored, { projectId: project.id })
+    expect(loaded.repaired).toBe(false)
+    const reopened = loaded.content
+    expect(episodes(reopened.nodes)).toEqual(Array(5).fill(undefined))
+    expect(
+      buildOutlineGroups(reopened.nodes, reopened.edges, {}).map(
+        (group) => group.episode,
+      ),
+    ).toEqual([null])
+    act(() => h.history.undo())
+    expect(h.hook.result.current.doc.nodes).toHaveLength(4)
+    act(() => h.history.undo())
+    expect(episodes(h.hook.result.current.doc.nodes)).toEqual([
+      1,
+      undefined,
+      undefined,
+      undefined,
+    ])
+    await act(() => h.history.redo())
+    await act(() => h.history.redo())
+    expect(episodes(h.hook.result.current.doc.nodes)).toEqual(
+      Array(5).fill(undefined),
+    )
+    expect(h.hook.result.current.doc.edges).toEqual(project.edges)
+  },
+)
+
+it('明确分集仍需预览确认，执行后一步撤销/重做', async () => {
+  const h = await setup()
+  chat.mockResolvedValue(
+    reply([{ op: 'update_node', nodeId: 's', patch: { episodeNo: 2 } }]),
+  )
+  await send('把场景归入第 2 集')
+  expect(episodes(h.hook.result.current.doc.nodes)).toEqual([
+    1,
+    undefined,
+    undefined,
+    undefined,
+  ])
+  fireEvent.click(screen.getByRole('button', { name: /执行改动/ }))
+  expect(episodes(h.hook.result.current.doc.nodes)).toEqual([
+    1,
+    2,
+    undefined,
+    undefined,
+  ])
+  act(() => h.history.undo())
+  expect(episodes(h.hook.result.current.doc.nodes)).toEqual([
+    1,
+    undefined,
+    undefined,
+    undefined,
+  ])
+  await act(() => h.history.redo())
+  expect(episodes(h.hook.result.current.doc.nodes)).toEqual([
+    1,
+    2,
+    undefined,
+    undefined,
+  ])
+})
+
+it('模型持续夹带集号时耗尽预算，整批不可执行且不修改图', async () => {
+  const h = await setup()
+  chat.mockResolvedValue(
+    reply([
+      {
+        op: 'create_node',
+        nodeType: 'beat',
+        data: { name: '新转折', episodeNo: 1 },
+      },
+      { op: 'update_node', nodeId: 's', patch: { episodeNo: 1 } },
+    ]),
+  )
+  await send('根据剧情增加新的节拍')
+  expect(chat).toHaveBeenCalledTimes(4)
+  expect(
+    (screen.getByRole('button', { name: /执行改动/ }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: /执行改动/ }))
+  expect(h.hook.result.current.doc.nodes).toEqual(project.nodes)
+  expect(h.hook.result.current.doc.edges).toEqual(project.edges)
+  expect(h.history.canUndo).toBe(false)
+})
+
+it('恢复旧的新增节拍卡不能借后续分集请求执行旧集号', async () => {
+  const h = await setup()
+  const v = h.hook.result.current.ai.validateCommands([
+    { op: 'update_node', nodeId: 's', patch: { episodeNo: 1 } },
+  ])!
+  cleanup()
+  const restored = await setup({
+    schemaVersion: 1,
+    entries: [
+      { id: 1, kind: 'msg', role: 'user', text: '根据剧情增加新的节拍' },
+      {
+        id: 2,
+        kind: 'msg',
+        role: 'assistant',
+        text: '旧预览',
+        card: { v, status: 'pending' },
+      },
+      { id: 3, kind: 'msg', role: 'user', text: '创建第一集' },
+    ],
+  })
+  expect(
+    (screen.getByRole('button', { name: /执行改动/ }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: /执行改动/ }))
+  expect(screen.getByText(/本轮未明确要求分集/)).toBeTruthy()
+  expect(episodes(restored.hook.result.current.doc.nodes)).toEqual([
+    1,
+    undefined,
+    undefined,
+    undefined,
+  ])
+})

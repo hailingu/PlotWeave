@@ -93,9 +93,9 @@ export function shotLabel(shotNo: number, size: string): string {
   return `SHOT${pad2(shotNo)}·${size}`
 }
 
-/** 集 N 前缀（§3.5 分集）：有 episodeNo 的编剧侧节点才标注。 */
+/** 分集状态显式发送，缺省不能让模型从历史消息推回已经清除的集号（#929）。 */
 function epTag(data: { episodeNo?: unknown }): string {
-  return typeof data.episodeNo === 'number' ? `集${data.episodeNo} ` : ''
+  return typeof data.episodeNo === 'number' ? `集${data.episodeNo} ` : '未分集 '
 }
 
 /** 单个节点行：id + 标签 + 关键参数（按类型裁剪）。 */

@@ -26,6 +26,7 @@ Agent 不直接触碰文档状态，只产出 `GraphCommand`（`actor: 'agent'`�
         → 合法改动预览 → 用户确认 → 命令通道执行（整批一步撤销）
 ```
 
+- **AI 分集范围（[issue #929](https://github.com/hailingu/PlotWeave/issues/929)，已实现）**：当前画布摘要明确标注编剧节点的「未分集」；通用创建示例不预填集号。普通新增/改写请求不得夹带 `episodeNo`；工具与 JSON 围栏统一整批拒绝并沿用有限纠错，不静默剥离字段或回填历史集号。只有本轮用户文本明确包含分集或目标集要求且未否定/仅讨论时才允许分集写入；含糊表达应先澄清具体要求。恢复和确认历史卡仍按该卡之前最近的原始用户请求核对，不能从助手文案或后续分集请求取得范围。合法分集仍需预览确认；手动分集、已有归属、持久化和整批撤销语义不变，不新增关联节点自动归集算法。词句识别是保守产品边界，不能证明任意自然语言的完整语义；验证矩阵与真实模型调用边界见 [#929 回归记录](../testing/issue-929-episode-scope.md)。
 - **工具集 = 命令清单的封装**：读工具 `get_graph_snapshot` / `get_node` / `find_nodes` / `get_settings_snapshot` / `get_document`（`find_nodes` 按名称/文案检索全部节点并附关联连线，issue #275 起作为画布摘要体积节选的补读路径）；写工具 `create_node` / `delete_node` / `update_node_spec` / `connect_edge` / `disconnect_edge` / `upsert_character` / `upsert_location` / `upsert_document` / `batch`。
 - **`find_nodes` 单节点连线分页契约**（[PR #294](https://github.com/hailingu/PlotWeave/pull/294)，已实现）：首次读取的截断提示给出 `offset` 与 `cursor`；后续调用需同时传回。游标绑定目标节点与关联边身份/顺序，边集变化或缺失游标时拒绝继续并要求从 `offset=0` 重枚举，避免旧位置偏移静默漏读。多节点命中仍按节点位置分页，跨调用节点集变化需重新搜索。
 - **`find_nodes` 回喂预算**（[PR #294](https://github.com/hailingu/PlotWeave/pull/294)，已实现）：`runAgentLoop` 为一次用户请求中的全部 `find_nodes` 结果共享 24,000 字符预算，包含同轮并行调用与后续读取／纠错轮次。结果超出剩余额度时，该调用得到明确的预算不足诊断，整页不回喂也不伪装成完整结果；下一次用户请求重新计额。其他读工具沿用各自契约。
