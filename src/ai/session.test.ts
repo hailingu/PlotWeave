@@ -2,6 +2,38 @@ import { describe, expect, it } from 'vitest'
 import { normalizeAiSession } from './session'
 
 describe('normalizeAiSession', () => {
+  it.each([
+    ['allow', 'allow'],
+    ['preserve', 'preserve'],
+    [undefined, undefined],
+    ['unexpected', 'preserve'],
+    [true, 'preserve'],
+    [null, 'preserve'],
+  ])('分集范围落盘归一化：%s → %s', (raw, expected) => {
+    const normalized = normalizeAiSession({
+      schemaVersion: 1,
+      entries: [
+        {
+          id: 1,
+          kind: 'msg',
+          role: 'assistant',
+          text: '预览',
+          card: {
+            v: {
+              ok: true,
+              commands: [],
+              items: [],
+              issues: [],
+              hasDeletes: false,
+            },
+            status: 'pending',
+            episodeScope: raw,
+          },
+        },
+      ],
+    })
+    expect(normalized.session.entries[0]?.card?.episodeScope).toBe(expected)
+  })
   it('保留可恢复的消息、预览卡状态与回执，并隔离损坏条目', () => {
     const result = normalizeAiSession({
       schemaVersion: 1,

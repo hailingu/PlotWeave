@@ -17,6 +17,9 @@ export interface AiSession {
   entries: ThreadEntry[]
 }
 
+/** 卡片所属用户请求的分集范围；随卡保存，不依赖可能被裁剪的用户消息。 */
+export type AiEpisodeScope = 'allow' | 'preserve'
+
 /** 可恢复会话条目：消息、改动预览及其执行回执均只作为历史记录保存。 */
 export interface ThreadEntry {
   id: number
@@ -30,6 +33,8 @@ export interface ThreadEntry {
   card?: {
     v: BatchValidation
     status: 'pending' | 'executed' | 'dismissed'
+    /** 请求范围，不是执行确认；旧卡缺省时才回退到原始用户消息。 */
+    episodeScope?: AiEpisodeScope
     /** 上次确认执行失败的诊断（仅 pending 保存）；供后续轮次辨认失败，
      * 重试成功或忽略后清除。旧会话缺省表示没有结构化失败记录。 */
     executionError?: string
@@ -124,6 +129,12 @@ function isValidation(value: unknown): value is BatchValidation {
   )
 }
 
+/** 保留合法请求范围；异常元数据保守降为 preserve，绝不扩大分集范围。 */
+function cardEpisodeScope(value: unknown): { episodeScope?: AiEpisodeScope } {
+  if (value === undefined) return {}
+  return { episodeScope: value === 'allow' ? 'allow' : 'preserve' }
+}
+
 function entryOf(value: unknown): ThreadEntry | null {
   if (
     !isRecord(value) ||
@@ -159,6 +170,7 @@ function entryOf(value: unknown): ThreadEntry | null {
     card: {
       v: value.card.v,
       status: value.card.status,
+      ...cardEpisodeScope(value.card.episodeScope),
       ...(value.card.status === 'pending' &&
       typeof value.card.executionError === 'string' &&
       value.card.executionError.trim() !== ''

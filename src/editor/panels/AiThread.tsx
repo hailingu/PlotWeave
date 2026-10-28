@@ -15,6 +15,11 @@ import { listChatModels, type ChatModelOption } from '../../settings/types'
 import { cardResultEntry } from './aiThreadModel'
 import { PreviewCard } from './PreviewCard'
 import {
+  episodeScopeForRequest,
+  requestForEntry,
+  validateEpisodeScope,
+} from '../ai/episodeScope'
+import {
   stripExecutionRuntime,
   type AiSession,
   type ThreadEntry,
@@ -123,7 +128,17 @@ function restoreThreadEntries(
     if (based.card?.status !== 'pending') return based
     const card = reconcilePendingCard(based.card, aiRevision)
     if (card.status === 'executed') return { ...based, card }
-    return { ...based, card: revalidatePendingCard(card, validateCommands) }
+    const checked = revalidatePendingCard(card, validateCommands)
+    const request = requestForEntry(initialSession?.entries ?? [], index)
+    const episodeScope = checked.episodeScope ?? episodeScopeForRequest(request)
+    return {
+      ...based,
+      card: {
+        ...checked,
+        episodeScope,
+        v: validateEpisodeScope(checked.v, request, episodeScope) ?? checked.v,
+      },
+    }
   })
 }
 
@@ -197,7 +212,14 @@ function applyCardExecution(
 ): void {
   const { setThread, setArmedIdx, entry, idx, nextId } = args
   if (entry.card?.status !== 'pending' || !args.onApplyAiBatch) return
-  const err = args.onApplyAiBatch(entry.card.v.commands)
+  const scoped = validateEpisodeScope(
+    entry.card.v,
+    requestForEntry(args.thread, idx),
+    entry.card.episodeScope,
+  )
+  const err = scoped?.ok
+    ? args.onApplyAiBatch(scoped.commands)
+    : (scoped?.issues[0]?.message ?? '批次校验未通过')
   const receipt = {
     ...cardResultEntry(err, entry.card.v.commands.length, nextId),
     cardReceiptFor: entry.id,

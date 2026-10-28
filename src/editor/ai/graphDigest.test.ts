@@ -104,10 +104,10 @@ describe('buildGraphDigest（§6/§12.2 画布快照：id + 参数 + 连线语�
     expect(digest).toContain('屋顶')
     expect(digest).toContain('林晚')
     expect(digest).toContain('压抑')
-    expect(digest).toContain('- d1 对白·摊牌')
+    expect(digest).toContain('- d1 未分集 对白·摊牌')
     expect(digest).toContain('2 人')
     expect(digest).toContain('2 句')
-    expect(digest).toContain('- br1 分支·追或不追？')
+    expect(digest).toContain('- br1 未分集 分支·追或不追？')
     expect(digest).toContain('追/不追')
     expect(digest).toContain('- sh1 SHOT03·特写')
   })
@@ -350,7 +350,7 @@ describe('摘要总量预算与节选降级（issue #275：每轮画布摘要不
     const { nodes, edges } = bigCanvas(1200)
     const digest = buildGraphDigest(nodes, edges, resolvers())
     // 首个节点完整在列（稳定 id 保留，get_node 可按 id 补读）
-    expect(digest).toContain('- s1 场01·场1')
+    expect(digest).toContain('- s1 未分集 场01·场1')
     // 未列出量有明确计数，不无提示删除
     expect(digest).toMatch(/另有 \d+ 个节点未列出/)
     expect(digest).toMatch(/另有 \d+ 条连线未列出/)
@@ -372,7 +372,7 @@ describe('摘要总量预算与节选降级（issue #275：每轮画布摘要不
     const digest = buildGraphDigest(nodes, edges, resolvers(3, 3))
     expect(digest).not.toContain('未列出')
     expect(digest).not.toContain('已截断')
-    expect(digest).toContain('- s8 场08·场8')
+    expect(digest).toContain('- s8 未分集 场08·场8')
   })
 
   it('条数在上限内但拼接超总量时按字符硬上限截断并带截断标记', () => {

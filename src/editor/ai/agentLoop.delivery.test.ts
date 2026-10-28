@@ -66,6 +66,46 @@ function run(
 }
 
 describe('明确修改请求的预览交付', () => {
+  it.each([false, true])(
+    '新增节拍不得夹带旧分集（围栏=%s），整批回喂纠正',
+    async (fenced) => {
+      const stale = [
+        {
+          op: 'create_node',
+          nodeType: 'beat',
+          ref: 'new',
+          data: { name: '转折', episodeNo: 1 },
+        },
+        { op: 'update_node', nodeId: 'n1', patch: { episodeNo: 1 } },
+      ]
+      const messages: ChatMessage[] = [
+        { role: 'user', content: '创建第一集' },
+        { role: 'assistant', content: '已安排第一集。' },
+        { role: 'user', content: '根据剧情增加新的节拍' },
+      ]
+      chat
+        .mockResolvedValueOnce(proposal(fenced, stale))
+        .mockResolvedValueOnce(
+          proposal(fenced, [
+            { op: 'create_node', nodeType: 'beat', data: { name: '转折' } },
+          ]),
+        )
+      const result = await run('', messages)
+      expect(chat).toHaveBeenCalledTimes(2)
+      expect(result.validation).toMatchObject({
+        ok: true,
+        commands: [
+          { op: 'create_node', nodeType: 'beat', data: { name: '转折' } },
+        ],
+      })
+      expect(
+        messages.some(
+          (m) => /episodeNo/.test(m.content) && /分集/.test(m.content),
+        ),
+      ).toBe(true)
+    },
+  )
+
   it.each([
     '增加下一个场景',
     '在下一个节奏卡增加场景',

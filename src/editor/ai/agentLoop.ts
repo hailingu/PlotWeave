@@ -21,6 +21,7 @@ import {
   type ToolCallParse,
 } from './tools'
 import type { ProviderConfig } from '../../settings/types'
+import { validateEpisodeScope } from './episodeScope'
 
 /**
  * Agent 会话循环（数据模型 §12.2 朴素 tool-calling，issue 41 校验闭环）：
@@ -294,7 +295,10 @@ export async function runAgentLoop(
     const parsed = toolCallsToCommands(calls)
     const { readRequests, errors } = parsed
     const prose = (reply.content ?? '').trim()
-    const validation = validateReply(parsed, prose, validators)
+    const validation = validateEpisodeScope(
+      validateReply(parsed, prose, validators),
+      initialText,
+    )
     const attempted =
       calls.length > readRequests.length ||
       validation !== null ||
