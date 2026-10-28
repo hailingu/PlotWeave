@@ -118,3 +118,14 @@ export type DocumentRejectsLegacyZero = Reject<
 export type DocumentRejectsFutureVersion = Reject<
   Extends<{ schemaVersion: 2 }, DocumentVersionProbe>
 >
+
+/** Optional scene numbering accepts omission, while invalid null and explicit undefined remain outside persisted domain shapes (#933). */
+export type SceneNoCanBeOmitted = Expect<
+  Extends<Omit<SceneSpec, 'sceneNo'>, SceneSpec>
+>
+export type SceneNoRejectsNull = Reject<
+  Extends<{ sceneNo: null }, Pick<SceneSpec, 'sceneNo'>>
+>
+export type SceneNoRejectsExplicitUndefined = Reject<
+  Extends<{ sceneNo: undefined }, Pick<SceneSpec, 'sceneNo'>>
+>

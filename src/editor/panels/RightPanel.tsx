@@ -1,3 +1,4 @@
+import { sceneNumberText } from '../sceneNumber'
 import type { AiThreadCallbacks } from './aiThreadCallbacks'
 import type { ComponentProps } from 'react'
 import { SegmentedControl } from './SegmentedControl'
@@ -39,7 +40,7 @@ function sceneInspectorRows(
     { label: '名称', value: node.data.name },
     {
       label: '场号',
-      value: `SCENE ${String(node.data.sceneNo).padStart(2, '0')}`,
+      value: `SCENE ${sceneNumberText(node.data.sceneNo)}`,
     },
     { label: '内外景', value: node.data.interior ? '内' : '外' },
     {

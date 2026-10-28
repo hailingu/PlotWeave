@@ -79,6 +79,8 @@ type NamedFlowNode = Extract<
  * issue #99）：name/episodeNo 上移 meta.label/episodeNo，其余字段进 spec。 */
 function namedStoryNode(n: NamedFlowNode): StoryNode {
   const { name, episodeNo, ...spec } = n.data
+  // #933：清除态在文档对象中即省略，所有 JSON/宿主传输消费相同的可选契约。
+  if (n.type === 'scene' && spec.sceneNo === undefined) delete spec.sceneNo
   return {
     id: n.id,
     layout: layoutOf(n),

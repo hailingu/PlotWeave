@@ -83,31 +83,46 @@ function SceneCastChips({
  * 自由文本字段经 useCompositionSafeValue 缓冲中文组合输入（issue #42）。
  * 自 NodeSettingsPanel.tsx 外置（issue #39，ImageNodeForm.tsx 先例）。 */
 
-/** 场次输入（SceneForm 拆分，issue #99）：必填（导出/卡片头消费）——
- * 清空/非法输入不产生 patch，保留原值等用户输入完成；§4.1 正安全整数
- * 域内才提交（有限但越界值如 1e20 落载后会被顺位重发，同域拒收）。 */
+/** 可选场次使用缺失态；清除和重新输入都经原有补丁 / 历史通道（#933）。 */
 function SceneNoField({
   value,
   onPatch,
 }: {
-  readonly value: number
-  readonly onPatch: (n: number) => void
+  readonly value: number | undefined
+  readonly onPatch: (n: number | undefined) => void
 }) {
   return (
     <Field label="场次">
-      <input
-        className="pw-set-input"
-        type="number"
-        min={1}
-        value={value}
-        aria-label="场次"
-        onChange={(e) => {
-          const raw = e.target.value
-          if (raw === '') return
-          const n = Math.max(1, Math.floor(Number(raw)))
-          if (Number.isSafeInteger(n) && n !== value) onPatch(n)
-        }}
-      />
+      <div className="pw-set-ep">
+        <input
+          className="pw-set-input"
+          type="number"
+          min={1}
+          value={value ?? ''}
+          placeholder="未设置场次"
+          aria-label="场次"
+          onChange={(e) => {
+            const raw = e.target.value
+            if (raw === '') {
+              if (value !== undefined) onPatch(undefined)
+              return
+            }
+            const n = Math.max(1, Math.floor(Number(raw)))
+            if (Number.isSafeInteger(n) && n !== value) onPatch(n)
+          }}
+        />
+        {value !== undefined && (
+          <button
+            type="button"
+            className="pw-set-x"
+            aria-label="清除场次"
+            title="清除场次"
+            onClick={() => onPatch(undefined)}
+          >
+            ✕
+          </button>
+        )}
+      </div>
     </Field>
   )
 }

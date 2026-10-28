@@ -370,7 +370,8 @@ export function normalizeEdge(
 
 /** 场景/分镜编号顺位重发（§4.2 sceneNo/shotNo 值域：正的安全整数）：编号
  * 非法（非数、非整数、≤ 0、越界）时按文档序取本类型内最小未占用正整数
- * 并警告——编号仅作展示序号，重发不触碰任何引用；合法编号保留，包括重复。 */
+ * 并警告——缺失场次为合法空态，不参与重发；镜号仍必填。编号仅作展示序号，
+ * 重发不触碰任何引用；合法编号保留，包括重复。 */
 export function renumberSeqFields(
   nodes: StoryNode[],
   warnings: string[],
@@ -386,6 +387,8 @@ export function renumberSeqFields(
     // 只做编号值域的读改写，字段域由 REQUIRED_SCALARS/renumber 规则背书
     const spec = n.data.spec as unknown as Record<string, unknown>
     const cur = spec[key]
+    // #933：缺失场次是合法空态；显式非法值与必填镜号仍沿用修复。
+    if (n.type === 'scene' && cur === undefined) continue
     if (typeof cur === 'number' && Number.isSafeInteger(cur) && cur > 0) {
       used[n.type].add(cur)
       continue

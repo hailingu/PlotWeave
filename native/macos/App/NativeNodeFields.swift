@@ -16,7 +16,7 @@ struct NativeNodeFields: View {
             }
             if type == "scene" {
                 HStack(alignment: .top, spacing: 12) {
-                    NativeNumberField(label: "场次", value: data["sceneNo"]?.number) { target.patch(["sceneNo": .number($0)]) }
+                    NativeNumberField(label: "场次", value: data["sceneNo"]?.number, onClear: { target.clear("sceneNo") }) { target.patch(["sceneNo": .number($0)]) }
                     episodeField
                 }
             } else if ["beat", "dialogue", "branch"].contains(type) {

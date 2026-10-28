@@ -9,6 +9,161 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeProductionLifecycleTests {
+    /// Actual native clear buttons, React history and Swift disk reload share the optional numbering contract (#933).
+    @Test func sceneNumberClearControlsPersistAndUndoIndependently() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("独立清除编号")])
+        let id = try #require(created["id"]?.string)
+        var doc = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        doc["graph"] = outlineGraph()
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(doc), "expectExisting": .bool(true)])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        try await waitForHostReady(try #require(findWebView(mounted.window.contentView)))
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        _ = try await mounted.state.request("editor.patchNode", args: ["projectId": .string(id), "id": .string("A"), "patch": .object(["sceneNo": .number(7), "episodeNo": .number(2)])])
+        _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string("A")])
+        try await wait { mounted.state.selectedNodeID == "A" && mounted.state.editor["selected"]?["data"]?["sceneNo"] == .number(7) }
+        let controls = mounted.window
+        let before = try await numberingDocument(mounted.state, id: id)
+        try await assertNumberField(controls, label: "场次", value: "7")
+        try numberPreview(controls, name: "scene7-episode2")
+        try await pressNumberButton(controls, named: "清除场次")
+        try await waitForNumbering(mounted.state, scene: nil, episode: 2)
+        try await assertNumberField(controls, label: "场次", value: "")
+        try numberPreview(controls, name: "scene-cleared-episode2")
+        #expect(numberingInvariant(try await numberingDocument(mounted.state, id: id)) == numberingInvariant(before))
+        _ = try await mounted.state.request("editor.undo", args: ["projectId": .string(id)])
+        try await waitForNumbering(mounted.state, scene: 7, episode: 2)
+        try await assertNumberField(controls, label: "场次", value: "7")
+        try await pressNumberButton(controls, named: "清除集号")
+        try await waitForNumbering(mounted.state, scene: 7, episode: nil)
+        _ = try await mounted.state.request("editor.undo", args: ["projectId": .string(id)])
+        try await waitForNumbering(mounted.state, scene: 7, episode: 2)
+        try await exerciseNumberHistory(controls, state: mounted.state, id: id)
+        for selected in ["B", "A"] {
+            _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string(selected)])
+            try await wait { mounted.state.selectedNodeID == selected }
+        }
+        try await assertNumberField(controls, label: "场次", value: "")
+        #expect(!(try await NativeCreationControlFixture.elements(in: controls)).contains { NativeCreationControlFixture.string($0, "AXDescription") == "清除场次" })
+        try await enterSceneNumber(controls, text: "8")
+        try await waitForNumbering(mounted.state, scene: 8, episode: nil)
+        try await pressNumberButton(controls, named: "清除场次")
+        controls.makeFirstResponder(nil)
+        try await waitForNumbering(mounted.state, scene: nil, episode: nil)
+        try await waitForNumberDisk(projects, id: id)
+        _ = try await mounted.state.request("app.home")
+        try await wait { mounted.state.route == "home" }
+        let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+        let savedA = try #require(saved["graph"]?["nodes"]?.arrayValue?.first { $0["id"] == .string("A") })
+        #expect(savedA["data"]?["spec"]?.object?["sceneNo"] == nil)
+        #expect(savedA["data"]?["meta"]?.object?["episodeNo"] == nil)
+        #expect(numberingInvariant(saved) == numberingInvariant(before))
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string("A")])
+        try await waitForNumbering(mounted.state, scene: nil, episode: nil)
+        try await assertNumberField(controls, label: "场次", value: "")
+        #expect(mounted.state.error == nil)
+        await fixture.services.close()
+    }
+
+    /// Sequential clears have separate inverse keys and restore exact empty/value combinations.
+    private func exerciseNumberHistory(_ controls: NSWindow, state: NativeApplicationState, id: String) async throws {
+        try await pressNumberButton(controls, named: "清除场次")
+        try await waitForNumbering(state, scene: nil, episode: 2)
+        try await pressNumberButton(controls, named: "清除集号")
+        try await waitForNumbering(state, scene: nil, episode: nil)
+        _ = try await state.request("editor.undo", args: ["projectId": .string(id)])
+        try await waitForNumbering(state, scene: nil, episode: 2)
+        _ = try await state.request("editor.undo", args: ["projectId": .string(id)])
+        try await waitForNumbering(state, scene: 7, episode: 2)
+        _ = try await state.request("editor.redo", args: ["projectId": .string(id)])
+        try await waitForNumbering(state, scene: nil, episode: 2)
+        _ = try await state.request("editor.redo", args: ["projectId": .string(id)])
+        try await waitForNumbering(state, scene: nil, episode: nil)
+    }
+
+    /// Read the actual production serializer, independently of native field projections.
+    private func numberingDocument(_ state: NativeApplicationState, id: String) async throws -> HostJSON {
+        let result = try await state.request("editor.exportPreview", args: ["projectId": .string(id), "format": .string("json")])
+        return try HostJSON.decode(Data(try #require(result["text"]?.string).utf8))
+    }
+
+    /// Remove only A's two target fields so whole-graph equality catches changes to content, edges or other nodes.
+    private func numberingInvariant(_ document: HostJSON) -> HostJSON {
+        let nodes = (document["graph"]?["nodes"]?.arrayValue ?? []).map { node -> HostJSON in
+            guard node["id"] == .string("A"), var object = node.object, var data = node["data"]?.object,
+                  var spec = data["spec"]?.object, var meta = data["meta"]?.object else { return node }
+            spec.removeValue(forKey: "sceneNo"); meta.removeValue(forKey: "episodeNo")
+            data["spec"] = .object(spec); data["meta"] = .object(meta); object["data"] = .object(data)
+            return .object(object)
+        }
+        return .object(["nodes": .array(nodes), "edges": document["graph"]?["edges"] ?? .null])
+    }
+
+    /// Await authoritative projections rather than timing a mocked callback or assuming the control action completed.
+    private func waitForNumbering(_ state: NativeApplicationState, scene: Double?, episode: Double?, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        try await wait(sourceLocation: sourceLocation) { state.selectedNodeID == "A" && state.editor["selected"]?["data"]?["sceneNo"]?.number == scene
+            && state.editor["selected"]?["data"]?["episodeNo"]?.number == episode }
+    }
+
+    /// Public accessibility reads prove that the actual native input agrees with the document after focus/history changes.
+    private func assertNumberField(_ controls: NSWindow, label: String, value: String) async throws {
+        let field = try await NativeCreationControlFixture.element(in: controls, named: label, roles: ["AXTextField"])
+        #expect(NativeCreationControlFixture.string(field, "AXValue") == value)
+    }
+
+    /// Public AX activation exercises the actual production inspector in the existing shell window.
+    private func pressNumberButton(_ window: NSWindow, named name: String) async throws {
+        let button = try await NativeCreationControlFixture.button(in: window, named: name)
+        #expect(try NativeCreationControlFixture.isEnabled(button))
+        try NativeCreationControlFixture.press(button)
+    }
+
+    /// Actual native editing follows AppKit's public text delegate and the field's exposed semantic label.
+    private func enterSceneNumber(_ window: NSWindow, text: String) async throws {
+        func fields(_ view: NSView?) -> [NSTextField] {
+            guard let view else { return [] }
+            return (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap { fields($0) }
+        }
+        let field = try #require(fields(window.contentView).first {
+            $0.isEditable && !$0.isHiddenOrHasHiddenAncestor && !$0.visibleRect.isEmpty && $0.accessibilityLabel() == "场次"
+        })
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(field)
+        field.stringValue = text
+        field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+    }
+
+    /// Synthetic project screenshots document the two numbered-field states without using private user data.
+    private func numberPreview(_ window: NSWindow, name: String) throws {
+        let view = try #require(window.contentView)
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        Attachment.record(png, named: name + ".png")
+        let output = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("build/scene-number-previews", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        try png.write(to: output.appendingPathComponent(name + ".png"))
+    }
+
+    /// Save completion is observed on disk before navigating; a route projection alone is not a storage receipt.
+    private func waitForNumberDisk(_ store: NativeProjectStore, id: String) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+        while ContinuousClock.now < deadline {
+            let document = try await store.invoke(command: "load_project", args: ["id": .string(id)])
+            let node = document["graph"]?["nodes"]?.arrayValue?.first { $0["id"] == .string("A") }
+            if node?["data"]?["spec"]?.object?["sceneNo"] == nil && node?["data"]?["meta"]?.object?["episodeNo"] == nil { return }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        Issue.record("清除后的场次与集号未保存到磁盘")
+    }
+
     /// Dynamic ports, deleted nodes and empty graphs survive permanent page disposal and actual same-view reload.
     @Test(arguments: [false, true])
     func pageDisposalAfterDynamicPortsReloadsSavedProject(retainNode: Bool) async throws {
