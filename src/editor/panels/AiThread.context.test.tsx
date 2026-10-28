@@ -596,7 +596,7 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     const reply = deferredReply()
     const h = await setup({ projectId: 'p63-claim' })
     await sendInFlight()
-    expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    expect(screen.getByText('正在等待 AI 回复…')).toBeTruthy()
     const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
     h.unmount() // ⌘, 进入设置：编辑器整体卸载，回合仍在途
     await act(async () => {
@@ -604,7 +604,7 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     })
     const reopened = await setup({ projectId: 'p63-claim', session })
     expect(await screen.findByText('迟到回复。')).toBeTruthy()
-    expect(screen.queryByText('✦ 正在思考…')).toBeNull()
+    expect(screen.queryByText('正在等待 AI 回复…')).toBeNull()
     const last = reopened.saved[reopened.saved.length - 1]
     expect(last.entries.map((e) => e.role ?? e.kind)).toEqual([
       'user',
@@ -620,7 +620,7 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
     const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
     h.unmount()
     await setup({ projectId: 'p63-wait', session })
-    expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    expect(screen.getByText('正在等待 AI 回复…')).toBeTruthy()
     // busy 恢复：取消按钮替代输入框（issue #154）
     expect(screen.getByRole('button', { name: '取消' })).toBeTruthy()
     expect(screen.queryByLabelText('AI 对话输入')).toBeNull()
@@ -628,7 +628,7 @@ describe('AiThread 在途回合跨卸载按项目认领（issue #63）', () => {
       reply({ role: 'assistant', content: '等待后到达。' })
     })
     expect(await screen.findByText('等待后到达。')).toBeTruthy()
-    expect(screen.queryByText('✦ 正在思考…')).toBeNull()
+    expect(screen.queryByText('正在等待 AI 回复…')).toBeNull()
   })
 
   it('认领的迟到批次按当前画布重校验：目标已删则整批拒绝执行', async () => {
@@ -668,7 +668,7 @@ describe('AiThread 在途回合的归还与失败（issue #63）', () => {
     await flushAfterUnmount()
     const reopened = await setup({ projectId: 'p63-fail', session })
     expect(await screen.findByText(/网络中断/)).toBeTruthy()
-    expect(screen.queryByText('✦ 正在思考…')).toBeNull()
+    expect(screen.queryByText('正在等待 AI 回复…')).toBeNull()
     expect(reopened.saved).toHaveLength(0)
   })
 
@@ -679,11 +679,11 @@ describe('AiThread 在途回合的归还与失败（issue #63）', () => {
     const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
     h.unmount()
     const middle = await setup({ projectId: 'p63-return', session })
-    expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    expect(screen.getByText('正在等待 AI 回复…')).toBeTruthy()
     expect(screen.getByRole('button', { name: '取消' })).toBeTruthy()
     middle.unmount() // 等待期间再次进入设置
     await setup({ projectId: 'p63-return', session })
-    expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    expect(screen.getByText('正在等待 AI 回复…')).toBeTruthy()
     await act(async () => {
       reply({ role: 'assistant', content: '辗转到达。' })
     })
@@ -794,13 +794,13 @@ describe('AiThread 在途回合取消（issue #154）', () => {
       () => new Promise<AssistantMessage>(() => undefined),
     )
     await sendInFlight('丰富开场')
-    expect(screen.getByText('✦ 正在思考…')).toBeTruthy()
+    expect(screen.getByText('正在等待 AI 回复…')).toBeTruthy()
     const cancel = () => screen.getByRole('button', { name: '取消' })
     expect(cancel()).toBeTruthy()
 
     fireEvent.click(cancel())
     expect(await screen.findByText('已取消')).toBeTruthy()
-    expect(screen.queryByText('✦ 正在思考…')).toBeNull()
+    expect(screen.queryByText('正在等待 AI 回复…')).toBeNull()
     // 取消后立即可发下一轮：输入框恢复可用
     const input = screen.getByLabelText('AI 对话输入') as HTMLInputElement
     expect(input.disabled).toBe(false)
@@ -839,7 +839,7 @@ describe('AiThread 在途回合取消（issue #154）', () => {
     // 迟到结果同样收敛为「已取消」不上屏助手内容）
     expect(screen.queryByText('应被丢弃。')).toBeNull()
     expect(screen.getAllByText('已取消').length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByText('✦ 正在思考…')).toBeNull()
+    expect(screen.queryByText('正在等待 AI 回复…')).toBeNull()
   })
 })
 
