@@ -1,5 +1,5 @@
 /** #929：分集必须属于当前用户请求，历史方案、节点文案和模型理由不能扩大范围。 */
-import type { ThreadEntry } from '../../ai/session'
+import type { AiEpisodeScope, ThreadEntry } from '../../ai/session'
 import type { BatchValidation } from './commands'
 
 /** 明确的分集词或目标集号；不把普通「集」「集合」当作分集请求。 */
@@ -32,17 +32,25 @@ function keepsEpisodes(request: string): boolean {
 const DISCUSS_EPISODES =
   /^(?:请)?(?:如何|怎么|为什么|是否|解释|讨论)|^\s*(?:how|why|what)\b/i
 
-/** 将合法形状批次按本轮分集范围再校验；整批拒绝而非静默剥离字段。 */
-export function validateEpisodeScope(
-  validation: BatchValidation | null,
-  request: string,
-): BatchValidation | null {
-  if (!validation?.ok) return validation
+/** 只从本轮原始请求提取固定大小的分集范围，供卡片跨裁剪保留。 */
+export function episodeScopeForRequest(request: string): AiEpisodeScope {
   if (
     mentionsEpisode(request) &&
     !keepsEpisodes(request) &&
     !DISCUSS_EPISODES.test(request)
   )
+    return 'allow'
+  return 'preserve'
+}
+
+/** 将合法形状批次按本轮分集范围再校验；整批拒绝而非静默剥离字段。 */
+export function validateEpisodeScope(
+  validation: BatchValidation | null,
+  request: string,
+  recordedScope?: AiEpisodeScope,
+): BatchValidation | null {
+  if (!validation?.ok) return validation
+  if ((recordedScope ?? episodeScopeForRequest(request)) === 'allow')
     return validation
   const issues = validation.commands.flatMap((command, index) => {
     let fields: Record<string, unknown> | undefined

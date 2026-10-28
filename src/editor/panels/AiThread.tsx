@@ -14,7 +14,11 @@ import { useSettingsSnapshot } from '../../settings/useSettingsSnapshot'
 import { listChatModels, type ChatModelOption } from '../../settings/types'
 import { cardResultEntry } from './aiThreadModel'
 import { PreviewCard } from './PreviewCard'
-import { requestForEntry, validateEpisodeScope } from '../ai/episodeScope'
+import {
+  episodeScopeForRequest,
+  requestForEntry,
+  validateEpisodeScope,
+} from '../ai/episodeScope'
 import {
   stripExecutionRuntime,
   type AiSession,
@@ -125,15 +129,14 @@ function restoreThreadEntries(
     const card = reconcilePendingCard(based.card, aiRevision)
     if (card.status === 'executed') return { ...based, card }
     const checked = revalidatePendingCard(card, validateCommands)
+    const request = requestForEntry(initialSession?.entries ?? [], index)
+    const episodeScope = checked.episodeScope ?? episodeScopeForRequest(request)
     return {
       ...based,
       card: {
         ...checked,
-        v:
-          validateEpisodeScope(
-            checked.v,
-            requestForEntry(initialSession?.entries ?? [], index),
-          ) ?? checked.v,
+        episodeScope,
+        v: validateEpisodeScope(checked.v, request, episodeScope) ?? checked.v,
       },
     }
   })
@@ -212,6 +215,7 @@ function applyCardExecution(
   const scoped = validateEpisodeScope(
     entry.card.v,
     requestForEntry(args.thread, idx),
+    entry.card.episodeScope,
   )
   const err = scoped?.ok
     ? args.onApplyAiBatch(scoped.commands)
