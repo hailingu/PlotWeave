@@ -21,7 +21,7 @@ export interface OutlineDropDeps {
   applyDataPatch: (id: string, cmd: ReturnType<typeof episodeNoPatch>) => void
   setEdges: (fn: (eds: Edge[]) => Edge[]) => void
   pushHistory: (cmd: HistoryCommand) => void
-  /** 不可安全重排的拒绝提示上浮（actionError 横幅，issue #589）。 */
+  /** 不可安全重排的拒绝提示上浮（临时操作横幅，issues #589/#930）。 */
   onError: (message: string) => void
 }
 

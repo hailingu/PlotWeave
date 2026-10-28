@@ -42,8 +42,10 @@ export interface EditorLayoutProps {
   readonly view: CanvasView
   readonly graph: EditorGraphActions
   readonly ai: AiBridge
-  /** 拖放导入失败等瞬态动作诊断；null = 无。 */
+  /** 资产导入/恢复与需要恢复后重试的重做错误；null = 无。 */
   readonly actionError: string | null
+  /** 已结束的画布操作反馈，由会话所有者计时撤下。 */
+  readonly actionFeedback: string | null
   /** 独立于画布文档的项目 AI 会话。 */
   readonly aiSession: AiSession
   readonly aiSessionError: string | null

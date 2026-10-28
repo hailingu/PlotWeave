@@ -39,8 +39,10 @@ export interface EditorGraphActionsDeps {
   canvasRef: { current: HTMLDivElement | null }
   /** 自动排布完成后的视图适配。 */
   fitView: FitView
-  /** 拖放导入失败等瞬态动作诊断上浮。 */
+  /** 资产导入/恢复诊断可能需要保留现场，不能按普通完成反馈计时。 */
   onError: (message: string) => void
+  /** 已结束的大纲/排布/对齐操作反馈。 */
+  onActionFeedback: (message: string) => void
 }
 
 /** 编辑器全部画布写动作，按域分组下传。 */
@@ -90,7 +92,7 @@ function useGraphDeletion(
 
 /** 位置动作共用同一文档与历史入口：键盘移动、拖动、自动排布与选中对齐。 */
 function usePositionActions(deps: EditorGraphActionsDeps) {
-  const { doc, pushHistory, fitView, onError } = deps
+  const { doc, pushHistory, fitView, onActionFeedback } = deps
   const drag = useNodeDragHistory({
     nodesRef: doc.nodesRef,
     onNodesChange: doc.onNodesChange,
@@ -103,13 +105,13 @@ function usePositionActions(deps: EditorGraphActionsDeps) {
     setNodes: doc.setNodes,
     pushHistory,
     fitView,
-    onError,
+    onError: onActionFeedback,
   })
   const alignment = useCanvasAlignment({
     nodesRef: doc.nodesRef,
     setNodes: doc.setNodes,
     pushHistory,
-    onError,
+    onError: onActionFeedback,
   })
   return { drag, layout, alignment }
 }
@@ -126,6 +128,7 @@ export function useEditorGraphActions(
     screenToFlowPosition,
     canvasRef,
     onError,
+    onActionFeedback,
   } = deps
   const assets = useAssetIndex(doc.setAssets)
   const patch = useNodePatch(doc, pushHistory)
@@ -153,7 +156,7 @@ export function useEditorGraphActions(
     applyDataPatch: patch.applyDataPatch,
     setEdges: doc.setEdges,
     pushHistory,
-    onError,
+    onError: onActionFeedback,
   })
   const { drag, layout, alignment } = usePositionActions(deps)
   const drop = useCanvasDrop({

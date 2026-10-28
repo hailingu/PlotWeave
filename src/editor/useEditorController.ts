@@ -25,6 +25,7 @@ import {
   type EditorPersistence,
 } from './useEditorPersistence'
 import { useNodeEditApi } from './useNodeEditApi'
+import { useTransientActionFeedback } from './useTransientActionFeedback'
 import type { CommandHistory } from './editorLayoutProps'
 import type { NodeEditApi } from './nodeEdit'
 import type { HistoryCommand } from './history'
@@ -66,6 +67,8 @@ export interface EditorController {
   graph: EditorGraphActions
   ai: AiBridge
   actionError: string | null
+  /** 已结束的画布操作反馈，计时与恢复类错误相互独立。 */
+  actionFeedback: string | null
   nodeEditApi: NodeEditApi
   imageGen: ImageGenBinding
 }
@@ -79,6 +82,7 @@ export function useEditorController(
   const doc = useEditorDocument(project)
   const panels = useEditorPanels()
   const [actionError, setActionError] = useState<string | null>(null)
+  const feedback = useTransientActionFeedback(project.id)
   const persistence = useEditorPersistence(project, doc, onSave)
   const history = useCommandHistory(setActionError)
   const view = useCanvasView(doc, fitView)
@@ -91,6 +95,7 @@ export function useEditorController(
     canvasRef,
     fitView,
     onError: setActionError,
+    onActionFeedback: feedback.report,
   })
   const ai = useAiBridge({
     contentNodes: doc.contentNodes,
@@ -134,17 +139,28 @@ export function useEditorController(
     graph,
     ai,
     actionError,
+    actionFeedback: feedback.message,
     nodeEditApi,
-    imageGen: {
-      projectId: project.id,
-      nodes: doc.nodes,
-      nodesRef: doc.nodesRef,
-      assetsRef: doc.assetsRef,
-      settings: doc.settings,
-      applyDataPatch: graph.patch.applyDataPatch,
-      addAsset: graph.assets.addAsset,
-      removeAsset: graph.assets.removeAsset,
-      pushHistory: history.push,
-    },
+    imageGen: imageGenBinding(project.id, doc, graph, history.push),
+  }
+}
+
+/** Bind image generation to the same document, asset and history owners as canvas actions. */
+function imageGenBinding(
+  projectId: string,
+  doc: EditorDocument,
+  graph: EditorGraphActions,
+  pushHistory: (cmd: HistoryCommand) => void,
+): ImageGenBinding {
+  return {
+    projectId,
+    nodes: doc.nodes,
+    nodesRef: doc.nodesRef,
+    assetsRef: doc.assetsRef,
+    settings: doc.settings,
+    applyDataPatch: graph.patch.applyDataPatch,
+    addAsset: graph.assets.addAsset,
+    removeAsset: graph.assets.removeAsset,
+    pushHistory,
   }
 }

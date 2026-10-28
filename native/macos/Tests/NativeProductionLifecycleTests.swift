@@ -9,6 +9,67 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeProductionLifecycleTests {
+    /// Real WKWebView timers retire repeated native-outline refusals without mutating the document (#930).
+    @Test func outlineFeedbackExpiresAndDoesNotReturnAfterNavigation() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("操作反馈生命周期")])
+        let id = try #require(created["id"]?.string)
+        var doc = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        // An explicit viewport prevents startup fitView from changing the document after baseline capture.
+        var graph = try #require(outlineGraph().object)
+        graph["viewport"] = .object(["x": .number(0), "y": .number(0), "zoom": .number(1)])
+        doc["graph"] = .object(graph)
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(doc), "expectExisting": .bool(true)])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let web = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(web)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.editor["nodes"]?.arrayValue?.count == 5 }
+        let before = try await numberingDocument(mounted.state, id: id)
+        let args: [String: HostJSON] = ["projectId": .string(id), "id": .string("A"),
+            "target": .object(["kind": .string("row"), "anchorId": .string("X"), "position": .string("after")])]
+        _ = try await mounted.state.request("editor.outlineMove", args: args)
+        try await waitForActionFeedback(web, present: true)
+        try await Task.sleep(for: .seconds(3))
+        _ = try await mounted.state.request("editor.outlineMove", args: args)
+        try await Task.sleep(for: .milliseconds(5_100))
+        let text = try await web.evaluateJavaScript("document.querySelector('.pw-error-banner[role=alert]')?.textContent ?? ''") as? String
+        #expect(text?.contains("大纲拖拽未执行") == true)
+        #expect(text?.contains("请先在画布上调整连线") == true)
+        try await waitForActionFeedback(web, present: false)
+        #expect(try await numberingDocument(mounted.state, id: id) == before)
+        _ = try await mounted.state.request("editor.outlineMove", args: args)
+        try await waitForActionFeedback(web, present: true)
+        _ = try await mounted.state.request("app.home")
+        try await wait { mounted.state.route == "home" }
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        try await waitForActionFeedback(web, present: false)
+        let reopened = try await numberingDocument(mounted.state, id: id)
+        var expected = try #require(before.object)
+        var metadata = try #require(before["project"]?.object)
+        // app.home flushes the document: export now uses the reloaded save timestamp.
+        metadata["updatedAt"] = .string(try #require(reopened["project"]?["updatedAt"]?.string))
+        expected["project"] = .object(metadata)
+        #expect(reopened == .object(expected))
+        #expect(mounted.state.error == nil)
+        await fixture.services.close()
+    }
+
+    /// Observe rendered alerts with real browser scheduling, independently of native projections.
+    private func waitForActionFeedback(_ web: WKWebView, present: Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+        while ContinuousClock.now < deadline {
+            let visible = try await web.evaluateJavaScript("Array.from(document.querySelectorAll('[role=alert]')).some(node => node.textContent.includes('大纲拖拽未执行'))") as? Bool
+            if visible == present { return }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        Issue.record("大纲操作反馈未达到预期可见状态：\(present)")
+    }
+
     /// Actual native clear buttons, React history and Swift disk reload share the optional numbering contract (#933).
     @Test func sceneNumberClearControlsPersistAndUndoIndependently() async throws {
         let fixture = Fixture()
