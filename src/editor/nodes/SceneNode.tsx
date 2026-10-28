@@ -1,3 +1,4 @@
+import { sceneNumberText } from '../sceneNumber'
 import { Position, type NodeProps } from '@xyflow/react'
 import { useNodeEdit } from '../nodeEdit'
 import { SCENE_SHOT_HANDLE } from '../graphRules'
@@ -58,7 +59,7 @@ export function SceneNode({ id, data, selected }: NodeProps<SceneFlowNode>) {
       <div className="pw-index-body">
         <NodeKind
           kind="scene"
-          detail={`SCENE ${String(data.sceneNo).padStart(2, '0')}`}
+          detail={`SCENE ${sceneNumberText(data.sceneNo)}`}
         >
           <span className="pw-node-detail">{shotCountOf(id)} 镜</span>
           <NodeSettingsGear

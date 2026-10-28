@@ -106,8 +106,14 @@ struct NativeNumberField: View {
                 .onAppear { refresh() }
                 .onChange(of: value) { _, _ in if !focused { refresh() } }
                 .onChange(of: fieldIdentity) { _, _ in focused = false; refresh() }
-            if let onClear {
-                Button("清除", systemImage: "xmark.circle") { draft.replace("", identity: fieldIdentity); onClear() }.labelStyle(.iconOnly)
+            if let onClear, value != nil {
+                Button("清除" + label, systemImage: "xmark.circle") {
+                    // End the explicit edit so undo can refresh it; delayed projections still preserve focused typing.
+                    focused = false
+                    draft.replace("", identity: fieldIdentity)
+                    onClear()
+                }.labelStyle(.iconOnly)
+                    .help("清除" + label)
             }
         }
     }

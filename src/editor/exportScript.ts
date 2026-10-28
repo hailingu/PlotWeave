@@ -1,3 +1,4 @@
+import { sceneNumberText } from './sceneNumber'
 import type { Edge } from '@xyflow/react'
 import {
   buildExportOutline,
@@ -82,7 +83,7 @@ function shotAppendixLines(
   if (shots.length === 0) return []
   const lines: string[] = []
   lines.push(
-    `### 场 ${String(scene.data.sceneNo).padStart(2, '0')} · ${scene.data.name}（${shots.length} 镜）`,
+    `### 场 ${sceneNumberText(scene.data.sceneNo)} · ${scene.data.name}（${shots.length} 镜）`,
     '',
   )
   for (const shot of shots) {
@@ -115,7 +116,7 @@ function sceneBlockLines(
     .filter(Boolean)
     .join(' · ')
   const lines = [
-    `## 场 ${String(d.sceneNo).padStart(2, '0')} · ${d.name}`,
+    `## 场 ${sceneNumberText(d.sceneNo)} · ${d.name}`,
     '',
     meta,
     '',

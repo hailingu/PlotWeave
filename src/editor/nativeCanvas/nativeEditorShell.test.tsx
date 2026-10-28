@@ -1557,3 +1557,91 @@ it('invalid native command arguments reject without changing the document or his
     expect(view.editorProjection().canUndo, command).toBe(false)
   }
 })
+
+it('sceneNo clears independently, keeps content and topology, and has field-specific history (#933)', async () => {
+  nativeEditorFixture({
+    ...PROJECT,
+    nodes: [
+      { ...SCENE, data: { ...SCENE.data, sceneNo: 7, episodeNo: 2 } },
+      { ...SCENE, id: 'other' },
+    ],
+    edges: [
+      {
+        id: 'edge',
+        source: SCENE.id,
+        target: 'other',
+        className: 'pw-edge-sequence',
+      },
+    ],
+  })
+  const before = await exportedDocument()
+  await act(async () => {
+    expect(
+      await intent('editor.clearNodeField', { id: SCENE.id, field: 'sceneNo' }),
+    ).toEqual({ ok: null })
+  })
+  const cleared = await exportedDocument()
+  expect(cleared.graph.nodes[0].data.spec.sceneNo).toBeUndefined()
+  expect(cleared.graph.nodes[0].data.meta.episodeNo).toBe(2)
+  const expected = structuredClone(before)
+  delete expected.graph.nodes[0].data.spec.sceneNo
+  expect(cleared).toEqual(expected)
+  await act(async () => {
+    await intent('editor.clearNodeField', { id: SCENE.id, field: 'episodeNo' })
+  })
+  expect(
+    (await exportedDocument()).graph.nodes[0].data.meta.episodeNo,
+  ).toBeUndefined()
+  await act(async () => {
+    await intent('editor.undo')
+  })
+  expect(await exportedDocument()).toEqual(cleared)
+  await act(async () => {
+    await intent('editor.undo')
+  })
+  expect(await exportedDocument()).toEqual(before)
+  await act(async () => {
+    await intent('editor.redo')
+  })
+  expect(await exportedDocument()).toEqual(cleared)
+  await act(async () => {
+    await intent('editor.redo')
+  })
+  expect(
+    (await exportedDocument()).graph.nodes[0].data.meta.episodeNo,
+  ).toBeUndefined()
+  await act(async () => {
+    await intent('editor.patchNode', { id: SCENE.id, patch: { sceneNo: 8 } })
+  })
+  expect((await exportedDocument()).graph.nodes[0].data.spec.sceneNo).toBe(8)
+})
+
+it('repeated scene clearing is a no-op and rejects stale or foreign targets (#933)', async () => {
+  nativeEditorFixture(nativeListProject())
+  await act(async () => {
+    await intent('editor.clearNodeField', { id: SCENE.id, field: 'sceneNo' })
+  })
+  const cleared = await exportedDocument()
+  await act(async () => {
+    await intent('editor.clearNodeField', { id: SCENE.id, field: 'sceneNo' })
+  })
+  expect(await exportedDocument()).toEqual(cleared)
+  await act(async () => {
+    await intent('editor.undo')
+  })
+  expect((await exportedDocument()).graph.nodes[0].data.spec.sceneNo).toBe(1)
+  for (const args of [
+    { id: 'dialogue', field: 'sceneNo' },
+    { id: SCENE.id, field: 'shotNo' },
+    { id: SCENE.id, field: 'sceneNo', projectId: 'stale' },
+    { id: 'deleted', field: 'sceneNo' },
+  ]) {
+    const before = await exportedDocument()
+    await act(async () => {
+      expect(await intent('editor.clearNodeField', args)).toMatchObject({
+        error: { code: 'PW_INTENT_FAILED' },
+      })
+    })
+    expect(await exportedDocument()).toEqual(before)
+  }
+})

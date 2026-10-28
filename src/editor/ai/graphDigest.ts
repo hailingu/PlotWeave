@@ -1,3 +1,4 @@
+import { sceneNumberText } from '../sceneNumber'
 import type { Edge } from '@xyflow/react'
 import { SCENE_SHOT_HANDLE, branchOptionIdOf, edgeKindOf } from '../graphRules'
 import type { CanvasNode } from '../nodes/types'
@@ -83,8 +84,8 @@ const pad2 = (n: number) => String(n).padStart(2, '0')
 /** 场景/分镜的人读标签（issue #156）：AI 工作流内同一节点在图摘要与
  * 预览/执行回执中呈现同一格式——编号补零，两位以上保持完整（padStart
  * 不截断）；useAiBridge.nodeLabelOf 与本模块三处标签共用，不做第二实现。 */
-export function sceneLabel(sceneNo: number, name: string): string {
-  return `场${pad2(sceneNo)}·${name}`
+export function sceneLabel(sceneNo: number | undefined, name: string): string {
+  return `场${sceneNumberText(sceneNo)}·${name}`
 }
 
 /** 分镜标签（issue #156，同 sceneLabel 口径）。 */

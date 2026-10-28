@@ -346,6 +346,8 @@ J13–J16 补齐 [issue #502](https://github.com/hailingu/PlotWeave/issues/502) 
 
 ### 4.3 外壳交互（全部节点共享）
 
+**独立清除场次（[#933](https://github.com/hailingu/PlotWeave/issues/933)，已实现）**：场次与集号各自提供清除入口。原生 tooltip 和可访问名称分别为“清除场次”“清除集号”；Web 场次为“清除场次”，集号沿用“移出集”。按钮使用可聚焦的原生 / HTML Button，值为空时隐藏；输入框保持可编辑。清除只撤去对应编号，保留节点、另一编号、名称、梗概、引用及全部连线，不调用底部“删除节点”。清除、失焦、换选和保存重开均保持空态；重新填写恢复编号，撤销 / 重做恢复准确状态。持久化缺失字段表示未设置（数据模型 §4.2）；卡片、大纲与导出使用“未编号”，不伪造 0 或回填旧值。
+
 §4.1–4.2 中的齿轮形态与面板描述适用于浏览器／Tauri；Swift 原生版的六种节点不显示共享齿轮，属性入口按以下宿主边界呈现。
 
 - **名称在卡片头部**：场景 = 索引卡标题栏（名称 + SCENE 编号 + 🎞 镜数）、对白 = 标题行、节奏卡/分支正文即名字、分镜卡 = 镜号标题行。双击名称内联改名（发 `update_node_meta` 改 `meta.label`；**分支例外**——标题由 `spec.prompt` 派生、不落 `meta.label` 镜像，改名走 `update_node_spec` 改 prompt；**分镜卡无内联改名**——镜号标题由 `spec.shotNo` 派生，镜号在属性编辑器内编辑）。改名的 Enter 提交 / Esc 取消在输入法组合在途让位（#570）：组合中的 Enter/Esc 及 WebKit 晚于 compositionend 的 keyCode 229 键归输入法，不提交也不退出编辑；判定单一来源见 `src/platform/compositionKey.ts`。

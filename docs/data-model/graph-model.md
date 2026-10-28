@@ -99,6 +99,8 @@ type StoryNode =
 
 ### 4.2 各类型 spec
 
+**可选场次（[issue #933](https://github.com/hailingu/PlotWeave/issues/933)，已实现）**：`SceneSpec.sceneNo` 缺失表示未设置。既有合法编号保留；手动创建仍默认递增编号，跳过未编号场景。清除只删除该字段，不改变节点、集号、内容、连线或其他编号。JSON 不以 `null`、0 或空串表达清除；保存省略字段，重开保持空态，可重新填写正安全整数。空态在卡片、检查器、大纲、AI 标签及 Markdown 导出中显示“未编号”；原生和 Web 输入框为空。此为 v1 可选字段演进，不升级 schemaVersion；旧版本程序仍可能重编号，不承诺向旧程序降级回读。
+
 节点里写的一切内容——梗概、台词、以及将来 AI 生成的 prompt——都是 `spec` 的字段，随 `project.json` 持久化，无需额外存储。
 
 `src/model/document.ts` 保留本节与命令契约使用的公开 `NodeSpec` 名称（[issue #664](https://github.com/hailingu/PlotWeave/issues/664)）：它只汇总六种规格形状，不自带判别字段。当前生产读写仍使用 `StoryNode` 的 `type`／`spec` 对应关系；保留这个领域说明与类型组合接口，不意味着可用宽联合替代节点判别或运行时校验。
@@ -108,7 +110,7 @@ type NodeSpec = SceneSpec | BeatSpec | DialogueSpec | BranchSpec | ShotSpec | Im
 
 /** 场景：一个时空单元的叙事容器（UI 形态 = 索引卡，字段对齐 ui-design §4.2）。 */
 interface SceneSpec {
-  sceneNo: number            // 剧本场景头编号，展示为 SCENE 03；正整数且为安全整数（Number.isSafeInteger 且 > 0，命令边界与归一化均校验，§9.3/§11）
+  sceneNo?: number           // 可选场次；缺失 = 未设置，有值须为正安全整数（§9.3/§11，#933）
   interior: boolean          // 内景/外景徽标
   locationId?: string        // 引用 settings.locations
   time?: string              // 自由文本，如「夜·雨」
