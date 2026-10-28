@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ApplicationServices
 import SwiftUI
 import Testing
 import WebKit
@@ -9,6 +10,104 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeProductionLifecycleTests {
+    /// Real non-streaming WK requests publish readable native feedback; cancelled replies cannot replace a new round (#927).
+    @Test func aiRequestFeedbackFollowsActualTurnLifecycle() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let (mounted, id, gate) = try await prepareAiStatus(fixture)
+        let statusWindow = fixture.mountAi(state: mounted.state, projectId: id)
+        let args: [String: HostJSON] = ["projectId": .string(id), "text": .string("不要修改画布，只讨论人物。")]
+        let first = Task { try await mounted.state.request("ai.send", args: args) }
+        defer { first.cancel() }
+        try await wait { gate.replies.count == 1 && mounted.state.ai["feedback"]?["phase"]?.string == "waiting" }
+        try await assertAiStatus(statusWindow, title: "正在等待 AI 回复…")
+        _ = try await mounted.state.request("ai.cancel", args: ["projectId": .string(id)])
+        try await wait { mounted.state.ai["feedback"]?["phase"]?.string == "cancelled" }
+        try await assertAiStatus(statusWindow, title: "已停止本轮处理")
+        let second = Task { try await mounted.state.request("ai.send", args: args) }
+        defer { second.cancel() }
+        try await wait { gate.replies.count == 2 && mounted.state.ai["busy"]?.bool == true }
+        gate.finish(0, content: "旧轮迟到回复")
+        _ = try await first.value
+        #expect(mounted.state.ai["feedback"]?["phase"]?.string == "waiting")
+        #expect(mounted.state.ai["thread"]?.array.contains { $0["text"]?.string == "旧轮迟到回复" } != true)
+        // The native pane can remount without losing the still-current Web lifecycle.
+        statusWindow.contentView = nil
+        let remounted = fixture.mountAi(state: mounted.state, projectId: id)
+        try await assertAiStatus(remounted, title: "正在等待 AI 回复…")
+        gate.finish(1, content: "本轮文字回复")
+        _ = try await second.value
+        try await wait { mounted.state.ai["feedback"]?["phase"]?.string == "completed" }
+        try await assertAiStatus(remounted, title: "本轮回答已结束")
+        #expect(mounted.state.ai["busy"]?.bool == false)
+        let failed = Task { try await mounted.state.request("ai.send", args: args) }
+        defer { failed.cancel() }
+        try await wait { gate.replies.count == 3 }
+        gate.finish(2, error: true)
+        _ = try await failed.value
+        try await wait { mounted.state.ai["feedback"]?["phase"]?.string == "failed" }
+        try await assertAiStatus(remounted, title: "请求失败")
+        #expect(mounted.state.ai["error"]?.string?.contains("合成模型失败") == true)
+        await fixture.services.close()
+    }
+
+    /// Only the external model response is gated; production React, IPC, projection and native controls remain real.
+    private func prepareAiStatus(_ fixture: Fixture) async throws -> ((window: NSWindow, state: NativeApplicationState), String, AiReplyGate) {
+        let prefs = NativePreferences(root: fixture.root, machineMaterial: { "fixture-machine" })
+        let encrypted = try await prefs.invoke(command: "set_provider_key", args: ["providerId": .string("openai"), "key": .string("fixture-key")])
+        _ = try await prefs.invoke(command: "save_prefs", args: ["prefs": .object([
+            "providers": .array([.object(["id": .string("openai"), "label": .string("合成模型"), "baseUrl": .string("https://provider.example/v1"), "enabled": .bool(true), "models": .array([.string("fixture-model")]), "keyEnc": encrypted])]),
+            "defaultChat": .string("openai:fixture-model")
+        ])])
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("AI 状态回归")])
+        let id = try #require(created["id"]?.string)
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let web = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(web)
+        let coordinator = try #require(web.navigationDelegate as? WebCanvasCoordinator)
+        let gate = AiReplyGate(coordinator: coordinator)
+        let controller = web.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: "plotweaveHost", contentWorld: .page)
+        controller.addScriptMessageHandler(gate, contentWorld: .page, name: "plotweaveHost")
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.ai["ready"]?.bool == true }
+        return (mounted, id, gate)
+    }
+
+    /// The real native accessibility element must expose the same title as the request owner.
+    private func assertAiStatus(_ window: NSWindow, title: String) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            let elements = try await NativeCreationControlFixture.elements(in: window)
+            if elements.contains(where: {
+                NativeCreationControlFixture.string($0, kAXIdentifierAttribute) == "ai.requestStatus"
+                    && NativeCreationControlFixture.string($0, kAXDescriptionAttribute) == title
+            }) { return }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        Issue.record("原生 AI 请求状态未呈现：\(title)")
+    }
+
+    /// Deterministic external-response seam holds replies on the same production WK RPC futures.
+    @MainActor private final class AiReplyGate: NSObject, WKScriptMessageHandlerWithReply {
+        let coordinator: WebCanvasCoordinator
+        var replies: [@MainActor @Sendable (Any?, String?) -> Void] = []
+        /// Non-model requests keep their original service and session validation.
+        init(coordinator: WebCanvasCoordinator) { self.coordinator = coordinator }
+        /// Holds model transport only; no public endpoint or user credential is accessed.
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping @MainActor @Sendable (Any?, String?) -> Void) {
+            if (message.body as? [String: Any])?["command"] as? String == "llm_chat" { replies.append(replyHandler) }
+            else { coordinator.userContentController(controller, didReceive: message, replyHandler: replyHandler) }
+        }
+        /// Releases an owned pending transport request with a standard host envelope.
+        func finish(_ index: Int, content: String = "", error: Bool = false) {
+            replies[index](error ? ["error": ["code": "PW_FIXTURE_MODEL_FAILURE", "message": "合成模型失败"]]
+                : ["ok": ["role": "assistant", "content": content]], nil)
+        }
+    }
+
     /// Real WKWebView timers retire repeated native-outline refusals without mutating the document (#930).
     @Test func outlineFeedbackExpiresAndDoesNotReturnAfterNavigation() async throws {
         let fixture = Fixture()
@@ -707,6 +806,17 @@ struct NativeProductionLifecycleTests {
             // A nonactive app-hosted process still needs visible WebKit animation frames.
             window.orderFrontRegardless()
             return (window, state)
+        }
+
+        /// The actual native AI pane consumes the production page's projection without another session owner.
+        func mountAi(state: NativeApplicationState, projectId: String) -> NSWindow {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.level = .floating
+            window.contentView = NSHostingView(rootView: NativeAiView(state: state, projectId: projectId))
+            windows.append(window)
+            window.orderFrontRegardless()
+            return window
         }
 
         /// Teardown invalidates Web owners before removing only this fixture's disposable data.

@@ -24,6 +24,7 @@ import type { AiCommitIdentity } from '../ai/commitIdentity'
 import { useAiSessionPersistence } from '../ai/useAiSessionPersistence'
 import { revalidatePendingCard, useAiTurn } from './aiThreadTurn'
 import { AiTopbar } from './AiThreadTopbar'
+import { AiRequestStatus } from './AiRequestStatus'
 import { useNativeAiShell } from '../nativeCanvas/useNativeAiShell'
 import { isSwiftHost } from '../../platform/hostEnvironment'
 import { isCompositionKey } from '../../platform/compositionKey'
@@ -349,7 +350,6 @@ function AiThreadTimeline({
           />
         </div>
       ))}
-      {busy && <div className="pw-ai-thinking">✦ 正在思考…</div>}
       {error && <div className="pw-ai-msg pw-ai-msg-error">{error}</div>}
     </div>
   )
@@ -611,6 +611,7 @@ export const AiThread = memo(function AiThread(props: AiThreadProps) {
         onExecute={msg.executeCard}
         onDismiss={msg.markDismissed}
       />
+      <AiRequestStatus feedback={turn.feedback} />
       <AiComposer
         draft={turn.draft}
         setDraft={turn.setDraft}

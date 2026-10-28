@@ -7,6 +7,7 @@ import {
 } from '../../platform/nativeShell'
 import type { ThreadEntry } from '../../ai/session'
 import type { ChatModelOption } from '../../settings/types'
+import type { AiTurnFeedback } from '../panels/aiTurnStatus'
 
 /** Production AI controller inputs; credentials are deliberately absent from this bridge shape. */
 export interface NativeAiOptions {
@@ -28,6 +29,7 @@ export interface NativeAiOptions {
   }
   turn: {
     busy: boolean
+    feedback: AiTurnFeedback | null
     error: string | null
     knowsCanvas: boolean
     setKnowsCanvas: (value: boolean) => void
@@ -183,6 +185,7 @@ export function useNativeAiShell(options: NativeAiOptions): void {
           available: options.models.keyOkByProvider[item.providerId] === true,
         })),
         busy: options.turn.busy,
+        feedback: options.turn.feedback,
         error: options.turn.error,
         saveError: options.saveError,
         knowsCanvas: options.turn.knowsCanvas,

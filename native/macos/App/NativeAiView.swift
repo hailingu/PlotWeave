@@ -28,6 +28,7 @@ struct NativeAiView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             timeline
+            requestFeedback
             composer
         }
         .padding(14)
@@ -35,6 +36,25 @@ struct NativeAiView: View {
         .confirmationDialog("清空当前 AI 会话？", isPresented: $confirmClear) {
             Button("清空会话", role: .destructive) { send("ai.clear", args: ["confirmed": .bool(true)]) }
         } message: { Text("未确认的改动预览也会清除，此操作无法撤销。") }
+    }
+
+    /// Stable feedback consumes the Web lifecycle projection; this view never infers provider progress.
+    @ViewBuilder private var requestFeedback: some View {
+        if let feedback = ai["feedback"], let title = feedback["title"]?.string {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.subheadline.weight(.semibold))
+                if let detail = feedback["detail"]?.string {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(.quaternary, in: .rect(cornerRadius: 8))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("ai.requestStatus")
+            .accessibilityLabel(title)
+            .accessibilityValue(feedback["detail"]?.string ?? "")
+        }
     }
 
     /// The conversation header exposes session actions; application preferences remain in the standard menu.
