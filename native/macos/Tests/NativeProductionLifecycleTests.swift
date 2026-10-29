@@ -45,7 +45,7 @@ struct NativeProductionLifecycleTests {
         #expect(episodeOwnership(try await numberingDocument(mounted.state, id: id)) == assigned)
         _ = try await mounted.state.request("app.home")
         try await wait { mounted.state.route == "home" }
-        let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+        let saved = try await waitForEpisodeDisk(projects, id: id, expected: assigned)
         #expect(episodeOwnership(saved) == assigned)
         #expect(edgePairs(saved) == ["b->s", "d->r", "s->d"])
         mounted.window.close(); mounted.window.contentView = nil
@@ -89,6 +89,17 @@ struct NativeProductionLifecycleTests {
             guard let id = node["id"]?.string else { return nil }
             return (id, node["data"]?["meta"]?["episodeNo"] ?? .null)
         })
+    }
+
+    /// Navigation projects the home route before asynchronous storage settles; read real bytes until the confirmed ownership is durable.
+    private func waitForEpisodeDisk(_ projects: NativeProjectStore, id: String, expected: [String: HostJSON]) async throws -> HostJSON {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+        while ContinuousClock.now < deadline {
+            let document = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+            if episodeOwnership(document) == expected { return document }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        throw HostFailure(code: "PW_TEST_EPISODE_SAVE_TIMEOUT", message: "分集归属未在期限内保存到真实磁盘")
     }
 
     /// Real non-streaming WK requests publish readable native feedback; cancelled replies cannot replace a new round (#927).
