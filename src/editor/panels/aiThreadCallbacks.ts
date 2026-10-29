@@ -2,6 +2,7 @@ import type {
   AiCommand,
   BatchValidation,
   ValidatedCommand,
+  AiBatchConfirmation,
 } from '../ai/commands'
 
 /** 编辑器交给 AI 会话的能力契约；领域聚合允许省略，显式 undefined 不是已接线能力。 */
@@ -25,7 +26,10 @@ export interface AiThreadCallbacks {
     cursor?: string,
   ) => string
   /** 已确认批次作为单一复合命令执行；错误返回文案，成功返回 null。 */
-  readonly onApplyAiBatch?: (commands: ValidatedCommand[]) => string | null
+  readonly onApplyAiBatch?: (
+    commands: ValidatedCommand[],
+    confirmation?: AiBatchConfirmation,
+  ) => string | null
 }
 
 /** React/回合层转发可选成员时允许显式 undefined = 未接线；不放宽领域聚合的缺省约束。 */

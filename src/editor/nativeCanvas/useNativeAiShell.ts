@@ -8,6 +8,7 @@ import {
 import type { ThreadEntry } from '../../ai/session'
 import type { ChatModelOption } from '../../settings/types'
 import type { AiTurnFeedback } from '../panels/aiTurnStatus'
+import { requiresBatchConfirmation } from '../ai/commands'
 
 /** Production AI controller inputs; credentials are deliberately absent from this bridge shape. */
 export interface NativeAiOptions {
@@ -72,8 +73,8 @@ function cardAction(
     return
   }
   if (!card.v.ok) throw new Error('这批改动未通过验证。')
-  if (card.v.hasDeletes && options.messages.armedIdx !== index)
-    throw new Error('请先确认包含删除的改动。')
+  if (requiresBatchConfirmation(card.v) && options.messages.armedIdx !== index)
+    throw new Error('请先确认包含删除或分集冲突的改动。')
   options.messages.executeCard(index)
 }
 

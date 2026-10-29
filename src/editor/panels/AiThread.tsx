@@ -25,6 +25,11 @@ import {
   type ThreadEntry,
 } from '../../ai/session'
 import type { AiCommitIdentity } from '../ai/commitIdentity'
+import {
+  toInboundCommands,
+  requiresBatchConfirmation,
+  type BatchValidation,
+} from '../ai/commands'
 
 import { useAiSessionPersistence } from '../ai/useAiSessionPersistence'
 import { revalidatePendingCard, useAiTurn } from './aiThreadTurn'
@@ -200,7 +205,10 @@ function cardAfterExecution(
  * pending，画布落盘确认后再写 executed。回执关联卡片 id（可能追加在
  * 会话尾部）：未确认落盘的执行按关联剔除回执。 */
 function applyCardExecution(
-  args: Pick<ForwardedAiThreadCallbacks, 'onApplyAiBatch'> & {
+  args: Pick<
+    ForwardedAiThreadCallbacks,
+    'onApplyAiBatch' | 'onValidateCommands'
+  > & {
     readonly thread: ThreadEntry[]
     readonly setThread: Dispatch<SetStateAction<ThreadEntry[]>>
     readonly setArmedIdx: Dispatch<SetStateAction<number | null>>
@@ -208,20 +216,51 @@ function applyCardExecution(
     readonly idx: number
     readonly nextId: () => number
     readonly identity?: AiCommitIdentity | undefined
+    readonly armed: boolean
   },
 ): void {
   const { setThread, setArmedIdx, entry, idx, nextId } = args
   if (entry.card?.status !== 'pending' || !args.onApplyAiBatch) return
+  const fresh = args.onValidateCommands?.(
+    toInboundCommands(entry.card.v.commands),
+  )
+  if (
+    fresh?.ok &&
+    fresh.episodeAssignment?.fingerprint !==
+      entry.card.v.episodeAssignment?.fingerprint
+  ) {
+    setThread((t) =>
+      t.map((e, i) =>
+        i === idx && e.card
+          ? {
+              ...e,
+              card: {
+                ...e.card,
+                v: fresh,
+                executionError:
+                  '分集关联预览已更新，请查看全部改动并重新确认。',
+              },
+            }
+          : e,
+      ),
+    )
+    setArmedIdx(null)
+    return
+  }
+  if (requiresBatchConfirmation(entry.card.v) && !args.armed) return
   const scoped = validateEpisodeScope(
     entry.card.v,
     requestForEntry(args.thread, idx),
     entry.card.episodeScope,
   )
-  const err = scoped?.ok
-    ? args.onApplyAiBatch(scoped.commands)
-    : (scoped?.issues[0]?.message ?? '批次校验未通过')
+  const err = executeScopedBatch(args.onApplyAiBatch, scoped, args.armed)
   const receipt = {
-    ...cardResultEntry(err, entry.card.v.commands.length, nextId),
+    ...cardResultEntry(
+      err,
+      entry.card.v.episodeAssignment?.commandCount ??
+        entry.card.v.commands.length,
+      nextId,
+    ),
     cardReceiptFor: entry.id,
   }
   setThread((t) => [
@@ -233,6 +272,20 @@ function applyCardExecution(
     receipt,
   ])
   setArmedIdx(null)
+}
+
+/** 分集批次携带本次签名与明确冲突确认；普通批次沿既有单参数执行通道。 */
+function executeScopedBatch(
+  apply: NonNullable<AiThreadCallbacks['onApplyAiBatch']>,
+  validation: BatchValidation | null,
+  armed: boolean,
+): string | null {
+  if (!validation?.ok) return validation?.issues[0]?.message ?? '批次校验未通过'
+  if (!validation.episodeAssignment) return apply(validation.commands)
+  return apply(validation.commands, {
+    episodeFingerprint: validation.episodeAssignment.fingerprint,
+    episodeConflicts: armed,
+  })
 }
 
 /** 会话线程域（逻辑 hook，issue #39 拆分）：条目追加、预览卡执行/忽略
@@ -279,6 +332,8 @@ function useAiThreadMessages(
       idx,
       nextId,
       onApplyAiBatch: opts.onApplyAiBatch,
+      onValidateCommands: opts.onValidateCommands,
+      armed: armedIdx === idx,
       identity: opts.identity,
     })
 
@@ -516,6 +571,7 @@ function AiEntryBody({
           onArm={onArm}
           onExecute={onExecute}
           onDismiss={onDismiss}
+          executionError={entry.card.executionError}
         />
       )}
     </>

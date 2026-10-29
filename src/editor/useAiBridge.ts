@@ -16,9 +16,11 @@ import {
   type AiGraphSnapshot,
   type BatchValidation,
   type ValidatedCommand,
+  type AiBatchConfirmation,
 } from './ai/commands'
 import { validateAiBatch } from './ai/batchFold'
 import { simulateBatch, type BatchOps, type BuildNewNode } from './ai/batchSim'
+import { planEpisodeAssignments } from './ai/episodeAssignment'
 import type { HistoryCommand } from './history'
 import {
   resolveCharacterName,
@@ -94,7 +96,10 @@ export interface AiBridge {
   findNodes: (query: string, offset?: number, cursor?: string) => string
   /** ✦AI 改动落地：整批作为一条复合命令入栈；返回错误文案或 null。
    * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）。 */
-  applyAiBatch: (batch: ValidatedCommand[]) => string | null
+  applyAiBatch: (
+    batch: ValidatedCommand[],
+    confirmation?: AiBatchConfirmation,
+  ) => string | null
 }
 
 /** AI 校验用的图快照装配（§12.2）：类型 + 分支选项（id）供分类型校验与
@@ -163,14 +168,31 @@ function applyValidatedBatch(
     pushHistory: (cmd: HistoryCommand) => void
     closeSettings: () => void
   },
+  confirmation?: AiBatchConfirmation,
 ): string | null {
   if (batch.length === 0) return null
   const fresh = validateAiBatch(toInboundCommands(batch), ctx.snapshot())
   if (!fresh.ok) {
     return `改动无法安全执行：${fresh.issues[0]?.message ?? '批次校验未通过'}`
   }
+  const plan = planEpisodeAssignments(
+    fresh,
+    ctx.nodesRef.current,
+    ctx.edgesRef.current,
+  )
+  const assignment = plan.validation.episodeAssignment
+  if (assignment && confirmation?.episodeFingerprint !== assignment.fingerprint)
+    return '分集关联预览已变化，请查看全部改动后重新确认。'
+  if (assignment?.conflicts.length && !confirmation?.episodeConflicts)
+    return '分集存在冲突，画布未更改；请明确确认本次冲突或取消。'
+  const expanded = validateAiBatch(
+    toInboundCommands(plan.commands),
+    ctx.snapshot(),
+  )
+  if (!expanded.ok)
+    return `关联改动无法安全执行：${expanded.issues[0]?.message ?? '批次校验未通过'}`
   const sim = simulateBatch(
-    fresh.commands,
+    expanded.commands,
     ctx.ops,
     ctx.nodesRef.current,
     ctx.edgesRef.current,
@@ -291,15 +313,23 @@ function useAiReadTools(deps: AiReadToolsDeps) {
     (text: string): BatchValidation | null => {
       const parsed = extractBatchJson(text)
       if (!parsed) return null
-      return validateAiBatch(parsed.commands, aiSnapshot())
+      return planEpisodeAssignments(
+        validateAiBatch(parsed.commands, aiSnapshot()),
+        nodesRef.current,
+        edgesRef.current,
+      ).validation
     },
-    [aiSnapshot],
+    [aiSnapshot, nodesRef, edgesRef],
   )
 
   const validateCommands = useCallback(
     (commands: AiCommand[]): BatchValidation | null =>
-      validateAiBatch(commands, aiSnapshot()),
-    [aiSnapshot],
+      planEpisodeAssignments(
+        validateAiBatch(commands, aiSnapshot()),
+        nodesRef.current,
+        edgesRef.current,
+      ).validation,
+    [aiSnapshot, nodesRef, edgesRef],
   )
 
   return {
@@ -345,17 +375,30 @@ export function useAiBridge(deps: AiBridgeDeps): AiBridge {
    * 入参为整批校验通过的执行命令（预览卡的合法子集，issue 16）；
    * 重校验与入栈编排见 applyValidatedBatch。 */
   const applyAiBatch = useCallback(
-    (batch: ValidatedCommand[]): string | null =>
-      applyValidatedBatch(batch, {
-        snapshot: aiSnapshot,
-        ops: { buildNewNode, applyDataPatch, setNodes, setEdges, setSettings },
-        nodesRef,
-        edgesRef,
-        settingsRef,
-        setAiRevision,
-        pushHistory,
-        closeSettings,
-      }),
+    (
+      batch: ValidatedCommand[],
+      confirmation?: AiBatchConfirmation,
+    ): string | null =>
+      applyValidatedBatch(
+        batch,
+        {
+          snapshot: aiSnapshot,
+          ops: {
+            buildNewNode,
+            applyDataPatch,
+            setNodes,
+            setEdges,
+            setSettings,
+          },
+          nodesRef,
+          edgesRef,
+          settingsRef,
+          setAiRevision,
+          pushHistory,
+          closeSettings,
+        },
+        confirmation,
+      ),
     [
       aiSnapshot,
       applyDataPatch,
