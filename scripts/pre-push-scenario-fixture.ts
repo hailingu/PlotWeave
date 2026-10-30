@@ -179,6 +179,12 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
   if (!fullGate) {
     writeGateRoutingProbe(resolve(sandbox, 'scripts/sonar-quality-gate.sh'))
   }
+  // #941：旧路由矩阵只观察原门禁边界；ub-mode 的真实对象/失败检查由
+  // ub-mode-gate.test.ts 单独集成验证，不能将此沙箱替身当真实技能执行。
+  writeFileSync(
+    resolve(sandbox, 'scripts/ub-mode-gate.ts'),
+    'process.exitCode = 0\n',
+  )
   // 沙箱产物走根层文件（calls.log 等）：提交沙箱级 .gitignore，使快路径
   // 的未跟踪检查在产物存在时仍可成立（--exclude-standard 生效的实证）
   writeFileSync(

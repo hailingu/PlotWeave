@@ -216,6 +216,11 @@ function copyScenarioFiles(sandbox: string): string {
   const bin = resolve(sandbox, 'bin')
   mkdirSync(bin, { recursive: true })
   mkdirSync(resolve(sandbox, 'scripts'), { recursive: true })
+  // #941：本矩阵观察原台账/树标记；真实 ub-mode 边界另有集成回归。
+  writeFileSync(
+    resolve(sandbox, 'scripts/ub-mode-gate.ts'),
+    'process.exitCode = 0\n',
+  )
   mkdirSync(resolve(sandbox, '.githooks'), { recursive: true })
   for (const script of [
     'check-docs.sh',

@@ -347,6 +347,9 @@ while read -r commit ref_scope local_ref; do
     *",$commit,"*) continue ;;
   esac
   analyzed_commits="$analyzed_commits,$commit"
+  # #941：每个实际发布对象须先通过真实 ub-mode 检查，文档范围也不豁免。
+  "$node_bin" "$main_root/scripts/ub-mode-gate.ts" verify "$commit" ||
+    fail "ub-mode 检查证据无效：$local_ref"
   short=$(git rev-parse --short "$commit")
   # 每次 ref 重置范围环境，避免同次多 ref 推送互相继承（owner 指示
   # 2026-10-18：文档/单栈分流；docs 不跑代码回归/覆盖率，单栈只跑该栈

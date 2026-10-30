@@ -21,6 +21,8 @@
     "tauri": "tauri",
     "test:coverage": "vitest run --coverage",
     "hooks:install": "node scripts/install-hooks.mjs",
+    "ub:check": "node scripts/ub-mode-gate.ts run",
+    "pr:create": "node scripts/ub-mode-gate.ts pr",
     "prepare": "node scripts/install-hooks.mjs",
     "sonar:gate": "sh scripts/sonar-quality-gate.sh",
     "check:static": "sh scripts/check-static.sh",

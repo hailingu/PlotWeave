@@ -13,6 +13,8 @@ export default tseslint.config(
       'src-tauri',
       'native/macos/App/WebCanvas',
       'native/macos/build',
+      'target/mutation-workers/**',
+      'target/mutator-backup/**',
     ],
   },
   {

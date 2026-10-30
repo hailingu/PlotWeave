@@ -7,6 +7,10 @@
 
 **整理日期**：2026-10-01
 
+2026-10-30（[#941](https://github.com/hailingu/PlotWeave/issues/941)）：每个唯一
+非删除提交先通过 [ub-mode 本地发布门禁](ub-mode-gate.md)，再运行以下既有分流。
+docs-only 也需有效 ub-mode 记录；原覆盖率、Sonar、隔离与台账语义保持。
+
 ## Scoped Push Routing (2026-10-18)
 
 所有者指示（2026-10-18）在 `pre-push` 引入按变更范围分派；commit-creating

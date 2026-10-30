@@ -14,6 +14,9 @@ const registeredFloors: Readonly<Record<string, number>> = {
   'scripts/native-canvas-coverage.ts': 80,
   'scripts/native-coverage.ts': 50,
   'scripts/scripts-coverage-floor.ts': 80,
+  'scripts/ub-mode-evidence.ts': 80,
+  'scripts/ub-mode-gate.ts': 80,
+  'scripts/ub-mode-run.ts': 80,
 }
 
 /** 生成 scripts 下限组（键为仓库相对 exact-path，glob 元字符此时不存在；
