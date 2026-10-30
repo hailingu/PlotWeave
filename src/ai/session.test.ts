@@ -3,6 +3,41 @@ import { normalizeAiSession } from './session'
 
 describe('normalizeAiSession', () => {
   it.each([
+    {},
+    { fingerprint: '旧签名', conflicts: null, commandCount: 2 },
+    '损坏',
+  ])(
+    '异常关联预览元数据被剥离，保留原始待重校验命令：%j',
+    (episodeAssignment) => {
+      const result = normalizeAiSession({
+        schemaVersion: 1,
+        entries: [
+          {
+            id: 1,
+            kind: 'msg',
+            role: 'assistant',
+            text: '预览',
+            card: {
+              status: 'pending',
+              v: {
+                ok: true,
+                items: [],
+                commands: [],
+                issues: [],
+                hasDeletes: false,
+                episodeAssignment,
+              },
+            },
+          },
+        ],
+      })
+      expect(
+        result.session.entries[0]?.card?.v.episodeAssignment,
+      ).toBeUndefined()
+      expect(result.session.entries[0]?.card?.status).toBe('pending')
+    },
+  )
+  it.each([
     ['allow', 'allow'],
     ['preserve', 'preserve'],
     [undefined, undefined],

@@ -10,6 +10,98 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeProductionLifecycleTests {
+    /// A legacy beat-only AI card expands in the real page, commits all memberships and survives a new native window (#931).
+    @Test func aiEpisodeAssignmentPersistsUndoRedoAndWindowReopen() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("AI 分集持久化")])
+        let id = try #require(created["id"]?.string)
+        var doc = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        doc["graph"] = episodeGraph()
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(doc), "expectExisting": .bool(true)])
+        let session = try JSONDecoder().decode(HostJSON.self, from: Data("""
+            {"schemaVersion":1,"entries":[
+              {"id":1,"kind":"msg","role":"user","text":"为现有的节奏卡安排合适的分集"},
+              {"id":2,"kind":"msg","role":"assistant","text":"合成分集方案","card":{"status":"pending","v":{
+                "ok":true,"items":[],"issues":[],"hasDeletes":false,
+                "commands":[{"op":"update_node","nodeId":"b","patch":{"nodeType":"beat","patch":{"episodeNo":1}}}]
+              }}}
+            ]}
+            """.utf8))
+        _ = try await projects.invoke(command: "save_ai_session", args: ["id": .string(id), "session": session])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        try await waitForHostReady(try #require(findWebView(mounted.window.contentView)))
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.ai["thread"]?.array.count == 2 }
+        #expect(mounted.state.ai["thread"]?.array.last?["card"]?["v"]?["episodeAssignment"]?["commandCount"]?.number == 4)
+        _ = try await mounted.state.request("ai.execute", args: ["projectId": .string(id), "entryId": .number(2)])
+        let assigned: [String: HostJSON] = ["b": .number(1), "s": .number(1), "d": .number(1), "r": .number(1), "o": .number(2)]
+        #expect(episodeOwnership(try await numberingDocument(mounted.state, id: id)) == assigned)
+        _ = try await mounted.state.request("editor.undo", args: ["projectId": .string(id)])
+        #expect(episodeOwnership(try await numberingDocument(mounted.state, id: id)) == ["b": .null, "s": .null, "d": .null, "r": .null, "o": .number(2)])
+        _ = try await mounted.state.request("editor.redo", args: ["projectId": .string(id)])
+        #expect(episodeOwnership(try await numberingDocument(mounted.state, id: id)) == assigned)
+        _ = try await mounted.state.request("app.home")
+        try await wait { mounted.state.route == "home" }
+        let saved = try await waitForEpisodeDisk(projects, id: id, expected: assigned)
+        #expect(episodeOwnership(saved) == assigned)
+        #expect(edgePairs(saved) == ["b->s", "d->r", "s->d"])
+        mounted.window.close(); mounted.window.contentView = nil
+        let reopened = fixture.mount()
+        try await wait { reopened.state.route == "home" && reopened.state.app["loading"] == .bool(false) }
+        try await waitForHostReady(try #require(findWebView(reopened.window.contentView)))
+        _ = try await reopened.state.request("app.open", args: ["id": .string(id)])
+        try await wait { reopened.state.route == "editor" && reopened.state.ai["thread"]?.array.isEmpty == false }
+        #expect(episodeOwnership(try await numberingDocument(reopened.state, id: id)) == assigned)
+        #expect(reopened.state.ai["thread"]?.array.first { $0["id"]?.number == 2 }?["card"]?["status"]?.string == "executed")
+        await fixture.services.close()
+    }
+
+    /// The synthetic project has one outgoing beat chain plus another episode with no relationship to that chain.
+    private func episodeGraph() -> HostJSON {
+        let specs: [(String, String, [String: HostJSON])] = [
+            ("b", "beat", ["tone": .string("")]),
+            ("s", "scene", ["sceneNo": .number(1), "interior": .bool(true), "time": .string("夜"), "synopsis": .string("原文"), "characterIds": .array([])]),
+            ("d", "dialogue", ["lines": .array([.object(["id": .string("line"), "kind": .string("action"), "text": .string("原对白")])])]),
+            ("r", "branch", ["prompt": .string("留下？"), "options": .array([])]),
+            ("o", "beat", ["tone": .string("")])
+        ]
+        let nodes: [HostJSON] = specs.enumerated().map { index, item in
+            let (id, type, spec) = item
+            var meta: [String: HostJSON] = type == "branch" ? [:] : ["label": .string(id)]
+            if id == "o" { meta["episodeNo"] = .number(2) }
+            return .object(["id": .string(id), "type": .string(type),
+                            "layout": .object(["position": .object(["x": .number(Double(index * 220)), "y": .number(0)])]),
+                            "ui": .object(["selected": .bool(false), "expanded": .bool(true)]),
+                            "data": .object(["meta": .object(meta), "spec": .object(spec)])])
+        }
+        let edges: [HostJSON] = [("b", "s"), ("s", "d"), ("d", "r")].map { source, target in
+            .object(["id": .string(source + target), "source": .string(source), "target": .string(target), "data": .object(["kind": .string("sequence")])])
+        }
+        return .object(["nodes": .array(nodes), "edges": .array(edges), "viewport": .object(["x": .number(0), "y": .number(0), "zoom": .number(1)])])
+    }
+
+    /// Ownership is read from serialized node metadata, independently from the outline projection.
+    private func episodeOwnership(_ document: HostJSON) -> [String: HostJSON] {
+        Dictionary(uniqueKeysWithValues: (document["graph"]?["nodes"]?.array ?? []).compactMap { node -> (String, HostJSON)? in
+            guard let id = node["id"]?.string else { return nil }
+            return (id, node["data"]?["meta"]?["episodeNo"] ?? .null)
+        })
+    }
+
+    /// Navigation projects the home route before asynchronous storage settles; read real bytes until the confirmed ownership is durable.
+    private func waitForEpisodeDisk(_ projects: NativeProjectStore, id: String, expected: [String: HostJSON]) async throws -> HostJSON {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+        while ContinuousClock.now < deadline {
+            let document = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+            if episodeOwnership(document) == expected { return document }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        throw HostFailure(code: "PW_TEST_EPISODE_SAVE_TIMEOUT", message: "分集归属未在期限内保存到真实磁盘")
+    }
+
     /// Real non-streaming WK requests publish readable native feedback; cancelled replies cannot replace a new round (#927).
     @Test func aiRequestFeedbackFollowsActualTurnLifecycle() async throws {
         let fixture = Fixture()

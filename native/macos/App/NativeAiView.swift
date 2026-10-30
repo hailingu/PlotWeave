@@ -255,6 +255,8 @@ private struct NativeAiPreview: View {
     let busy: Bool
     private var armed: Bool { state.ai["armedEntryId"]?.number == entryId }
     private var validation: HostJSON { card["v"] ?? .null }
+    /// Conflicts expose original/proposed ownership and require this preview's manual confirmation.
+    private var conflicts: [HostJSON] { validation["episodeAssignment"]?["conflicts"]?.array ?? [] }
 
     var body: some View {
         GroupBox("改动预览") {
@@ -264,6 +266,14 @@ private struct NativeAiPreview: View {
                 }
                 ForEach(Array((validation["issues"]?.array ?? []).enumerated()), id: \.offset) { _, issue in
                     Text(issue["message"]?.string ?? "校验失败").foregroundStyle(.red)
+                }
+                if card["status"]?.string == "pending" && !conflicts.isEmpty {
+                    Text("分集冲突：尚未执行。请核对原/目标归属，确认本次冲突后执行，也可忽略取消。")
+                        .foregroundStyle(.red)
+                    ForEach(Array(conflicts.enumerated()), id: \.offset) { _, conflict in
+                        Text(conflict.string ?? "分集冲突").foregroundStyle(.red)
+                    }
+                    if validation["hasDeletes"]?.bool == true { Text("本批同时包含删除；确认也将执行已列删除。") }
                 }
                 if let error = card["executionError"]?.string { Text(error).foregroundStyle(.red) }
                 if card["uncommitted"]?.bool == true {
@@ -282,10 +292,10 @@ private struct NativeAiPreview: View {
         HStack {
             Button("忽略") { send("ai.dismiss") }
             Spacer()
-            if validation["hasDeletes"]?.bool == true && !armed {
-                Button("确认删除改动…", role: .destructive) { send("ai.arm") }
+            if (!conflicts.isEmpty || validation["hasDeletes"]?.bool == true) && !armed {
+                Button(conflicts.isEmpty ? "确认删除改动…" : "确认分集冲突…", role: .destructive) { send("ai.arm") }
             } else {
-                Button(armed ? "确认执行" : "执行改动") { send("ai.execute") }
+                Button(!conflicts.isEmpty ? "确认本次分集冲突并执行" : (armed ? "确认执行" : "执行改动")) { send("ai.execute") }
                     .disabled(validation["ok"]?.bool != true)
             }
         }.disabled(busy)

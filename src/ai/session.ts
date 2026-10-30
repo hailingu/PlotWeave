@@ -162,13 +162,26 @@ function entryOf(value: unknown): ThreadEntry | null {
   ) {
     return null
   }
+  // #931：只保留合法展示形状；pending 恢复时仍重算，人工确认不落盘。
+  const validation = { ...value.card.v }
+  const assignment = validation.episodeAssignment
+  if (
+    !isRecord(assignment) ||
+    typeof assignment.fingerprint !== 'string' ||
+    !Array.isArray(assignment.conflicts) ||
+    !assignment.conflicts.every((item) => typeof item === 'string') ||
+    typeof assignment.commandCount !== 'number' ||
+    !Number.isSafeInteger(assignment.commandCount) ||
+    assignment.commandCount < 0
+  )
+    delete validation.episodeAssignment
   return {
     id: value.id,
     kind: 'msg',
     role: value.role,
     text: value.text,
     card: {
-      v: value.card.v,
+      v: validation,
       status: value.card.status,
       ...cardEpisodeScope(value.card.episodeScope),
       ...(value.card.status === 'pending' &&
