@@ -28,6 +28,14 @@ describe('本轮分集范围', () => {
     '保留现有分集，增加节拍',
     '现有集号不变，增加节拍',
     '根据第一集的剧情增加节拍',
+    '修改第一集对白的标题为开场',
+    '修改第1集中的对白文案',
+    '修改第 1 集 对白标题',
+    '更改第一集的场景名称',
+    '调整第1集内的节拍内容',
+    '设置第1集对白的标题为第二集',
+    '新增第1集对白',
+    '创建第一集的对白',
     '新增节拍参考第一集',
     '增加节拍参考第一集',
     '添加对白参考第 2 集',
@@ -81,6 +89,9 @@ describe('本轮分集范围', () => {
     '不要解释，为现有节拍分集',
     'Create episode 1 and add beats',
     'Set episodeNo to 1',
+    '修改第1集对白的集号为 2',
+    '将对白改为第 2 集',
+    '请在第1集新增对白',
   ])('保留明确分集操作：%s', (request) => {
     const batch = proposal()
     expect(validateEpisodeScope(batch, request)).toBe(batch)
@@ -102,12 +113,14 @@ describe('本轮分集范围', () => {
     expect(validateEpisodeScope(batch, '根据剧情增加新的节拍')).toBe(batch)
   })
 
-  it.each(['不修改现有集号，只增加节拍', '保留现有分集，增加节拍'])(
-    '可见原始请求的保留要求优先于旧卡范围：%s',
-    (request) => {
-      expect(validateEpisodeScope(proposal(), request, 'allow')?.ok).toBe(false)
-    },
-  )
+  it.each([
+    '不修改现有集号，只增加节拍',
+    '保留现有分集，增加节拍',
+    '修改第一集对白的标题为开场',
+    '修改第1集中的对白文案',
+  ])('可见原始请求的保留要求优先于旧卡范围：%s', (request) => {
+    expect(validateEpisodeScope(proposal(), request, 'allow')?.ok).toBe(false)
+  })
   it('不把缺失或形状校验失败的批次变成可执行', () => {
     expect(validateEpisodeScope(null, '创建第一集')).toBeNull()
     const invalid = validateAiBatch(

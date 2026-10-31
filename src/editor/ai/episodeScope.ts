@@ -98,6 +98,16 @@ function isDirectEpisodeAddition(before: string): boolean {
   )
 }
 
+/** 集目标须结束或进入后续动作；「第一集的/中的对白」是内容定位，不是分集目标。 */
+function assignsEpisodeTarget(before: string, after: string): boolean {
+  if (!/^(?:$|并|再|然后|且|同时)/.test(after)) return false
+  return (
+    isDirectEpisodeAddition(before) ||
+    EPISODE_ASSIGNMENTS.some((term) => before.includes(term)) ||
+    /\b(?:create|assign|move|set|split|group|organize)\b/i.test(before)
+  )
+}
+
 /** 提及旧集号不等于分集：只认分配动作与目标集的组合，含糊表达保留归属。 */
 function requestsEpisodeChange(request: string): boolean {
   return request.split(/[，。；\n,;.!]/).some((clause) => {
@@ -114,12 +124,11 @@ function requestsEpisodeChange(request: string): boolean {
     return indices.some((index) => {
       if (index < 0) return false
       const before = text.slice(Math.max(0, index - 16), index)
-      if (isDirectEpisodeAddition(before)) return true
-      if (
-        EPISODE_ASSIGNMENTS.some((term) => before.includes(term)) ||
-        /\b(?:create|assign|move|set|split|group|organize)\b/i.test(before)
-      )
-        return true
+      const after =
+        numbered?.index === index
+          ? text.slice(index + numbered[0].length).trimStart()
+          : ''
+      if (assignsEpisodeTarget(before, after)) return true
       return (
         numbered?.index === index &&
         /^请?[在为给向往]\s*$/.test(text.slice(0, index)) &&
