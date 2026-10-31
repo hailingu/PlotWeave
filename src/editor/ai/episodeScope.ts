@@ -11,7 +11,8 @@ const EPISODE_ADDITIONS = ['新增', '增加', '添加']
 const EPISODE_CREATIONS = ['创建', '新建', '建立']
 /** 这些动词也可改写集内内容，仅凭集号前出现动词不足以授予分集范围。 */
 const EPISODE_CONTENT_EDITS = ['设置', '设定', '修改', '更改', '调整']
-const EPISODE_ASSIGNMENTS = [
+/** 明确创建/归入动作独立授予范围，不被同窗中的内容改写词否决。 */
+const EPISODE_EXPLICIT_ASSIGNMENTS = [
   '安排',
   ...EPISODE_CREATIONS,
   '分配',
@@ -21,7 +22,6 @@ const EPISODE_ASSIGNMENTS = [
   '归属',
   '划入',
   '设为',
-  ...EPISODE_CONTENT_EDITS,
   '改为',
   '改成',
   '放入',
@@ -29,6 +29,11 @@ const EPISODE_ASSIGNMENTS = [
   '移到',
   '移入',
   '重分',
+]
+/** 否定仍覆盖所有分集动作，包括可指向内容的改写动词。 */
+const EPISODE_ASSIGNMENTS = [
+  ...EPISODE_EXPLICIT_ASSIGNMENTS,
+  ...EPISODE_CONTENT_EDITS,
 ]
 
 /** 明确的分集词或目标集号；不把普通「集」「集合」当作分集请求。 */
@@ -88,26 +93,25 @@ function isDirectEpisodeArrangement(text: string): boolean {
   )
 }
 
-/** 明确创建先于改写限定判断；「增加节拍参考第一集」不属于紧接目标的创建。 */
-function isDirectEpisodeCreation(before: string): boolean {
+/** 新增须紧接集目标；「增加节拍参考第一集」不属于目标新增。 */
+function isDirectEpisodeAddition(before: string): boolean {
   return (
-    [...EPISODE_ADDITIONS, ...EPISODE_CREATIONS].some((term) =>
-      before.trimEnd().endsWith(term),
-    ) || /\b(?:add|create)\s*$/i.test(before)
+    EPISODE_ADDITIONS.some((term) => before.trimEnd().endsWith(term)) ||
+    /\badd\s*$/i.test(before)
   )
 }
 
-/** 模糊改写须以集目标结束或进入后续动作；其余创建/指派沿用既有规则。 */
+/** 明确动作先独立判定，只有单独的模糊内容改写需要集目标后缀限定。 */
 function assignsEpisodeTarget(before: string, after: string): boolean {
-  if (isDirectEpisodeCreation(before)) return true
   if (
-    EPISODE_CONTENT_EDITS.some((term) => before.includes(term)) &&
-    !/^(?:$|并|再|然后|且|同时)/.test(after)
-  )
-    return false
-  return (
-    EPISODE_ASSIGNMENTS.some((term) => before.includes(term)) ||
+    isDirectEpisodeAddition(before) ||
+    EPISODE_EXPLICIT_ASSIGNMENTS.some((term) => before.includes(term)) ||
     /\b(?:create|assign|move|set|split|group|organize)\b/i.test(before)
+  )
+    return true
+  return (
+    EPISODE_CONTENT_EDITS.some((term) => before.includes(term)) &&
+    /^(?:$|并|再|然后|且|同时)/.test(after)
   )
 }
 
