@@ -24,31 +24,35 @@ import { EMPTY_SETTINGS } from '../settings'
 import { mergeNodeData } from '../nodes/patch'
 import type { CanvasNode, DialogueFlowNode } from '../nodes/types'
 import { settingsStore } from '../../settings/settingsStore'
+import type { AppSettings } from '../../settings/types'
 import { stubElementScrollTo } from './testDomStubs'
 import { RightPanel } from './RightPanel'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 const invokeMock = vi.mocked(invoke)
 
+/** 可用配置在延迟加载回归中与普通装配复用，不绕过真实模型就绪状态。 */
+const configuredSettings: AppSettings = {
+  providers: [
+    {
+      id: 'test',
+      label: '测试服务',
+      baseUrl: 'https://example.test/v1',
+      enabled: true,
+      models: ['test-model'],
+      keyEnc: 'pw1:test-fixture',
+    },
+  ],
+  defaultChat: 'test:test-model',
+  defaultImage: null,
+}
+
 beforeEach(() => {
   stubElementScrollTo() // happy-dom 未实现 scrollTo
   invokeMock
     .mockReset()
     .mockResolvedValue({ role: 'assistant', content: '继续讨论。' })
-  vi.spyOn(settingsStore, 'load').mockResolvedValue({
-    providers: [
-      {
-        id: 'test',
-        label: '测试服务',
-        baseUrl: 'https://example.test/v1',
-        enabled: true,
-        models: ['test-model'],
-        keyEnc: 'pw1:test-fixture',
-      },
-    ],
-    defaultChat: 'test:test-model',
-    defaultImage: null,
-  })
+  vi.spyOn(settingsStore, 'load').mockResolvedValue(configuredSettings)
 })
 
 afterEach(() => {
@@ -213,17 +217,28 @@ async function setup(
   }
 }
 
-/** 使用真实输入入口，并等待 Agent 循环结束，避免发送中重复操作。 */
+/** 只统计实际模型请求，输入DOM存在不能证明本轮已获接纳。 */
+function modelCallCount() {
+  return invokeMock.mock.calls.filter(([cmd]) => cmd === 'llm_chat').length
+}
+
+/** 使用已就绪的真实输入入口，观察请求接纳后再等待Agent回合结束。 */
 async function send(text = '再丰富点') {
-  const input = screen.getByLabelText('AI 对话输入')
+  const input = await waitFor(() => {
+    const current = screen.getByLabelText('AI 对话输入') as HTMLInputElement
+    expect(current.disabled).toBe(false)
+    return current
+  })
+  const previousCalls = modelCallCount()
   fireEvent.change(input, { target: { value: text } })
   fireEvent.keyDown(input, { key: 'Enter' })
-  // busy 时输入行被卸载换成「取消」按钮，捕获的 input 引用随之游离、
-  // disabled 恒为 false——必须活查询等输入行回来（回合落定），否则
-  // waitFor 空转通过，用例在回合落定前继续（CI run 38372244808 flake）
+  // 拒绝发送也会没有「取消」按钮，必须同时证明请求增加和已就绪输入回来。
   await waitFor(() => {
+    expect(modelCallCount()).toBeGreaterThan(previousCalls)
     expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
-    screen.getByLabelText('AI 对话输入')
+    expect(
+      (screen.getByLabelText('AI 对话输入') as HTMLInputElement).disabled,
+    ).toBe(false)
   })
 }
 
@@ -243,6 +258,43 @@ function records(messages = lastRequest()): Record<string, unknown>[] {
       return record ? [JSON.parse(record) as Record<string, unknown>] : []
     })
 }
+
+describe('AiThread 输入准备与发送确认', () => {
+  it('设置加载期间等待模型可用，真实发送落定后再保存重开', async () => {
+    let loadSettings!: (value: AppSettings) => void
+    vi.mocked(settingsStore.load).mockReturnValueOnce(
+      new Promise((resolve) => {
+        loadSettings = resolve
+      }),
+    )
+    const h = await setup({ projectId: 'context-model-ready' })
+    invokeMock.mockResolvedValueOnce(proposal())
+    let settled = false
+    const sending = send('丰富旁白').then(() => {
+      settled = true
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    try {
+      expect(
+        (screen.getByLabelText('AI 对话输入') as HTMLInputElement).disabled,
+      ).toBe(true)
+      expect(settled).toBe(false)
+      expect(invokeMock).not.toHaveBeenCalled()
+    } finally {
+      await act(async () => loadSettings(configuredSettings))
+      await sending
+    }
+    expect(modelCallCount()).toBe(1)
+    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    expect(session.entries.some((entry) => entry.card)).toBe(true)
+    h.unmount()
+    await setup({ session, nodes: [], projectId: 'context-model-ready' })
+    await send()
+    expect(records()).toMatchObject([{ status: 'validation_failed' }])
+  })
+})
 
 describe('AiThread 确认后下一轮的真实请求', () => {
   it.each([false, true])(
