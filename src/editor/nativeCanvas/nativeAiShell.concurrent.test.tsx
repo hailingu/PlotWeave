@@ -10,6 +10,7 @@ import {
 } from '../concurrentRenderTestScaffolding'
 import { validateAiBatch } from '../ai/batchFold'
 import type { ThreadEntry } from '../../ai/session'
+import * as nativeShell from '../../platform/nativeShell'
 
 const host = window as Window & {
   __pwNativeHost?: unknown
@@ -70,9 +71,16 @@ function options(context = vi.fn()): NativeAiOptions {
   return {
     projectId: 'p',
     models: {
-      options: [],
-      activeKey: null,
-      keyOkByProvider: {},
+      options: [
+        {
+          key: 'test:one',
+          providerId: 'test',
+          providerLabel: '测试',
+          model: 'one',
+        },
+      ],
+      activeKey: 'test:one',
+      keyOkByProvider: { test: true },
       ready: true,
       setModelKey: vi.fn(),
     },
@@ -289,6 +297,7 @@ it.each([
       },
     ]
     input.models.keyOkByProvider = { test: keyOk }
+    input.models.ready = keyOk
     fixture(false, input)
     expect(await command('ai.selectModel', { model })).toMatchObject({
       error: { code: 'PW_INTENT_FAILED' },
@@ -314,6 +323,7 @@ it.each(['not-ready', 'busy'])(
   async (state) => {
     const input = options()
     input.models.ready = state !== 'not-ready'
+    if (state === 'not-ready') input.models.activeKey = null
     input.turn.busy = state === 'busy'
     fixture(false, input)
     expect(await command('ai.send', { text: '草稿' })).toMatchObject({
@@ -396,7 +406,7 @@ function preview(destructive = false) {
   return { input, card }
 }
 
-it.each(['missing', 'executed', 'historical', 'busy', 'invalid'])(
+it.each(['missing', 'not-a-card', 'executed', 'historical', 'busy', 'invalid'])(
   '执行拒绝失效或无效预览 %s',
   async (state) => {
     const { input, card } = preview()
@@ -406,8 +416,18 @@ it.each(['missing', 'executed', 'historical', 'busy', 'invalid'])(
     if (state === 'invalid') card.v = { ...card.v, ok: false, commands: [] }
     fixture(false, input)
     expect(
-      await command('ai.execute', { entryId: state === 'missing' ? 999 : 2 }),
-    ).toMatchObject({ error: { code: 'PW_INTENT_FAILED' } })
+      await command('ai.execute', {
+        entryId: state === 'missing' ? 999 : state === 'not-a-card' ? 1 : 2,
+      }),
+    ).toMatchObject({
+      error: {
+        code: 'PW_INTENT_FAILED',
+        message:
+          state === 'invalid'
+            ? '这批改动未通过验证。'
+            : '这条改动已失效或正在执行。',
+      },
+    })
     expect(input.messages.executeCard).not.toHaveBeenCalled()
   },
 )
@@ -451,3 +471,77 @@ it.each([null, 2, 1])(
     )
   },
 )
+
+it.each([null, 1, 99])(
+  '原生投影保留模型可用性并映射武装位置 %s',
+  (armedIdx) => {
+    const post = vi.fn()
+    host.webkit = { messageHandlers: { canvasHost: { postMessage: post } } }
+    const { input } = preview()
+    input.messages.armedIdx = armedIdx
+    input.models.options.push({
+      key: 'disabled:two',
+      providerId: 'disabled',
+      providerLabel: '未配置',
+      model: 'two',
+    })
+    input.models.keyOkByProvider.disabled = false
+    input.turn.knowsCanvas = true
+    input.turn.error = '回合错误'
+    input.saveError = '未落盘'
+    fixture(false, input)
+    expect(post).toHaveBeenLastCalledWith({
+      event: 'projection',
+      protocolVersion: 1,
+      sessionId: 'ai-owner-page',
+      sequence: expect.any(Number),
+      projection: {
+        ai: {
+          projectId: 'p',
+          ready: true,
+          model: 'test:one',
+          models: [
+            { value: 'test:one', label: '测试 · one', available: true },
+            { value: 'disabled:two', label: '未配置 · two', available: false },
+          ],
+          busy: false,
+          feedback: null,
+          error: '回合错误',
+          saveError: '未落盘',
+          knowsCanvas: true,
+          thread: JSON.parse(JSON.stringify(input.messages.thread)),
+          armedEntryId: armedIdx === 1 ? 2 : null,
+        },
+      },
+    })
+  },
+)
+
+it('卸载后已交付注册层的旧动作回调也不能写入', async () => {
+  const register = nativeShell.registerNativeIntentHandler
+  let registered: Parameters<typeof register>[1] | undefined
+  vi.spyOn(nativeShell, 'registerNativeIntentHandler').mockImplementation(
+    (domain, handler) => {
+      if (domain === 'ai') registered = handler
+      return register(domain, handler)
+    },
+  )
+  const input = options()
+  const h = fixture(false, input)
+  const previous = registered
+  if (!previous) throw new Error('Native AI owner was not published')
+  h.unmount()
+  await expect(
+    previous('ai.context', { projectId: 'p', enabled: true }),
+  ).rejects.toThrow('AI 命令所属项目已关闭。')
+  expect(input.turn.setKnowsCanvas).not.toHaveBeenCalled()
+})
+
+it('Web 挂载不安装原生 AI 命令或投影', () => {
+  const post = vi.fn()
+  delete host.__pwNativeHost
+  host.webkit = { messageHandlers: { canvasHost: { postMessage: post } } }
+  fixture(false, options())
+  expect(host.__pwNativeIntent).toBeUndefined()
+  expect(post).not.toHaveBeenCalled()
+})

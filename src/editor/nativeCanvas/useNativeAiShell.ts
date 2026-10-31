@@ -45,9 +45,11 @@ export interface NativeAiOptions {
 /** Current owner and immediate send reservation close React's render interval for duplicate submissions. */
 interface NativeAiOwner {
   current: NativeAiOptions
-  active: boolean
-  sendToken: number
-  sending: number | null
+  /** No registration exists before the effect; cleanup explicitly retires it. */
+  active?: boolean
+  /** A send generation is an opaque identity, not a numeric ordinal. */
+  sendToken: symbol | null
+  sending: symbol | null
 }
 
 /** Resolve a still-pending card before interpreting any native preview action. */
@@ -135,7 +137,7 @@ async function sendMessage(
     owner.sending !== null
   )
     throw new Error('暂时无法发送，请检查模型设置或等待当前回合。')
-  const token = ++owner.sendToken
+  const token = (owner.sendToken = Symbol())
   owner.sending = token
   try {
     await options.turn.send(args.text)
@@ -186,12 +188,18 @@ async function run(
   throw new Error('未知的 AI 命令。')
 }
 
+/** Resolve selection by entry presence without coercing the validated numeric entry identity. */
+function armedEntryId(messages: NativeAiOptions['messages']): number | null {
+  if (messages.armedIdx === null) return null
+  const entry = messages.thread[messages.armedIdx]
+  return entry ? entry.id : null
+}
+
 /** Publishes credential-free session snapshots for the native AI panel and registers its action owner. */
 export function useNativeAiShell(options: NativeAiOptions): void {
   const owner = useRef<NativeAiOwner>({
     current: options,
-    active: false,
-    sendToken: 0,
+    sendToken: null,
     sending: null,
   })
   useLayoutEffect(() => {
@@ -229,10 +237,7 @@ export function useNativeAiShell(options: NativeAiOptions): void {
         saveError: options.saveError,
         knowsCanvas: options.turn.knowsCanvas,
         thread: options.messages.thread,
-        armedEntryId:
-          options.messages.armedIdx === null
-            ? null
-            : (options.messages.thread[options.messages.armedIdx]?.id ?? null),
+        armedEntryId: armedEntryId(options.messages),
       })
     : ''
   useEffect(() => {
