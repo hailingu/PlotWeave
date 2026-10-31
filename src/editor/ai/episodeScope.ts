@@ -206,7 +206,9 @@ export function validateEpisodeScope(
     (request === '' || episodeScopeForRequest(request) === 'allow')
   )
     return validation
-  const issues = validation.commands.flatMap(outOfScopeEpisodeIssue)
+  const issues = validation.commands.flatMap((command, index) =>
+    outOfScopeEpisodeIssue(command, index),
+  )
   return issues.length === 0
     ? validation
     : {
