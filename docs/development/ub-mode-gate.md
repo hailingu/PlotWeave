@@ -25,9 +25,11 @@
    npm run pr:create -- 'fix(scope): summary' /tmp/pr-body.md
    ```
 
-检查运行 `npm run test:coverage -- --maxWorkers=4`，再为 base..HEAD 中新增或
+检查运行 `npm run test:coverage -- --maxWorkers=<预算>`，再为 base..HEAD 中新增或
 修改的受支持生产源码运行 `crapper --use-existing-coverage --threshold 9.99`、
-`dryer --threshold 0.8`、`mutator --use-existing-coverage --test-command <记录命令>`。
+`dryer --threshold 0.8`、`mutator --mutate-all --no-coverage --test-command <记录命令>`。
+覆盖率和变异并行数遵循既有 `PLOTWEAVE_GATE_CPU_BUDGET`，未设置或空值时为4；
+非法预算阻断。变异检查重跑所有候选，不能复用旧 killed 缓存或跳过未覆盖候选。
 重复候选即使 dryer 返回 0 也阻断；变异工具失败同样阻断。工具只接受明确变更
 路径，避免纯文档时空参数意外扫描全仓库。测试、明确登记的测试设施和删除的源码不参加
 生产复杂度/重复/变异扫描；它们通过实际回归、人工审查及原门禁约束。
@@ -43,6 +45,8 @@ shell 等工具不支持的语言仍须逐项人工检查，并通过原生/脚�
 成功记录和原始日志保留于 common Git 目录 `plotweave-ub-mode/<commit>/`。
 记录包含最终原始 commit/tree、base、技能字节摘要、人工审查及四项检查产物
 摘要。24 小时到期、未来时间、提交改变、技能改变、产物丢失或改写均失败。
+base 必须是完整原始提交标识，且为本地 dev 与 HEAD 分叉点本身或其祖先；
+执行与发布两端均检查，不能选择任务自身提交来缩小检查范围。
 开始重检会撤销此提交旧记录；检查失败不保留通过记录。执行前后检查 HEAD 与
 工作树干净状态，避免把修改中的树当最终对象。检查产物忽略，不写 tracked
 ledger，也不改 pending、索引或 #829 的字节归因。

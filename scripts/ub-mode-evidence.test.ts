@@ -29,7 +29,7 @@ function record() {
     version: 1,
     head: 'head',
     tree: 'tree',
-    base: 'base',
+    base: 'a'.repeat(40),
     finishedAt: 100_000_000,
     skill: artifact('skill'),
     review: artifact('review'),
@@ -134,3 +134,26 @@ it('技能摘要缺失给出稳定的技能变更诊断', () => {
     'UB_MODE_SKILL_CHANGED',
   )
 })
+
+it.each([undefined, 'HEAD', '-option', '', 1])(
+  '基线必须是完整原始提交标识：%j',
+  (base) => {
+    const f = record()
+    expect(() => f.verify({ ...f.receipt, base })).toThrow(
+      'UB_MODE_BASE_MISMATCH',
+    )
+  },
+)
+
+it.each([[null], [7], [''], ['coverage', false]])(
+  '命令必须全部是非空文字参数：%j',
+  (...command) => {
+    const f = record()
+    expect(() =>
+      f.verify({
+        ...f.receipt,
+        checks: f.receipt.checks.map((check) => ({ ...check, command })),
+      }),
+    ).toThrow('UB_MODE_INVALID')
+  },
+)

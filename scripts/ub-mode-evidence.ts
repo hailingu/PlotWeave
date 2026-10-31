@@ -93,6 +93,15 @@ export function ubRequire(condition: unknown, code: string): asserts condition {
   if (!condition) throw new Error(`[${code}] ub-mode 发布检查未通过`)
 }
 
+/** 基线只能扩大 dev 分叉点的范围，不能跳过任务分支上的任何改动。 */
+export function requireUbBase(root: string, base: string, head: string): void {
+  const integration = ubGit(root, ['merge-base', 'dev', head])
+  ubRequire(
+    ubGit(root, ['merge-base', base, integration]) === base,
+    'UB_MODE_BASE_MISMATCH',
+  )
+}
+
 /** 解析外部 JSON 后一次验证结构、对象、时效及完整的实际检查产物。 */
 export function validateUbReceipt(
   value: unknown,
@@ -106,6 +115,11 @@ export function validateUbReceipt(
   ubRequire(
     receipt.version === 1 && receipt.head === head && receipt.tree === tree,
     'UB_MODE_OBJECT_MISMATCH',
+  )
+  ubRequire(
+    typeof receipt.base === 'string' &&
+      /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(receipt.base),
+    'UB_MODE_BASE_MISMATCH',
   )
   ubRequire(
     typeof receipt.finishedAt === 'number' &&
@@ -132,7 +146,11 @@ export function validateUbReceipt(
 function validateUbCheck(check: UbCheck): void {
   ubRequire(check.mode === 'tool' || check.mode === 'manual', 'UB_MODE_INVALID')
   ubRequire(
-    Array.isArray(check.command) && check.command.length > 0,
+    Array.isArray(check.command) &&
+      check.command.length > 0 &&
+      check.command.every(
+        (part) => typeof part === 'string' && part.length > 0,
+      ),
     'UB_MODE_INVALID',
   )
   ubRequire(
@@ -163,11 +181,13 @@ export function verifyUbCommit(root: string, revision: string): UbReceipt {
   } catch {
     throw new Error('[UB_MODE_MISSING] 请先对最终提交执行 npm run ub:check')
   }
-  return validateUbReceipt(
+  const receipt = validateUbReceipt(
     JSON.parse(content) as unknown,
     head,
     ubGit(root, ['rev-parse', `${head}^{tree}`]),
     ubSkill(root),
     Date.now(),
   )
+  requireUbBase(root, receipt.base, head)
+  return receipt
 }

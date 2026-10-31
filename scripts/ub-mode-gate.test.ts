@@ -495,3 +495,63 @@ it('显式仓库不受调用方 Git 定位变量影响', () => {
   expect(f.run('run', 'dev', 'review.json').status).toBe(0)
   expect(f.run('verify', 'HEAD').status).toBe(0)
 })
+
+it('执行和发布校验都拒绝缩小到任务自身提交的基线', () => {
+  const f = runnableFixture()
+  expect(f.run('run', 'HEAD', 'review.json').stderr).toContain(
+    'UB_MODE_BASE_MISMATCH',
+  )
+  expect(existsSync(f.receipt)).toBe(false)
+  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  const receipt = JSON.parse(readFileSync(f.receipt, 'utf8')) as Record<
+    string,
+    unknown
+  >
+  writeFileSync(
+    f.receipt,
+    JSON.stringify({
+      ...receipt,
+      base: f.git('rev-parse', 'HEAD').stdout.trim(),
+    }),
+  )
+  expect(f.run('verify', 'HEAD').stderr).toContain('UB_MODE_BASE_MISMATCH')
+})
+
+it('变异执行必须重跑全部候选，不以缓存或未覆盖候选的跳过结果放行', () => {
+  const f = runnableFixture()
+  f.command(
+    'mutator',
+    'case " $* " in *" --mutate-all "*) ;; *) exit 64 ;; esac\ncase " $* " in *" --no-coverage "*) ;; *) exit 64 ;; esac',
+  )
+  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+})
+
+it.each([undefined, '', '1', '2'])(
+  '技能命令遵循既有 CPU 预算且缺省为4：%j',
+  (budget) => {
+    const f = runnableFixture()
+    vi.stubEnv('PLOTWEAVE_GATE_CPU_BUDGET', budget)
+    const expected = budget || '4'
+    f.command(
+      'npm',
+      `case " $* " in *" --maxWorkers=${expected} "*) ;; *) exit 64 ;; esac`,
+    )
+    f.command(
+      'mutator',
+      `case " $* " in *" --max-workers ${expected} "*) ;; *) exit 64 ;; esac`,
+    )
+    expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  },
+)
+
+it.each(['0', '-1', '1.5', 'text', '9007199254740992'])(
+  '非法 CPU 预算阻断而不静默回退：%s',
+  (budget) => {
+    const f = runnableFixture()
+    vi.stubEnv('PLOTWEAVE_GATE_CPU_BUDGET', budget)
+    expect(f.run('run', 'dev', 'review.json').stderr).toContain(
+      'GATE_CPU_BUDGET_INVALID',
+    )
+    expect(existsSync(f.receipt)).toBe(false)
+  },
+)

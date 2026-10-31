@@ -8,6 +8,7 @@ import {
   ubReceiptDirectory,
   ubRequire,
   ubSkill,
+  requireUbBase,
   type UbCheck,
 } from './ub-mode-evidence.ts'
 
@@ -171,6 +172,18 @@ function manualCheck(directory: string, name: string, text: string): UbCheck {
   }
 }
 
+/** 复用现有门禁的固定缺省及显式正整数预算，不更改检查集或阈值。 */
+function cpuBudget(): string {
+  const value = process.env.PLOTWEAVE_GATE_CPU_BUDGET || '4'
+  ubRequire(
+    /^\d+$/.test(value) &&
+      Number.isSafeInteger(Number(value)) &&
+      Number(value) > 0,
+    'GATE_CPU_BUDGET_INVALID',
+  )
+  return value
+}
+
 /** 最终 HEAD 完成全部流程后原子发布记录；开始即撤销该 HEAD 的旧记录。 */
 export function runUbMode(
   root: string,
@@ -210,8 +223,9 @@ function runLocked(
     '--verify',
     `${baseRevision}^{commit}`,
   ])
-  ubGit(root, ['merge-base', '--is-ancestor', base, head])
+  requireUbBase(root, base, head)
   requireClean(root)
+  const workers = cpuBudget()
   const skill = ubSkill(root)
   const review = readReview(root, head, reviewPath)
   const savedReview = resolve(directory, 'review.json')
@@ -220,7 +234,13 @@ function runLocked(
   const check = (name: string, command: string[]) =>
     executeCheck(root, directory, name, command, review.fallbacks?.[name])
   const checks: UbCheck[] = [
-    check('coverage', ['npm', 'run', 'test:coverage', '--', '--maxWorkers=4']),
+    check('coverage', [
+      'npm',
+      'run',
+      'test:coverage',
+      '--',
+      `--maxWorkers=${workers}`,
+    ]),
   ]
   const commands: [string, string[]][] = [
     [
@@ -232,11 +252,12 @@ function runLocked(
       'mutation',
       [
         'mutator',
-        '--use-existing-coverage',
+        '--mutate-all',
+        '--no-coverage',
         '--test-command',
         review.testCommand,
         '--max-workers',
-        '4',
+        workers,
         ...paths,
       ],
     ],
