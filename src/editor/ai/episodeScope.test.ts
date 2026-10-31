@@ -4,15 +4,15 @@ import { validateAiBatch } from './batchFold'
 import { snap } from './testGraphs'
 
 /** 同时覆盖新建载荷与既有节点补丁，形状校验由生产验证器提供。 */
-function proposal() {
+function proposal(episodeNo = 1) {
   return validateAiBatch(
     [
       {
         op: 'create_node',
         nodeType: 'beat',
-        data: { name: '转折', episodeNo: 1 },
+        data: { name: '转折', episodeNo },
       },
-      { op: 'update_node', nodeId: 'n1', patch: { episodeNo: 1 } },
+      { op: 'update_node', nodeId: 'n1', patch: { episodeNo } },
     ],
     snap(),
   )
@@ -38,6 +38,11 @@ const preservedRequests = [
   '调整第1集内的节拍内容',
   '设置第1集对白的标题为第二集',
   '设定第1集对白标题为开场',
+  '修改第1集对白标题为第2集',
+  '修改第1集的标题为第2集',
+  '修改第1集为主的对白',
+  '不要修改第1集为第2集',
+  '如何修改第1集为第2集',
   '修改第一集和第二集的对白标题',
   '更改第1集、第2集对白文案',
   '调整第1集以及第2集中的场景名称',
@@ -112,6 +117,15 @@ const assignedRequests = [
   '新增第一集和新增第二集',
 ]
 
+/** 完整源/目标替换直接操作集对象，不依赖字面集号字段或尾部整理说明。 */
+const replacedEpisodeRequests = [
+  '修改第1集为第2集',
+  '更改第一集成第二集',
+  '调整第 1 集到第 2 集以便整理',
+  '设定第一集至第二集',
+  '修改原来的第1集为第2集',
+]
+
 describe('本轮分集范围', () => {
   it.each(preservedRequests)('拒绝超范围的创建和更新：%s', (request) => {
     expect(validateEpisodeScope(proposal(), request)).toMatchObject({
@@ -125,6 +139,15 @@ describe('本轮分集范围', () => {
     expect(validateEpisodeScope(batch, request)).toBe(batch)
     expect(validateEpisodeScope(batch, request, 'allow')).toBe(batch)
   })
+  it.each(replacedEpisodeRequests)(
+    '保留源集到目标集的重编号：%s',
+    (request) => {
+      const batch = proposal(2)
+      expect(batch.ok).toBe(true)
+      expect(validateEpisodeScope(batch, request)).toBe(batch)
+      expect(validateEpisodeScope(batch, request, 'allow')).toBe(batch)
+    },
+  )
 })
 
 describe('批次与原请求约束', () => {

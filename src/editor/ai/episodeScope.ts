@@ -5,6 +5,10 @@ import type { BatchIssue, BatchValidation, ValidatedCommand } from './commands'
 const EPISODE_WORDS = ['分集', '归集', '集归属', '集号']
 /** 数字片段有界扫描（安全整数最多 16 位十进制），中文表达预留空间；「第」可省略。 */
 const NUMBERED_EPISODE = /(?:第\s*)?[\d一二三四五六七八九十百零〇两]{1,32}\s*集/
+/** 源集后的替换关系直接绑定目标集，复用同一有界数字集表达。 */
+const EPISODE_REPLACEMENT_TARGET = new RegExp(
+  String.raw`^(?:为|成|至|到)\s*${NUMBERED_EPISODE.source}`,
+)
 const ENGLISH_EPISODE = /\bepisode(?:s|No)?\b/i
 const EPISODE_ADDITIONS = ['新增', '增加', '添加']
 /** 明确创建或在指定集创建内容，沿用既有的集归属范围。 */
@@ -105,6 +109,14 @@ function isDirectEpisodeAddition(before: string): boolean {
   )
 }
 
+/** 完整集对象可以是单集或源/目标替换；集后直接跟内容名称仍只是定位。 */
+function isEpisodeEditOperand(after: string): boolean {
+  return (
+    /^(?:$|并|再|然后|且|同时)/.test(after) ||
+    EPISODE_REPLACEMENT_TARGET.test(after)
+  )
+}
+
 /** 明确动作先独立判定，只有单独的模糊内容改写需要集目标后缀限定。 */
 function assignsEpisodeTarget(before: string, after: string): boolean {
   if (
@@ -116,7 +128,7 @@ function assignsEpisodeTarget(before: string, after: string): boolean {
     return true
   return (
     EPISODE_CONTENT_EDITS.some((term) => before.includes(term)) &&
-    /^(?:$|并|再|然后|且|同时)/.test(after)
+    isEpisodeEditOperand(after)
   )
 }
 
