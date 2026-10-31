@@ -428,27 +428,37 @@ describe('AiThread 恢复待执行卡的校验边界', () => {
     ).toBe(true)
     expect(reopened.history.canUndo).toBe(false)
   })
+})
 
-  it('第一轮 llm_chat 迟到宏任务落定时 send 仍等待回合结束再重开会话', async () => {
+describe('AiThread 在途回合落定后恢复', () => {
+  it('第一轮 llm_chat 挂起时 send 等待回合结束再重开会话', async () => {
     const h = await setup()
-    invokeMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          setTimeout(() => resolve(proposal()), 200)
-        }),
+    const completeReply = deferredReply()
+    let settled = false
+    const sending = send('丰富旁白').then(() => {
+      settled = true
+    })
+    await screen.findByRole('button', { name: '取消' })
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'llm_chat')).toBe(
+        true,
+      ),
     )
-    await send('丰富旁白')
-    // send 必须等到回合落定：否则会话保存只含用户消息（无卡），重开
-    // 还会认领在途回合使 busy 复位，第二轮发送成为 no-op——records 读
-    // 到第一轮请求而无批次记录（CI run 38372244808 的 flake 形态）
+    expect(settled).toBe(false)
+    await act(async () => completeReply(proposal()))
+    await sending
+    // 用已观察到的在途状态和响应屏障替代200ms竞速；保存的卡必须已落定。
     const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    expect(session.entries.some((entry) => entry.card)).toBe(true)
     h.unmount()
     await setup({ session, nodes: [] })
     invokeMock.mockResolvedValueOnce(proposal())
     await send()
     expect(records()).toMatchObject([{ status: 'validation_failed' }])
   })
+})
 
+describe('AiThread 恢复整批拒绝卡', () => {
   it.each([false, true])(
     '校验拒绝卡（兼容合法子集=%s）重开后仍保持整批拒绝',
     async (withSubset) => {

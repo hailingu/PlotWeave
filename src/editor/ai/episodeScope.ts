@@ -11,6 +11,10 @@ const EPISODE_ADDITIONS = ['新增', '增加', '添加']
 const EPISODE_CREATIONS = ['创建', '新建', '建立']
 /** 这些动词也可改写集内内容，仅凭集号前出现动词不足以授予分集范围。 */
 const EPISODE_CONTENT_EDITS = ['设置', '设定', '修改', '更改', '调整']
+/** 直接给集字段赋值时，字段与动词必须紧邻目标，不依赖目标后的整理说明。 */
+const EPISODE_FIELD_ASSIGNMENT = new RegExp(
+  String.raw`(?:${EPISODE_WORDS.join('|')})\s*(?:${EPISODE_CONTENT_EDITS.join('|')})(?:为|成|至|到)?\s*$`,
+)
 /** 明确创建/归入动作独立授予范围，不被同窗中的内容改写词否决。 */
 const EPISODE_EXPLICIT_ASSIGNMENTS = [
   '安排',
@@ -105,6 +109,7 @@ function isDirectEpisodeAddition(before: string): boolean {
 function assignsEpisodeTarget(before: string, after: string): boolean {
   if (
     isDirectEpisodeAddition(before) ||
+    EPISODE_FIELD_ASSIGNMENT.test(before) ||
     EPISODE_EXPLICIT_ASSIGNMENTS.some((term) => before.includes(term)) ||
     /\b(?:create|assign|move|set|split|group|organize)\b/i.test(before)
   )
