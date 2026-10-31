@@ -184,6 +184,55 @@ function cpuBudget(): string {
   return value
 }
 
+/** 四项检查共享固定顺序、命令与人工降级职责，不参与最终记录的发布。 */
+function runChecks(
+  root: string,
+  directory: string,
+  paths: string[],
+  review: UbReview,
+  workers: string,
+): UbCheck[] {
+  const check = (name: string, command: string[]) =>
+    executeCheck(root, directory, name, command, review.fallbacks?.[name])
+  const checks: UbCheck[] = [
+    check('coverage', [
+      'npm',
+      'run',
+      'test:coverage',
+      '--',
+      `--maxWorkers=${workers}`,
+    ]),
+  ]
+  const commands: [string, string[]][] = [
+    [
+      'complexity',
+      ['crapper', '--use-existing-coverage', '--threshold', '9.99', ...paths],
+    ],
+    ['duplication', ['dryer', '--threshold', '0.8', ...paths]],
+    [
+      'mutation',
+      [
+        'mutator',
+        '--mutate-all',
+        '--no-coverage',
+        '--test-command',
+        review.testCommand,
+        '--max-workers',
+        workers,
+        ...paths,
+      ],
+    ],
+  ]
+  for (const [name, command] of commands) {
+    checks.push(
+      paths.length
+        ? check(name, command)
+        : manualCheck(directory, name, review.unsupported),
+    )
+  }
+  return checks
+}
+
 /** 最终 HEAD 完成全部流程后原子发布记录；开始即撤销该 HEAD 的旧记录。 */
 export function runUbMode(
   root: string,
@@ -231,44 +280,7 @@ function runLocked(
   const savedReview = resolve(directory, 'review.json')
   writeFileSync(savedReview, JSON.stringify(review, null, 2))
   const paths = productionPaths(root, base, head)
-  const check = (name: string, command: string[]) =>
-    executeCheck(root, directory, name, command, review.fallbacks?.[name])
-  const checks: UbCheck[] = [
-    check('coverage', [
-      'npm',
-      'run',
-      'test:coverage',
-      '--',
-      `--maxWorkers=${workers}`,
-    ]),
-  ]
-  const commands: [string, string[]][] = [
-    [
-      'complexity',
-      ['crapper', '--use-existing-coverage', '--threshold', '9.99', ...paths],
-    ],
-    ['duplication', ['dryer', '--threshold', '0.8', ...paths]],
-    [
-      'mutation',
-      [
-        'mutator',
-        '--mutate-all',
-        '--no-coverage',
-        '--test-command',
-        review.testCommand,
-        '--max-workers',
-        workers,
-        ...paths,
-      ],
-    ],
-  ]
-  for (const [name, command] of commands) {
-    checks.push(
-      paths.length
-        ? check(name, command)
-        : manualCheck(directory, name, review.unsupported),
-    )
-  }
+  const checks = runChecks(root, directory, paths, review, workers)
   requireClean(root)
   ubRequire(
     ubGit(root, ['rev-parse', 'HEAD']) === head,
