@@ -64,6 +64,17 @@ Before changing production code for a feature or reproducible defect fix, agents
 
 ## Execution Workflow
 
+Before every formal push and PR creation, complete the real `/ub-mode` skill
+and run `npm run ub:check -- <base> <committed-review.json>` on the clean final
+commit. `pre-push` requires fresh (less than 24 hours), object-bound evidence
+for every unique non-deletion commit, including docs-only pushes. Use
+`npm run pr:create -- <title> <body-file>` to create draft task PRs after the
+remote branch matches that checked commit. Missing, failed, expired or changed
+evidence blocks publishing; this gate supplements every existing gate.
+See [ub-mode Local Publish Gate](docs/development/ub-mode-gate.md) for the real
+skill discovery, tools, explicit manual review and local enforcement boundary.
+User authorization in the current session still governs outward actions.
+
 1. Read this guide and every more-specific instruction that applies to the requested scope.
 2. Inspect the relevant code, documentation, build files, and current worktree before proposing or making changes.
 3. Classify the change. Read-only work needs no task branch. Keep an existing authorized task branch or worktree. When files will change and no authorized task branch exists, follow the version-control policy below.

@@ -6,6 +6,9 @@ dist-ssr/
 .vite/
 .vitest/
 coverage/
+.metrics/
+target/mutation-workers/
+target/mutator-backup/
 .scannerwork/
 .sonar-gate.lock/
 npm-debug.log*

@@ -17,7 +17,13 @@ export default defineConfig({
     // 基准运行（PostCSS from 等路径相对 CWD 解析，从父仓库根跑其测试会
     // 误判令牌源归属），不应被父仓库的测试发现扫描（.worktrees 出现于
     // issue #362 评审期间，排除对主仓测试集无影响）。
-    exclude: [...configDefaults.exclude, '.worktrees/**'],
+    // #941：变异执行器的生成副本也属于独立测试根；中断残留不能进入维护测试。
+    exclude: [
+      ...configDefaults.exclude,
+      '.worktrees/**',
+      'target/mutation-workers/**',
+      'target/mutator-backup/**',
+    ],
     // lcov 供 SonarQube（sonar.javascript.lcov.reportPaths）；text 供本地直观核对
     coverage: {
       provider: 'v8',

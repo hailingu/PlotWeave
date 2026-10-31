@@ -312,6 +312,12 @@ The complete follow-up run passed 246 files / 3416 tests at 97.47% aggregate lin
 
 #### Scripts Tooling Per-File Floors (Issue #726)
 
+Issue [#941](https://github.com/hailingu/PlotWeave/issues/941) adds three
+in-process-tested publish-gate modules (`ub-mode-evidence.ts`, `ub-mode-run.ts`,
+`ub-mode-gate.ts`) at 80% each. Their integration tests call the real entry
+functions and use real Git repositories; external companion tools are replaced
+only in fault-injection tests. Separate real tool runs are required for publishing.
+
 Gate-critical production TypeScript under `scripts/` now has failable line-coverage floors instead of relying on test discipline alone. `vite.config.ts` adds `scripts/**/*.ts` to `coverage.include`, and `scripts/scripts-coverage-floor.ts` registers one exact-path threshold group per in-process-testable production file: `gate-scope-core.ts` and `native-canvas-coverage.ts` at 80 (the generator module itself is also registered at 80, executed in-process through `vite.config.ts`), and `native-coverage.ts` at a recorded starting floor of 50 (issue #726 permits starting below 80; measured 53.84% at dev `9e2d89b1`) — the aggregate 80% floor and the native-canvas groups are unchanged.
 
 The registered-list (not directory-discovery) design exists because most `scripts/` production files are driven by tests as spawned child processes (`check-file-size.ts`, `check-workspace-drift.ts`, `gate-scope.ts`, `verify-gate-evidence.ts`, the three `pre-push-install*.mjs` CLIs): V8 in-process coverage cannot observe child processes, so auto-flooding them at 80% would fail immediately and counting them at 0% would pollute the aggregate with instrumentation blindness rather than test absence. Those files are excluded from coverage and instead carry a **test-driver-evidence guard**: `scripts/scripts-coverage-scope.test.ts` fails unless every production `.ts`/`.mjs` under `scripts/` is classified (floored, subprocess-driven, or test facility per the #311 policy: the probe/fixture pair `build-library-import-probe.ts` + `scripts/fixtures/**`, `gate-routing-probe.ts`, `git-scenario-fixture.ts`, `native-coverage-fixture.ts`), registry entries are dangling, or a floored/subprocess file loses its last referencing test. Deleting all tests of any production file therefore fails either `npm run test:coverage` (floored files) or `npm test` (the guard, which also runs in CI), satisfying issue #726's acceptance; the same guard pins the include/exclude classification against the vite config.

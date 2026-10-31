@@ -19,6 +19,9 @@ const flooredLineFloors: Readonly<Record<string, number>> = {
   'scripts/native-canvas-coverage.ts': 80,
   'scripts/native-coverage.ts': 50,
   'scripts/scripts-coverage-floor.ts': 80,
+  'scripts/ub-mode-evidence.ts': 80,
+  'scripts/ub-mode-gate.ts': 80,
+  'scripts/ub-mode-run.ts': 80,
 }
 
 /** 子进程驱动的生产文件：测试以 spawn(node, file) 集成执行，v8 覆盖率

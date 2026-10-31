@@ -375,6 +375,8 @@ function gateEnvironment(
   // PLOTWEAVE_GATE_SCOPE 会随 ...process.env 泄入夹具门禁，使未指定范围的
   // 用例走单栈分流而非被测的完整流程；默认删除，按用例显式注入。
   delete environment.PLOTWEAVE_GATE_SCOPE
+  // 默认预算用例拥有未配置状态，不继承宿主完整门禁的资源预算。
+  delete environment.PLOTWEAVE_GATE_CPU_BUDGET
   if (options.scope !== undefined) {
     environment.PLOTWEAVE_GATE_SCOPE = options.scope
   }
@@ -738,6 +740,7 @@ describe(
   () => {
     it('两个覆盖率阶段按默认预算 4 限核：--maxWorkers / --jobs / RUST_TEST_THREADS 同值', () => {
       const budget = 4
+      vi.stubEnv('PLOTWEAVE_GATE_CPU_BUDGET', '2')
       const result = runGate('scripts/sonar-quality-gate.sh')
 
       expect(result.status, result.stderr).toBe(0)
