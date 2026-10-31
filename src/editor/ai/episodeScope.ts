@@ -1,6 +1,6 @@
 /** #929：分集必须属于当前用户请求，历史方案、节点文案和模型理由不能扩大范围。 */
 import type { AiEpisodeScope, ThreadEntry } from '../../ai/session'
-import type { BatchValidation } from './commands'
+import type { BatchIssue, BatchValidation, ValidatedCommand } from './commands'
 
 const EPISODE_WORDS = ['分集', '归集', '集归属', '集号']
 /** 数字片段有界扫描（安全整数最多 16 位十进制），中文表达预留空间；「第」可省略。 */
@@ -108,34 +108,54 @@ function assignsEpisodeTarget(before: string, after: string): boolean {
   )
 }
 
+/** 「在第 N 集新增内容」明确指定新内容归属，保留既有创建路径。 */
+function createsInEpisode(
+  text: string,
+  index: number,
+  numbered: RegExpExecArray | null,
+): boolean {
+  return (
+    numbered?.index === index &&
+    /^请?[在为给向往]\s*$/.test(text.slice(0, index)) &&
+    /新增|增加|创建|添加/.test(text.slice(index + numbered[0].length))
+  )
+}
+
+/** 一个集提及只有与分集动作直接结合，或明确承载新增内容时才是写入目标。 */
+function targetsEpisode(
+  text: string,
+  index: number,
+  numbered: RegExpExecArray | null,
+): boolean {
+  if (index < 0) return false
+  const before = text.slice(Math.max(0, index - 16), index)
+  const after =
+    numbered?.index === index
+      ? text.slice(index + numbered[0].length).trimStart()
+      : ''
+  return (
+    assignsEpisodeTarget(before, after) ||
+    createsInEpisode(text, index, numbered)
+  )
+}
+
+/** 分句内区分直接分集、显式集字段与数字集目标，动作窗口保持原有边界。 */
+function clauseChangesEpisodes(clause: string): boolean {
+  const text = clause.replace(/未分集/g, '').trim()
+  if (text === '分集' || text === '归集' || isDirectEpisodeArrangement(text))
+    return true
+  const numbered = NUMBERED_EPISODE.exec(text)
+  const english = ENGLISH_EPISODE.exec(text)
+  return [
+    ...EPISODE_WORDS.map((term) => text.indexOf(term)),
+    numbered?.index ?? -1,
+    english?.index ?? -1,
+  ].some((index) => targetsEpisode(text, index, numbered))
+}
+
 /** 提及旧集号不等于分集：只认分配动作与目标集的组合，含糊表达保留归属。 */
 function requestsEpisodeChange(request: string): boolean {
-  return request.split(/[，。；\n,;.!]/).some((clause) => {
-    const text = clause.replace(/未分集/g, '').trim()
-    if (text === '分集' || text === '归集' || isDirectEpisodeArrangement(text))
-      return true
-    const numbered = NUMBERED_EPISODE.exec(text)
-    const english = ENGLISH_EPISODE.exec(text)
-    const indices = [
-      ...EPISODE_WORDS.map((term) => text.indexOf(term)),
-      numbered?.index ?? -1,
-      english?.index ?? -1,
-    ]
-    return indices.some((index) => {
-      if (index < 0) return false
-      const before = text.slice(Math.max(0, index - 16), index)
-      const after =
-        numbered?.index === index
-          ? text.slice(index + numbered[0].length).trimStart()
-          : ''
-      if (assignsEpisodeTarget(before, after)) return true
-      return (
-        numbered?.index === index &&
-        /^请?[在为给向往]\s*$/.test(text.slice(0, index)) &&
-        /新增|增加|创建|添加/.test(text.slice(index + numbered[0].length))
-      )
-    })
-  })
+  return request.split(/[，。；\n,;.!]/).some(clauseChangesEpisodes)
 }
 /** 询问分集知识不授权模型改分集；不确定的表达由模型澄清具体请求。 */
 const DISCUSS_EPISODES =
@@ -152,6 +172,25 @@ export function episodeScopeForRequest(request: string): AiEpisodeScope {
   return 'preserve'
 }
 
+/** 范围拒绝只识别实际写入字段，标题文案及其他命令不能被误作分集写入。 */
+function outOfScopeEpisodeIssue(
+  command: ValidatedCommand,
+  index: number,
+): BatchIssue[] {
+  let fields: Record<string, unknown> | undefined
+  if (command.op === 'create_node') fields = command.data
+  else if (command.op === 'update_node') fields = command.patch.patch
+  return fields && Object.prototype.hasOwnProperty.call(fields, 'episodeNo')
+    ? [
+        {
+          index,
+          message:
+            '本轮未明确要求分集，不能写入 episodeNo。请保持现有归属，新建内容省略集号；需要分集时请先向用户确认具体分集要求。',
+        },
+      ]
+    : []
+}
+
 /** 将合法形状批次按本轮分集范围再校验；整批拒绝而非静默剥离字段。 */
 export function validateEpisodeScope(
   validation: BatchValidation | null,
@@ -164,20 +203,7 @@ export function validateEpisodeScope(
     (request === '' || episodeScopeForRequest(request) === 'allow')
   )
     return validation
-  const issues = validation.commands.flatMap((command, index) => {
-    let fields: Record<string, unknown> | undefined
-    if (command.op === 'create_node') fields = command.data
-    else if (command.op === 'update_node') fields = command.patch.patch
-    return fields && Object.prototype.hasOwnProperty.call(fields, 'episodeNo')
-      ? [
-          {
-            index,
-            message:
-              '本轮未明确要求分集，不能写入 episodeNo。请保持现有归属，新建内容省略集号；需要分集时请先向用户确认具体分集要求。',
-          },
-        ]
-      : []
-  })
+  const issues = validation.commands.flatMap(outOfScopeEpisodeIssue)
   return issues.length === 0
     ? validation
     : {

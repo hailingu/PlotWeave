@@ -1,0 +1,13 @@
+{
+  "reviewer": "Codex；完整阅读本机 ~/.agents/skills/ub-mode/SKILL.md，工具结果由执行器保存原始产物",
+  "tdd": "#939 实现前 16 失败 / 89 通过，随后原组 105 通过、补充原请求优先用例与相邻 #931 后 129 通过。#940 StrictMode 开/关的挂起用例均先因错误调用未提交 B 失败，另三个生命周期用例原来通过；提交阶段镜像修复后七文件 179 通过。矩阵及行动日志见 issue-939-episode-locator.md。",
+  "rootCause": "#939 只看集号前的修改动词，错误把内容定位当分集目标；共享的回合、恢复和确认重校验都受影响。#940 注册过的稳定 owner 在 render 内接收新 options，挂起树的回调能泄漏给当前原生命令；在 layout 提交阶段发布修正所有权。",
+  "model": "原始用户请求拥有 allow/preserve，数字集目标须结束或进入后续动作；显式集号与在指定集新增路径保留。NativeAiOwner 单独保留 active/sending/sendToken，提交镜像只更新 current。没有第二套 AI、文档或历史写入器。",
+  "boundaries": "#939 create/update 额外集号整批拒绝并有限纠正，原请求约束历史 allow。#940 同项目原生命令只能接收已提交 options，丢弃和卸载不发布新 owner；同任务模型选择、发送预留、取消及迟到完成隔离保留。未声称构造回归就是独立真实桌面或外部模型复现。",
+  "complexity": "真实 crapper 预检发现旧 run/cardAction 和范围函数超过阈值，已在已通过行为回归下按动作、目标及问题收集拆分，未放宽阈值。重构后的原始 CC 均不超过9；旧覆盖率因行移动失效，不能作通过证据，最终 fresh coverage/CRAP 由真实门禁给出。",
+  "duplication": "范围、批次校验、原生 dispatcher 和 NativeAiOwner 继续单点拥有不变量。测试复用原装配与独立 gate，动作参数合同共用本文件 fixture；没有复制 AI 控制器。dryer 0.8 的实际结果以最终日志为准。",
+  "tests": "#939 双通道纠正、耗尽、旧卡、序列化及整批撤销重做；#940 真实 Transition/lazy、StrictMode 开/关、放弃与卸载、reservation 迟到隔离。补齐外部动作的类型、状态、模型可用性、预览身份与确认边界；保留真实 AI 面板和真实删除/历史回归。最终覆盖率与变异由实际工具产物证明，不自报分数。",
+  "log": "#941 合入并清理后从 dev 497b7877 建独立分支；#939 红绿后正常完整提交 efcc4c02 成功，前端3975、Rust603/1 ignored、Sonar新增未解决0。依赖软链未被目录忽略规则识别，已替换为既有安装的独立副本，没有安装软件或改依赖。#940 先真实协议红后最小 layout 修复，再在179项通过的基线上拆分复杂单元并保持179绿、生产构建通过。最后补足拆分动作的协议合同回归，重新执行正常提交及最终 HEAD ub-mode。保留用户 WORK_LOG.md 删除、共享 pending/ledger 和 #829 归因。",
+  "testCommand": "npm test -- src/editor/ai/episodeScope.test.ts src/editor/panels/AiThread.episodeScope.test.tsx src/editor/nativeCanvas/nativeAiShell.concurrent.test.tsx src/editor/nativeCanvas/nativeAiShell.test.tsx --maxWorkers=1 --bail=1 --reporter=dot",
+  "unsupported": "文档与矩阵进行结构化审查。#940 暂未证明产品交互能稳定产生挂起顺序，按本次明确修复授权处理已确认的 owner 合同问题；真实模型和桌面像素不在此测试证明范围。无 Swift/shell 生产变更，不虚构其变异分数。"
+}
