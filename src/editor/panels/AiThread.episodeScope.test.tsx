@@ -121,10 +121,10 @@ function reply(commands: AiCommand[], fenced = false): AssistantMessage {
 }
 
 /** 以生产文档镜像和写通道装配，refresh 对应编辑器随文档变化重渲染。 */
-async function setup(initialSession?: AiSession) {
+async function setup(initialSession?: AiSession, content = project) {
   const history = new CommandStack()
   const hook = renderHook(() => {
-    const doc = useEditorDocument(project)
+    const doc = useEditorDocument(content)
     const patch = useNodePatch(doc, (command) => history.push(command))
     const ai = useAiBridge({
       ...doc,
@@ -142,7 +142,7 @@ async function setup(initialSession?: AiSession) {
   })
   const saved: AiSession[] = []
   const props = () => ({
-    projectId: project.id,
+    projectId: content.id,
     initialSession,
     canvasDigest: hook.result.current.ai.canvasDigest,
     onValidateCommands: hook.result.current.ai.validateCommands,
@@ -160,6 +160,159 @@ async function setup(initialSession?: AiSession) {
   const refresh = () => view.rerender(<AiThread {...props()} />)
   return { hook, history, saved, refresh }
 }
+
+/** #939：直接从第 1 集对白开始，不用额外的测试补丁污染撤销栈。 */
+function assignedDialogueProject(): EditorProjectContent {
+  return {
+    ...project,
+    nodes: project.nodes.map((node) =>
+      node.id === 'd' && node.type === 'dialogue'
+        ? { ...node, data: { ...node.data, episodeNo: 1 } }
+        : node,
+    ),
+  }
+}
+
+it.each(
+  ['修改第一集对白的标题为开场', '修改第1集中的对白文案'].flatMap((request) => [
+    [request, false] as const,
+    [request, true] as const,
+  ]),
+)(
+  '#939 内容定位请求须先纠正额外集号，再确认、重开和撤销重做：%s，围栏=%s',
+  async (request, fenced) => {
+    const h = await setup(undefined, assignedDialogueProject())
+    const original = h.hook.result.current.doc.nodes
+    chat
+      .mockResolvedValueOnce(
+        reply(
+          [
+            {
+              op: 'update_node',
+              nodeId: 'd',
+              patch: { name: '开场', episodeNo: 2 },
+            },
+            {
+              op: 'create_node',
+              nodeType: 'dialogue',
+              data: { name: '越界新增', episodeNo: 2 },
+            },
+          ],
+          fenced,
+        ),
+      )
+      .mockResolvedValueOnce(
+        reply(
+          [{ op: 'update_node', nodeId: 'd', patch: { name: '开场' } }],
+          fenced,
+        ),
+      )
+    await send(request)
+    expect(chat).toHaveBeenCalledTimes(2)
+    expect(h.hook.result.current.doc.nodes).toEqual(original)
+    fireEvent.click(screen.getByRole('button', { name: /执行改动/ }))
+    h.refresh()
+    const doc = h.hook.result.current.doc
+    expect(doc.nodes).toHaveLength(original.length)
+    expect(doc.nodes.find((node) => node.id === 'd')?.data).toMatchObject({
+      name: '开场',
+      episodeNo: 1,
+    })
+    const loaded = parseProject(
+      JSON.parse(
+        JSON.stringify(
+          serializeProject({ ...doc, name: project.name }, project.id),
+        ),
+      ),
+      { projectId: project.id },
+    )
+    expect(loaded.repaired).toBe(false)
+    expect(
+      loaded.content.nodes.find((node) => node.id === 'd')?.data,
+    ).toMatchObject({ name: '开场', episodeNo: 1 })
+    act(() => h.history.undo())
+    expect(h.hook.result.current.doc.nodes).toEqual(original)
+    await act(() => h.history.redo())
+    expect(
+      h.hook.result.current.doc.nodes.find((node) => node.id === 'd')?.data,
+    ).toMatchObject({ name: '开场', episodeNo: 1 })
+    expect(h.hook.result.current.doc.edges).toEqual(project.edges)
+  },
+)
+
+it.each([false, true])(
+  '#939 内容定位纠错耗尽保持图和历史不变，围栏=%s',
+  async (fenced) => {
+    const h = await setup(undefined, assignedDialogueProject())
+    const original = h.hook.result.current.doc.nodes
+    chat.mockResolvedValue(
+      reply(
+        [
+          {
+            op: 'update_node',
+            nodeId: 'd',
+            patch: { name: '开场', episodeNo: 2 },
+          },
+        ],
+        fenced,
+      ),
+    )
+    await send('修改第1集中的对白文案')
+    expect(chat).toHaveBeenCalledTimes(4)
+    const execute = screen.getByRole('button', {
+      name: /执行改动/,
+    }) as HTMLButtonElement
+    expect(execute.disabled).toBe(true)
+    fireEvent.click(execute)
+    expect(h.hook.result.current.doc.nodes).toEqual(original)
+    expect(h.hook.result.current.doc.edges).toEqual(project.edges)
+    expect(h.history.canUndo).toBe(false)
+  },
+)
+
+it.each([undefined, 'allow'] as const)(
+  '#939 旧内容定位卡不能借保存的 %s 范围修改集号',
+  async (episodeScope) => {
+    const content = assignedDialogueProject()
+    const initial = await setup(undefined, content)
+    const v = initial.hook.result.current.ai.validateCommands([
+      { op: 'update_node', nodeId: 'd', patch: { episodeNo: 2 } },
+    ])!
+    cleanup()
+    const restored = await setup(
+      {
+        schemaVersion: 1,
+        entries: [
+          {
+            id: 1,
+            kind: 'msg',
+            role: 'user',
+            text: '修改第一集对白的标题为开场',
+          },
+          {
+            id: 2,
+            kind: 'msg',
+            role: 'assistant',
+            text: '旧预览',
+            card: {
+              v,
+              status: 'pending',
+              ...(episodeScope ? { episodeScope } : {}),
+            },
+          },
+        ],
+      },
+      content,
+    )
+    const execute = screen.getByRole('button', {
+      name: /执行改动/,
+    }) as HTMLButtonElement
+    expect(execute.disabled).toBe(true)
+    fireEvent.click(execute)
+    expect(restored.hook.result.current.doc.nodes).toEqual(content.nodes)
+    expect(restored.history.canUndo).toBe(false)
+  },
+)
 
 /** 真实发送入口，等待模型回合落定再操作预览。 */
 async function send(text: string) {
@@ -321,6 +474,7 @@ it.each(
     '请新增第 2 集',
     '增加第 2 集',
     '添加第 2 集',
+    '新增第1集和第2集',
   ].flatMap((request) => [[request, false] as const, [request, true] as const]),
 )(
   '明确创建请求可预览、确认、保存重开和撤销重做：%s，围栏=%s',
@@ -380,7 +534,7 @@ it.each(
   },
 )
 
-it.each(['新增第 2 集并添加节拍', '请新增第 2 集'])(
+it.each(['新增第 2 集并添加节拍', '请新增第 2 集', '新增第1集和第2集'])(
   '恢复原请求可见的旧 allow 卡仍可确认：%s',
   async (request) => {
     const initial = await setup()
@@ -421,7 +575,7 @@ it.each(['新增第 2 集并添加节拍', '请新增第 2 集'])(
   },
 )
 
-it.each(['把场景归入第 2 集', '请新增第 2 集'])(
+it.each(['把场景归入第 2 集', '请新增第 2 集', '新增第1集和第2集'])(
   '超过 200 条时原始请求被裁掉，合法分集卡仍可重开确认：%s',
   async (request) => {
     const h = await setup()

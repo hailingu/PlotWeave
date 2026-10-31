@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { isSwiftHost } from '../../platform/hostEnvironment'
 import {
@@ -45,9 +45,22 @@ export interface NativeAiOptions {
 /** Current owner and immediate send reservation close React's render interval for duplicate submissions. */
 interface NativeAiOwner {
   current: NativeAiOptions
-  active: boolean
-  sendToken: number
-  sending: number | null
+  /** No registration exists before the effect; cleanup explicitly retires it. */
+  active?: boolean
+  /** A send generation is an opaque identity, not a numeric ordinal. */
+  sendToken: symbol | null
+  sending: symbol | null
+}
+
+/** Resolve a still-pending card before interpreting any native preview action. */
+function pendingCard(options: NativeAiOptions, args: Record<string, unknown>) {
+  const index = options.messages.thread.findIndex(
+    (entry) => entry.id === args.entryId,
+  )
+  const card = options.messages.thread[index]?.card
+  if (card?.status !== 'pending' || card.historical || options.turn.busy)
+    throw new Error('这条改动已失效或正在执行。')
+  return { index, card }
 }
 
 /** Native preview actions resolve live stable entry IDs and enforce the same deletion confirmation. */
@@ -56,12 +69,7 @@ function cardAction(
   command: string,
   args: Record<string, unknown>,
 ): void {
-  const index = options.messages.thread.findIndex(
-    (entry) => entry.id === args.entryId,
-  )
-  const card = options.messages.thread[index]?.card
-  if (card?.status !== 'pending' || card.historical || options.turn.busy)
-    throw new Error('这条改动已失效或正在执行。')
+  const { index, card } = pendingCard(options, args)
   if (command === 'ai.arm') {
     options.messages.setArmedIdx(
       options.messages.armedIdx === index ? null : index,
@@ -78,87 +86,125 @@ function cardAction(
   options.messages.executeCard(index)
 }
 
+/** Every command captures one active, committed options snapshot for the matching project. */
+function activeOptions(
+  owner: NativeAiOwner,
+  args: Record<string, unknown>,
+): NativeAiOptions {
+  const options = owner.current
+  if (!owner.active || args.projectId !== options.projectId)
+    throw new Error('AI 命令所属项目已关闭。')
+  return options
+}
+
+/** Only an available configured model can become the session's current selection. */
+function selectModel(
+  options: NativeAiOptions,
+  args: Record<string, unknown>,
+): void {
+  if (
+    typeof args.model !== 'string' ||
+    !options.models.options.some(
+      (item) =>
+        item.key === args.model &&
+        options.models.keyOkByProvider[item.providerId],
+    )
+  )
+    throw new Error('模型不可用或尚未配置 key。')
+  options.models.setModelKey(args.model)
+}
+
+/** Context changes retain the native boolean contract and the existing AI turn owner. */
+function setContext(
+  options: NativeAiOptions,
+  args: Record<string, unknown>,
+): void {
+  if (typeof args.enabled !== 'boolean') throw new Error('画布上下文开关无效。')
+  options.turn.setKnowsCanvas(args.enabled)
+}
+
+/** Reserve synchronously; only this send's completion may release its reservation. */
+async function sendMessage(
+  owner: NativeAiOwner,
+  options: NativeAiOptions,
+  args: Record<string, unknown>,
+): Promise<void> {
+  if (
+    typeof args.text !== 'string' ||
+    !args.text.trim() ||
+    !options.models.ready ||
+    options.turn.busy ||
+    owner.sending !== null
+  )
+    throw new Error('暂时无法发送，请检查模型设置或等待当前回合。')
+  const token = (owner.sendToken = Symbol())
+  owner.sending = token
+  try {
+    await options.turn.send(args.text)
+  } finally {
+    if (owner.sending === token) owner.sending = null
+  }
+}
+
+/** Cancellation remains reachable during the render interval before busy is projected. */
+function cancelTurn(owner: NativeAiOwner, options: NativeAiOptions): void {
+  if (options.turn.busy || owner.sending !== null) {
+    options.turn.cancel()
+    options.turn.appendCancelReceipt()
+    owner.sending = null
+  }
+}
+
+/** Clearing requires explicit confirmation and cannot overtake an active send. */
+function clearSession(
+  owner: NativeAiOwner,
+  options: NativeAiOptions,
+  args: Record<string, unknown>,
+): void {
+  if (args.confirmed !== true || options.turn.busy || owner.sending !== null)
+    throw new Error('清空会话需要确认，并须等待当前回合结束。')
+  options.turn.clearError()
+  options.messages.resetSession()
+}
+
 /** Commands use existing AI lifecycle/persistence rather than constructing a second thread or graph writer. */
 async function run(
   owner: NativeAiOwner,
   command: string,
   args: Record<string, unknown>,
 ): Promise<void> {
-  const options = owner.current
-  if (!owner.active || args.projectId !== options.projectId)
-    throw new Error('AI 命令所属项目已关闭。')
-  switch (command) {
-    case 'ai.selectModel':
-      if (
-        typeof args.model !== 'string' ||
-        !options.models.options.some(
-          (item) =>
-            item.key === args.model &&
-            options.models.keyOkByProvider[item.providerId],
-        )
-      )
-        throw new Error('模型不可用或尚未配置 key。')
-      options.models.setModelKey(args.model)
-      return
-    case 'ai.context':
-      if (typeof args.enabled !== 'boolean')
-        throw new Error('画布上下文开关无效。')
-      options.turn.setKnowsCanvas(args.enabled)
-      return
-    case 'ai.send': {
-      if (
-        typeof args.text !== 'string' ||
-        !args.text.trim() ||
-        !options.models.ready ||
-        options.turn.busy ||
-        owner.sending !== null
-      )
-        throw new Error('暂时无法发送，请检查模型设置或等待当前回合。')
-      const token = ++owner.sendToken
-      owner.sending = token
-      try {
-        await options.turn.send(args.text)
-      } finally {
-        if (owner.sending === token) owner.sending = null
-      }
-      return
-    }
-    case 'ai.cancel':
-      if (options.turn.busy || owner.sending !== null) {
-        options.turn.cancel()
-        options.turn.appendCancelReceipt()
-        owner.sending = null
-      }
-      return
-    case 'ai.clear':
-      if (
-        args.confirmed !== true ||
-        options.turn.busy ||
-        owner.sending !== null
-      )
-        throw new Error('清空会话需要确认，并须等待当前回合结束。')
-      options.turn.clearError()
-      options.messages.resetSession()
-      return
-    case 'ai.arm':
-    case 'ai.execute':
-    case 'ai.dismiss':
-      cardAction(options, command, args)
-      return
-    default:
-      throw new Error('未知的 AI 命令。')
-  }
+  const options = activeOptions(owner, args)
+  if (command === 'ai.selectModel') return selectModel(options, args)
+  if (command === 'ai.context') return setContext(options, args)
+  if (command === 'ai.send') return sendMessage(owner, options, args)
+  if (command === 'ai.cancel') return cancelTurn(owner, options)
+  if (command === 'ai.clear') return clearSession(owner, options, args)
+  if (
+    command === 'ai.arm' ||
+    command === 'ai.execute' ||
+    command === 'ai.dismiss'
+  )
+    return cardAction(options, command, args)
+  throw new Error('未知的 AI 命令。')
+}
+
+/** Resolve selection by entry presence without coercing the validated numeric entry identity. */
+function armedEntryId(messages: NativeAiOptions['messages']): number | null {
+  if (messages.armedIdx === null) return null
+  const entry = messages.thread[messages.armedIdx]
+  return entry ? entry.id : null
 }
 
 /** Publishes credential-free session snapshots for the native AI panel and registers its action owner. */
 export function useNativeAiShell(options: NativeAiOptions): void {
   const owner = useRef<NativeAiOwner>({
     current: options,
-    active: false,
-    sendToken: 0,
+    sendToken: null,
     sending: null,
   })
-  owner.current.current = options
+  useLayoutEffect(() => {
+    owner.current.current = options
+  }, [options])
   useEffect(() => {
     if (!isSwiftHost()) return
     const active = owner.current
@@ -191,10 +237,7 @@ export function useNativeAiShell(options: NativeAiOptions): void {
         saveError: options.saveError,
         knowsCanvas: options.turn.knowsCanvas,
         thread: options.messages.thread,
-        armedEntryId:
-          options.messages.armedIdx === null
-            ? null
-            : (options.messages.thread[options.messages.armedIdx]?.id ?? null),
+        armedEntryId: armedEntryId(options.messages),
       })
     : ''
   useEffect(() => {

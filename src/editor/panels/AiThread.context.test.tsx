@@ -24,31 +24,38 @@ import { EMPTY_SETTINGS } from '../settings'
 import { mergeNodeData } from '../nodes/patch'
 import type { CanvasNode, DialogueFlowNode } from '../nodes/types'
 import { settingsStore } from '../../settings/settingsStore'
+import type { AppSettings } from '../../settings/types'
 import { stubElementScrollTo } from './testDomStubs'
 import { RightPanel } from './RightPanel'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 const invokeMock = vi.mocked(invoke)
+/** 同一用例的重挂保留项目身份，不让不同用例认领彼此的在途回合。 */
+let contextCase = 0
+
+/** 可用配置在延迟加载回归中与普通装配复用，不绕过真实模型就绪状态。 */
+const configuredSettings: AppSettings = {
+  providers: [
+    {
+      id: 'test',
+      label: '测试服务',
+      baseUrl: 'https://example.test/v1',
+      enabled: true,
+      models: ['test-model'],
+      keyEnc: 'pw1:test-fixture',
+    },
+  ],
+  defaultChat: 'test:test-model',
+  defaultImage: null,
+}
 
 beforeEach(() => {
+  contextCase += 1
   stubElementScrollTo() // happy-dom 未实现 scrollTo
   invokeMock
     .mockReset()
     .mockResolvedValue({ role: 'assistant', content: '继续讨论。' })
-  vi.spyOn(settingsStore, 'load').mockResolvedValue({
-    providers: [
-      {
-        id: 'test',
-        label: '测试服务',
-        baseUrl: 'https://example.test/v1',
-        enabled: true,
-        models: ['test-model'],
-        keyEnc: 'pw1:test-fixture',
-      },
-    ],
-    defaultChat: 'test:test-model',
-    defaultImage: null,
-  })
+  vi.spyOn(settingsStore, 'load').mockResolvedValue(configuredSettings)
 })
 
 afterEach(() => {
@@ -148,19 +155,22 @@ function canvasHarness(
 }
 
 /** 装配真实右栏和 AI 桥；refresh 对应画布更新后 EditorView 的重渲染。
- * projectId 用于在途回合的项目归属（issue #63）——跨用例模块级注册表
- * 共享，需要隔离的用例显式传入独立 id。 */
+ * 默认项目身份按用例隔离，同例重挂继续复用；指定 projectId 的认领
+ * 用例仍直接覆盖实际跨卸载归属（issue #63）。 */
 async function setup(
   options: {
     session?: AiSession
     aiRevision?: number
     nodes?: CanvasNode[]
     whenCanvasCommitted?: () => Promise<void>
+    /** 保存回调确认后才交付测试快照，独立于UI回合落定。 */
+    whenSessionSaved?: () => Promise<void>
     projectId?: string
     onOpenSettings?: () => void
     loadFailed?: boolean
   } = {},
 ) {
+  const projectId = options.projectId ?? `p-context-${contextCase}`
   const canvas = canvasHarness(options.nodes, options.aiRevision)
   const saved: AiSession[] = []
   const props = () => ({
@@ -171,7 +181,7 @@ async function setup(
     onResize: () => undefined,
     onTabChange: () => undefined,
     ai: {
-      projectId: options.projectId ?? 'p-context',
+      projectId,
       onOpenSettings: options.onOpenSettings,
       sessionLoadFailed: options.loadFailed,
       canvasDigest: canvas.hook.result.current.canvasDigest,
@@ -187,6 +197,7 @@ async function setup(
           : {}),
       },
       onSaveSession: async (session: AiSession) => {
+        if (options.whenSessionSaved) await options.whenSessionSaved()
         saved.push(JSON.parse(JSON.stringify(session)) as AiSession)
       },
     },
@@ -213,17 +224,28 @@ async function setup(
   }
 }
 
-/** 使用真实输入入口，并等待 Agent 循环结束，避免发送中重复操作。 */
+/** 只统计实际模型请求，输入DOM存在不能证明本轮已获接纳。 */
+function modelCallCount() {
+  return invokeMock.mock.calls.filter(([cmd]) => cmd === 'llm_chat').length
+}
+
+/** 使用已就绪的真实输入入口，观察请求接纳后再等待Agent回合结束。 */
 async function send(text = '再丰富点') {
-  const input = screen.getByLabelText('AI 对话输入')
+  const input = await waitFor(() => {
+    const current = screen.getByLabelText('AI 对话输入') as HTMLInputElement
+    expect(current.disabled).toBe(false)
+    return current
+  })
+  const previousCalls = modelCallCount()
   fireEvent.change(input, { target: { value: text } })
   fireEvent.keyDown(input, { key: 'Enter' })
-  // busy 时输入行被卸载换成「取消」按钮，捕获的 input 引用随之游离、
-  // disabled 恒为 false——必须活查询等输入行回来（回合落定），否则
-  // waitFor 空转通过，用例在回合落定前继续（CI run 38372244808 flake）
+  // 拒绝发送也会没有「取消」按钮，必须同时证明请求增加和已就绪输入回来。
   await waitFor(() => {
+    expect(modelCallCount()).toBeGreaterThan(previousCalls)
     expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
-    screen.getByLabelText('AI 对话输入')
+    expect(
+      (screen.getByLabelText('AI 对话输入') as HTMLInputElement).disabled,
+    ).toBe(false)
   })
 }
 
@@ -243,6 +265,101 @@ function records(messages = lastRequest()): Record<string, unknown>[] {
       return record ? [JSON.parse(record) as Record<string, unknown>] : []
     })
 }
+
+/** 保存前置条件沿用生产会话卡片字段，不从UI状态推断持久化交付。 */
+type StoredCard = NonNullable<AiSession['entries'][number]['card']>
+
+/** 恢复消费者只读取已实际交付且符合该用例前置条件的卡片快照。 */
+async function storedCardSession(
+  saved: AiSession[],
+  expected: Partial<StoredCard> = {},
+): Promise<AiSession> {
+  return waitFor(() => {
+    const session = normalizeAiSession(saved[saved.length - 1]).session
+    expect(session.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          card: expect.objectContaining({ status: 'pending', ...expected }),
+        }),
+      ]),
+    )
+    return session
+  })
+}
+
+describe('AiThread 保存交付与恢复', () => {
+  it('UI回合完成后仍须等待保存卡片交付，再按当前图重开', async () => {
+    let confirmSave!: () => void
+    const saved = new Promise<void>((resolve) => {
+      confirmSave = resolve
+    })
+    const h = await setup({
+      projectId: 'context-saved-card',
+      whenSessionSaved: () => saved,
+    })
+    invokeMock.mockResolvedValueOnce(proposal())
+    await send('丰富旁白')
+    expect(screen.getByRole('button', { name: '✓ 执行改动' })).toBeTruthy()
+    let captured = false
+    const reading = storedCardSession(h.saved).then((session) => {
+      captured = true
+      return session
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    try {
+      expect(h.saved).toHaveLength(0)
+      expect(captured).toBe(false)
+    } finally {
+      await act(async () => confirmSave())
+      await reading
+    }
+    const session = await reading
+    expect(session.entries.some((entry) => entry.card)).toBe(true)
+    h.unmount()
+    await setup({ session, nodes: [], projectId: 'context-saved-card' })
+    await send()
+    expect(records()).toMatchObject([{ status: 'validation_failed' }])
+  })
+})
+
+describe('AiThread 输入准备与发送确认', () => {
+  it('设置加载期间等待模型可用，真实发送落定后再保存重开', async () => {
+    let loadSettings!: (value: AppSettings) => void
+    vi.mocked(settingsStore.load).mockReturnValueOnce(
+      new Promise((resolve) => {
+        loadSettings = resolve
+      }),
+    )
+    const h = await setup({ projectId: 'context-model-ready' })
+    invokeMock.mockResolvedValueOnce(proposal())
+    let settled = false
+    const sending = send('丰富旁白').then(() => {
+      settled = true
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    try {
+      expect(
+        (screen.getByLabelText('AI 对话输入') as HTMLInputElement).disabled,
+      ).toBe(true)
+      expect(settled).toBe(false)
+      expect(invokeMock).not.toHaveBeenCalled()
+    } finally {
+      await act(async () => loadSettings(configuredSettings))
+      await sending
+    }
+    expect(modelCallCount()).toBe(1)
+    const session = await storedCardSession(h.saved)
+    expect(session.entries.some((entry) => entry.card)).toBe(true)
+    h.unmount()
+    await setup({ session, nodes: [], projectId: 'context-model-ready' })
+    await send()
+    expect(records()).toMatchObject([{ status: 'validation_failed' }])
+  })
+})
 
 describe('AiThread 确认后下一轮的真实请求', () => {
   it.each([false, true])(
@@ -313,7 +430,9 @@ describe('AiThread 失败恢复与成功重试', () => {
         executionError: expect.stringContaining('d1'),
       },
     ])
-    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    const session = await storedCardSession(h.saved, {
+      executionError: expect.stringContaining('d1'),
+    })
     h.unmount()
     // 目标在重开前恢复：重新校验可执行，但上次失败记录仍是历史事实。
     const reopened = await setup({ session })
@@ -325,10 +444,12 @@ describe('AiThread 失败恢复与成功重试', () => {
     expect(reopened.state.nodes[0].data.lines).toHaveLength(4)
     expect(records()).toMatchObject([{ status: 'executed' }])
     expect(records()[0]).not.toHaveProperty('executionError')
-    expect(
-      reopened.saved[reopened.saved.length - 1].entries.find((e) => e.card)!
-        .card,
-    ).not.toHaveProperty('executionError')
+    const retried = await storedCardSession(reopened.saved, {
+      status: 'executed',
+    })
+    expect(retried.entries.find((e) => e.card)!.card).not.toHaveProperty(
+      'executionError',
+    )
   })
 
   it('执行失败后忽略同一卡片，后续请求及保存不再携带旧失败状态', async () => {
@@ -342,9 +463,10 @@ describe('AiThread 失败恢复与成功重试', () => {
     await send()
     expect(records()).toMatchObject([{ status: 'dismissed' }])
     expect(records()[0]).not.toHaveProperty('executionError')
-    expect(
-      h.saved[h.saved.length - 1].entries.find((e) => e.card)!.card,
-    ).not.toHaveProperty('executionError')
+    const dismissed = await storedCardSession(h.saved, { status: 'dismissed' })
+    expect(dismissed.entries.find((e) => e.card)!.card).not.toHaveProperty(
+      'executionError',
+    )
     expect(h.history.canUndo).toBe(false)
   })
 })
@@ -364,18 +486,19 @@ describe('AiThread 执行与保存是独立事实', () => {
     expect(records()).toMatchObject([
       { status: 'executed', canvasSavePending: true },
     ])
-    expect(
-      h.saved[h.saved.length - 1].entries.find((e) => e.card)!.card,
-    ).toMatchObject({ status: 'pending', aiRevisionAfter: 1 })
+    const pending = await storedCardSession(h.saved, { aiRevisionAfter: 1 })
+    expect(pending.entries.find((e) => e.card)!.card).toMatchObject({
+      status: 'pending',
+      aiRevisionAfter: 1,
+    })
     await act(async () => {
       confirm()
     })
     await send()
     expect(records()).toMatchObject([{ status: 'executed' }])
     expect(records()[0]).not.toHaveProperty('canvasSavePending')
-    expect(
-      h.saved[h.saved.length - 1].entries.find((e) => e.card)!.card?.status,
-    ).toBe('executed')
+    const executed = await storedCardSession(h.saved, { status: 'executed' })
+    expect(executed.entries.find((e) => e.card)!.card?.status).toBe('executed')
   })
 
   it.each([
@@ -391,7 +514,7 @@ describe('AiThread 执行与保存是独立事实', () => {
       await send('丰富旁白')
       fireEvent.click(screen.getByRole('button', { name: '✓ 执行改动' }))
       await send()
-      const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+      const session = await storedCardSession(h.saved, { aiRevisionAfter: 1 })
       const nodes = revision === 1 ? h.state.nodes : [dialogueNode()]
       h.unmount()
       await setup({ session, nodes, aiRevision: revision })
@@ -417,7 +540,7 @@ describe('AiThread 恢复待执行卡的校验边界', () => {
     const h = await setup()
     invokeMock.mockResolvedValueOnce(proposal())
     await send('丰富旁白')
-    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    const session = await storedCardSession(h.saved)
     h.unmount()
     const reopened = await setup({ session, nodes: [] })
     await send()
@@ -428,27 +551,37 @@ describe('AiThread 恢复待执行卡的校验边界', () => {
     ).toBe(true)
     expect(reopened.history.canUndo).toBe(false)
   })
+})
 
-  it('第一轮 llm_chat 迟到宏任务落定时 send 仍等待回合结束再重开会话', async () => {
+describe('AiThread 在途回合落定后恢复', () => {
+  it('第一轮 llm_chat 挂起时 send 等待回合结束再重开会话', async () => {
     const h = await setup()
-    invokeMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          setTimeout(() => resolve(proposal()), 200)
-        }),
+    const completeReply = deferredReply()
+    let settled = false
+    const sending = send('丰富旁白').then(() => {
+      settled = true
+    })
+    await screen.findByRole('button', { name: '取消' })
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'llm_chat')).toBe(
+        true,
+      ),
     )
-    await send('丰富旁白')
-    // send 必须等到回合落定：否则会话保存只含用户消息（无卡），重开
-    // 还会认领在途回合使 busy 复位，第二轮发送成为 no-op——records 读
-    // 到第一轮请求而无批次记录（CI run 38372244808 的 flake 形态）
-    const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+    expect(settled).toBe(false)
+    await act(async () => completeReply(proposal()))
+    await sending
+    // 用已观察到的在途状态和响应屏障替代200ms竞速；保存的卡必须已落定。
+    const session = await storedCardSession(h.saved)
+    expect(session.entries.some((entry) => entry.card)).toBe(true)
     h.unmount()
     await setup({ session, nodes: [] })
     invokeMock.mockResolvedValueOnce(proposal())
     await send()
     expect(records()).toMatchObject([{ status: 'validation_failed' }])
   })
+})
 
+describe('AiThread 恢复整批拒绝卡', () => {
   it.each([false, true])(
     '校验拒绝卡（兼容合法子集=%s）重开后仍保持整批拒绝',
     async (withSubset) => {
@@ -472,7 +605,7 @@ describe('AiThread 恢复待执行卡的校验边界', () => {
         ],
       })
       await send('修改两个节点')
-      const session = normalizeAiSession(h.saved[h.saved.length - 1]).session
+      const session = await storedCardSession(h.saved)
       const rejected = session.entries.find((e) => e.card)!.card!
       expect(rejected.v).toMatchObject({ ok: false, commands: [] })
       // 当前拒绝结果不保留命令；兼容契约允许存在已校验的子集，两者都不是原始整批。
