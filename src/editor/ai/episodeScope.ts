@@ -9,6 +9,8 @@ const ENGLISH_EPISODE = /\bepisode(?:s|No)?\b/i
 const EPISODE_ADDITIONS = ['新增', '增加', '添加']
 /** 明确创建或在指定集创建内容，沿用既有的集归属范围。 */
 const EPISODE_CREATIONS = ['创建', '新建', '建立']
+/** 这些动词也可改写集内内容，仅凭集号前出现动词不足以授予分集范围。 */
+const EPISODE_CONTENT_EDITS = ['设置', '设定', '修改', '更改', '调整']
 const EPISODE_ASSIGNMENTS = [
   '安排',
   ...EPISODE_CREATIONS,
@@ -19,17 +21,13 @@ const EPISODE_ASSIGNMENTS = [
   '归属',
   '划入',
   '设为',
-  '设置',
-  '设定',
-  '修改',
-  '更改',
+  ...EPISODE_CONTENT_EDITS,
   '改为',
   '改成',
   '放入',
   '放到',
   '移到',
   '移入',
-  '调整',
   '重分',
 ]
 
@@ -99,10 +97,14 @@ function isDirectEpisodeCreation(before: string): boolean {
   )
 }
 
-/** 集目标须结束或进入后续动作；「第一集的/中的对白」是内容定位，不是分集目标。 */
+/** 模糊改写须以集目标结束或进入后续动作；其余创建/指派沿用既有规则。 */
 function assignsEpisodeTarget(before: string, after: string): boolean {
   if (isDirectEpisodeCreation(before)) return true
-  if (!/^(?:$|并|再|然后|且|同时)/.test(after)) return false
+  if (
+    EPISODE_CONTENT_EDITS.some((term) => before.includes(term)) &&
+    !/^(?:$|并|再|然后|且|同时)/.test(after)
+  )
+    return false
   return (
     EPISODE_ASSIGNMENTS.some((term) => before.includes(term)) ||
     /\b(?:create|assign|move|set|split|group|organize)\b/i.test(before)
