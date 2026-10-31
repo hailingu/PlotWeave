@@ -474,6 +474,7 @@ it.each(
     '请新增第 2 集',
     '增加第 2 集',
     '添加第 2 集',
+    '新增第1集和第2集',
   ].flatMap((request) => [[request, false] as const, [request, true] as const]),
 )(
   '明确创建请求可预览、确认、保存重开和撤销重做：%s，围栏=%s',
@@ -533,7 +534,7 @@ it.each(
   },
 )
 
-it.each(['新增第 2 集并添加节拍', '请新增第 2 集'])(
+it.each(['新增第 2 集并添加节拍', '请新增第 2 集', '新增第1集和第2集'])(
   '恢复原请求可见的旧 allow 卡仍可确认：%s',
   async (request) => {
     const initial = await setup()
@@ -574,7 +575,7 @@ it.each(['新增第 2 集并添加节拍', '请新增第 2 集'])(
   },
 )
 
-it.each(['把场景归入第 2 集', '请新增第 2 集'])(
+it.each(['把场景归入第 2 集', '请新增第 2 集', '新增第1集和第2集'])(
   '超过 200 条时原始请求被裁掉，合法分集卡仍可重开确认：%s',
   async (request) => {
     const h = await setup()

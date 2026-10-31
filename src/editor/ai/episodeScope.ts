@@ -7,11 +7,11 @@ const EPISODE_WORDS = ['分集', '归集', '集归属', '集号']
 const NUMBERED_EPISODE = /(?:第\s*)?[\d一二三四五六七八九十百零〇两]{1,32}\s*集/
 const ENGLISH_EPISODE = /\bepisode(?:s|No)?\b/i
 const EPISODE_ADDITIONS = ['新增', '增加', '添加']
+/** 明确创建或在指定集创建内容，沿用既有的集归属范围。 */
+const EPISODE_CREATIONS = ['创建', '新建', '建立']
 const EPISODE_ASSIGNMENTS = [
   '安排',
-  '创建',
-  '新建',
-  '建立',
+  ...EPISODE_CREATIONS,
   '分配',
   '划分',
   '归入',
@@ -90,19 +90,20 @@ function isDirectEpisodeArrangement(text: string): boolean {
   )
 }
 
-/** 新增动作必须紧接集目标；「增加节拍参考第一集」不能因此扩大范围。 */
-function isDirectEpisodeAddition(before: string): boolean {
+/** 明确创建先于改写限定判断；「增加节拍参考第一集」不属于紧接目标的创建。 */
+function isDirectEpisodeCreation(before: string): boolean {
   return (
-    EPISODE_ADDITIONS.some((term) => before.trimEnd().endsWith(term)) ||
-    /\badd\s*$/i.test(before)
+    [...EPISODE_ADDITIONS, ...EPISODE_CREATIONS].some((term) =>
+      before.trimEnd().endsWith(term),
+    ) || /\b(?:add|create)\s*$/i.test(before)
   )
 }
 
 /** 集目标须结束或进入后续动作；「第一集的/中的对白」是内容定位，不是分集目标。 */
 function assignsEpisodeTarget(before: string, after: string): boolean {
+  if (isDirectEpisodeCreation(before)) return true
   if (!/^(?:$|并|再|然后|且|同时)/.test(after)) return false
   return (
-    isDirectEpisodeAddition(before) ||
     EPISODE_ASSIGNMENTS.some((term) => before.includes(term)) ||
     /\b(?:create|assign|move|set|split|group|organize)\b/i.test(before)
   )
