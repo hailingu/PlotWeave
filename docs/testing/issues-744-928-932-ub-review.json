@@ -1,0 +1,13 @@
+{
+  "reviewer": "Codex，执行真实个人 /Users/guhailin/.agents/skills/ub-mode/SKILL.md；Swift 部分明确为人工复杂度、重复与测试充分性审查。",
+  "tdd": "#932 有效红灯：生产 React 宿主内文字鼠标点击成功后，右侧空白点击未选中；最小 contentShape/内边距修正后文字、两侧空白、行间和邻行通过。#928 有效红灯：等真实忽略控件后，基线完整 AX 无列表/行；首帧空壳失败已撤回。原生列表/行修正后单/多条及状态通过。#744 无已证实根因，不改产品输入框；实际墨迹测试先正常通过，再受控覆层24组失败、恢复72组通过。",
+  "rootCause": "#932 plain Button 的可见全宽背景未定义全行交互形状，水平内边距在按钮外；只把这同一行的可见边界交给原Button。#928 纯摘要借用pencil/trash操作图形且没有列表语义；装饰圆点与系统只读列表表示表达信息。#744 真实产品重开场景未独立证伪，保留开放与缺口，不猜测padding根因。",
+  "model": "React 独占编辑文档、图、选中和撤销；NativeOutlineView 仍发同一个 editor.select。NativeAiSummaryList 只有有序只读 labels，不复制会话或批次决策，真实确认/执行/忽略仍由现有卡片动作所有者处理。",
+  "boundaries": "不改权限、工具链规则、凭据或外部端点；UI测试拥有窗口和临时根，NativeMouseEventFixture 只对拥有的 NSWindow 送 down/up，不控制外部应用。当前缺少CUA，不把组件或构造投影当独立产品复现。普通Return/候选/旧回执及#929/#931/#939/#940边界由既有全量回归保留。",
+  "complexity": "MANUAL Swift：新增 SummaryList.body 是有序视觉与AX两种投影，无业务状态分支；NativeAiPreview.body 只替换纯摘要循环，既有执行/危险/冲突状态分支不变；NativeOutlineRow.body 增加标签内几何和contentShape，无新决策。生产可执行单元均小于80代码行，没有深层条件链或新并发所有者，不声称计算过Swift CRAP。",
+  "duplication": "MANUAL Swift：摘要标签只映射一次；视觉圆点和AX列表是对同一labels的必要不同呈现，不复制校验或执行决策。三类截图/位图/AX证据写入复用 NativePresentationEvidenceFixture，去掉新增测试中重复缓存及文件写入块；原有公开AX查找/项目fixture继续复用。未发现新增近似业务块。",
+  "tests": "公共原生入口已全量通过460 tests/97 suites，79/79 App文件，9826/10775行91.192575% report-only；72个中文墨迹对照最小比0.966507，受控覆层24组真实失败后已恢复；#928 四种外观/数量组合与校验失败/已执行，#932真实鼠标与React画布/检查器一致。没有伪造Swift mutation或VO/真实IME结果。最终HEAD另外执行ub:check要求的真实前端覆盖率、正常提交/推送门禁和CI。",
+  "log": "docs/testing/issues-744-928-932-native-ui.md 记录有效红灯、恢复、环境、状态矩阵与限制。原始行动日志 /tmp/plotweave-native3-work-log.jsonl、有效红灯 diagnostic/valid-red-and-oracle、受控 overlay-oracle 和恢复后green日志及截图/AX产物在清理前存 common Git 的 plotweave-task-evidence/issues-744-928-932；未覆盖原共享pending/index/ledger与#829证据。",
+  "testCommand": "sh scripts/test-native.sh",
+  "unsupported": "MANUAL：本次运行时代码仅 Swift（NativeAiView.swift、NativeOutlineView.swift）；已实际检查已安装crapper/dryer/mutator的语言支持，它们不支持Swift，没有以失败工具运行降级。逐项人工复杂度/重复/充分性审查见本JSON与验证文档；真实原生全量和受控遮挡对照已经执行，不报CRAP数或Swift自动mutation score。ub:check仍必须真实运行前端test:coverage，不能以此文字代替覆盖率或最终HEAD receipt。"
+}

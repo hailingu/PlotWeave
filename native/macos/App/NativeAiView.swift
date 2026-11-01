@@ -261,9 +261,7 @@ private struct NativeAiPreview: View {
     var body: some View {
         GroupBox("改动预览") {
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(Array((validation["items"]?.array ?? []).enumerated()), id: \.offset) { _, item in
-                    Label(item["label"]?.string ?? "", systemImage: item["danger"]?.bool == true ? "trash" : "pencil")
-                }
+                NativeAiSummaryList(labels: (validation["items"]?.array ?? []).map { $0["label"]?.string ?? "" })
                 ForEach(Array((validation["issues"]?.array ?? []).enumerated()), id: \.offset) { _, issue in
                     Text(issue["message"]?.string ?? "校验失败").foregroundStyle(.red)
                 }
@@ -304,5 +302,33 @@ private struct NativeAiPreview: View {
     /// Preview identity resolves against the current thread at dispatch time.
     private func send(_ command: String) {
         state.send(command, args: ["projectId": .string(projectId), "entryId": .number(entryId)])
+    }
+}
+
+/// Preview summaries are a hanging-indent information list; validated actions remain outside its accessibility subtree.
+private struct NativeAiSummaryList: View {
+    /// Array order and duplicate labels retain the validated batch's exact item identity and count.
+    let labels: [String]
+
+    /// Decorative bullets share a baseline, while every wrapped line uses the summary text's leading edge.
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("•").accessibilityHidden(true)
+                    Text(verbatim: label).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .accessibilityRepresentation {
+            List {
+                ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
+                    Text(verbatim: label).selectionDisabled(true)
+                }
+            }
+            .listStyle(.plain)
+            .scrollDisabled(true)
+            .scrollIndicators(.hidden)
+        }
     }
 }

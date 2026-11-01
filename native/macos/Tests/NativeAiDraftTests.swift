@@ -186,6 +186,75 @@ struct NativeAiDraftTests {
         #expect(Self.firstLineFrame(editor, in: fixture.window).maxY <= editor.visibleRect.maxY + 1)
     }
 
+    /// Actual rasterized top strokes must match the same unobstructed glyphs on the second line (#744).
+    /// This owned component window does not claim independent product, physical-focus or real-IME acceptance.
+    @Test(arguments: ["创建", "连线", "创建，连线"])
+    func firstLineCjkInkMatchesUnclippedSecondLine(text: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        fixture.window.appearance = NSAppearance(named: .aqua)
+        let editor = try await fixture.editor()
+        for width: CGFloat in [600, 300] {
+            fixture.window.setContentSize(NSSize(width: width, height: 620))
+            for busy in [false, true] {
+                try fixture.publishAI(busy: busy, thread: [["id": 1, "kind": "msg", "role": "user", "text": text]])
+                for focused in [false, true] {
+                    fixture.enter(text + "\n" + text + "\n", in: editor)
+                    editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+                    if focused { try await fixture.focusEditor(editor) }
+                    else { fixture.window.makeFirstResponder(nil) }
+                    fixture.window.contentView?.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(40))
+                    let first = try upperInk(editor, location: 0, length: text.utf16.count)
+                    let second = try upperInk(editor, location: text.utf16.count + 1, length: text.utf16.count)
+                    print("[cjk-ink] text=\(text) width=\(width) busy=\(busy) focused=\(focused) first=\(first) reference=\(second) scale=\(fixture.window.backingScaleFactor)")
+                    #expect(second > 10, "对照行必须真实绘出上部笔画")
+                    #expect(Double(first) >= Double(second) * 0.90,
+                            "首行上部笔画不应被裁切：first=\(first), reference=\(second), width=\(width), busy=\(busy), focused=\(focused)")
+                    try NativePresentationEvidenceFixture.record(try #require(fixture.window.contentView), name: "cjk-\(text)-\(Int(width))-busy\(busy)-focus\(focused)")
+                    for (kind, value) in [("single", text), ("long", String(repeating: text + "。", count: 80))] {
+                        fixture.enter(value, in: editor)
+                        editor.setSelectedRange(NSRange(location: value.utf16.count, length: 0))
+                        if kind == "long" { editor.scrollRangeToVisible(NSRange(location: 0, length: text.utf16.count)) }
+                        fixture.window.contentView?.layoutSubtreeIfNeeded()
+                        try await Task.sleep(for: .milliseconds(40))
+                        let ink = try upperInk(editor, location: 0, length: text.utf16.count)
+                        print("[cjk-ink] kind=\(kind) text=\(text) width=\(width) busy=\(busy) focused=\(focused) first=\(ink) reference=\(second)")
+                        #expect(Double(ink) >= Double(second) * 0.90, "单行与长文本首行的实际笔画应完整可见")
+                        try NativePresentationEvidenceFixture.record(try #require(fixture.window.contentView), name: "cjk-\(kind)-\(text)-\(Int(width))-busy\(busy)-focus\(focused)")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sampling the actual view cache checks visible ink, independent of declared insets or TextKit's layout engine.
+    private func upperInk(_ editor: NSTextView, location: Int, length: Int) throws -> Int {
+        let window = try #require(editor.window)
+        let hosting = try #require(window.contentView)
+        var actual = NSRange()
+        let screenRect = editor.firstRect(forCharacterRange: NSRange(location: location, length: length), actualRange: &actual)
+        let frame = hosting.convert(window.convertFromScreen(screenRect), from: nil)
+        let bitmap = try NativePresentationEvidenceFixture.bitmap(of: hosting)
+        let scaleX = CGFloat(bitmap.pixelsWide) / hosting.bounds.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / hosting.bounds.height
+        let top = hosting.isFlipped ? frame.minY : hosting.bounds.maxY - frame.maxY
+        let minX = max(0, Int((frame.minX * scaleX).rounded()))
+        let maxX = min(bitmap.pixelsWide, Int((frame.maxX * scaleX).rounded()))
+        let minY = max(0, Int((top * scaleY).rounded()))
+        let maxY = min(bitmap.pixelsHigh, minY + Int((frame.height * scaleY * 0.45).rounded()))
+        try #require(minX < maxX && minY < maxY)
+        var ink = 0
+        for y in minY..<maxY {
+            for x in minX..<maxX {
+                if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                   color.alphaComponent > 0.5,
+                   (color.redComponent + color.greenComponent + color.blueComponent) / 3 < 0.5 { ink += 1 }
+            }
+        }
+        return ink
+    }
+
     /// The first character's on-screen frame converted into the editor's coordinate space.
     private static func firstLineFrame(_ editor: NSTextView, in window: NSWindow) -> NSRect {
         var actual = NSRange()
@@ -283,7 +352,7 @@ struct NativeAiDraftTests {
 
         /// Mounts the actual composer under the same fixed pane constraints used by this disposable window.
         func mount() {
-            window.contentView = NSHostingView(rootView: NativeAiView(state: state, projectId: "fixture").frame(width: 600, height: 620))
+            window.contentView = NSHostingView(rootView: NativeAiView(state: state, projectId: "fixture").frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .windowBackgroundColor)))
             window.contentView?.layoutSubtreeIfNeeded()
         }
 
