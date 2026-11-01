@@ -4,7 +4,7 @@
 
 基线为 `7e8d7df404c039678e0d5681b99dd691be71f45b`（PR #943 已合入的 dev）。
 本轮确认并修正 [#928](https://github.com/hailingu/PlotWeave/issues/928) 的预览摘要语义和 [#932](https://github.com/hailingu/PlotWeave/issues/932) 的整行命中。
-[#744](https://github.com/hailingu/PlotWeave/issues/744) 只增加实际绘制回归与调查记录，保持开放；没有给已修的 Return、候选确认和草稿回执另造实现。
+[#744](https://github.com/hailingu/PlotWeave/issues/744) 增加实际绘制回归与调查记录；没有给已修的 Return、候选确认和草稿回执另造实现，也不凭组件通过直接证伪旧反馈。
 
 ## 状态与不变量
 
@@ -37,4 +37,19 @@
 
 回归只用自有 NSWindow／NSHostingView、真实生产 React 资源与注入临时目录。摘要测试的投影和模型固定响应是测试输入，不冒充独立产品复现。没有真实 API key 或公网模型调用。PNG／AX 记录在 `native/macos/build/ui-evidence/<测试进程 PID>/`，覆盖报告在 `native/macos/build/coverage/`；清理 build 前保留本轮原始日志与产物摘要到 common Git 的任务证据目录。
 
-本轮 CUA 接口未提供；上轮坐标接口在用户解锁置前后仍返回 noWindowsAvailable。该工具限制不是产品证据，没有改用外部 UI 脚本绕过。#744 仍欠独立产品窗口的窄面板、真实点击失焦、中文输入法和真实请求中继续撰写核验；当前证据不足以断言报告不存在，因此不关闭。
+CUA 直接接口可用，已补做下方独立产品窗口验证。坐标点击在窗口已激活、按 bundle ID 重新绑定、系统 Fill 适配屏幕后仍返回 noWindowsAvailable；AX 操作、键盘和截图正常。该限制不是产品证据，没有改用外部 UI 脚本或扩大权限。真实中文输入法和物理指针路径不能由组件／AX 通过结果自动证明，最终处置仍须结合对应运行版本的人工结果。
+
+
+## 独立产品窗口验证（2026-11-01）
+
+应用为已复制并通过深度严格验签的 `Verification/PlotWeaveUiChecks.app`，独立 bundle ID 为 `dev.plotweave.verification.issues744928932`，版本 0.3.0／build 2，二进制 SHA256 为 `d0de8bb3e7e822f4875954c05b6ec0fbaa96dd36ab1d399776a636fc6bc940d1`。构建基线为 `7e8d7df4`；本轮产品变更仅预览摘要与大纲命中，没有修改 composer。生产 Web 入口确认为该 bundle 的 `native-canvas.html`，没有 `#fixture`。数据目录是本任务新建的独立命名空间，“未命名短剧”为本任务测试项目。
+
+实际深色窗口经 CUA AX／键盘操作和截图观察：
+
+- 单行“创建”“连线”顶部完整；“创建，连线”经 Shift+Return 后产生两行，没有发送。
+- 通过公开 AX 分隔条属性调整宽度，实际 divider 位置为 1369 和 1034，对应约 300／640 pt 的窄／宽 AI 面板；已有中文草稿保持，截图首行与第二行均完整。这里验证的是实际布局变化，不声称进行了物理拖动。
+- 窄面板粘贴 300 个中文／标点字符，Command+Up 回到开头，实际首行与光标可见。Control+Tab 把焦点移到真实画布 HTML，草稿保持，首行仍完整。
+- 设置页只读确认默认模型指向 `http://127.0.0.1:63093/v1`；没有读取或输入真实密钥。固定纯文本回复暂挂时，Return 接受一条用户消息后输入立即清空，界面仍显示等待与取消。
+- 等待期间通过 AX 聚焦输入两行新的“创建，连线”，实际文字与光标完整；释放本地回复后，新草稿仍在，历史与草稿中的同字同时可见。用户时间线仅一条本次消息。夹具最终记录 4 次本地调用，与 `runAgentLoop` 的 `WRITE_ATTEMPTS = 4` 无有效批次纠正路径一致；不能把提供方调用数当用户重复发送数。
+
+上述窗口截图和完整 AX 状态保存在本轮 CUA 工具结果，未冒称为已上传 GitHub 的图片附件。夹具 PID／启动身份和调用计数另存任务证据。所有模型响应均为本机固定内容；无可执行批次、没有执行图改动。真实中文输入法候选确认及物理鼠标路径的人工结果另行核对，当前验证不替代这两项。
