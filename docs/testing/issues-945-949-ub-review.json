@@ -1,13 +1,13 @@
 {
   "reviewer": "Codex，使用真实 /Users/guhailin/.agents/skills/ub-mode/SKILL.md；本次为文档范围的结构化审阅。",
-  "tdd": "纯文档修正，不制造逐字匹配正文的测试。基线静态阅读确认 AGENTS.md 仍描述当前产品为 Tauri/Rust、UI 头部仍笼统整体待评审；README/workflow/v0.3.0 源码说明及已合入 PR288/526 给出相反的现行依据。",
+  "tdd": "文档修正采用结构化审阅，不制造逐字匹配测试。CI两次暴露既有Git用例5秒超时：本地原样通过，211次Git进程已分析；同一20ms慢Git控制下旧例10.669s按5秒红灯，修正后的6种模式均在原期限内绿灯。测试文件已按哈希恢复。",
   "rootCause": "迁移后的产品架构引言和 UI 规格整体状态未随既有合入记录更新。修正引言并增加范围明确的状态表，保留历史设计同步快照；issue945 对第二处行号的引用不准确，实际只需修正那一段过时引言。",
   "model": "SwiftUI/AppKit/Swift 服务是 v0.3.0 源码产品，WKWebView 内 React Flow 保持唯一编辑会话；Tauri/Rust 是保留基线。设计状态按既有定稿约束、已实现、规划/验收缺口、明确不支持分别持有。",
   "boundaries": "没有修改业务行为、门禁政策、权限、发布状态或工具链规则；没有补签整体设计批准。Windows/VoiceOver 仍按既有 owner 决定不支持；对比度及真实视觉验收边界保留。",
-  "complexity": "MANUAL：本次仅 Markdown 与审查 JSON，无新增或修改的可执行生产单元，CRAP 数值不适用。状态表复用既有 CSS 契约和原生功能对齐入口，没有新增检查工具。",
-  "duplication": "MANUAL：产品职责引用 workflow 作为现行入口，UI 状态表引用既有契约/PR与正文，避免复制完整规则或新增第二套实现清单；历史快照不重写。",
-  "tests": "现有 ub-mode 三个回归文件实际运行68项通过（37.78秒），覆盖凭据/入口/工具发现。修改后按文档路由进行结构化审阅及差异检查；正常提交仍实际执行完整静态、前端/Rust覆盖率和Sonar，最终HEAD必须另行执行真实ub:check并验证receipt。",
-  "log": "/tmp/plotweave-round-1102-1345-snapshot.json 固定五项issue与分组；本组行动日志 /tmp/plotweave-round-1102-work-log.jsonl，回归日志 /tmp/plotweave-round-ub-baseline.log。发布前保存精确HEAD、原始门禁日志及对象凭据。用户主工作区WORK_LOG.md删除与共享门禁历史保持。",
-  "testCommand": "npm test -- scripts/ub-mode-gate.test.ts scripts/ub-mode-evidence.test.ts scripts/ub-mode-discovery.test.ts --maxWorkers=1",
-  "unsupported": "MANUAL：变更只有文档和审查JSON，没有受支持的生产源码供crapper/dryer/mutator分析；复杂度、重复和测试充分性按技能人工审阅，无CRAP或mutation score声明。ub:check的前端覆盖率仍须真实执行，不能用这份记录替代最终HEAD/tree/base/技能及检查产物绑定的有效凭据。"
+  "complexity": "MANUAL：无生产可执行源码变更，CRAP数值不适用；测试改动保持执行单元小于80代码行。复用既有GitScenarioFixture，将不变历史播种与单次核验分开，没有新增检查工具或修改生产门禁逻辑。",
+  "duplication": "MANUAL：产品职责和设计状态引用既有权威入口；Git历史测试复用一次不可变模板，每例复制独立仓库，保留全部原断言和普通/发布模式，减少重复播种与单个测试内的双重执行。",
+  "tests": "初版完整提交门禁4056项前端/Rust603+1忽略/Sonar通过，ub基线68项通过。CI的唯一超时在两次attempt复现；修正后完整真实Git文件58项通过51.98s，慢Git校准6项通过且旧例预期超时，5秒测试期限未提高。新最终HEAD必须重新完成完整门禁与真实ub:check，不能复用bda980bd凭据。",
+  "log": "本轮固定清单见/tmp/plotweave-round-1102-1345-snapshot.json；行动日志/tmp/plotweave-round-1102-work-log.jsonl。CI修正说明见docs/testing/issues-945-949-ci.md；原始两轮CI、211次Git的Trace2、58项回归、慢Git红绿及恢复记录保存在本轮任务证据目录。",
+  "testCommand": "npm test -- scripts/verify-gate-evidence.test.ts --maxWorkers=1",
+  "unsupported": "MANUAL：变更为Markdown、审阅JSON及既有测试夹具，无受支持的生产源码供crapper/dryer/mutator扫描；复杂度、重复及测试充分性是明确的文档/测试人工审阅，不报告CRAP或mutation score。自动前端覆盖率仍实际运行；最终对象绑定receipt必须通过原门禁和真实技能检查。"
 }
