@@ -517,6 +517,15 @@ const edgeCases: [string, (graph: Graph) => void][] = [
   ],
 ]
 
+it.each([null, undefined, true, 1, 'document'])(
+  'rejects a non-object root with the owned diagnostic: %j',
+  (value) => {
+    expect(() => parseProject(value)).toThrow(
+      new TypeError('项目文件损坏：不是有效的文档对象'),
+    )
+  },
+)
+
 it('accepts all variants, optional fields, empty lists and retained extensions without changing valid input', () => {
   const graph = graphFixture()
   meta(graph).createdAt = 'kept'
