@@ -1,9 +1,20 @@
 # PlotWeave UI 设计规格
 
-> 状态：草案 v1（整体待评审），含已实现与规划内容；2026-09-09 按已关闭 issue 核对，逐项依据见[设计同步记录](design-sync.md)。未标记完成的规划不因本次同步而视为已实现。
+> 状态：现行实现基线与规划并列维护（2026-11-02，见 [#949](https://github.com/hailingu/PlotWeave/issues/949)）；已定稿约束、已实现功能与规划的范围及依据见下表。2026-09-09 的核对属于[设计同步记录](design-sync.md)中的历史快照，后续状态以各条目的合入记录和验收边界为准。
 > 适用范围：应用外壳、画布编辑器、设定集与资产库面板、AI 对话、设置页、设计令牌与动效规范、SwiftUI/AppKit 原生界面与服务（§12，已实现，保留验收缺口）。
 > 设计基准：Apple Human Interface Guidelines（HIG），当前仅支持 macOS；不支持 Windows，历史适配设想见 §11。
 > 配套文档：[数据模型主题索引](data-model/README.md)。本文档引用的数据模型 §x.y 章节号沿用原编号，可经[迁移对照](data-model.md)定位到对应主题正文。
+
+## 规格状态与依据
+
+| 范围 | 状态 | 依据与边界 |
+| --- | --- | --- |
+| 三层令牌、组件与节点语义接线、既有配对及动效降级变体 | 已定稿的现行实现约束 | §2、§4 与 §9 中由 [CSS 令牌静态契约](css-token-contract.md)覆盖的规则，以已合入的 [PR #288](https://github.com/hailingu/PlotWeave/pull/288)及其后续条目为依据；`sheetTokens.test.ts`／`tsxTokenScan.test.ts` 守护结构、接线与变体。§2.2／§2.3／§2.6 已登记的对比度边界仍保留，静态契约不等同于完整视觉验收。 |
+| macOS 原生界面、Swift 服务与 WKWebView 画布 | 已实现，逐项保留验收边界 | §12、已合入的 [PR #526](https://github.com/hailingu/PlotWeave/pull/526)及[原生功能对齐记录](swiftui-react-flow-feature-parity.md)；后续变更以各条目关联的 issue／PR 为准。 |
+| 其他功能与交互方案 | 按条目区分已实现、规划和保留边界 | 已实现条目沿用正文中的合入依据；没有实现或验收依据的目标仍为规划／待验收。§9 的交互目标按具体功能的实施记录判定状态。 |
+| Windows 与 VoiceOver | 明确不支持 | 分别沿用 §11 的 [#503](https://github.com/hailingu/PlotWeave/issues/503) 和 §2.6 的 [#569](https://github.com/hailingu/PlotWeave/issues/569) 所有者决定，不列为待完成的交付项。 |
+
+“已定稿”仅指已有合入记录确定的现行约束；具体实现与验收范围由对应记录持有。后续设计或行为变更仍通过任务 PR 更新受影响正文与回归，规划和已有验收缺口保持各自状态。
 
 ## 一、设计目标与原则
 
