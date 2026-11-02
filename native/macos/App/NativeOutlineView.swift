@@ -124,9 +124,10 @@ private struct NativeOutlineRow: View {
             }
             .padding(.leading, CGFloat(min(3, max(0, row["level"]?.number ?? 0))) * 10)
             .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            .padding(.horizontal, 5)
+            .contentShape(.rect(cornerRadius: 5))
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 5)
         .background(targeted ? Color.accentColor.opacity(0.2) : isSelected ? Color.accentColor.opacity(0.1) : .clear,
             in: .rect(cornerRadius: 5))
         .draggable(payload)

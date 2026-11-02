@@ -10,6 +10,79 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeProductionLifecycleTests {
+    /// Physical events hit the real native outline; selection returns through the production React owner (#932).
+    @Test func outlineTextAndBlankSpaceSelectTheSameProductionNode() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("大纲整行命中")])
+        let id = try #require(created["id"]?.string)
+        var doc = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        doc["graph"] = outlineHitGraph()
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(doc), "expectExisting": .bool(true)])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let web = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(web)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.editor["nodes"]?.array.count == 2 }
+        let outline = fixture.mountOutline(state: mounted.state)
+        let target = try await outlineRowButton(in: outline, containing: "节拍 · 雨过天晴")
+        try NativeCreationControlFixture.press(target)
+        try await wait { mounted.state.selectedNodeID == "target" }
+        let targetFrame = try NativeCreationControlFixture.frame(target)
+        print("[outline-hit] button=\(targetFrame) window=\(outline.frame)")
+        let windowFrame = outline.convertToScreen(try #require(outline.contentView).bounds)
+        for x in [targetFrame.minX + 16, windowFrame.maxX - 14, windowFrame.minX + 14] {
+            _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string("first")])
+            try await wait { mounted.state.selectedNodeID == "first" }
+            print("[outline-hit] clicking x=\(x), from=\(mounted.state.selectedNodeID ?? "nil")")
+            try NativeMouseEventFixture.click(in: outline, accessibilityPoint: CGPoint(x: x, y: targetFrame.midY))
+            try await wait { mounted.state.selectedNodeID == "target" }
+            #expect(mounted.state.editor["selected"]?["data"]?["name"]?.string == "雨过天晴")
+            #expect(try await web.evaluateJavaScript("document.querySelector('.react-flow__node.selected')?.dataset.id ?? ''") as? String == "target")
+        }
+        _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string("first")])
+        try await wait { mounted.state.selectedNodeID == "first" }
+        try NativeMouseEventFixture.click(in: outline, accessibilityPoint: CGPoint(x: windowFrame.maxX - 14, y: targetFrame.maxY + 2))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(mounted.state.selectedNodeID == "first", "行间区域不得把点击归给目标行")
+        let first = try await outlineRowButton(in: outline, containing: "节拍 · 起风")
+        _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string("target")])
+        try await wait { mounted.state.selectedNodeID == "target" }
+        try NativeMouseEventFixture.click(in: outline, accessibilityPoint: CGPoint(x: windowFrame.maxX - 14, y: try NativeCreationControlFixture.frame(first).midY))
+        try await wait { mounted.state.selectedNodeID == "first" }
+        await fixture.services.close()
+    }
+
+    /// SwiftUI combines the beat title and fulfillment subtitle in one button's accessible name.
+    private func outlineRowButton(in window: NSWindow, containing title: String) async throws -> AXUIElement {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        repeat {
+            let elements = try await NativeCreationControlFixture.elements(in: window)
+            if let button = elements.first(where: { element in
+                NativeCreationControlFixture.string(element, kAXRoleAttribute) == kAXButtonRole
+                    && [kAXTitleAttribute, kAXDescriptionAttribute].contains { attribute in
+                        NativeCreationControlFixture.string(element, attribute)?.contains(title) == true
+                    }
+            }) { return button }
+        } while ContinuousClock.now < deadline
+        throw HostFailure(code: "PW_TEST_OUTLINE_ROW_TIMEOUT", message: "测试大纲行未呈现：" + title)
+    }
+
+    /// Two independent beats reproduce the reported second-episode row without a model or parallel graph owner.
+    private func outlineHitGraph() -> HostJSON {
+        let nodes: [HostJSON] = [("first", "起风"), ("target", "雨过天晴")].enumerated().map { index, item in
+            .object(["id": .string(item.0), "type": .string("beat"),
+                     "layout": .object(["position": .object(["x": .number(Double(index * 300)), "y": .number(0)])]),
+                     "ui": .object(["selected": .bool(false), "expanded": .bool(true)]),
+                     "data": .object(["meta": .object(["label": .string(item.1), "episodeNo": .number(Double(index + 1))]),
+                                      "spec": .object(["tone": .string("")])])])
+        }
+        return .object(["nodes": .array(nodes), "edges": .array([]),
+                        "viewport": .object(["x": .number(0), "y": .number(0), "zoom": .number(1)])])
+    }
+
     /// A legacy beat-only AI card expands in the real page, commits all memberships and survives a new native window (#931).
     @Test func aiEpisodeAssignmentPersistsUndoRedoAndWindowReopen() async throws {
         let fixture = Fixture()
@@ -898,6 +971,17 @@ struct NativeProductionLifecycleTests {
             // A nonactive app-hosted process still needs visible WebKit animation frames.
             window.orderFrontRegardless()
             return (window, state)
+        }
+
+        /// A second native projection window shares the existing production document owner and no mutable graph.
+        func mountOutline(state: NativeApplicationState) -> NSWindow {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.level = .floating
+            window.contentView = NSHostingView(rootView: NativeOutlineView(state: state))
+            windows.append(window)
+            window.orderFrontRegardless()
+            return window
         }
 
         /// The actual native AI pane consumes the production page's projection without another session owner.
