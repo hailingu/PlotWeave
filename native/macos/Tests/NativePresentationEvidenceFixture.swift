@@ -4,10 +4,20 @@ import Testing
 /// Public view-cache rendering captures only a test-owned view, with no desktop or external-window automation.
 @MainActor
 enum NativePresentationEvidenceFixture {
-    /// The cache records actual drawn pixels after layout; callers can measure glyph ink or inspect the PNG.
-    static func bitmap(of view: NSView) throws -> NSBitmapImageRep {
+    /// The cache records drawn pixels at native or explicitly requested raster scale, without changing the display.
+    static func bitmap(of view: NSView, scale: CGFloat? = nil) throws -> NSBitmapImageRep {
         view.layoutSubtreeIfNeeded()
-        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        let bitmap: NSBitmapImageRep
+        if let scale {
+            try #require(scale > 0)
+            bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil,
+                pixelsWide: Int(ceil(view.bounds.width * scale)), pixelsHigh: Int(ceil(view.bounds.height * scale)),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            bitmap.size = view.bounds.size
+        } else {
+            bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        }
         view.cacheDisplay(in: view.bounds, to: bitmap)
         return bitmap
     }

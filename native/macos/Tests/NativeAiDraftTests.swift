@@ -10,18 +10,22 @@ import WebKit
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeAiDraftTests {
     /// A free-standing same-font glyph reference can reveal clipping shared by both editor lines.
-    @Test(arguments: ["创建", "连线", "创建，连线"])
-    func firstLineCjkMatchesUnconstrainedGlyphs(text: String) async throws {
+    @Test(arguments: ["创建", "连线", "创建，连线"], [0.0, 1.0, 2.0])
+    func firstLineCjkMatchesUnconstrainedGlyphs(text: String, rasterScale: Double) async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         fixture.window.appearance = NSAppearance(named: .aqua)
         let editor = try await fixture.editor()
         fixture.enter(text, in: editor)
         try await fixture.focusEditor(editor)
+        editor.setSelectedRange(NSRange(location: text.utf16.count, length: 0))
+        fixture.window.makeFirstResponder(nil)
         fixture.window.contentView?.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
         let hosting = try #require(fixture.window.contentView)
-        let actual = try NativePresentationEvidenceFixture.bitmap(of: hosting)
+        let capture = rasterScale == 0 ? "native" : "\(Int(rasterScale))x"
+        let requestedScale = rasterScale == 0 ? nil : CGFloat(rasterScale)
+        let actual = try NativePresentationEvidenceFixture.bitmap(of: hosting, scale: requestedScale)
         let scale = CGFloat(actual.pixelsWide) / hosting.bounds.width
         let reference = try unconstrainedGlyphs(text, attributes: editor.typingAttributes, scale: scale)
         var range = NSRange()
@@ -31,12 +35,48 @@ struct NativeAiDraftTests {
         let top = hosting.isFlipped ? frame.minY : hosting.bounds.maxY - frame.maxY
         let actualInk = glyphInk(actual, rect: NSRect(x: frame.minX * scale, y: top * scale, width: frame.width * scale, height: frame.height * scale))
         let referenceInk = glyphInk(reference, rect: NSRect(x: 0, y: 0, width: reference.pixelsWide, height: reference.pixelsHigh))
-        print("[cjk-independent] text=\(text) font=\(String(describing: editor.font)) actual=\(actualInk) reference=\(referenceInk)")
+        print("[cjk-independent] text=\(text) capture=\(capture) scale=\(scale) font=\(String(describing: editor.font)) actual=\(actualInk) reference=\(referenceInk)")
         try #require(referenceInk.count > 10, "独立对照必须真正画出中文笔画")
         #expect(actualInk.height >= referenceInk.height - 1, "字形总高度不能被编辑器裁短")
-        #expect(Double(actualInk.count) >= Double(referenceInk.count) * 0.90, "同字体独立绘制的笔画不能在编辑器内消失")
-        try NativePresentationEvidenceFixture.record(hosting, name: "cjk-independent-actual-\(text)")
-        try NativePresentationEvidenceFixture.record(try #require(reference.representation(using: .png, properties: [:])), named: "cjk-independent-reference-\(text).png")
+        #expect(actualInk.width >= referenceInk.width - 1, "字形横向边界不能被编辑器裁短")
+        #expect(actualInk.weight >= referenceInk.weight * 0.90, "连续墨迹对照应保留笔画，避免二值化丢掉抗锯齿覆盖率")
+        try NativePresentationEvidenceFixture.record(try #require(actual.representation(using: .png, properties: [:])), named: "cjk-independent-actual-\(capture)-\(text).png")
+        try NativePresentationEvidenceFixture.record(try #require(reference.representation(using: .png, properties: [:])), named: "cjk-independent-reference-\(capture)-\(text).png")
+        let cover = try coverTopStrokes(editor, screenRect: screen, in: fixture.window)
+        defer { cover.removeFromSuperview() }
+        try await Task.sleep(for: .milliseconds(40))
+        let occluded = try NativePresentationEvidenceFixture.bitmap(of: hosting, scale: requestedScale)
+        let clippedInk = glyphInk(occluded, rect: NSRect(x: frame.minX * scale, y: top * scale,
+                                                       width: frame.width * scale, height: frame.height * scale))
+        #expect(editor.string == text, "遮挡不能修改草稿")
+        print("[cjk-occlusion] text=\(text) capture=\(capture) scale=\(scale) actual=\(clippedInk) reference=\(referenceInk)")
+        #expect(clippedInk.count > 0, "部分遮挡应保留下部笔画，而非把编辑器整体移除")
+        #expect(clippedInk.height < referenceInk.height - 1, "真实覆盖上部笔画必须使可见高度检查失败")
+        #expect(clippedInk.weight < referenceInk.weight * 0.90, "遮挡也必须使连续墨迹检查失败")
+        try NativePresentationEvidenceFixture.record(try #require(occluded.representation(using: .png, properties: [:])), named: "cjk-occlusion-\(capture)-\(text).png")
+    }
+
+    /// A test-owned sibling in the public clip view obscures top strokes without changing text or layout.
+    private func coverTopStrokes(_ editor: NSTextView, screenRect: NSRect, in window: NSWindow) throws -> NSView {
+        let clip = try #require(editor.enclosingScrollView?.contentView)
+        let document = try #require(clip.documentView)
+        let rect = clip.convert(window.convertFromScreen(screenRect), from: nil)
+        let height = rect.height * 0.60
+        let y = clip.isFlipped ? rect.minY : rect.maxY - height
+        let cover = GlyphOcclusion(frame: NSRect(x: rect.minX, y: y, width: rect.width, height: height))
+        clip.addSubview(cover, positioned: .above, relativeTo: nil)
+        try #require(clip.documentView === document, "遮挡不能替换文档视图")
+        print("[cjk-cover] glyph=\(screenRect) clipBounds=\(clip.bounds) localGlyph=\(rect) cover=\(cover.frame)")
+        return cover
+    }
+
+    /// Opaque painting makes the occlusion visible in both native and controlled-scale view caches.
+    @MainActor private final class GlyphOcclusion: NSView {
+        /// Only the owned glyph region is covered; no desktop or other application is involved.
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor.white.setFill()
+            NSBezierPath(rect: bounds).fill()
+        }
     }
 
     /// Independent drawing uses the actual display scale and ample point-space around every glyph.
@@ -61,28 +101,39 @@ struct NativeAiDraftTests {
         return bitmap
     }
 
-    /// Visible dark pixels measure complete glyph height and ink without assuming declared font insets.
-    private func glyphInk(_ bitmap: NSBitmapImageRep, rect: NSRect) -> (height: Int, count: Int) {
+    /// Visible pixel bounds and integrated contrast separate glyph geometry from anti-aliasing darkness.
+    private func glyphInk(_ bitmap: NSBitmapImageRep, rect: NSRect) -> (height: Int, width: Int, count: Int, weight: Double) {
         let left = max(0, Int(floor(rect.minX)))
         let right = min(bitmap.pixelsWide, Int(ceil(rect.maxX)))
         let top = max(0, Int(floor(rect.minY)))
         let bottom = min(bitmap.pixelsHigh, Int(ceil(rect.maxY)))
-        guard left < right, top < bottom else { return (0, 0) }
-        var first = bottom
-        var last = top
-        var count = 0
+        guard left < right, top < bottom else { return (0, 0, 0, 0) }
+        var samples: [(column: Int, row: Int, luminance: Double)] = []
         for y in top..<bottom {
             for x in left..<right {
-                if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-                   color.alphaComponent > 0.5,
-                   (color.redComponent + color.greenComponent + color.blueComponent) / 3 < 0.5 {
-                    first = min(first, y)
-                    last = max(last, y)
-                    count += 1
+                if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.alphaComponent > 0.5 {
+                    samples.append((x, y, (color.redComponent + color.greenComponent + color.blueComponent) / 3))
                 }
             }
         }
-        return (count > 0 ? last - first + 1 : 0, count)
+        let background = max(samples.map(\.luminance).max() ?? 1, Double.leastNormalMagnitude)
+        var first = bottom
+        var last = top
+        var firstColumn = right
+        var lastColumn = left
+        var count = 0
+        var weight = 0.0
+        for sample in samples {
+            weight += max(0, background - sample.luminance) / background
+            if sample.luminance < 0.5 {
+                first = min(first, sample.row)
+                last = max(last, sample.row)
+                firstColumn = min(firstColumn, sample.column)
+                lastColumn = max(lastColumn, sample.column)
+                count += 1
+            }
+        }
+        return (count > 0 ? last - first + 1 : 0, count > 0 ? lastColumn - firstColumn + 1 : 0, count, weight)
     }
 
     /// A missing page has no Web user message, so its rejected send must leave the native draft intact.
