@@ -96,10 +96,13 @@ struct NativeAiView: View {
         }
     }
 
-    /// Draft text precedes the bottom model/context controls; send and long-request cancellation retain their original owner.
+    /// Draft text shares native body typography with messages, avoiding implicit Helvetica metrics for CJK glyphs.
+    /// Send and long-request cancellation retain their original owner.
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextEditor(text: $draft).frame(minHeight: 60, maxHeight: 120)
+            TextEditor(text: $draft)
+                .font(.body)
+                .frame(minHeight: 60, maxHeight: 120)
                 .scrollContentBackground(.hidden)
                 .safeAreaInset(edge: .top, spacing: 0) {
                     Color.clear.frame(height: 6).allowsHitTesting(false)

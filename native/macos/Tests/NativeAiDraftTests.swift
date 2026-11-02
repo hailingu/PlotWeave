@@ -9,6 +9,82 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeAiDraftTests {
+    /// A free-standing same-font glyph reference can reveal clipping shared by both editor lines.
+    @Test(arguments: ["创建", "连线", "创建，连线"])
+    func firstLineCjkMatchesUnconstrainedGlyphs(text: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        fixture.window.appearance = NSAppearance(named: .aqua)
+        let editor = try await fixture.editor()
+        fixture.enter(text, in: editor)
+        try await fixture.focusEditor(editor)
+        fixture.window.contentView?.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let hosting = try #require(fixture.window.contentView)
+        let actual = try NativePresentationEvidenceFixture.bitmap(of: hosting)
+        let scale = CGFloat(actual.pixelsWide) / hosting.bounds.width
+        let reference = try unconstrainedGlyphs(text, attributes: editor.typingAttributes, scale: scale)
+        var range = NSRange()
+        let screen = editor.firstRect(forCharacterRange: NSRange(location: 0, length: text.utf16.count), actualRange: &range)
+        try #require(range.length == text.utf16.count)
+        let frame = hosting.convert(fixture.window.convertFromScreen(screen), from: nil).insetBy(dx: 0, dy: -8)
+        let top = hosting.isFlipped ? frame.minY : hosting.bounds.maxY - frame.maxY
+        let actualInk = glyphInk(actual, rect: NSRect(x: frame.minX * scale, y: top * scale, width: frame.width * scale, height: frame.height * scale))
+        let referenceInk = glyphInk(reference, rect: NSRect(x: 0, y: 0, width: reference.pixelsWide, height: reference.pixelsHigh))
+        print("[cjk-independent] text=\(text) font=\(String(describing: editor.font)) actual=\(actualInk) reference=\(referenceInk)")
+        try #require(referenceInk.count > 10, "独立对照必须真正画出中文笔画")
+        #expect(actualInk.height >= referenceInk.height - 1, "字形总高度不能被编辑器裁短")
+        #expect(Double(actualInk.count) >= Double(referenceInk.count) * 0.90, "同字体独立绘制的笔画不能在编辑器内消失")
+        try NativePresentationEvidenceFixture.record(hosting, name: "cjk-independent-actual-\(text)")
+        try NativePresentationEvidenceFixture.record(try #require(reference.representation(using: .png, properties: [:])), named: "cjk-independent-reference-\(text).png")
+    }
+
+    /// Independent drawing uses the actual display scale and ample point-space around every glyph.
+    private func unconstrainedGlyphs(_ text: String, attributes: [NSAttributedString.Key: Any], scale: CGFloat) throws -> NSBitmapImageRep {
+        let width = Int(ceil(256 * scale))
+        let height = Int(ceil(64 * scale))
+        let bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                                                  bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                                  isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = context
+        NSColor.white.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: height)).fill()
+        let transform = NSAffineTransform()
+        transform.scale(by: scale)
+        transform.concat()
+        var resolved = attributes
+        resolved[.foregroundColor] = NSColor.black
+        NSAttributedString(string: text, attributes: resolved).draw(at: NSPoint(x: 20, y: 20))
+        return bitmap
+    }
+
+    /// Visible dark pixels measure complete glyph height and ink without assuming declared font insets.
+    private func glyphInk(_ bitmap: NSBitmapImageRep, rect: NSRect) -> (height: Int, count: Int) {
+        let left = max(0, Int(floor(rect.minX)))
+        let right = min(bitmap.pixelsWide, Int(ceil(rect.maxX)))
+        let top = max(0, Int(floor(rect.minY)))
+        let bottom = min(bitmap.pixelsHigh, Int(ceil(rect.maxY)))
+        guard left < right, top < bottom else { return (0, 0) }
+        var first = bottom
+        var last = top
+        var count = 0
+        for y in top..<bottom {
+            for x in left..<right {
+                if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                   color.alphaComponent > 0.5,
+                   (color.redComponent + color.greenComponent + color.blueComponent) / 3 < 0.5 {
+                    first = min(first, y)
+                    last = max(last, y)
+                    count += 1
+                }
+            }
+        }
+        return (count > 0 ? last - first + 1 : 0, count)
+    }
+
     /// A missing page has no Web user message, so its rejected send must leave the native draft intact.
     @Test func rejectedSendPreservesDraftAndAllowsRetry() async throws {
         let fixture = try Fixture()
@@ -244,15 +320,7 @@ struct NativeAiDraftTests {
         let minY = max(0, Int((top * scaleY).rounded()))
         let maxY = min(bitmap.pixelsHigh, minY + Int((frame.height * scaleY * 0.45).rounded()))
         try #require(minX < maxX && minY < maxY)
-        var ink = 0
-        for y in minY..<maxY {
-            for x in minX..<maxX {
-                if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-                   color.alphaComponent > 0.5,
-                   (color.redComponent + color.greenComponent + color.blueComponent) / 3 < 0.5 { ink += 1 }
-            }
-        }
-        return ink
+        return glyphInk(bitmap, rect: NSRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)).count
     }
 
     /// The first character's on-screen frame converted into the editor's coordinate space.
