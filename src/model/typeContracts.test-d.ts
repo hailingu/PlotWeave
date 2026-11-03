@@ -8,6 +8,7 @@
  * 同款探针见 src/editor/nodes/sessionCompat.test-d.ts。
  */
 import type {
+  DialogueLine,
   DerivedMeta,
   ImageMeta,
   ProjectDocument,
@@ -128,4 +129,12 @@ export type SceneNoRejectsNull = Reject<
 >
 export type SceneNoRejectsExplicitUndefined = Reject<
   Extends<{ sceneNo: undefined }, Pick<SceneSpec, 'sceneNo'>>
+>
+
+/** Existing loading semantics preserve null as an explicit no-speaker value (#946). */
+export type DialogueLineAcceptsExplicitNoSpeaker = Expect<
+  Extends<
+    { id: string; kind: 'line'; text: string; speaker: null },
+    DialogueLine
+  >
 >

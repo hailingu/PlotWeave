@@ -13,6 +13,7 @@
 import { sameCanonicalJson } from './jsonGuards'
 import { fromDocument } from './serialize'
 import { normalizeContainers } from './normalizeContainers'
+import { finalizeNormalizedGraph } from './normalizedGraphShape'
 import type { NormalizeEnv } from './normalizeContainers'
 import {
   isOrphanEdge,
@@ -181,6 +182,7 @@ export function parseProject(
     warnings,
     reissuedAssetAliases,
   } = normalizeDocument(raw as Record<string, unknown>, env)
+  finalizeNormalizedGraph(normalized.graph, warnings)
   return {
     content: fromDocument(normalized, warnings),
     repaired: !sameCanonicalJson(pristine, normalized),

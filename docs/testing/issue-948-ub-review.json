@@ -7,7 +7,7 @@
   "complexity": "MANUAL：生产变更为已安装crapper不支持的POSIX shell。15个函数体未变，主入口与两个职责库人工追踪；各新增/实质修改执行单元保持80代码行内。没有新增复杂度检查器或数值声明。",
   "duplication": "MANUAL：函数只搬移一次，入口source复用；场景夹具复制同一真实模块，无内联副本。9项用例通过公共aggregate辅助入口驱动真实awk，未另写参考实现。dryer不支持shell。",
   "tests": "新增9项真实shell协议用例红绿完成；原始88项基线通过；提取后refs/install/watchdog/gate-history与新协议共5文件131项通过，覆盖docs/单栈/慢路径full、信号与锁释放、工作区清理、台账。逐文件sh -n、零警告ESLint通过；正常完整提交/推送和最终HEAD真实ub:check须随后完成。 既有ub-mode三文件68项在部署修正后全部通过，明确覆盖文档分流前拒绝缺失凭据、有效凭据、唯一对象去重和删除ref边界。 共享基线旧台账用例哈希与952两次失败一致；复用bde015f9已通过四项CI的相同测试夹具修正，保留5秒限制和全部断言，最终HEAD完整门禁仍重新执行。 全量门禁再发现gate-tree-marker第三处复制清单缺依赖（4067pass/1fail，提交未创建），补齐相同两项资源后28项全部通过32.25s，断言和门禁政策保持；下一正常完整门禁必须实际通过。",
-  "log": "docs/testing/issue-948-pre-push.md含先置状态矩阵及证据；原始脚本与extraction-proof、红绿和回归日志将归档到本轮task evidence对应最终HEAD。/tmp/plotweave-round-1102-work-log.jsonl持续记录。",
+  "log": "docs/testing/issue-948-pre-push.md含先置状态矩阵及证据；原始脚本与extraction-proof、红绿和回归日志将归档到本轮task evidence对应最终HEAD。/tmp/plotweave-round-1102-work-log.jsonl持续记录。 2026-11-03 按授权合并已评审 dev d9cb7a19；仅台账冲突，以标准三方 union 保留两父原始记录字节和顺序，预览位于 /tmp/plotweave-round-954-merge-preview。钩子拆分实现及旧15个函数体保持原167a9240内容；新最终HEAD仍执行完整门禁、真实技能检查、推送后CI与实际复审。",
   "testCommand": "npm test -- scripts/pre-push-protocol.test.ts scripts/pre-push-refs.test.ts scripts/pre-push-install.test.ts scripts/pre-push-install-watchdog.test.ts scripts/gate-history.test.ts scripts/gate-tree-marker.test.ts scripts/ub-mode-gate.test.ts scripts/ub-mode-evidence.test.ts scripts/ub-mode-discovery.test.ts scripts/verify-gate-evidence.test.ts --maxWorkers=1",
   "unsupported": "MANUAL：生产逻辑为POSIX shell，crapper/dryer/mutator均未支持；对应复杂度、重复和充分性根据函数体哈希相同证据、原行为分支/失败诊断/信号清理回归以及新模块真实shell单测审阅。修改的TS场景工厂是既有注册测试设施，另一个TS文件为测试，不冒充支持语言生产代码的自动得分。自动前端覆盖率仍真实执行。"
 }
