@@ -7,7 +7,7 @@
   "complexity": "人工检查依赖选择和 lock 差异，没有维护函数、分支或嵌套变化；上游改变通过真实消费者回归验证，不对 JSON/锁文件宣称 CRAP 数值。",
   "duplication": "人工检查没有复制配置块或增加第二套包管理/解析流程，typescript-eslint 精确子包继续由同一包组解析；复用现有构建、lint、覆盖率和原生回归入口。",
   "tests": "npm ci 已按锁文件成功，项目审计入口通过且保留12项 moderate，无 high/critical。最终集成树执行实际完整提交门禁与覆盖率；最终 HEAD 的公共原生回归验证更新后构建的 Web 资源，正常 scoped pre-push、GitHub 四项 CI 与实际评审另行核实；不放宽现有测试、超时或覆盖率下限。",
-  "log": "只读核对官方 release/manifests、原PR补丁和两份完整 lock，确认没有新增节点、运行时依赖或脚本；独立检出原 PR 分支并正常 hooks 安装、npm ci 和只读审计；通过正常 hooks 对原 bot 树运行完整门禁并保留真实记录，再合并最新已验证 dev、写入本记录并正常提交物化；最终重新运行 ub-mode、消费者回归和 pre-push，跟踪同一 HEAD 的 CI/review 后才条件合并。",
+  "log": "先核对官方 release、manifest 与完整锁文件，在独立既有 PR 分支正常安装和审计；原始 bot 树通过正常完整门禁。a47754ee 已在 dev03f 基线通过完整提交门禁、真实 ub-mode 和公共原生461项回归。前一 chore PR #950 随后经实际评审及四项CI通过后合入 dev65b22c94；本次标准 Git union 合并仅有台账冲突，核验保留两父原始记录字节及顺序、基线两条 malformed 行，不改通过字段或核验器。更新本记录后，新的最终HEAD重新执行正常完整提交门禁、真实 ub-mode 和正常 pre-push，再核实同一HEAD实际评审与CI后条件合并。",
   "testCommand": "npm test -- --maxWorkers=4",
   "unsupported": "维护变更为 package JSON、lock 和审阅 JSON，无 crapper/dryer/mutator 支持的变更生产源码。三项分别人工核查复杂度、重复和测试充分性，不报告虚构分数；coverage 仍实际执行。"
 }

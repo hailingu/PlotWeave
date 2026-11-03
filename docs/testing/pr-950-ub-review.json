@@ -1,0 +1,13 @@
+{
+  "reviewer": "Codex",
+  "tdd": "本次为已有 Dependabot PR #950 的不可变 GitHub Action 引用更新；没有维护代码行为修改，不新增复述配置文本的测试。先核对官方 tag、完整上游 diff、输入、权限及原 CI，再通过项目真实静态、构建、覆盖率、审计和原生回归验证集成行为。",
+  "rootCause": "将 taiki-e/install-action 2.87.31 固定提交更新至官方 v2.88.1 所指的 68a389c788b2cd04016ce8c80ee23b80d2ab3d68；上游比较47个提交、28个文件，action.yml、main.sh 和 cargo-audit 清单均未改变；不是产品缺陷修复。",
+  "model": "依赖职责保持：workflow 选择不可变 action SHA，tool 输入仍固定 cargo-audit@0.22.2；不改变产品数据、模块边界、Node/Rust/Xcode 工具链钉版或审计政策。",
+  "boundaries": "官方 tag 与目标 SHA 精确一致；cargo-audit manifest 两端为同一 blob 9d430336a1891a727b0c364d50007370b3b037cd；checksum 默认 true；没有 workflow 权限、凭据或网络范围变更。只处理本 PR 的安装器引用。",
+  "complexity": "人工检查新增范围：一行不可变引用、验证记录及正常物化台账，没有新增或修改维护函数、分支、嵌套。上游 action 入口和主执行脚本字节保持；不对 YAML/JSON 报告 CRAP 分数。",
+  "duplication": "人工比较更新前后及最新 dev：没有新增重复执行块、包装函数或第二套安装逻辑，仍由单个现有 action 步骤负责 cargo-audit 安装。",
+  "tests": "使用现有真实项目消费者验证，既有断言、5秒夹具期限、覆盖率下限和 Sonar 新问题要求保持；最终 HEAD 运行真实 coverage，完整 pre-push 包含原生回归，GitHub 同一 HEAD 四项 CI 与实际评审另行核实。原始 bot 树通过正常 hooks 验证后，其记录由后续普通提交物化。",
+  "log": "先只读检查 #950 diff、官方 compare/tag/manifest 与原四项 CI；在独立已有 PR 分支检出并 npm ci，保持 hooks 接线；先对原始树使用普通 path-limited allow-empty 提交实际运行完整提交门禁，避免改变记录键；再合并最新 dev、保存原始历史台账、正常提交，最终 HEAD 重新运行真实 ub-mode 和 pre-push；具体退出码和日志保留 Git common 证据归档。",
+  "testCommand": "npm test -- --maxWorkers=4",
+  "unsupported": "修改为 YAML 中的 SHA、JSON 人工审阅和台账记录；没有新增/修改受 crapper、dryer、mutator 支持的维护生产源码。三项逐项人工审查，不伪造复杂度/重复/变异分数；coverage 仍实际运行。"
+}
