@@ -51,7 +51,8 @@ export interface DialogueLine {
   id: string
   kind: 'line' | 'action'
   text: string
-  speaker?: string
+  /** null is the existing persisted no-speaker value accepted during loading (#946). */
+  speaker?: string | null
   side?: 'left' | 'right'
   vo?: boolean
 }

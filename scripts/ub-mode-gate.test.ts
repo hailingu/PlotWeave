@@ -68,6 +68,29 @@ function fixture() {
   return { root, env, git, run }
 }
 
+/** Deploy the real hook together with its callable libraries into one owned publishing fixture. */
+function deployPushTooling(root: string): void {
+  for (const directory of ['.githooks', 'scripts']) {
+    mkdirSync(resolve(root, directory), { recursive: true })
+  }
+  cpSync(
+    resolve(import.meta.dirname, '../.githooks/pre-push'),
+    resolve(root, '.githooks/pre-push'),
+  )
+  for (const file of [
+    'pre-push-protocol.sh',
+    'pre-push-runtime.sh',
+    'ub-mode-gate.ts',
+    'ub-mode-evidence.ts',
+    'ub-mode-run.ts',
+    'gate-scope.ts',
+    'gate-scope-core.ts',
+    'check-docs.sh',
+  ]) {
+    cpSync(resolve(import.meta.dirname, file), resolve(root, 'scripts', file))
+  }
+}
+
 /** 在新提交中加入需检查的生产源码和人工技能记录，命令使用受控故障边界。 */
 function runnableFixture() {
   const f = fixture()
@@ -137,26 +160,7 @@ it('真实 pre-push 在文档分流之前阻断缺失 ub-mode 证据', () => {
   writeFileSync(resolve(f.root, 'README.md'), '# docs\n')
   expect(f.git('add', '.').status).toBe(0)
   expect(f.git('commit', '-qm', 'docs').status).toBe(0)
-  mkdirSync(resolve(f.root, '.githooks'))
-  mkdirSync(resolve(f.root, 'scripts'))
-  cpSync(
-    resolve(import.meta.dirname, '../.githooks/pre-push'),
-    resolve(f.root, '.githooks/pre-push'),
-  )
-  for (const file of [
-    'ub-mode-gate.ts',
-    'ub-mode-evidence.ts',
-    'ub-mode-run.ts',
-    'gate-scope.ts',
-    'gate-scope-core.ts',
-    'check-docs.sh',
-  ]) {
-    const copy = spawnSync('cp', [
-      resolve(import.meta.dirname, file),
-      resolve(f.root, 'scripts', file),
-    ])
-    expect(copy.status).toBe(0)
-  }
+  deployPushTooling(f.root)
   const head = f.git('rev-parse', 'HEAD').stdout.trim()
   const result = spawnSync('sh', ['.githooks/pre-push'], {
     cwd: f.root,
@@ -170,21 +174,7 @@ it('真实 pre-push 在文档分流之前阻断缺失 ub-mode 证据', () => {
 
 it('真实 pre-push 接受有效记录，唯一对象只检查一次，删除 ref 不查', () => {
   const f = runnableFixture()
-  mkdirSync(resolve(f.root, '.githooks'))
-  mkdirSync(resolve(f.root, 'scripts'))
-  cpSync(
-    resolve(import.meta.dirname, '../.githooks/pre-push'),
-    resolve(f.root, '.githooks/pre-push'),
-  )
-  for (const file of [
-    'ub-mode-gate.ts',
-    'ub-mode-evidence.ts',
-    'ub-mode-run.ts',
-    'gate-scope.ts',
-    'gate-scope-core.ts',
-    'check-docs.sh',
-  ])
-    cpSync(resolve(import.meta.dirname, file), resolve(f.root, 'scripts', file))
+  deployPushTooling(f.root)
   const gatePath = resolve(f.root, 'scripts/sonar-quality-gate.sh')
   writeFileSync(gatePath, '#!/bin/sh\necho sonar >> calls.log\n')
   chmodSync(gatePath, 0o755)

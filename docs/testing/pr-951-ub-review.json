@@ -1,0 +1,13 @@
+{
+  "reviewer": "Codex",
+  "tdd": "仅接纳已有 Dependabot PR #951 的开发依赖补丁，维护源码没有行为修改，不新增断言配置文本的测试。先核对上游实际 release、manifest、完整锁文件增删与兼容范围，再用现有 lint、严格类型检查、生产构建、行为测试和原生消费端回归验收。",
+  "rootCause": "将 postcss 锁定版本 8.5.31 更新至 8.5.32、typescript-eslint 及其同代包 8.72.0 更新至 8.72.1，同时更新既有传递 ignore 7.0.13 至 7.0.14；上游补丁处理 source/Warning/Promise finally 语义、lint 误报及 project-service 单程序复用，不扩大到新的依赖代际。",
+  "model": "package.json 仍是开发依赖选择入口、package-lock.json 是唯一解析结果。13 个既有节点升级，没有新增/删除节点、生产依赖变更或新 install scripts；所有解析来源仍是 registry.npmjs.org，typescript-eslint 包组保持同一 8.72.1 版本。",
+  "boundaries": "manifest 与 lock 根元数据一致；项目 Node ^24.18.0 || >=26.0.0、TypeScript ~6.0.3、ESLint ^10.13.0 落在上下游不变的兼容范围。没有 legacy-peer-deps、覆盖规则、脚本授权或仓库凭据修改；工具链、运行时依赖与审计阈值保持。",
+  "complexity": "人工检查依赖选择和 lock 差异，没有维护函数、分支或嵌套变化；上游改变通过真实消费者回归验证，不对 JSON/锁文件宣称 CRAP 数值。",
+  "duplication": "人工检查没有复制配置块或增加第二套包管理/解析流程，typescript-eslint 精确子包继续由同一包组解析；复用现有构建、lint、覆盖率和原生回归入口。",
+  "tests": "npm ci 已按锁文件成功，项目审计入口通过且保留12项 moderate，无 high/critical。最终集成树执行实际完整提交门禁与覆盖率；最终 HEAD 的公共原生回归验证更新后构建的 Web 资源，正常 scoped pre-push、GitHub 四项 CI 与实际评审另行核实；不放宽现有测试、超时或覆盖率下限。",
+  "log": "只读核对官方 release/manifests、原PR补丁和两份完整 lock，确认没有新增节点、运行时依赖或脚本；独立检出原 PR 分支并正常 hooks 安装、npm ci 和只读审计；通过正常 hooks 对原 bot 树运行完整门禁并保留真实记录，再合并最新已验证 dev、写入本记录并正常提交物化；最终重新运行 ub-mode、消费者回归和 pre-push，跟踪同一 HEAD 的 CI/review 后才条件合并。",
+  "testCommand": "npm test -- --maxWorkers=4",
+  "unsupported": "维护变更为 package JSON、lock 和审阅 JSON，无 crapper/dryer/mutator 支持的变更生产源码。三项分别人工核查复杂度、重复和测试充分性，不报告虚构分数；coverage 仍实际执行。"
+}

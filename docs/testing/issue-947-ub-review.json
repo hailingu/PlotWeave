@@ -1,0 +1,13 @@
+{
+  "reviewer": "Codex，实际使用 /Users/guhailin/.agents/skills/ub-mode/SKILL.md；#947 纯路径重组审阅。",
+  "tdd": "纯文件移动没有行为需求，不制造源码布局断言。移动前记录79文件的SHA256与明确职责映射，移动后逐字节确认；构建及公共原生功能回归验证递归工程成员发现。",
+  "rootCause": "79个App Swift文件全部平铺，现有文件系统同步组和覆盖率清单均已递归，缺口仅为职责导航。沿用现有机制移动78文件、入口保留，不增加工程清单工具。",
+  "model": "Shell/Editor/Library/Storage/Providers/Media为导航目录；target、Swift模块、访问级别和状态所有权不变。每个文件按实际现有职责归组。",
+  "boundaries": "所有79个生产Swift文件哈希保持，含78个移动文件和根入口；无生产内容、依赖、权限、工具链规则或公开契约改动。历史证据路径保留，仅更新当前功能页相对源码链接。",
+  "complexity": "MANUAL：Swift运行单元逐字节未变，没有新增或实质修改函数。安装的crapper不支持Swift，本次不报告CRAP；本变更只降低目录导航成本。",
+  "duplication": "MANUAL：不复制生产实现、不增加平行模块，文件只移动一次。已有递归工程和覆盖率发现保持，无新文件清单逻辑。dryer不支持Swift。",
+  "tests": "79文件移动前后SHA256一致，Git暂存78个R100重命名。npm run build:native通过；仓库根npm run check:size && sh scripts/test-native.sh通过，461项/97套件，App覆盖率9830/10779行（91.20%）、79/79文件，维持report-only。正常提交门禁和最终HEAD真实ub检查随后执行，不能以此JSON代替有效凭据。 5d92ddba已通过正常原生范围pre-push并推送，尚未创建PR。发布PR前复用与952两次失败同哈希的CI夹具修正（8cac2afa→bbfbc679），原5秒限制保留；Swift源字节不变，新最终HEAD仍须完整门禁与真实ub后再次推送，旧凭据不授权新代码。",
+  "log": "职责与验证入口见docs/development/native-source-layout.md；原始manifest、哈希核验、build/native门禁日志将归档到本轮task evidence对应最终HEAD。行动日志/tmp/plotweave-round-1102-work-log.jsonl。 2026-11-03 按已授权流程合并 dev 62b75090；仅台账冲突，以标准三方 union 保留两父原始记录字节与顺序，预览位于 /tmp/plotweave-round-955-merge-preview。Swift生产文件内容及职责映射保持，原始间歇失败取证另存 common任务证据目录，未宣称修复其根因。新最终HEAD仍重新执行完整门禁、真实技能检查、正常推送、CI与实际复审。",
+  "testCommand": "npm run check:size && sh scripts/test-native.sh",
+  "unsupported": "MANUAL：生产变更仅为Swift路径移动，已安装crapper/dryer/mutator不支持Swift；函数复杂度、无复制与测试充分性基于逐字节相同证据、Xcode递归工程成员及完整公共原生回归审阅，不生成虚构CRAP或mutation score。自动前端覆盖率仍真实执行。"
+}

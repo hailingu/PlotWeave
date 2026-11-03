@@ -136,7 +136,7 @@ interface DialogueLine {
   id: string
   kind: 'line' | 'action'
   text: string
-  speaker?: string           // kind='line' 时的说话人，引用 settings.characters
+  speaker?: string | null    // kind='line' 时引用 settings.characters；null 沿用无说话人的加载语义
   side?: 'left' | 'right'    // 气泡左右侧
   vo?: boolean               // 画外音（VO 徽标）
 }
