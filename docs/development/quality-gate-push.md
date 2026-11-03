@@ -791,3 +791,13 @@ does not contain (omitted staged changes, unstaged tracked changes, or
 untracked/ignored inputs) — is recorded in
 [What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces) as a
 boundary of this inventory.
+
+
+## Implementation navigation (#948)
+
+The entry hook [`.githooks/pre-push`](../../.githooks/pre-push) owns environment initialization, the single trap registration, stdin ref collection, and commit dispatch. It sources two POSIX function libraries from the current gate tree:
+
+- [`pre-push-protocol.sh`](../../scripts/pre-push-protocol.sh) resolves pushed objects and scope bases, checks each ref scope, and aggregates the existing scope manifest. Documentation is neutral; distinct stacks and `full` converge to `full` independently of ref order.
+- [`pre-push-runtime.sh`](../../scripts/pre-push-runtime.sh) executes one commit in the current tree or an isolated worktree and owns the existing child supervision and cleanup helpers. The entry hook remains the sole initializer and trap owner.
+
+The extracted function bodies, stdin format, stable diagnostics, routing, receipt checks, pending evidence, and signal/lock lifecycle are preserved. The real-hook loaders in `pre-push-scenario-fixture.ts`, `ub-mode-gate.test.ts`, and `gate-tree-marker.test.ts` copy both libraries together with the entry hook, so publishing, ledger, and historical-tree scenarios use the same current gate implementation. The direct shell protocol test checks aggregation behavior; the existing real-Git tests retain the lifecycle and fast/slow-path coverage.
