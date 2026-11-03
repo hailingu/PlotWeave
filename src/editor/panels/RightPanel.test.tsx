@@ -956,9 +956,12 @@ describe('RightPanel ✦AI 恢复条目重定基', () => {
     send('新消息')
     expect(await screen.findByText('收到。')).toBeTruthy()
 
-    const entries = (saved as { entries: { id: number }[] }).entries
-    expect(entries.map((entry) => entry.id)).toEqual([1, 2, 3])
-    expect(normalizeAiSession(saved).repaired).toBe(false)
+    // 回复呈现先于保存 effect；等待实际保存快照，不能把 DOM 就绪当作落盘就绪。
+    await waitFor(() => {
+      const entries = (saved as { entries: { id: number }[] }).entries
+      expect(entries.map((entry) => entry.id)).toEqual([1, 2, 3])
+      expect(normalizeAiSession(saved).repaired).toBe(false)
+    })
   })
 })
 
