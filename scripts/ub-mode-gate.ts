@@ -10,7 +10,7 @@ function createPr(root: string, title: string, bodyFile: string): void {
   const head = ubGit(root, ['rev-parse', 'HEAD'])
   verifyUbCommit(root, head)
   const branch = ubGit(root, ['symbolic-ref', '--short', 'HEAD'])
-  ubRequire(!['dev', 'main'].includes(branch), 'UB_MODE_PROTECTED_BRANCH')
+  ubRequire(!['develop', 'main'].includes(branch), 'UB_MODE_PROTECTED_BRANCH')
   const remote = ubGit(root, [
     'ls-remote',
     '--exit-code',
@@ -26,7 +26,7 @@ function createPr(root: string, title: string, bodyFile: string): void {
       '--repo',
       'hailingu/PlotWeave',
       '--base',
-      'dev',
+      'develop',
       '--head',
       branch,
       '--draft',

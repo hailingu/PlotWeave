@@ -20,7 +20,7 @@ const configuration = load(
   ),
 )
 const weeklyPolicy = {
-  'target-branch': 'dev',
+  'target-branch': 'develop',
   schedule: { interval: 'weekly', day: 'monday', timezone: 'Asia/Shanghai' },
   'open-pull-requests-limit': 5,
 }

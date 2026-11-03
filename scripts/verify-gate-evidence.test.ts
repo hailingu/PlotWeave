@@ -351,7 +351,7 @@ describe(
 )
 
 describe(
-  '发布集成边界的豁免通过（--release-boundary，dev → main 形态，PR #581 评审 5542207474）',
+  '发布集成边界的豁免通过（--release-boundary，develop → main 形态，PR #581 评审 5542207474）',
   { timeout: 60_000 },
   () => {
     afterEach(() => {

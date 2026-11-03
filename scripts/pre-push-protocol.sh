@@ -12,7 +12,7 @@ resolve_pushed_commit() {
 }
 
 # 变更范围基线（owner 指示 2026-10-18）：已有远端分支用远端旧 tip 的
-# 范围，新建分支优先用本地 dev 的 merge-base，其次 origin/dev，最后退回
+# 范围，新建分支优先用本地 develop 的 merge-base，其次 origin/develop，最后退回
 # 被推提交的父提交。已有 tip 缺对象或无法确定基线时返回非零，调用方按 full 处理。
 scope_base_for_commit() {
   commit=$1
@@ -22,11 +22,11 @@ scope_base_for_commit() {
     printf '%s\n' "$remote_sha"
     return 0
   fi
-  if git rev-parse --verify --quiet dev^{commit} >/dev/null 2>&1; then
-    git merge-base dev "$commit" 2>/dev/null && return 0
+  if git rev-parse --verify --quiet develop^{commit} >/dev/null 2>&1; then
+    git merge-base develop "$commit" 2>/dev/null && return 0
   fi
-  if git rev-parse --verify --quiet origin/dev^{commit} >/dev/null 2>&1; then
-    git merge-base origin/dev "$commit" 2>/dev/null && return 0
+  if git rev-parse --verify --quiet origin/develop^{commit} >/dev/null 2>&1; then
+    git merge-base origin/develop "$commit" 2>/dev/null && return 0
   fi
   if git rev-parse --verify --quiet "$commit^" >/dev/null 2>&1; then
     git rev-parse "$commit^" 2>/dev/null && return 0

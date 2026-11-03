@@ -40,10 +40,10 @@ function fixture() {
   const git = (...args: string[]) =>
     spawnSync('git', args, { cwd: root, env, encoding: 'utf8' })
   for (const args of [
-    ['init', '-q', '-b', 'dev'],
+    ['init', '-q', '-b', 'develop'],
     ['config', 'user.name', 'test'],
     ['config', 'user.email', 'test@invalid'],
-    ['config', 'core.hooksPath', '/dev/null'],
+    ['config', 'core.hooksPath', '/develop/null'],
   ])
     expect(git(...args).status).toBe(0)
   writeFileSync(
@@ -180,7 +180,7 @@ it('真实 pre-push 接受有效记录，唯一对象只检查一次，删除 re
   chmodSync(gatePath, 0o755)
   expect(f.git('add', '.').status).toBe(0)
   expect(f.git('commit', '-qm', 'real hook tooling').status).toBe(0)
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   const head = f.git('rev-parse', 'HEAD').stdout.trim()
   const zero = '0'.repeat(40)
   const result = spawnSync('sh', ['.githooks/pre-push'], {
@@ -198,7 +198,7 @@ it('真实 pre-push 接受有效记录，唯一对象只检查一次，删除 re
 
 it('实际运行四项命令后通过，后续新提交必须重检', () => {
   const f = runnableFixture()
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   expect(
     readFileSync(resolve(f.root, 'calls.log'), 'utf8').trim().split('\n'),
   ).toEqual(['npm', 'crapper', 'dryer', 'mutator'])
@@ -213,9 +213,9 @@ it.each(['npm', 'crapper', 'dryer', 'mutator'])(
   '检查失败不保留旧成功记录：%s',
   (tool) => {
     const f = runnableFixture()
-    expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+    expect(f.run('run', 'develop', 'review.json').status).toBe(0)
     f.command(tool, 'exit 3')
-    expect(f.run('run', 'dev', 'review.json').stderr).toContain(
+    expect(f.run('run', 'develop', 'review.json').stderr).toContain(
       'UB_MODE_CHECK_FAILED',
     )
     expect(existsSync(f.receipt)).toBe(false)
@@ -225,7 +225,7 @@ it.each(['npm', 'crapper', 'dryer', 'mutator'])(
 it('dryer 成功退出但发现重复也不能发布', () => {
   const f = runnableFixture()
   f.command('dryer', 'echo "DUPLICATE score=0.85"')
-  expect(f.run('run', 'dev', 'review.json').stderr).toContain(
+  expect(f.run('run', 'develop', 'review.json').stderr).toContain(
     'UB_MODE_DUPLICATION',
   )
   expect(existsSync(f.receipt)).toBe(false)
@@ -234,22 +234,26 @@ it('dryer 成功退出但发现重复也不能发布', () => {
 it('脏工作树及检查期间源码修改均不能生成记录', () => {
   const f = runnableFixture()
   writeFileSync(resolve(f.root, 'file.txt'), 'dirty')
-  expect(f.run('run', 'dev', 'review.json').stderr).toContain('UB_MODE_DIRTY')
+  expect(f.run('run', 'develop', 'review.json').stderr).toContain(
+    'UB_MODE_DIRTY',
+  )
   expect(f.git('restore', 'file.txt').status).toBe(0)
   f.command('mutator', 'echo dirty > file.txt')
-  expect(f.run('run', 'dev', 'review.json').stderr).toContain('UB_MODE_DIRTY')
+  expect(f.run('run', 'develop', 'review.json').stderr).toContain(
+    'UB_MODE_DIRTY',
+  )
   expect(existsSync(f.receipt)).toBe(false)
 })
 
 it('检查后的技能和日志字节修改使证据失效', () => {
   const f = runnableFixture()
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   const value = JSON.parse(readFileSync(f.receipt, 'utf8')) as {
     checks: { artifact: { path: string } }[]
   }
   writeFileSync(value.checks[0]!.artifact.path, 'different')
   expect(f.run('verify', 'HEAD').stderr).toContain('UB_MODE_ARTIFACT_CHANGED')
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   writeFileSync(
     resolve(f.root, 'SKILL.md'),
     '---\nname: ub-mode\n---\nChanged skill body\n',
@@ -269,11 +273,11 @@ it('PR 只为已检查且与真实 origin head 一致的分支创建 draft', () 
   expect(f.run('pr', 'title', '/tmp/body.md').stderr).toContain(
     'UB_MODE_MISSING',
   )
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   f.command('gh', `printf '%s\\n' "$*" >> '${f.root}/calls.log'`)
   expect(f.run('pr', 'title', '/tmp/body.md').status).toBe(0)
   expect(readFileSync(resolve(f.root, 'calls.log'), 'utf8')).toContain(
-    '--base dev --head feature/check --draft',
+    '--base develop --head feature/check --draft',
   )
   expect(
     f.git(
@@ -281,7 +285,7 @@ it('PR 只为已检查且与真实 origin head 一致的分支创建 draft', () 
       origin,
       'update-ref',
       'refs/heads/feature/check',
-      f.git('rev-parse', 'dev').stdout.trim(),
+      f.git('rev-parse', 'develop').stdout.trim(),
     ).status,
   ).toBe(0)
   expect(f.run('pr', 'title', '/tmp/body.md').stderr).toContain(
@@ -293,7 +297,7 @@ it('纯文档或工具不支持语言仅保存明确人工检查，仍运行覆�
   const f = runnableFixture()
   expect(f.git('rm', 'src/feature.ts').status).toBe(0)
   expect(f.git('commit', '-qm', 'docs only').status).toBe(0)
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   const directory = resolve(
     f.root,
     '.git/plotweave-ub-mode',
@@ -331,20 +335,22 @@ it('伴随工具缺失可按技能人工降级，已安装工具失败仍阻断'
   expect(f.git('commit', '-qm', 'review fallback').status).toBe(0)
   rmSync(resolve(f.root, 'bin/crapper'))
   f.env.PATH = `${resolve(f.root, 'bin')}:/usr/bin:/bin`
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   expect(f.run('verify', 'HEAD').status).toBe(0)
   f.command('crapper', 'exit 2')
-  expect(f.run('run', 'dev', 'review.json').stderr).toContain(
+  expect(f.run('run', 'develop', 'review.json').stderr).toContain(
     'UB_MODE_CHECK_FAILED',
   )
 })
 
 it('同一提交并发执行被互斥，运行中记录不可用于发布', () => {
   const f = runnableFixture()
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   const lock = resolve(f.receipt, '../running.lock')
   mkdirSync(lock)
-  expect(f.run('run', 'dev', 'review.json').stderr).toContain('UB_MODE_RUNNING')
+  expect(f.run('run', 'develop', 'review.json').stderr).toContain(
+    'UB_MODE_RUNNING',
+  )
   expect(f.run('verify', 'HEAD').stderr).toContain('UB_MODE_RUNNING')
   rmSync(lock, { recursive: true })
   expect(f.run('verify', 'HEAD').status).toBe(0)
@@ -355,7 +361,7 @@ it('参数不完整、未知命令及技能缺失不能调用发布', () => {
   expect(f.run('pr').stderr).toContain('UB_MODE_USAGE')
   expect(f.run('unknown', 'a', 'b').stderr).toContain('UB_MODE_USAGE')
   f.env.PLOTWEAVE_UB_SKILL = resolve(f.root, 'missing.md')
-  expect(f.run('run', 'dev', 'review.json').stderr).toContain(
+  expect(f.run('run', 'develop', 'review.json').stderr).toContain(
     'UB_MODE_SKILL_MISSING',
   )
 })
@@ -365,7 +371,7 @@ it('人工审查记录缺项阻断且不保留成功记录', () => {
   writeFileSync(resolve(f.root, 'review.json'), '{}')
   expect(f.git('add', '.').status).toBe(0)
   expect(f.git('commit', '-qm', 'incomplete review').status).toBe(0)
-  expect(f.run('run', 'dev', 'review.json').stderr).toContain(
+  expect(f.run('run', 'develop', 'review.json').stderr).toContain(
     'UB_MODE_REVIEW_INCOMPLETE',
   )
 })
@@ -385,7 +391,7 @@ it('生产文件名称含 Probe 或 fixture 仍必须进入伴随工具检查', 
     writeFileSync(resolve(f.root, 'src', name), 'export const loaded = true\n')
   expect(f.git('add', '.').status).toBe(0)
   expect(f.git('commit', '-qm', 'production loaders').status).toBe(0)
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   const path = resolve(
     f.root,
     '.git/plotweave-ub-mode',
@@ -406,7 +412,7 @@ it('生产文件名称含 Probe 或 fixture 仍必须进入伴随工具检查', 
 it('发布验证拒绝多余参数，真实覆盖率命令的第一个参数是 run', () => {
   const f = runnableFixture()
   f.command('npm', '[ "$1" = run ] || exit 64')
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   expect(f.run('verify', 'HEAD', 'extra').stderr).toContain('UB_MODE_USAGE')
   expect(f.run('verify', '').stderr).toContain('UB_MODE_USAGE')
 })
@@ -423,7 +429,7 @@ it.each([false, 0, '', null, ['text']])(
     writeFileSync(path, JSON.stringify({ ...review, fallbacks }))
     expect(f.git('add', '.').status).toBe(0)
     expect(f.git('commit', '-qm', 'invalid fallback shape').status).toBe(0)
-    expect(f.run('run', 'dev', 'review.json').stderr).toContain(
+    expect(f.run('run', 'develop', 'review.json').stderr).toContain(
       'UB_MODE_REVIEW_INCOMPLETE',
     )
   },
@@ -444,14 +450,14 @@ it.each(['required', 'fallback'])(
       expect(f.git('commit', '-qm', 'review text boundary').status).toBe(0)
     }
     save({ ...review, reviewer: '顾', fallbacks: { complexity: '无' } })
-    expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+    expect(f.run('run', 'develop', 'review.json').status).toBe(0)
     save({
       ...review,
       ...(mode === 'required'
         ? { tdd: '  ' }
         : { fallbacks: { complexity: '  ' } }),
     })
-    expect(f.run('run', 'dev', 'review.json').stderr).toContain(
+    expect(f.run('run', 'develop', 'review.json').stderr).toContain(
       'UB_MODE_REVIEW_INCOMPLETE',
     )
   },
@@ -472,7 +478,7 @@ it('非文字的人工降级结论不能当作真实审查证据', () => {
   expect(f.git('commit', '-qm', 'invalid manual record').status).toBe(0)
   rmSync(resolve(f.root, 'bin/crapper'))
   f.env.PATH = `${resolve(f.root, 'bin')}:/usr/bin:/bin`
-  expect(f.run('run', 'dev', 'review.json').stderr).toContain(
+  expect(f.run('run', 'develop', 'review.json').stderr).toContain(
     'UB_MODE_REVIEW_INCOMPLETE',
   )
 })
@@ -482,7 +488,7 @@ it('显式仓库不受调用方 Git 定位变量影响', () => {
   vi.stubEnv('GIT_DIR', resolve(f.root, 'unrelated.git'))
   vi.stubEnv('GIT_WORK_TREE', resolve(f.root, 'other-worktree'))
   vi.stubEnv('GIT_INDEX_FILE', resolve(f.root, 'other-index'))
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   expect(f.run('verify', 'HEAD').status).toBe(0)
 })
 
@@ -492,7 +498,7 @@ it('执行和发布校验都拒绝缩小到任务自身提交的基线', () => {
     'UB_MODE_BASE_MISMATCH',
   )
   expect(existsSync(f.receipt)).toBe(false)
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   const receipt = JSON.parse(readFileSync(f.receipt, 'utf8')) as Record<
     string,
     unknown
@@ -513,7 +519,7 @@ it('变异执行必须重跑全部候选，不以缓存或未覆盖候选的跳�
     'mutator',
     'case " $* " in *" --mutate-all "*) ;; *) exit 64 ;; esac\ncase " $* " in *" --no-coverage "*) ;; *) exit 64 ;; esac',
   )
-  expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+  expect(f.run('run', 'develop', 'review.json').status).toBe(0)
 })
 
 it.each([undefined, '', '1', '2'])(
@@ -530,7 +536,7 @@ it.each([undefined, '', '1', '2'])(
       'mutator',
       `case " $* " in *" --max-workers ${expected} "*) ;; *) exit 64 ;; esac`,
     )
-    expect(f.run('run', 'dev', 'review.json').status).toBe(0)
+    expect(f.run('run', 'develop', 'review.json').status).toBe(0)
   },
 )
 
@@ -539,7 +545,7 @@ it.each(['0', '-1', '1.5', 'text', '9007199254740992'])(
   (budget) => {
     const f = runnableFixture()
     vi.stubEnv('PLOTWEAVE_GATE_CPU_BUDGET', budget)
-    expect(f.run('run', 'dev', 'review.json').stderr).toContain(
+    expect(f.run('run', 'develop', 'review.json').stderr).toContain(
       'GATE_CPU_BUDGET_INVALID',
     )
     expect(existsSync(f.receipt)).toBe(false)

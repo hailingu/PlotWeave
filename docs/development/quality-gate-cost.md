@@ -160,7 +160,7 @@ Boundaries:
   fails closed instead of silently omitting a report.
 - A reused LCOV can be stale if the unchanged stack moved since that report.
   Existing refs require their remote old tip locally; a missing tip runs `full`.
-  Only new refs fall back to local `dev` merge-base, `origin/dev`, or the commit
+  Only new refs fall back to local `develop` merge-base, `origin/develop`, or the commit
   parent. All ranges for a shared commit are combined before deduplication;
   different implementation stacks require `full`. Single-stack LCOV reuse is
   limited to the fast path: the pushed commit is checked out and the index,

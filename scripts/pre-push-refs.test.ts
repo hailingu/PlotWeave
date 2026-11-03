@@ -70,7 +70,7 @@ function commitInstallProbe(scenario: PushScenario, body: string): string {
   expect(
     scenario.git([
       '-c',
-      'core.hooksPath=/dev/null',
+      'core.hooksPath=/develop/null',
       'commit',
       '-q',
       '-m',
@@ -1162,7 +1162,7 @@ function commitScopeBranch(
   expect(
     scenario.git([
       '-c',
-      'core.hooksPath=/dev/null',
+      'core.hooksPath=/develop/null',
       'commit',
       '-q',
       '-m',
@@ -1310,7 +1310,7 @@ it(
     const scenario = preparePushScenario({ fullGate: true })
     scenario.env.PLOTWEAVE_GATE_FULL_NATIVE = '0'
     commitScopeBranch(scenario, 'docs/missing-tip.md', 'missing-tip')
-    expect(scenario.git(['branch', 'dev', 'HEAD~1']).status).toBe(0)
+    expect(scenario.git(['branch', 'develop', 'HEAD~1']).status).toBe(0)
     const absent = '1234567890123456789012345678901234567890'
     const head = scenario.headSha()
 
@@ -1425,7 +1425,7 @@ it(
     expect(
       scenario.git([
         '-c',
-        'core.hooksPath=/dev/null',
+        'core.hooksPath=/develop/null',
         'commit',
         '-qm',
         'bad whitespace',
