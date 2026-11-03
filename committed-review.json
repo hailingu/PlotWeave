@@ -1,0 +1,13 @@
+{
+  "reviewer": "ZCode",
+  "tdd": "本次为 CI 工作流配置变更，无源码行为改动，不需要 Red-Green-Refactor 源码测试循环；验证以格式检查与门禁通过为准。",
+  "rootCause": "项目集成分支名从非标准的 dev 统一改为标准的 develop，需要先在 CI 触发列表中加入 develop，避免后续远端更名后保护规则死锁。",
+  "model": "GitHub 分支是 CI 触发与保护规则的入口；历史证据台账与评审记录保持原分支名不变，仅当前行为引用随分支改名迁移。",
+  "boundaries": "远端更名使用 GitHub 官方 rename API 以自动转移保护规则；本 PR 保持 dev 触发过渡；发布边界与 dependabot 等剩余引用将在后续 PR B 处理。",
+  "complexity": "低：仅改动 .github/workflows/ci.yml 的触发分支列表与顶部注释。",
+  "duplication": "无新增重复。",
+  "tests": "npx prettier --check .github 通过；完整本地门禁（format/lint/typecheck/size/coverage/Sonar Quality Gate）通过，新增代码问题为 0；PR 合并后由 GitHub Actions 验证 develop 触发。",
+  "log": "1) 勘察确认默认分支为 main、dev 有保护规则、无打开 PR。2) 创建任务分支 chore/develop-rename-precursor。3) 将 ci.yml 触发分支 [dev, main] 改为 [dev, develop, main]。4) 清理计划产物并恢复误删的 WORK_LOG.md。5) 准备本审查记录。",
+  "testCommand": "npm run test:coverage",
+  "unsupported": "本变更只涉及 .github/workflows/ci.yml（YAML），无 TypeScript/Rust/Python 生产代码路径，因此复杂度/重复/变异三项工具检查不适用，按规范走人工审查降级。"
+}
