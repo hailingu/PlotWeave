@@ -1,13 +1,13 @@
 {
   "reviewer": "ZCode",
-  "tdd": "本次为 CI 工作流配置变更，无源码行为改动，不需要 Red-Green-Refactor 源码测试循环；验证以格式检查与门禁通过为准。",
-  "rootCause": "项目集成分支名从非标准的 dev 统一改为标准的 develop，需要先在 CI 触发列表中加入 develop，避免后续远端更名后保护规则死锁。",
-  "model": "GitHub 分支是 CI 触发与保护规则的入口；历史证据台账与评审记录保持原分支名不变，仅当前行为引用随分支改名迁移。",
-  "boundaries": "远端更名使用 GitHub 官方 rename API 以自动转移保护规则；本 PR 保持 dev 触发过渡；发布边界与 dependabot 等剩余引用将在后续 PR B 处理。",
-  "complexity": "低：仅改动 .github/workflows/ci.yml 的触发分支列表与顶部注释。",
-  "duplication": "无新增重复。",
-  "tests": "npx prettier --check .github 通过；完整本地门禁（format/lint/typecheck/size/coverage/Sonar Quality Gate）通过，新增代码问题为 0；PR 合并后由 GitHub Actions 验证 develop 触发。",
-  "log": "1) 勘察确认默认分支为 main、dev 有保护规则、无打开 PR。2) 创建任务分支 chore/develop-rename-precursor。3) 将 ci.yml 触发分支 [dev, main] 改为 [dev, develop, main]。4) 清理计划产物并恢复误删的 WORK_LOG.md。5) 准备本审查记录。",
+  "tdd": "本次为配置/文档同步变更，无新增源码行为，不需要 Red-Green-Refactor 源码测试循环；依赖脚本测试（ub-mode-gate、pre-push-protocol、dependabot-config 等）验证常量与夹具随分支名正确迁移。",
+  "rootCause": "远端分支已从 dev 更名为 develop，仓库内所有定义当前行为的引用（CI、dependabot、ub-mode 门禁、pre-push 协议、AGENTS.md、流程文档）必须同步，否则门禁、PR 入口和文档会指向不存在的分支。",
+  "model": "GitHub 分支名是保护规则、CI 触发、Dependabot 目标、ub-mode base 与 pre-push merge-base 的入口；历史证据记录（台账、发布说明、历史评审）保持原分支名不变。",
+  "boundaries": "远端更名使用 GitHub 官方 rename API，保护规则与重定向已自动转移；本 PR 只改当前行为引用，不改写历史 SHA/PR 记录；发布边界豁免从 develop→main 继续生效。",
+  "complexity": "中：涉及多个配置文件、门禁脚本、测试夹具与文档，但每项均为机械替换 develop，无逻辑变化。",
+  "duplication": "无新增重复；历史测量注释保留在 scripts-coverage-floor.ts 与相关文档中，不删除。",
+  "tests": "`npx prettier --check .github`、`npm run check:size`、`npm run typecheck:strict`、`npm test -- scripts` 全部通过（606 tests）。ci.yml 与 dependabot.yml 的行为将由 PR 合并后的 GitHub Actions 验证。",
+  "log": "1) PR A 已合并，develop 分支已存在且受保护。2) 创建任务分支 chore/develop-rename。3) 更新 ci.yml 触发与发布边界、dependabot.yml、ub-mode-gate.ts/evidence.ts、pre-push-protocol.sh、verify-gate-evidence.ts 注释、AGENTS.md 与关键 docs/development 流程文档。4) 更新对应 .test.ts 夹具。5) 保留历史证据文件不动。6) 运行并通过 scoped checks。",
   "testCommand": "npm run test:coverage",
-  "unsupported": "本变更只涉及 .github/workflows/ci.yml（YAML），无 TypeScript/Rust/Python 生产代码路径，因此复杂度/重复/变异三项工具检查不适用，按规范走人工审查降级。"
+  "unsupported": "本变更以配置、脚本与文档为主；生产代码路径（TS/Rust/Python）仅在门禁脚本常量中改变分支名，因此复杂度/重复/变异伴随工具检查不适用，由已通过的项目脚本测试与人工审查覆盖。"
 }

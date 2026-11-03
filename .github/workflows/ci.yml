@@ -1,4 +1,4 @@
-# PR 检查（issue #228）：面向 dev / main 的持续集成——版本化路由检查
+# PR 检查（issue #228）：面向 develop / main 的持续集成——版本化路由检查
 #（AGENTS.md Scope Routing）在 GitHub 上有独立、绑定提交 SHA 的记录，
 # 不再只依赖调用者本机环境。工具版本复用 .nvmrc / rust-toolchain.toml。
 # SonarQube 扫描保留在本机门禁（scripts/sonar-quality-gate.sh）——Sonar
@@ -7,9 +7,9 @@
 name: ci
 on:
   pull_request:
-    branches: [dev, develop, main]
+    branches: [develop, main]
   push:
-    branches: [dev, develop, main]
+    branches: [develop, main]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -169,14 +169,14 @@ jobs:
   # gate-history.jsonl（issue #355）：PR 范围内除 tip 外的每个提交必须在
   # head 版台账中存在 tree 匹配且 Quality Gate OK、新增代码未解决问题为 0
   # 的通过记录；tip 自身的门禁记录（提交与推送两轮）按物化时序滞后
-  # 一次提交，仅注解告警或按「仅改台账的 tip」豁免；dev → main 发布
+  # 一次提交，仅注解告警或按「仅改台账的 tip」豁免；develop → main 发布
   # 范围额外识别集成边界：合并提交跳过、被集成分支 tip（合并的非首父）
   # 同告警、台账入库前的历史提交豁免（PR #581 评审 5542207474）。
   # 与分支保护（issue #548 方案 2）互补：
   # 本校验复核自述台账的留证约束（不证明真实执行），分支保护关闭直推。只读台账、不新增
   # 本地门禁变体（quality-gate-cost.md 的单一成本决策不变）。语义与容差
   # 见 docs/development/quality-gate-evidence.md。仅 PR 事件运行：push 到
-  # dev/main 的运行包含服务端创建的合并提交，本无本地台账记录。
+  # develop/main 的运行包含服务端创建的合并提交，本无本地台账记录。
   gate-evidence:
     name: gate-evidence（门禁证据核验）
     runs-on: ubuntu-latest
@@ -195,11 +195,11 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          # 集成边界豁免仅本仓库自身的 dev → main 发布 PR 启用：base 为
-          # main、head 为 dev、且 head 仓库即本仓库——fork 中同名 dev 分
+          # 集成边界豁免仅本仓库自身的 develop → main 发布 PR 启用：base 为
+          # main、head 为 develop、且 head 仓库即本仓库——fork 中同名 develop 分
           # 支不获豁免（PR #581 评审 5542342537/5542467935/5542611194：分
           # 支保护不限制 PR 来源，短分支名可被 fork 复刻）；其余一律留证
-          RELEASE_BOUNDARY: ${{ github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && '1' || '' }}
+          RELEASE_BOUNDARY: ${{ github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'develop' && github.event.pull_request.head.repo.full_name == github.repository && '1' || '' }}
         run: |
           # 只获取对象，不检出、安装依赖或执行 head 的任何内容；失败不回退到 PR 核验器。
           git fetch --no-tags origin "$HEAD_SHA"

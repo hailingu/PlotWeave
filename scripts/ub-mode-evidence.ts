@@ -93,9 +93,9 @@ export function ubRequire(condition: unknown, code: string): asserts condition {
   if (!condition) throw new Error(`[${code}] ub-mode 发布检查未通过`)
 }
 
-/** 基线只能扩大 dev 分叉点的范围，不能跳过任务分支上的任何改动。 */
+/** 基线只能扩大 develop 分叉点的范围，不能跳过任务分支上的任何改动。 */
 export function requireUbBase(root: string, base: string, head: string): void {
-  const integration = ubGit(root, ['merge-base', 'dev', head])
+  const integration = ubGit(root, ['merge-base', 'develop', head])
   ubRequire(
     ubGit(root, ['merge-base', base, integration]) === base,
     'UB_MODE_BASE_MISMATCH',

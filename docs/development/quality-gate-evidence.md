@@ -443,7 +443,7 @@ two complementary backstops (方案 1 + 方案 2):
 
 1. **CI evidence check（方案 1）.** The `gate-evidence` job in
    `.github/workflows/ci.yml` runs `scripts/verify-gate-evidence.ts` on
-   every pull request targeting `dev` or `main` (`ubuntu-latest`,
+   every pull request targeting `develop` or `main` (`ubuntu-latest`,
    pull-request events only — push runs contain server-created merge
    commits that have no local ledger record by design). Since issue #593,
    the job checks out the immutable event `pull_request.base.sha`; both the
@@ -550,7 +550,7 @@ two complementary backstops (方案 1 + 方案 2):
    non-tip commits.
 
    **Release-PR integration boundary (PR #581 评审 5542207474/5542342537).**
-   A `dev → main` release PR's range enumerates GitHub-created merge commits
+   A `develop → main` release PR's range enumerates GitHub-created merge commits
    and every integrated task branch — including each task's tip, whose
    records may still be pending in that repository when the release opens. Linked worktree removal now preserves the common queue; an independently discarded clone or an older private gitdir has no automatic migration guarantee. The verifier therefore
    recognizes the integration boundary instead of demanding impossible
@@ -564,10 +564,10 @@ two complementary backstops (方案 1 + 方案 2):
    a commit that merely deletes the ledger has touched the path and is not
    exempt. **These tolerances are gated on the explicit `--release-boundary`
    flag, which ci.yml passes only for the actual release PR — base `main`,
-   head `dev`, and the head repository being this repository itself (PR
+   head `develop`, and the head repository being this repository itself (PR
    #581 评审 5542467935/5542611194: base-only would hand the exemptions to
    any task branch opening a PR straight to `main`, and a short branch name
-   alone to a fork's identically named `dev`; branch protection does not
+   alone to a fork's identically named `develop`; branch protection does not
    restrict PR source branches)**: every other PR gets
    no integration-boundary exemptions at all — its merge
    commits and non-first parents require evidence like every other commit,
@@ -577,7 +577,7 @@ two complementary backstops (方案 1 + 方案 2):
    either.
 
 2. **Branch protection（方案 2）.** GitHub branch protection is enabled on
-   `dev` and `main` (owner decision, 2026-10-16): pull requests required
+   `develop` and `main` (owner decision, 2026-10-16): pull requests required
    (no approving-review count), the four `ci` jobs required as status
    checks, administrators included, force pushes and deletions blocked. A
    `git push --no-verify` direct push is rejected server-side before any

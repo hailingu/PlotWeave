@@ -640,7 +640,7 @@ So the accurate statement of the invariant is:
 
 **Server-side backstop (issue #548, 2026-10-16).** The push-time
 `--no-verify` bypass is now contained server-side rather than left to local
-discipline alone: GitHub branch protection on `dev` and `main` rejects
+discipline alone: GitHub branch protection on `develop` and `main` rejects
 direct pushes entirely (pull request required, administrators included,
 force pushes and deletions blocked), and the required `gate-evidence` CI
 check fails a pull request whose non-tip commits lack passing records in
@@ -757,7 +757,7 @@ that state, for example after one of the uncovered creation paths. The
 prohibition in `AGENTS.md` covers this push-time bypass regardless of any
 earlier analysis. Since issue #548 (2026-10-16) this bypass is also
 contained server-side: branch protection rejects direct pushes to
-`dev`/`main`, and the required `gate-evidence` check fails un-evidenced PR
+`develop`/`main`, and the required `gate-evidence` check fails un-evidenced PR
 commits (see the server-side backstop note above).
 
 Push-time analysis since the issue #405 fix (2026-09-30) covers every

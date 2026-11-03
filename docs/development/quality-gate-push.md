@@ -29,8 +29,8 @@ docs-only 也需有效 ub-mode 记录；原覆盖率、Sonar、隔离与台账�
 
 - `scripts/gate-scope.ts` 从 `git diff --no-renames --name-only <base> <commit>`
   分类；已有 ref 只取远端旧 tip，若该对象在本地不可用则按 `full`。
-  只有远端 SHA 全零的新 ref 才依次取本地 `dev` merge-base、
-  `origin/dev`、提交父提交。无法确定时按 `full`，不因“没有差异”跳过。
+  只有远端 SHA 全零的新 ref 才依次取本地 `develop` merge-base、
+  `origin/develop`、提交父提交。无法确定时按 `full`，不因“没有差异”跳过。
 - 同一提交的所有 ref 范围先收集再合并，随后才去重执行：docs 为中性，
   不同实现栈或任一 full 取 full；每个文档范围均执行差异检查。
   交换 ref 顺序不改变最终范围。三个提交创建入口显式设置

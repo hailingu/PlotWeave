@@ -20,7 +20,7 @@
 4. 干净的最终 HEAD 执行：
 
    ```sh
-   npm run ub:check -- dev docs/testing/issue-N-ub-review.json
+   npm run ub:check -- develop docs/testing/issue-N-ub-review.json
    git push -u origin <task-branch>
    npm run pr:create -- 'fix(scope): summary' /tmp/pr-body.md
    ```
@@ -45,7 +45,7 @@ shell 等工具不支持的语言仍须逐项人工检查，并通过原生/脚�
 成功记录和原始日志保留于 common Git 目录 `plotweave-ub-mode/<commit>/`。
 记录包含最终原始 commit/tree、base、技能字节摘要、人工审查及四项检查产物
 摘要。24 小时到期、未来时间、提交改变、技能改变、产物丢失或改写均失败。
-base 必须是完整原始提交标识，且为本地 dev 与 HEAD 分叉点本身或其祖先；
+base 必须是完整原始提交标识，且为本地 develop 与 HEAD 分叉点本身或其祖先；
 执行与发布两端均检查，不能选择任务自身提交来缩小检查范围。
 开始重检会撤销此提交旧记录；检查失败不保留通过记录。执行前后检查 HEAD 与
 工作树干净状态，避免把修改中的树当最终对象。检查产物忽略，不写 tracked
@@ -53,7 +53,7 @@ ledger，也不改 pending、索引或 #829 的字节归因。
 
 `pre-push` 对每个唯一的非删除对象校验，位于 docs-only 跳过之前；随后仍执行
 原有逐 ref 分流、隔离 worktree、静态、覆盖率、native 及 Sonar。PR 入口复用同一
-校验，再读取真实 `origin` 分支 head；不一致阻断，成功仅创建针对 `dev` 的 draft。
+校验，再读取真实 `origin` 分支 head；不一致阻断，成功仅创建针对 `develop` 的 draft。
 
 Git hooks 和本地 PR 入口约束正常发布流程。直接调用外部 gh/API、禁用 hook 或
 篡改本机记录不能由本机脚本在服务端强制阻止；本记录不是签名证明，人工判断
