@@ -7,7 +7,7 @@
   "complexity": "新函数/闭包人工审阅在80代码行内，拆出shape/array/enum/variant与统一拒绝诊断；最终HEAD必须实际执行crapper并要求每函数CRAP<10。",
   "duplication": "公共元数据、节点布局、边字段及schema遍历集中持有；dryer预检无重复候选。最终HEAD仍实际重新执行dryer，不能沿用预检冒充发布结果。",
   "tests": "相关245项、strict/build/ESLint已通过。首次完整提交门禁前端4139项、Rust603+1忽略与覆盖率通过；Sonar因1处void表达式阻止提交，已改为复用空枚举并再次验证245项/strict/lint。新的正常提交门禁及最终HEAD真实crapper/dryer/mutator仍需完成。10k节点最终候选配对中位85.474→89.418ms，约+4.61%，仅为CPU夹具评估。 首次实际CRAP最高9.0、dryer无重复；mutation1存活阻止发布，新增5项根诊断负例后相关250项通过，最终HEAD完整门禁和全部真实变异仍需完成。 d3d66b61已实际通过全部真实ub-mode：46 killed/0survived/0uncovered、CRAP<10、dryer无重复。发布前复用952已确证的同基线CI夹具修正（旧新哈希分别8cac2afa与bbfbc679），因此最终HEAD再次完整门禁和真实ub，d3d66b61凭据不授权后续内容。",
-  "log": "docs/testing/issue-946-normalization.md 记录先置不变量矩阵和实际证据；行动日志 /tmp/plotweave-round-1102-work-log.jsonl，原始日志将归档到本轮task evidence的对应最终HEAD目录。",
+  "log": "docs/testing/issue-946-normalization.md 记录先置不变量矩阵和实际证据；行动日志 /tmp/plotweave-round-1102-work-log.jsonl，原始日志将归档到本轮task evidence的对应最终HEAD目录。 2026-11-03 按授权合并已评审通过的 dev fc684892；design-sync 同时保留两个主题段，台账使用标准三方 union 保留两父记录完整字节和顺序，预览及 SHA256 位于 /tmp/plotweave-round-953-merge-preview。无生产源码改动；新的合并 HEAD 将重新通过完整门禁、真实 ub-mode、CI 与实际复审。",
   "testCommand": "npm test -- src/model/normalizedGraphShape src/model/convert --maxWorkers=1",
   "unsupported": "本次生产TypeScript均由已安装真实crapper/dryer/mutator检查，不申请人工降级；Markdown与编译期类型探针只做相应人工/严格编译审阅。"
 }
