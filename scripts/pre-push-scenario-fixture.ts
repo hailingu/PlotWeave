@@ -152,6 +152,8 @@ function commitScenarioTooling(sandbox: string, fullGate: boolean): void {
     'gate-scope-core.ts',
     'gate-scope.ts',
     'gate-tree-marker.sh',
+    'pre-push-protocol.sh',
+    'pre-push-runtime.sh',
     'pre-push-install.mjs',
     'pre-push-install-launcher.mjs',
     'pre-push-install-watchdog.mjs',
