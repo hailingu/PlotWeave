@@ -1,0 +1,13 @@
+{
+  "reviewer": "Codex",
+  "tdd": "本次仅恢复 #958 分支改名误伤的非分支字面值，4文件8处，没有新增产品行为。未制造检查配置或文档措辞的伪失败测试；沿用实际测试私有Git夹具回归。编辑最初按用户要求不验证，用户随后明确允许本次仓库门禁；三个受影响测试文件已实际通过114项。",
+  "rootCause": "dev→develop 的机械替换越过分支名语义，误改 Tauri dev 子命令、dev.plotweave bundle身份派生路径、npm dev dependencies 文案及5处私有夹具的 /dev/null。仅恢复这些非分支字面值；main/develop分支结构及实际分支引用保持。",
+  "model": "命令子命令、bundle身份、操作系统空设备路径和开发依赖类别分别属于原有外部契约，不由Git分支名决定。没有修改门禁规则、生产数据模型、公开接口或依赖。",
+  "boundaries": "测试内 core.hooksPath=/dev/null 只作用于私有临时Git夹具，未修改真实仓库hooks配置；真实.githooks继续启用。当前develop与远端均为fddc7ea1，目标仍为develop，不恢复dev、不创建其他分支或PR、不绕过保护；门禁失败或推送拒绝则停止相关操作并报告。",
+  "complexity": "人工检查8个字面值替换，没有新增或扩大函数、分支、嵌套或可执行单元；三个测试文件复用原有私有Git夹具。JSON审查为门禁要求的元数据，不增加产品复杂度。",
+  "duplication": "没有复制测试或增加第二套实现；只修正文档3处与原有三个夹具文件5处。保留原有分组和内部接线，不为常量替换引入跨模块抽象。",
+  "tests": "npm test -- scripts/gate-evidence-workflow.test.ts scripts/pre-push-refs.test.ts scripts/ub-mode-gate.test.ts --maxWorkers=4 实际通过3文件114项。完整提交门禁、最终HEAD真实ub-mode和正常pre-push随后分别执行并保留真实结果；尚未执行的步骤不视为通过。",
+  "log": "先只读确认main/develop结构、真实.git/config的.githooks及远端develop受保护；仅检查并保留原4文件8处修改，无其他用户改动。用户新授权取代本次不验证限制后，先运行114项聚焦回归，再提交本审查记录并经正常hooks创建提交。后续仅按实际结果继续，不重复提交或伪造通过证据。行动与原始日志位于/tmp/plotweave-958-corrections-*。",
+  "testCommand": "npm test -- scripts/gate-evidence-workflow.test.ts scripts/pre-push-refs.test.ts scripts/ub-mode-gate.test.ts --maxWorkers=4",
+  "unsupported": "本次维护差异为Markdown、测试TS及本审查JSON，无受支持的变更生产源码；复杂度、重复、变异按既有ub-mode规则逐项人工检查，不宣称CRAP或变异分数。coverage仍须实际执行，完整原门禁与发布保护保持。"
+}

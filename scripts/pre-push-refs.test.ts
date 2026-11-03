@@ -70,7 +70,7 @@ function commitInstallProbe(scenario: PushScenario, body: string): string {
   expect(
     scenario.git([
       '-c',
-      'core.hooksPath=/develop/null',
+      'core.hooksPath=/dev/null',
       'commit',
       '-q',
       '-m',
@@ -1162,7 +1162,7 @@ function commitScopeBranch(
   expect(
     scenario.git([
       '-c',
-      'core.hooksPath=/develop/null',
+      'core.hooksPath=/dev/null',
       'commit',
       '-q',
       '-m',
@@ -1425,7 +1425,7 @@ it(
     expect(
       scenario.git([
         '-c',
-        'core.hooksPath=/develop/null',
+        'core.hooksPath=/dev/null',
         'commit',
         '-qm',
         'bad whitespace',

@@ -43,7 +43,7 @@ function fixture() {
     ['init', '-q', '-b', 'develop'],
     ['config', 'user.name', 'test'],
     ['config', 'user.email', 'test@invalid'],
-    ['config', 'core.hooksPath', '/develop/null'],
+    ['config', 'core.hooksPath', '/dev/null'],
   ])
     expect(git(...args).status).toBe(0)
   writeFileSync(

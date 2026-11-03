@@ -36,15 +36,11 @@ const fixtures: Array<ReturnType<typeof gitScenarioFixture>> = []
 
 /** 只操作测试私有 Git；不继承宿主提交钩子或仓库定位。 */
 function git(root: string, ...args: string[]): string {
-  const result = spawnSync(
-    'git',
-    ['-c', 'core.hooksPath=/develop/null', ...args],
-    {
-      cwd: root,
-      env: environment,
-      encoding: 'utf8',
-    },
-  )
+  const result = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
+    cwd: root,
+    env: environment,
+    encoding: 'utf8',
+  })
   if (result.status !== 0) throw new Error(result.stderr)
   return result.stdout.trim()
 }
