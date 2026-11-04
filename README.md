@@ -1,85 +1,71 @@
 # PlotWeave
 
+**在一张画布上，把故事编成剧本。**
+
+PlotWeave 是面向短剧创作者的 macOS 可视化创作工具。把节奏、场景、对白、分支与分镜放到同一张画布上，从故事构思到剧本导出，随时看清人物、剧情走向与不同结局之间的关系。
+
 [![源码发布版本](https://img.shields.io/github/v/release/hailingu/PlotWeave?style=flat&display_name=tag&label=source%20release)](https://github.com/hailingu/PlotWeave/releases/latest)
-[![CI（main push）](https://github.com/hailingu/PlotWeave/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/hailingu/PlotWeave/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush)
-[![macOS 26.0 及以上](https://img.shields.io/badge/macOS-26.0%2B-000000?style=flat&logo=apple&logoColor=white)](#从源码运行)
-[![源码构建要求 Node.js ^24.18.0 或 >=26.0.0](https://img.shields.io/badge/Node.js-%5E24.18.0%20%7C%7C%20%3E%3D26.0.0-5FA04E?style=flat&logo=nodedotjs&logoColor=white)](package.json)
-[![项目文档](https://img.shields.io/badge/docs-%E6%96%87%E6%A1%A3-2563EB?style=flat)](#文档)
+[![macOS 26.0 及以上](https://img.shields.io/badge/macOS-26.0%2B-000000?style=flat&logo=apple&logoColor=white)](#开始使用)
 [![MIT 许可证](https://img.shields.io/github/license/hailingu/PlotWeave?style=flat)](LICENSE)
 
-**PlotWeave** 是一款面向短剧创作者的可视化桌面工具。它把剧本、场景、角色、道具和剧情分支放到同一张可编辑画布中，让创作者可以直观看见故事结构，组织多线叙事，并将成果导出为可继续加工的文档。
+[快速上手](docs/guide/quick-start.md) · [项目 Wiki](https://github.com/hailingu/PlotWeave/wiki) · [源码发布](https://github.com/hailingu/PlotWeave/releases) · [反馈问题](https://github.com/hailingu/PlotWeave/issues)
 
-![PlotWeave 开发版：原生故事大纲与场景、对白、分支画布，使用内置合成示例“午夜出租车”](assets/plotweave-canvas-dev-b94ac01f.jpg)
+![PlotWeave：故事大纲与场景、对白、分支画布，展示示例短剧“午夜出租车”](assets/plotweave-canvas-dev-b94ac01f.jpg)
 
-开发版实际运行截图，源码来自 [`b94ac01f`](https://github.com/hailingu/PlotWeave/commit/b94ac01f8276a3aa3c9124bc540555335e6e5590)，画面使用仓库内置合成示例，不代表已发布版本。[截图来源与验证边界](docs/swiftui-react-flow-current-state.md#readme-截图来源)。
+*应用实拍，使用内置合成示例“午夜出租车”。示例用于展示创作流程，你可以创建自己的故事。[截图来源](docs/swiftui-react-flow-current-state.md#readme-截图来源)*
 
 ## 可以做什么
 
-- 在无限画布上创建、编辑、连接和整理场景、桥段与对白节点。
-- 编排多线剧情、反转与多结局，并通过缩放和导航浏览完整故事。
-- 管理角色、场景、道具等设定，并把它们与剧情节点关联。
-- 多选节点后进行六方向对齐；可开启 22 单位网格吸附。对齐、拖动和方向键移动均支持撤销和重做，键盘每次移动单独记一步历史。
-- 导出 Markdown 剧本（含分镜附录）。
-- 导出结构化 JSON，保留完整节点、分支、设定与资产引用，便于备份或接入其他工具。JSON 不会打包媒体文件，也不包含 AI 会话。
-- 在画布内为图片节点生成角色垫图、场景底图或分镜关键帧；生成结果保存为项目资产。此功能需要配置兼容的 AI Provider。
+### 看清整个故事
 
-## 如何理解 PlotWeave
+用节奏卡、场景、对白、分支、分镜和图片六类节点搭建故事。连线呈现剧情流向，缩放与导航帮助你在局部细节和全局结构之间切换；通过大纲按分集组织内容、调整顺序。
 
-- **画布**是故事的全景图：节点承载叙事内容，连线表达剧情流向。
-- **分支**把选择、反转和不同结局直接呈现在故事结构中。
-- **设定**集中管理角色、地点与道具，使它们在不同场景中的引用保持一致。
-- **项目文件**保存画布与设定；导出的 Markdown 或 JSON 是面向阅读、交换和后续处理的交付格式。
+### 编排分支与多结局
 
-## 当前版本与获取方式
+把选择、反转和不同结局直接放进故事结构，查看每条路线如何展开、在哪里汇合。适合线性短剧，也适合探索互动叙事。
 
-最新公开 Release 为 [v0.2.0](https://github.com/hailingu/PlotWeave/releases/latest)，能力以其[历史发布说明](docs/releases/v0.2.0.md)为准。当前源码为 v0.3.0 开发版，范围见 [v0.3.0 源码说明](docs/releases/v0.3.0.md)，不等同于已公开的 Release。
+### 让角色、设定与素材跟上创作
 
-目前 Release **仅提供源码归档**，尚未提供经过 Developer ID 签名、公证及安装验收的 macOS 安装包。请勿将 GitHub 自动生成的源码压缩包当作可直接安装的应用。
+在设定集中管理角色、地点与文档，并关联到剧情节点。通过素材库导入和整理图片、引用项目资产，为场景与分镜补充视觉参考。
 
-## 技术栈一览
+### 自由整理，随时修改
 
-| 部分       | 当前实现                                                                                             |
-| ---------- | ---------------------------------------------------------------------------------------------------- |
-| 原生应用   | SwiftUI / AppKit 界面，Swift 承接存储、素材、设置、密钥与模型服务                                    |
-| 编辑画布   | WKWebView 中的 React / TypeScript / React Flow，维护单一编辑会话与撤销历史                           |
-| 保留的基线 | Tauri / React Flow / [Rust 1.95.0](rust-toolchain.toml)，用于既有宿主与契约回归；原生应用不链接 Rust |
+拖动、复制、多选、自动排布、六方向对齐与网格吸附，让画布更容易阅读。编辑支持撤销与重做，项目保存在本机；保存失败时会显示提示并提供恢复入口。
 
-工程结构与迁移历史见[开发工作流](docs/development/workflow.md)，当前能力和验收边界见[原生版本状态](docs/swiftui-react-flow-current-state.md)。
+### 使用自己的 AI 服务辅助创作
 
-## 从源码运行
+配置兼容的 Provider 和模型后，可在项目内对话、预览并执行 AI 提议的修改，也可为图片节点生成角色参考、场景底图或分镜关键帧。AI 是可选能力，基础编排与导出不依赖 AI 服务。
 
-当前支持 **macOS**，不提供 Windows 构建、测试或发行支持；[平台与工具链细则](docs/development/workflow.md#supported-platforms)维护在开发文档中。
+### 把创作成果带出去
 
-| 原生构建前置      | 要求                                                                                   |
-| ----------------- | -------------------------------------------------------------------------------------- |
-| 系统              | macOS 26.0+                                                                            |
-| Node.js           | [24.18.0 起的 24.x，或 26.0.0 及以上](package.json)；默认运行版本见 [`.nvmrc`](.nvmrc) |
-| Xcode / macOS SDK | [27.0 / 27.0](docs/swiftui-react-flow-toolchain.md)，Swift 6 语言模式                  |
+导出 Markdown 剧本及分镜附录；需要交付节奏与分支信息时，可开启“创作大纲”附录。也可以导出 JSON，保留节点、连线、布局、设定与资产引用，供后续处理。
 
-原生构建无需 Rust。完整环境配置与 Node 版本兼容细则见[开发工作流](docs/development/workflow.md#nodejs-minimum-and-runtime-versions)：
+## 从一个想法开始
 
-```bash
-nvm use
-npm install
-npm run build:native
-open -n native/macos/build/DerivedData/Build/Products/Debug/PlotWeaveNative.app
-```
+1. **新建短剧**：为自己的故事创建项目，也可先打开内置示例熟悉画布。
+2. **搭建结构**：添加场景与对白，用节奏卡梳理起承转合，用分支连接不同走向。
+3. **补充细节**：组织分集、完善角色和地点，加入分镜及参考图片。
+4. **导出分享**：预览剧本，按需要复制文本或保存 Markdown / JSON。
 
-AI 功能需自行配置可用的 Provider；PlotWeave **不支持 VoiceOver**。数据隔离、迁移历史及人工验收边界见[开发运行说明](docs/development/workflow.md#native-application-launch-and-verification)和[当前功能状态](docs/swiftui-react-flow-current-state.md)。
+具体操作见[快速上手](docs/guide/quick-start.md)。
 
-保留的 Tauri 基线运行方式见[开发环境配置](docs/development/workflow.md#tauri-baseline-development-environment)。源码构建不等同于发行安装包。
+<a id="从源码运行"></a>
 
-## 文档
+## 开始使用
 
-- [v0.3.0 源码说明](docs/releases/v0.3.0.md)与 [v0.2.0 历史发布说明](docs/releases/v0.2.0.md)
-- [数据模型与项目格式](docs/data-model/README.md)
-- [界面与交互设计](docs/ui-design.md)
-- [SwiftUI/AppKit + React Flow 改造计划](docs/swiftui-react-flow-migration-plan.md)与[当前功能、证据及验收边界](docs/swiftui-react-flow-current-state.md)
-- [开发与贡献指南](docs/development/workflow.md)
+当前版本为 **v0.3.0 源码版**，支持 **macOS 26.0 及以上**。[GitHub Release](https://github.com/hailingu/PlotWeave/releases) 提供源码归档，尚无可直接安装的应用包。需要从源码构建的用户，请按[构建与运行指南](docs/development/workflow.md#native-application-launch-and-verification)操作。
 
-## 开发与贡献
+AI 功能需自行配置服务地址、模型和 API Key；相关请求由所配置的服务处理，可能产生服务费用。项目数据保存在本机。
 
-开发者请从 `dev` 创建任务分支，并先阅读 [AGENTS.md](AGENTS.md) 与[开发工作流](docs/development/workflow.md)。分支策略、PR 持续集成、质量门禁、仓库结构、技术栈及发布步骤统一维护在开发文档中，不在产品 README 中重复。
+## 当前限制
+
+- JSON 导出包含资产引用，不包含媒体文件本体或独立 AI 会话，不能当作完整备份；目前没有 JSON 导入入口。
+- 视频制作、资产收藏回库尚未实现。Windows 不受支持，Linux 未验证；VoiceOver 不受支持。
+- v0.3.0 仍在演进。完整能力、数据迁移及人工验收边界见[发布说明](docs/releases/v0.3.0.md)与[当前功能状态](docs/swiftui-react-flow-current-state.md)。
+
+## 参与项目
+
+欢迎通过 [Issues](https://github.com/hailingu/PlotWeave/issues) 反馈使用问题和功能建议。参与开发请阅读[开发与贡献指南](docs/development/workflow.md)和 [AGENTS.md](AGENTS.md)。
 
 ## 许可证
 

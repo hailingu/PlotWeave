@@ -72,7 +72,7 @@ PR #766 的第一轮本地完整公开入口 `sh scripts/test-native.sh` 的红�
 
 | 项目 | 来源与边界 |
 | --- | --- |
-| 应用源码 | [`b94ac01f8276a3aa3c9124bc540555335e6e5590`](https://github.com/hailingu/PlotWeave/commit/b94ac01f8276a3aa3c9124bc540555335e6e5590)，v0.3.0 开发源码；公开正式 Release 仍为 [v0.2.0](https://github.com/hailingu/PlotWeave/releases/latest) |
+| 应用源码 | [`b94ac01f8276a3aa3c9124bc540555335e6e5590`](https://github.com/hailingu/PlotWeave/commit/b94ac01f8276a3aa3c9124bc540555335e6e5590)，截图拍摄时的 v0.3.0 开发源码；当时公开 Release 为 [v0.2.0](https://github.com/hailingu/PlotWeave/releases/tag/v0.2.0)，当前版本见 [Release 列表](https://github.com/hailingu/PlotWeave/releases) |
 | 真实运行入口 | 从该源码构建的 SwiftUI/AppKit 生产应用与 `native-canvas.html`，未使用 `#fixture`、设计稿或生成图；画面显示故事大纲及 50% 缩放的分支画布局部视图 |
 | 示例数据 | 应用在全新隔离目录自动创建的[仓库内置合成项目](../src/projectStore/seeds.ts)“午夜出租车”，15 个节点；未使用真实用户项目、Provider 配置或密钥 |
 | 隔离方式 | 仅本次构建覆盖 `PRODUCT_BUNDLE_IDENTIFIER=dev.plotweave.readme772demo`，独立数据根由现有 `Bundle.main` 规则派生；启动前确认该根不存在，核验进程可执行路径属于本任务构建。未修改生产源码、项目配置或默认开发数据根 |

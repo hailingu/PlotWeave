@@ -1,0 +1,13 @@
+{
+  "reviewer": "Codex（产品文档与源码发布结构化审查）",
+  "tdd": "本次仅修改产品与发布文档，未改变生产代码、配置或接口。按 AGENTS.md 的文档路由不制造措辞红测；已对照实际原生菜单、首页、导出与设置入口核对六类节点、片库、AI 与交付流程。",
+  "rootCause": "现有 README 把产品介绍与技术栈、工具链和构建命令混排；Wiki 停留在旧 dev 分支及迁移中的架构。README 改为功能和创作流程，开发信息由原工作流承接，补充用户上手入口。",
+  "model": "文档将产品能力、用户操作、工程规则与版本证据各归其已有权威来源。0.3.0 取自现有应用清单、原生项目和已规划的次版本；不改变 schema、数据模型或发布策略。",
+  "boundaries": "在从当前本地 develop=1913294fd0c4af81b33f77f56c8b58034b5666c2 建立的隔离发布工作区改文档，原主工作区保持不变。保留历史源码运行锚点、截图原始来源、JSON/媒体边界与原生/Tauri数据隔离。仅普通 PR 合并，四项CI、main push CI及原有hooks均保留；旧tag不动，新版不附二进制。",
+  "complexity": "人工检查 README 的功能段落和四步流程、上手指南的五步流程、发布说明的版本/验证/限制分区。没有新增可执行函数、分支或复杂度；工程细节通过链接保留。",
+  "duplication": "README 给产品概览，上手指南给操作步骤，工具链和命令仅由 docs/development/workflow.md 维护；发布说明链接当前状态和数据合同，没有另造一套接口规范。",
+  "tests": "已执行 git diff --check 和5份文档相对链接目标检查；完整静态、前端/Rust覆盖率与Sonar由正常提交hooks随后执行，干净最终HEAD再实际执行ub:check。通过结果仅以对应原始日志和CI运行记录为准。",
+  "log": "只读核实原工作区干净、develop/main对象与保护、既有v0.2.0发布及Wiki；在任务目录创建隔离clone和docs/release-v0.3.0工作分支，按锁文件npm ci并启用.githooks。核对原生产品入口后整理README、上手、版本说明、工作流入口及截图历史表述；保留无关源码与配置。日志与后续实际门禁结果保存于任务目录evidence/。",
+  "testCommand": "npm run test:coverage -- --maxWorkers=4",
+  "unsupported": "差异仅Markdown及本审查JSON，不含工具支持的变更生产源码。复杂度、重复和变异按真实ub-mode的纯文档分流逐项人工审查，不声称CRAP、重复率或变异分数；coverage仍实际执行。Wiki为独立Git仓库，按文档更新核对页面、链接和差异后另行提交发布。"
+}
