@@ -1,7 +1,7 @@
 # PlotWeave 数据模型
 
 > 状态：v1（2026-08-28 定稿）
-> 实施状态（2026-09-09 核对）：`ProjectDocument` v1、加载归一化与序列化管线已落地；磁盘保存使用 `schemaVersion: 1`；旧扁平 v0 格式支持已随 [#519 处置](https://github.com/hailingu/PlotWeave/issues/519)退役，判型即拒绝。本索引同时保留目标架构与后续演进，不能据此认定每个示意接口均已实现；当前模块与命令映射见[分层](overview.md#二总体分层)与[Rust 持久化命令](persistence.md#105-rust-持久化命令tauri-commands)。已关闭 issue 的逐项结论和合并依据见[设计同步记录](../design-sync.md)。历轮评审修订已归档至[修订历史](../data-model-revisions.md)，当前状态以各主题正文的落地说明为准。
+> 实施状态（2026-09-09 核对）：`ProjectDocument` v1、加载归一化与序列化管线已落地；磁盘保存使用 `schemaVersion: 1`；旧扁平 v0 格式支持已随 [#519 处置](https://github.com/hailingu/PlotWeave/issues/519)退役，判型即拒绝。本索引同时保留目标架构与后续演进，不能据此认定每个示意接口均已实现；当前模块与命令映射见[分层](overview.md#二总体分层)与[Rust 持久化命令](persistence.md#105-rust-持久化命令tauri-commands)。已关闭 issue 的逐项结论和合并依据见[设计同步记录](../design-sync.md)；当前状态以各主题正文的落地说明为准。
 > 适用范围：画布文档模型、设定与资产模型、命令与撤销、本地存储体系、AI Agent 交互。
 > 明确不在范围内：用户体系、租户、余额/计费。PlotWeave 是单用户 BYOK 桌面工具；若未来出现此类需求，另起《服务端领域模型》文档。
 
@@ -25,5 +25,5 @@
 ## 迁移与历史记录
 
 - [旧路径与全部 35 个章节、子章节标题的迁移对照](../data-model.md)保留原标题锚点；历史记录或源码注释中的 `§` 编号可从此处定位。拆分依据见 [issue #281](https://github.com/hailingu/PlotWeave/issues/281)。
-- [设计同步记录](../design-sync.md)保留已关闭 issue 的落地结论与依据；[修订历史](../data-model-revisions.md)保留 v1 定稿过程中的历轮记录。两者不替代现行主题正文。
+- [设计同步记录](../design-sync.md)保留已关闭 issue 的落地结论与依据，不替代现行主题正文；v1 定稿历轮评审修订见 git 历史（[issue #236](https://github.com/hailingu/PlotWeave/issues/236) 归档）。
 - 结构拆分未修改 `ProjectDocument` schema、IPC、持久化、归一化或撤销契约；原正文中的实施与规划标记继续有效。

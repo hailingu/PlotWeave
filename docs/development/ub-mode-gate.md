@@ -60,7 +60,7 @@ Git hooks 和本地 PR 入口约束正常发布流程。直接调用外部 gh/AP
 也不能自动证明。既有分支保护、实际 review 和四项 CI 保留。不得利用此边界绕过
 用户要求；本次门禁自身首个 PR 也执行完整技能检查。
 
-状态矩阵、TDD 与验证见 [#941 验证记录](../testing/issue-941-ub-mode.md)。
+状态矩阵、TDD 与验证见 [#941 验证记录](https://github.com/hailingu/PlotWeave/issues/941)。
 
 中断生成的 `target/mutation-workers/**` 与 `target/mutator-backup/**` 不属于维护测试输入，Vitest 测试发现显式排除；生产覆盖率范围和下限不变。Git 读取清除调用方定位环境，以显式仓库的实际索引、原始对象和 common Git 目录为准，避免嵌套钩子或其他仓库环境改变发布身份。
 

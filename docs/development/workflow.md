@@ -67,7 +67,7 @@ Gate-workflow regression imports the explicitly approved historical Git objects 
 
 ### Native Application Launch And Verification
 
-On 2026-10-07, the complete source from the archived worktree was restored and merged into the current primary tree; the build entry no longer points to the early demo shell. See the [integration record](../swiftui-react-flow-integration.md) for provenance, coordination of overlapping changes, and this verification.
+On 2026-10-07, the complete source from the archived worktree was restored and merged into the current primary tree; the build entry no longer points to the early demo shell. See [PR #526](https://github.com/hailingu/PlotWeave/pull/526) for provenance, coordination of overlapping changes, and this verification.
 
 The native application on the current `develop` branch implements the SwiftUI project home, toolbar, outline, property inspector, story settings, library, AI, export, and application settings interfaces, together with Swift storage, asset, preferences/key, and model services. Swift handles 27 business commands and two exit commands, totaling 29 snake_case IPC commands, plus the `system.copyText` and `system.saveText` system delivery commands. React retains the single editing session, history, and canvas; the default resource entry runs the production application, and only an explicit `#fixture` loads a non-persistent in-memory demo. See the [feature parity record](../swiftui-react-flow-feature-parity.md) for current behavior and the test matrix; the former P1/P2 status is retained only as [historical evidence](../swiftui-react-flow-p1-evidence.md) and in the [historical Rust extraction record](../swiftui-react-flow-p2-evidence.md).
 
