@@ -710,3 +710,18 @@
 .pw-ai-error-actions {
   margin: 12px 4px 0;
 }
+
+/* 请求状态固定在输入区前，长会话滚动不隐藏反馈（issue #927）。 */
+.pw-ai-feedback {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-hairline);
+  font-size: 12px;
+}
+
+.pw-ai-feedback span {
+  color: var(--text-secondary);
+}

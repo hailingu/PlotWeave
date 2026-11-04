@@ -25,7 +25,6 @@ coverage_report_path=${PLOTWEAVE_COVERAGE_REPORT_PATH:-$repository_root/coverage
 rust_coverage_report_path=${PLOTWEAVE_RUST_COVERAGE_REPORT_PATH:-$repository_root/src-tauri/target/coverage/lcov-rust.info}
 llvm_cov_bin=${PLOTWEAVE_CARGO_LLVM_COV_BIN:-cargo-llvm-cov}
 xcodebuild_bin=${PLOTWEAVE_XCODEBUILD_BIN:-xcodebuild}
-lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$repository_root/.sonar-gate.lock}
 report_path=${PLOTWEAVE_SONAR_REPORT_PATH:-$repository_root/.scannerwork/report-task.txt}
 quality_gate_timeout=${SONAR_QUALITY_GATE_TIMEOUT:-300}
 sonar_host_url=${SONAR_HOST_URL:-}
@@ -37,9 +36,10 @@ sonar_token=${SONAR_TOKEN:-${PLOTWEAVE_SONAR_TOKEN:-}}
 
 cd "$repository_root"
 
-# 待物化路径在 cd 之后解析（PR #415 评审 5338815626）：git-path 的输出
-# 相对当前目录，须在仓库根下取值；非仓库环境回退到仓库根下的 .git。
-gate_pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-$(git rev-parse --git-path plotweave-gate-history.pending 2>/dev/null || printf '%s' "$repository_root/.git/plotweave-gate-history.pending")}
+# #917: one durable queue and mutex per repository, including linked and temporary worktrees.
+shared_git_directory=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || printf '%s' "$repository_root/.git")
+gate_pending_path=${PLOTWEAVE_GATE_PENDING_PATH:-$shared_git_directory/plotweave-gate-history.pending}
+lock_directory=${PLOTWEAVE_SONAR_LOCK_DIRECTORY:-$shared_git_directory/plotweave-sonar-gate.lock}
 
 # 输出一致的阻塞原因并终止当前 Git 操作。
 fail() {
@@ -101,8 +101,8 @@ lcov_line_coverage_percent() {
 # 覆盖率下限（issue #393）：整体行覆盖率 ≥ 80%——与本机 SonarQube 服务端
 # Quality Gate 的 80% 条件对齐的仓库侧可失败下限，不依赖服务端条件存在
 # 或未被改动；按与门禁台账相同的 LCOV DA 口径在扫描前复核两份报告。
-# 数值不追踪实测基线（Rust 82.6%/前端 98.13%，见 rust-standard.md 与
-# typescript-standard.md），差额留作余量。恰等于下限通过（与服务端
+# 数值不追踪实测基线；当次 LCOV 与 docs/development/gate-history.jsonl
+# 提供覆盖率及余量依据（口径见两栈 standard.md）。恰等于下限通过（与服务端
 # 「低于才失败」语义一致）；达标不得靠扩充排除清单（scripts/
 # sonar-test-scope.test.ts 双向核验）。前端另有 vitest thresholds
 #（vite.config.ts）在 npm run test:coverage 内先行失败。

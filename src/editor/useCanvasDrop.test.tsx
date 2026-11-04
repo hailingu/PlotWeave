@@ -15,6 +15,7 @@ import type { CanvasNode } from './nodes/types'
 vi.mock('./projectAssets', () => ({
   projectAssets: {
     importFromLibrary: vi.fn(),
+    discardImport: vi.fn().mockResolvedValue(undefined),
     mediaUrl: vi.fn(),
     revalidate: vi.fn(),
   },
@@ -60,8 +61,8 @@ function setup(nodes: CanvasNode[] = [shotNode]) {
     pushHistory: vi.fn(),
     onError: vi.fn(),
   }
-  const { result } = renderHook(() => useCanvasDrop(deps))
-  return { deps, handlers: result.current }
+  const { result, unmount } = renderHook(() => useCanvasDrop(deps))
+  return { deps, handlers: result.current, unmount }
 }
 
 /** 构造 drop/dragOver 事件替身：target 经 closest 命中给定节点 id（null = 空白画布）。 */
@@ -283,4 +284,69 @@ describe('useCanvasDrop：库资产拖上分镜卡（§7.3 拷贝进项目）', 
     expect(e2.preventDefault).toHaveBeenCalled()
     expect(e3.preventDefault).not.toHaveBeenCalled()
   })
+})
+
+describe('库资产导入后拒绝会回收新副本（issue #864）', () => {
+  it('reports both MIME rejection and failed quarantine', async () => {
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {})
+    importMock.mockResolvedValueOnce({ ...importedAsset, mime: 'audio/mpeg' })
+    vi.mocked(projectAssets.discardImport).mockRejectedValueOnce(
+      new Error('disk unavailable'),
+    )
+    const { deps, handlers } = setup()
+    await act(async () =>
+      handlers.onCanvasDrop(
+        fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], {
+          [PW_LIBRARY_ASSET_MIME]: libPayload(),
+        }),
+      ),
+    )
+    const message = vi.mocked(deps.onError).mock.lastCall?.[0]
+    expect(message).toContain('不符')
+    expect(message).toContain('disk unavailable')
+    expect(deps.addAsset).not.toHaveBeenCalled()
+    expect(diagnostic).toHaveBeenCalledWith(
+      '未绑定项目资产隔离失败',
+      expect.any(Error),
+      expect.objectContaining({ code: 'PW_PROJECT_IMPORT_DISCARD_FAILED' }),
+    )
+    diagnostic.mockRestore()
+  })
+  it.each(['deleted', 'changed', 'mime', 'unmounted'] as const)(
+    '%s 不留下未绑定导入',
+    async (reason) => {
+      let resolveImport!: (asset: AssetRef) => void
+      importMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveImport = resolve
+          }),
+      )
+      const { deps, handlers, unmount } = setup()
+      act(() =>
+        handlers.onCanvasDrop(
+          fakeEvent('sh1', [PW_LIBRARY_ASSET_MIME], {
+            [PW_LIBRARY_ASSET_MIME]: libPayload(),
+          }),
+        ),
+      )
+      if (reason === 'unmounted') unmount()
+      if (reason === 'deleted') deps.nodesRef.current = []
+      if (reason === 'changed')
+        deps.nodesRef.current = [{ ...sceneNode, id: 'sh1' }]
+      await act(async () =>
+        resolveImport(
+          reason === 'mime'
+            ? { ...importedAsset, mime: 'audio/mpeg' }
+            : importedAsset,
+        ),
+      )
+      expect(deps.addAsset).not.toHaveBeenCalled()
+      expect(deps.pushHistory).not.toHaveBeenCalled()
+      expect(projectAssets.discardImport).toHaveBeenCalledExactlyOnceWith(
+        'p-1',
+        importedAsset.id,
+      )
+    },
+  )
 })

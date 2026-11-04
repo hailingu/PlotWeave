@@ -44,6 +44,8 @@ function parseTreePackages(text: string): PackageVersions {
     const match = /^(\S+) v(\S+)/.exec(line)
     if (!match) continue
     const [, name, version] = match
+    // Both capture groups are mandatory in a successful match.
+    if (name === undefined || version === undefined) continue
     const versions = packages.get(name) ?? new Set<string>()
     versions.add(version)
     packages.set(name, versions)

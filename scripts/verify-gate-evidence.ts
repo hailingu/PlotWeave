@@ -27,6 +27,8 @@
  *   合法纯追加（删除/截断/重写失败，PR #581 评审 5543678876），豁免
  *   （提示）。
  * - [GATE_EVIDENCE_MALFORMED_LINE]：台账中无法解析的行被跳过（告警）。
+ * - [GATE_EVIDENCE_HISTORY_LAG]：最多8个最近非合并基线祖先中超过1项无记录（仅告警）。
+ * - [GATE_EVIDENCE_HISTORY_UNAVAILABLE]：附加历史诊断不可用（仅告警，不改变原核验）。
  * 集成边界豁免（合并提交跳过、INTEGRATED_TIP_LAG、PRE_LEDGER_COMMIT）
  * 仅在 --release-boundary 时启用——ci.yml 只在 dev → main 发布 PR
  * （base 为 main）传入；普通 task PR 中合并提交与其非首父同样必须留证
@@ -113,11 +115,12 @@ function parseArguments(argv: string[]): {
   let releaseBoundary = false
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
-    if (argument === '--base' && argv[index + 1] !== undefined) {
-      base = argv[index + 1]
+    const value = argv[index + 1]
+    if (argument === '--base' && value !== undefined) {
+      base = value
       index += 1
-    } else if (argument === '--head' && argv[index + 1] !== undefined) {
-      head = argv[index + 1]
+    } else if (argument === '--head' && value !== undefined) {
+      head = value
       index += 1
     } else if (argument === '--release-boundary') {
       releaseBoundary = true
@@ -303,8 +306,8 @@ function preservesLinearLedger(content: string, parent: string): boolean {
 /** 合并与跨提交恢复允许交织记录，但必须保留历史快照的记录字节与顺序。
  * 记录包含换行符；原末行无换行时允许补换行后再追加。 */
 function preservesLedgerRecords(content: string, parent: string): boolean {
-  const lines = content.match(/[^\n]*\n|[^\n]+$/g) ?? []
-  const parentLines = parent.match(/[^\n]*\n|[^\n]+$/g) ?? []
+  const lines: string[] = content.match(/[^\n]*\n|[^\n]+$/g) ?? []
+  const parentLines: string[] = parent.match(/[^\n]*\n|[^\n]+$/g) ?? []
   let cursor = 0
   return parentLines.every((line) => {
     let position = lines.indexOf(line, cursor)
@@ -341,6 +344,7 @@ function tipPreservesLedger(commit: RangeCommit): boolean {
  * 的基础上追加恢复旧快照；tip 自身仍受原先更严格的直接父守卫约束。 */
 function rangePreservesLedger(commits: RangeCommit[]): boolean {
   const tip = commits[commits.length - 1]
+  if (!tip) return false
   if (!tipPreservesLedger(tip)) return false
   const content = ledgerContentOf(tip.sha)
   const parents = new Set(
@@ -392,6 +396,8 @@ function verifyRange(
   const integratedTipWarnings: CommitFinding[] = []
   const preLedgerNotes: CommitFinding[] = []
   const tip = commits[commits.length - 1]
+  // main handles empty ranges before verification; reject invalid internal input.
+  if (!tip) throw new UsageError('没有可核验的提交')
   const { mergeShas, integratedTipShas } = releaseBoundary
     ? collectIntegrationBoundaries(commits)
     : { mergeShas: new Set<string>(), integratedTipShas: new Set<string>() }
@@ -446,6 +452,40 @@ function emitWarning(message: string): void {
   }
 }
 
+/** Detects cross-PR ledger stagnation without changing any existing gate or claiming a gate did not run (#917). */
+function warnHistoricalLag(
+  base: string,
+  head: string,
+  trees: Set<string>,
+): void {
+  try {
+    const boundary = runGit(['merge-base', base, head]).trim()
+    const history = runGit([
+      'rev-list',
+      '--no-merges',
+      '--max-count=8',
+      boundary,
+    ]).trim()
+    const missing = (history === '' ? [] : history.split('\n'))
+      .map((sha) => describeCommit(sha))
+      .filter(
+        (commit) =>
+          !trees.has(commit.tree) &&
+          !commitPredatesLedger(commit.sha) &&
+          !isLedgerOnlyTip(commit),
+      )
+    if (missing.length > 1) {
+      emitWarning(
+        `[GATE_EVIDENCE_HISTORY_LAG] 最近最多8个非合并基线祖先有${missing.length}项无tree自述记录：${missing.map((commit) => commit.short).join(',')}；仅提示台账滞后，不改变本范围核验，也不证明门禁未执行。`,
+      )
+    }
+  } catch {
+    emitWarning(
+      '[GATE_EVIDENCE_HISTORY_UNAVAILABLE] 附加历史诊断不可用；本范围原有核验继续，退出条件不变。',
+    )
+  }
+}
+
 /** 核验主流程：参数解析 → 范围枚举 → 台账比对 → 结论输出与退出码。 */
 function main(): number {
   const { base, head, releaseBoundary } = parseArguments(process.argv.slice(2))
@@ -455,6 +495,7 @@ function main(): number {
     return 0
   }
   const { trees, malformedLines } = readEvidenceTrees(head)
+  warnHistoricalLag(base, head, trees)
   if (malformedLines > 0) {
     emitWarning(
       `[GATE_EVIDENCE_MALFORMED_LINE] 台账有 ${malformedLines} 行无法解析，已跳过（日志语义，不阻塞）。`,

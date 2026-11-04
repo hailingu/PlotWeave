@@ -13,7 +13,14 @@ export default tseslint.config(
       'src-tauri',
       'native/macos/App/WebCanvas',
       'native/macos/build',
+      'target/mutation-workers/**',
+      'target/mutator-backup/**',
     ],
+  },
+  {
+    files: ['scripts/**/*.mjs'],
+    extends: [js.configs.recommended],
+    languageOptions: { globals: globals.node },
   },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
@@ -27,7 +34,14 @@ export default tseslint.config(
       'react-refresh': reactRefresh,
     },
     rules: {
-      ...reactHooks.configs.recommended.rules,
+      // react-hooks v7 的 recommended 预设在核心两条之外附带整套 React
+      // Compiler 规则（refs/immutability/set-state-in-effect 等 14 条）。该
+      // 规则集对本仓既有代码风格产生实质误报（如把 ref 作为 JSX 属性传递
+      // `ref={props.canvasRef}` 误判为 render 期读取），且其采用与否属独立
+      // 评估项；此处固定 v5 代际推荐语义的两条核心规则，维持升级前的既有
+      // 强制度（issue #783）。
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
       'react-refresh/only-export-components': [
         'warn',
         { allowConstantExport: true },

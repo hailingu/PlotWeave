@@ -1,3 +1,4 @@
+import { sceneNumberText } from '../sceneNumber'
 import type { Edge } from '@xyflow/react'
 import { SCENE_SHOT_HANDLE, branchOptionIdOf, edgeKindOf } from '../graphRules'
 import type { CanvasNode } from '../nodes/types'
@@ -83,8 +84,8 @@ const pad2 = (n: number) => String(n).padStart(2, '0')
 /** 场景/分镜的人读标签（issue #156）：AI 工作流内同一节点在图摘要与
  * 预览/执行回执中呈现同一格式——编号补零，两位以上保持完整（padStart
  * 不截断）；useAiBridge.nodeLabelOf 与本模块三处标签共用，不做第二实现。 */
-export function sceneLabel(sceneNo: number, name: string): string {
-  return `场${pad2(sceneNo)}·${name}`
+export function sceneLabel(sceneNo: number | undefined, name: string): string {
+  return `场${sceneNumberText(sceneNo)}·${name}`
 }
 
 /** 分镜标签（issue #156，同 sceneLabel 口径）。 */
@@ -92,9 +93,9 @@ export function shotLabel(shotNo: number, size: string): string {
   return `SHOT${pad2(shotNo)}·${size}`
 }
 
-/** 集 N 前缀（§3.5 分集）：有 episodeNo 的编剧侧节点才标注。 */
+/** 分集状态显式发送，缺省不能让模型从历史消息推回已经清除的集号（#929）。 */
 function epTag(data: { episodeNo?: unknown }): string {
-  return typeof data.episodeNo === 'number' ? `集${data.episodeNo} ` : ''
+  return typeof data.episodeNo === 'number' ? `集${data.episodeNo} ` : '未分集 '
 }
 
 /** 单个节点行：id + 标签 + 关键参数（按类型裁剪）。 */

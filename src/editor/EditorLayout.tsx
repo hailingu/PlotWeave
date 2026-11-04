@@ -23,10 +23,12 @@ function LayoutBanners({
   saveStatus,
   saveError,
   actionError,
+  actionFeedback,
 }: {
   readonly saveStatus: SaveStatus
   readonly saveError: string | null
   readonly actionError: string | null
+  readonly actionFeedback: string | null
 }) {
   return (
     <>
@@ -39,6 +41,7 @@ function LayoutBanners({
         />
       )}
       {actionError !== null && <ErrorBanner message={actionError} />}
+      {actionFeedback !== null && <ErrorBanner message={actionFeedback} />}
     </>
   )
 }
@@ -250,6 +253,7 @@ export function EditorLayout(props: EditorLayoutProps) {
         saveStatus={persistence.saveStatus}
         saveError={persistence.saveError}
         actionError={props.actionError}
+        actionFeedback={props.actionFeedback}
       />
       <LayoutBody {...props} />
       <EditorRegionBoundary

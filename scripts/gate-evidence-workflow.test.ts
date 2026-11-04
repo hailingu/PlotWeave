@@ -62,7 +62,7 @@ function scenario(evidenced = false, missingBase = false) {
   let base = ''
   let head = ''
   const fixture = gitScenarioFixture((root) => {
-    git(root, 'init', '-q', '-b', 'dev')
+    git(root, 'init', '-q', '-b', 'develop')
     git(root, 'config', 'user.name', 'gate-workflow-test')
     git(root, 'config', 'user.email', 'gate@example.invalid')
     const ledger = `${JSON.stringify({ tree: 'f'.repeat(40), qualityGate: 'OK', newCodeUnresolvedIssues: 0 })}\n`
@@ -76,7 +76,7 @@ function scenario(evidenced = false, missingBase = false) {
       )
     base = commit(root, 'base')
     git(root, 'remote', 'add', 'origin', root)
-    git(root, 'update-ref', 'refs/remotes/origin/dev', base)
+    git(root, 'update-ref', 'refs/remotes/origin/develop', base)
     write(
       root,
       verifierPath,
@@ -112,7 +112,7 @@ function runJob(scene: ReturnType<typeof scenario>, releaseBoundary = false) {
   const source = job.steps
     .flatMap((step) => (step.run ? [step.run] : []))
     .join('\n')
-    .replaceAll('${{ github.event.pull_request.base.ref }}', 'dev')
+    .replaceAll('${{ github.event.pull_request.base.ref }}', 'develop')
     .replaceAll('${{ github.event.pull_request.head.sha }}', scene.head)
   const runnerTemp = resolve(scene.root, '.runner-temp')
   mkdirSync(runnerTemp, { recursive: true })
@@ -134,7 +134,7 @@ function runJob(scene: ReturnType<typeof scenario>, releaseBoundary = false) {
 function bootstrapScenario(evidenced = false, trustedObject = true) {
   let head = ''
   const fixture = gitScenarioFixture((root) => {
-    git(root, 'init', '-q', '-b', 'dev')
+    git(root, 'init', '-q', '-b', 'develop')
     git(root, 'config', 'user.name', 'gate-bootstrap-test')
     git(root, 'config', 'user.email', 'bootstrap@example.invalid')
     git(root, 'fetch', '--no-tags', repositoryRoot, bootstrapBase)
@@ -188,7 +188,7 @@ it('required job 固定 checkout base SHA，保持检查名和只读工具链来
   expect(verify.env?.HEAD_SHA).toBe('${{ github.event.pull_request.head.sha }}')
   // This machine expression is the approved same-repository release authorization contract.
   expect(verify.env?.RELEASE_BOUNDARY).toBe(
-    "${{ github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && '1' || '' }}",
+    "${{ github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'develop' && github.event.pull_request.head.repo.full_name == github.repository && '1' || '' }}",
   )
 })
 

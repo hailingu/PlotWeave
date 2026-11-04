@@ -6,7 +6,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import {
   gitFixtureEnvironment,
   gitScenarioFixture,
@@ -18,6 +18,22 @@ const ledgerPath = 'docs/development/gate-history.jsonl'
 const environment = gitFixtureEnvironment()
 
 const fixtures: Array<ReturnType<typeof gitScenarioFixture>> = []
+
+it('warns about multiple missing base-ancestry records without changing single-tip acceptance (#917)', () => {
+  const root = createSeeded((root) => {
+    writeFile(root, 'src/app.txt', 'older task\n')
+    commitAll(root, 'older task')
+    writeFile(root, 'src/app.txt', 'base task\n')
+    const base = commitAll(root, 'base task')
+    git(root, 'tag', 'task-base', base)
+    writeFile(root, 'src/app.txt', 'current task\n')
+    commitAll(root, 'current task')
+  })
+  const result = runVerifier(root, ['--base', 'task-base'])
+  expect(result.status).toBe(0)
+  expect(result.output).toContain('[GATE_EVIDENCE_HISTORY_LAG]')
+  expect(result.output).toContain('[GATE_EVIDENCE_TIP_LAG]')
+})
 
 /** 在隔离环境中执行真实 git；失败即抛出，夹具播种不应有 git 错误。 */
 function git(root: string, ...args: string[]): string {
@@ -41,7 +57,7 @@ function writeFile(root: string, path: string, content: string): void {
 /** 向台账追加记录行；不动其他文件，配合调用方的提交构成物化形态。 */
 function appendLedger(root: string, lines: string[]): void {
   if (lines.length === 0) return
-  let existing = ''
+  let existing: string
   try {
     existing = readFileSync(resolve(root, ledgerPath), 'utf8')
   } catch {
@@ -115,7 +131,9 @@ function runVerifier(
     cwd: root,
     encoding: 'utf8',
     env: environment,
+    timeout: 30_000,
   })
+  if (result.error) throw result.error
   return { status: result.status, output: `${result.stdout}${result.stderr}` }
 }
 
@@ -333,7 +351,7 @@ describe(
 )
 
 describe(
-  '发布集成边界的豁免通过（--release-boundary，dev → main 形态，PR #581 评审 5542207474）',
+  '发布集成边界的豁免通过（--release-boundary，develop → main 形态，PR #581 评审 5542207474）',
   { timeout: 60_000 },
   () => {
     afterEach(() => {
@@ -834,33 +852,41 @@ function seedDeletedMerge(root: string): {
 }
 
 describe('跨合并删除再恢复（PR #581 评审 5544522794）', () => {
-  it.each(['保留全部', '丢失 main', '丢失 side'])('%s', (mode) => {
-    let base = ''
-    const root = createSeeded((root, seededBase) => {
-      base = seededBase
-      const { history, records } = seedDeletedMerge(root)
-      const restored = history
-        .trimEnd()
-        .split('\n')
-        .filter(
-          (line) =>
-            mode === '保留全部' ||
-            JSON.parse(line).tree !==
-              (mode === '丢失 main' ? 'main-history' : 'side-history'),
-        )
-        .join('\n')
-      writeFile(root, ledgerPath, `${restored}\n${records.join('\n')}\n`)
-      commitAll(root, '恢复合并台账')
-    })
-
-    for (const flags of [[], ['--release-boundary']]) {
-      const result = runVerifier(root, ['--base', base, ...flags])
-
-      expect(result.status).toBe(mode === '保留全部' ? 0 : 1)
-      expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
-      if (mode !== '保留全部') {
-        expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
-      }
+  const scenario = { base: '', history: '', records: [] as string[] }
+  // One immutable history seed, with a private full copy for every assertion mode.
+  const fixture = gitScenarioFixture((root) => {
+    scenario.base = seedBase(root)
+    Object.assign(scenario, seedDeletedMerge(root))
+  })
+  beforeAll(() => {
+    fixture.create()
+  })
+  afterAll(() => {
+    fixture.dispose()
+  })
+  const cases = ['保留全部', '丢失 main', '丢失 side'].flatMap((mode) =>
+    [false, true].map((release) => ({ mode, release })),
+  )
+  it.each(cases)('$mode（release=$release）', ({ mode, release }) => {
+    const root = fixture.create()
+    const restored = scenario.history
+      .trimEnd()
+      .split('\n')
+      .filter(
+        (line) =>
+          mode === '保留全部' ||
+          JSON.parse(line).tree !==
+            (mode === '丢失 main' ? 'main-history' : 'side-history'),
+      )
+      .join('\n')
+    writeFile(root, ledgerPath, `${restored}\n${scenario.records.join('\n')}\n`)
+    commitAll(root, '恢复合并台账')
+    const flags = release ? ['--release-boundary'] : []
+    const result = runVerifier(root, ['--base', scenario.base, ...flags])
+    expect(result.status).toBe(mode === '保留全部' ? 0 : 1)
+    expect(result.output).not.toContain('GATE_EVIDENCE_MISSING')
+    if (mode !== '保留全部') {
+      expect(result.output).toContain('GATE_EVIDENCE_LEDGER_DESTRUCTIVE')
     }
   })
 })

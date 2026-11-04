@@ -320,6 +320,36 @@ describe('LeftPanel 设定集分段', () => {
 })
 
 describe('LeftPanel 外壳', () => {
+  it('折叠使整栏 inert，重新展开保留分段、内容和宽度并恢复交互', () => {
+    const props = mkProps(nodes, nodes)
+    const view = render(<LeftPanel {...props} open={false} />)
+    const aside = view.container.querySelector<HTMLElement>('aside')!
+    expect(aside.hasAttribute('inert')).toBe(true)
+    expect(aside.getAttribute('aria-hidden')).toBe('true')
+
+    view.rerender(<LeftPanel {...props} />)
+    expect(aside.hasAttribute('inert')).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: '设定集' }))
+    const tab = screen.getByRole('button', { name: '设定集' })
+    const content = view.container.querySelector('.pw-panel-scroll')!
+    view.rerender(<LeftPanel {...props} open={false} />)
+    expect(aside.hasAttribute('inert')).toBe(true)
+    expect(aside.style.width).toBe('0px')
+    expect(aside.querySelector('.pw-panel-scroll')).toBe(content)
+    expect(
+      aside.querySelector<HTMLElement>('.pw-panel-inner')?.style.width,
+    ).toBe('280px')
+
+    view.rerender(<LeftPanel {...props} />)
+    expect(aside.hasAttribute('inert')).toBe(false)
+    expect(aside.style.width).toBe('280px')
+    expect(screen.getByRole('button', { name: '设定集' })).toBe(tab)
+    expect(tab.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: '大纲' }))
+    fireEvent.click(row('场 01 · 场一'))
+    expect(props.onLocate).toHaveBeenCalledWith('s1')
+  })
+
   it('折叠时 aria-hidden 且无调宽手柄；切到资产分段挂载 AssetsPanel', async () => {
     const spies = setup({ open: false })
     const aside = document.querySelector('.pw-panel-left')!

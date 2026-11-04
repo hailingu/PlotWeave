@@ -7,8 +7,8 @@ repository_root=${PLOTWEAVE_GATE_REPOSITORY_ROOT:-$(CDPATH= cd -- "$script_direc
 mode=${1:-regression}
 case $mode in
   regression) stress_enabled=0 ;;
-  stress|first-drag) stress_enabled=1 ;;
-  *) printf '[NATIVE_TEST_MODE_INVALID] 用法：sh scripts/test-native.sh [regression|stress|first-drag]\n' >&2; exit 2 ;;
+  stress|first-drag|list-scaling) stress_enabled=1 ;;
+  *) printf '[NATIVE_TEST_MODE_INVALID] 用法：sh scripts/test-native.sh [regression|stress|first-drag|list-scaling]\n' >&2; exit 2 ;;
 esac
 if [ "$#" -gt 1 ]; then
   printf '[NATIVE_TEST_ARGUMENTS_INVALID] 原生测试入口只接受一个模式参数。\n' >&2
@@ -31,6 +31,10 @@ if [ "$mode" = regression ]; then
   rm -f "$coverage_directory/coverage-summary.json" "$coverage_directory/coverage-summary.md" "$coverage_directory/xccov.json"
 fi
 "${PLOTWEAVE_NPM_BIN:-npm}" run build:native-canvas
+# Current gates also verify historical trees; build this fixture only when that tree owns its test.
+if [ -f "$repository_root/native/macos/Tests/WebLibraryImportTests.swift" ]; then
+  "${PLOTWEAVE_NPM_BIN:-npm}" run build:library-import-probe
+fi
 set -- -project native/macos/PlotWeaveNative.xcodeproj \
   -scheme PlotWeaveNative -destination 'platform=macOS' \
   -derivedDataPath native/macos/build/DerivedData -jobs "$native_jobs"
@@ -48,6 +52,15 @@ fi
 if [ "$mode" = first-drag ]; then
   exec "${PLOTWEAVE_XCODEBUILD_BIN:-xcodebuild}" "$@" -enableCodeCoverage NO \
     '-only-testing:PlotWeaveNativeTests/WebCanvasFirstDragLatencyTests' \
+    -parallel-testing-enabled NO test
+fi
+
+# 存储侧列表伸缩性基线（issue #730）：只选择 N×V 项目网格与资产数测量，不启动画布、长循环或首拖套件。
+# Release 对应生产优化级别；@testable 需要显式开启 testability，Release 配置默认关闭。
+if [ "$mode" = list-scaling ]; then
+  exec "${PLOTWEAVE_XCODEBUILD_BIN:-xcodebuild}" "$@" -configuration Release ENABLE_TESTABILITY=YES \
+    -enableCodeCoverage NO \
+    '-only-testing:PlotWeaveNativeTests/NativeListScalingBaselineTests' \
     -parallel-testing-enabled NO test
 fi
 

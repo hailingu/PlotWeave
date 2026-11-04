@@ -159,7 +159,7 @@ export class CommandStack {
  * 出口回调必填——拒绝原因不得被静默吞掉。完成（含成功应用与被取代
  * 放弃）**不回投清除**：横幅槽与其他动作错误共享，慢校验的旧重做
  * 完成时无法判定槽内是否仍是自己写的文案，清除会吞掉更新的其他
- * 动作错误；与既有瞬态横幅（拖放/保存失败）一致，由后续诊断替换。
+ * 动作错误；恢复类错误继续由此通道持有，已结束的画布操作另用计时反馈槽。
  */
 export function useCommandHistory(onRedoError: (message: string) => void) {
   const [version, setVersion] = useState(0)

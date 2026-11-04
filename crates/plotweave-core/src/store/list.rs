@@ -11,6 +11,7 @@ use crate::isotime::iso8601_to_epoch_millis;
 use crate::store::error::StoreError;
 use crate::store::persist::{
     is_project_temp_target, projects_op_lock, read_verified_file, sweep_orphan_temp_files,
+    sweep_session_dir_temp_files,
 };
 use crate::store::types::{validate_id, ProjectFile, ProjectInfo, ProjectMeta};
 /// 从画布 graph 派生统计：场数 = scene 节点数；结局数 = 无剧情流出边的
@@ -121,6 +122,10 @@ pub fn list_project_metas(root: &CapDir) -> Result<Vec<ProjectMeta>, StoreError>
     // 排他创建与 rename 之间；fail-soft 不阻断列表
     let _op = projects_op_lock();
     sweep_orphan_temp_files(root, "项目目录", is_project_temp_target);
+    // 会话目录（projects/{id}/）同款清扫（issue #722）：与
+    // save_ai_session_file 的原子写共享本操作锁，清扫不得插入排他创建
+    // 与 rename 之间；fail-soft 不阻断列表
+    sweep_session_dir_temp_files(root);
     let mut metas: Vec<ProjectMeta> = Vec::new();
     for entry in root
         .entries()
@@ -176,7 +181,8 @@ fn parse_project_info(v: Option<&serde_json::Value>) -> ProjectInfo {
 fn parse_v1_envelope(value: &serde_json::Value) -> ProjectFile {
     let schema_version = value
         .get("schemaVersion")
-        .and_then(|v| v.as_u64())
+        .and_then(|v| v.as_number())
+        .and_then(integer_version_value)
         .and_then(|v| u32::try_from(v).ok())
         .unwrap_or(1);
     ProjectFile {
@@ -213,6 +219,13 @@ fn is_canonical_integer_string(s: &str) -> bool {
     }
     bytes.len() == 1 || bytes[0] != b'0'
 }
+/// Owner decision #918: numeric values, not spelling, define safe-integer version claims.
+/// The later u32 width guard remains stricter; future-version values must never fall back to v1.
+fn integer_version_value(number: &serde_json::Number) -> Option<u64> {
+    let value = number.as_f64()?;
+    (value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= 9_007_199_254_740_991.0)
+        .then_some(value as u64)
+}
 /// 显式 schemaVersion 键的判型（§11 第 0 步）：按值是否构成版本主张分派——
 /// 数值主张定族：0 属旧扁平家族、≥1 属 v1 家族，版本号与信封形状两族矛盾
 /// 即拒绝并保留原文件——否则 v1 StoryNode 会被误当旧版交付，且每次加载都
@@ -229,7 +242,7 @@ fn parse_explicit_envelope(
 ) -> Result<ProjectFile, StoreError> {
     match value.get("schemaVersion") {
         Some(serde_json::Value::Number(n)) => {
-            let Some(version) = n.as_u64() else {
+            let Some(version) = integer_version_value(n) else {
                 return Err(StoreError::CorruptEnvelope(
                     "schemaVersion 是非法数值（负数/小数/越界），无法判别文档信封（已保留原文件）",
                 ));
@@ -319,5 +332,9 @@ pub(crate) fn parse_file(text: &str) -> Result<ProjectFile, StoreError> {
     })
 }
 
+#[cfg(test)]
+mod scaling_tests;
+#[cfg(test)]
+mod sweep_tests;
 #[cfg(test)]
 mod tests;

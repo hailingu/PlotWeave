@@ -10,6 +10,7 @@
  */
 import {
   useCallback,
+  useLayoutEffect,
   useRef,
   type DragEvent as ReactDragEvent,
   type RefObject,
@@ -21,6 +22,7 @@ import {
 } from './dragDrop'
 import { bindAssetRefPatch, shotRefKindForAsset } from './assetDrop'
 import { projectAssets } from './projectAssets'
+import { createDiagnostic } from '../diagnostics'
 import type { HistoryCommand } from './history'
 import type { AssetRef } from '../model/document'
 import type { NodeDataPatch } from './nodes/patch'
@@ -30,6 +32,13 @@ import {
   runWebOperation,
   WEB_EXIT_PENDING,
 } from '../webExitFence'
+
+/** Cleanup failures remain observable even after their editor has unmounted. */
+const reportDiscardFailure = createDiagnostic(
+  'ERROR',
+  'projectAssets',
+  'PW_PROJECT_IMPORT_DISCARD_FAILED',
+)
 
 /** useLibraryAssetDrop 的依赖注入：状态读写与命令栈全部来自 EditorView。 */
 export interface LibraryAssetDropDeps {
@@ -57,7 +66,7 @@ type ImportDeps = Pick<
   | 'removeAsset'
   | 'pushHistory'
   | 'onError'
->
+> & { isCurrent: () => boolean }
 
 async function importAssetToShotRef(
   deps: ImportDeps,
@@ -75,15 +84,18 @@ async function importAssetToShotRef(
     pushHistory,
     onError,
   } = deps
+  let unbound: AssetRef | undefined
+  let failureMessage = '导入后目标或引用位已失效'
   try {
     const asset = await projectAssets.importFromLibrary(projectId, payload.id)
+    unbound = asset
+    if (!deps.isCurrent()) return
     // 载荷可能过期/伪造：以导入返回的权威 MIME 复核引用位 kind
     if (
       shotRefKindForAsset({ kind: payload.kind, mime: asset.mime }) !== kind
     ) {
-      onError(
-        `资产「${payload.name}」实际类型（${asset.mime}）与拖拽载荷不符，未绑定`,
-      )
+      failureMessage = `资产「${payload.name}」实际类型（${asset.mime}）与拖拽载荷不符，未绑定`
+      onError(failureMessage)
       return
     }
     // 导入在途期间节点可能被删除/改型：以当前状态为准重查
@@ -94,6 +106,7 @@ async function importAssetToShotRef(
     if (!patch) return
     const next = patch.refs
     const bindPatch: NodeDataPatch = { nodeType: 'shot', patch: { refs: next } }
+    unbound = undefined
     addAsset(asset)
     applyDataPatch(nodeId, bindPatch)
     pushHistory({
@@ -110,10 +123,19 @@ async function importAssetToShotRef(
       },
     })
   } catch (err) {
-    onError(
-      `资产「${payload.name}」导入失败：${err instanceof Error ? err.message : String(err)}`,
-    )
+    failureMessage = `资产「${payload.name}」导入失败：${err instanceof Error ? err.message : String(err)}`
+    onError(failureMessage)
   } finally {
+    if (unbound) {
+      try {
+        await projectAssets.discardImport(projectId, unbound.id)
+      } catch (error) {
+        reportDiscardFailure('未绑定项目资产隔离失败', error)
+        onError(
+          `${failureMessage}；未绑定副本隔离失败，请保留项目现场：${String(error)}`,
+        )
+      }
+    }
     inFlight.delete(nodeId)
   }
 }
@@ -131,6 +153,14 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
   } = deps
   /** 同一分镜卡的导入在途标记（按 nodeId 串行化，宁可拒绝也不覆盖绑定）。 */
   const inFlightRef = useRef(new Set<string>())
+  const ownerRef = useRef<object | null>(null)
+  useLayoutEffect(() => {
+    const owner = {}
+    ownerRef.current = owner
+    return () => {
+      if (ownerRef.current === owner) ownerRef.current = null
+    }
+  }, [projectId])
 
   return useCallback(
     (e: ReactDragEvent) => {
@@ -154,6 +184,7 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
         return
       }
       inFlightRef.current.add(nodeId)
+      const owner = ownerRef.current
       void runWebOperation(() =>
         importAssetToShotRef(
           {
@@ -164,6 +195,7 @@ export function useLibraryAssetDrop(deps: LibraryAssetDropDeps) {
             removeAsset,
             pushHistory,
             onError,
+            isCurrent: () => owner !== null && ownerRef.current === owner,
           },
           inFlightRef.current,
           nodeId,

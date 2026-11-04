@@ -42,11 +42,20 @@ function expectBlocking(job: Job, step: Step | undefined): void {
 
 it('blocks frontend on the full high/critical npm audit instead of swallowing its status', () => {
   const job = workflow.jobs.frontend!
+  // Issue #741 plan A: the single audit entry is the retry wrapper, whose
+  // bounded retry and fail-closed behaviour run against real npm in
+  // scripts/ci-npm-audit.test.ts. No bare, unretried audit step may
+  // reappear beside it, and the audit still gates the dependency install.
   const audits = job.steps.filter(
-    (step) => step.run === 'npm audit --audit-level=high',
+    (step) => step.run === 'sh scripts/ci-npm-audit.sh',
   )
   expect(audits).toHaveLength(1)
   expectBlocking(job, audits[0])
+  expect(
+    job.steps.some((step) => step.run === 'npm audit --audit-level=high'),
+  ).toBe(false)
+  const install = job.steps.findIndex((step) => step.run === 'npm ci')
+  expect(install).toBeGreaterThan(job.steps.indexOf(audits[0]!))
 })
 
 it('pins cargo-audit to a specific semantic version and audits both lockfiles without ignore flags', () => {

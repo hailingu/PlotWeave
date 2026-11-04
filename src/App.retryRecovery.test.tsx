@@ -3,7 +3,8 @@
  * App 重命名后台恢复域测试（issue #525 自 App.test.tsx 拆分）：重命名
  * 保存失败后经共享保存链的后台重试恢复——当前文档重存成功才清错、
  * 同名不同文档不能清错、旧恢复不覆盖新失败、旧读取不篡改恢复身份
- * （PR #199 评审）。子视图与 projectStore 桩经 appShellTestScaffolding
+ * （PR #199 评审）；连续重命名读取乱序时旧意图不交付保存（issue #801）。
+ * 子视图与 projectStore 桩经 appShellTestScaffolding
  * 委托；notifyRetryPersisted 走真实 saveChain 模块。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -104,9 +105,9 @@ it('App ✦重命名后台恢复：旧读取迟到不覆盖新尝试的恢复身
         release = resolve
       }),
   )
-  store.save
-    .mockRejectedValueOnce(new Error('暂时只读'))
-    .mockRejectedValueOnce(new Error('暂时只读'))
+  // 旧意图读档返回后被作废、不再交付保存（issue #801），仅新尝试的
+  // 保存被拒绝；旧读取的迟到仍不得篡改新尝试登记的恢复文档身份
+  store.save.mockRejectedValueOnce(new Error('暂时只读'))
   render(<App />)
   await screen.findByText('共1项')
   let first!: Promise<void>
@@ -145,5 +146,35 @@ it('App ✦重命名后台恢复：先收到恢复成功、后处理保存拒绝
       ) => Promise<void>
     )('p1', '新名')
   })
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('App ✦连续重命名：读取乱序时旧意图不交付保存，最终落盘为新名（issue #801）', async () => {
+  let release!: (doc: ProjectContent) => void
+  store.load.mockImplementationOnce(
+    () =>
+      new Promise<ProjectContent>((resolve) => {
+        release = resolve
+      }),
+  )
+  render(<App />)
+  await screen.findByText('共1项')
+  let first!: Promise<void>
+  await act(async () => {
+    const rename = homeProps.current.onRenameProject as (
+      id: string,
+      name: string,
+    ) => Promise<void>
+    first = rename('p1', '旧名')
+    await rename('p1', '新名')
+  })
+  await act(async () => {
+    release(structuredClone(DOC))
+    await first
+  })
+  const savedNames = store.save.mock.calls.map(
+    (call) => (call[1] as ProjectContent).name,
+  )
+  expect(savedNames).toEqual(['新名'])
   expect(screen.queryByRole('alert')).toBeNull()
 })

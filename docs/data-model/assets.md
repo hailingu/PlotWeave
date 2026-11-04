@@ -8,6 +8,8 @@
 
 **Swift 原生保存与失败边界（[PR #526](https://github.com/hailingu/PlotWeave/pull/526)）**：当前原生服务由 `NativeProjectStore` 直接保存，`NativeProjectEnvelope` 校验完整信封／资产形状，`NativeDirectory` 按绑定目录句柄执行文件 I/O；原生应用不调用下文的 Rust 服务。项目保存前后均复验真实媒体。下文“失败整份拒绝”指提交前的形状／实路径复验：它不能更新文档。rename 已提交后，父目录持久性屏障或写后资产复验失败仍返回错误，文档可能已是新内容；这与[持久化 §10.5](persistence.md#105-rust-持久化命令tauri-commands)明示的两类失败一致，不是媒体与项目 JSON 的跨文件回滚事务。失败回执不能用于推断磁盘未变，也不能通过删除复验或忽略同步错误伪装成功。正常项目保存、媒体写入和删除由同一 Swift actor 串行；单实例范围及跨进程替换的保留边界见[§10.0](persistence.md#100-swift-原生落地与保留差异)。
 
+Swift 项目媒体读取失败（[issue #905](https://github.com/hailingu/PlotWeave/issues/905)）：`openMedia` 仅在控制文件确证消失（`project_not_found`）时同时退役 pendingMedia、mediaAliases 与 importReceipts。瞬时 I/O、大小上限或项目损坏等其他读取失败原样上抛，三表原样保留；恢复后无需成功保存即可继续按 pending 身份或修复别名打开真实媒体。凭据与 pending 引用只在各自成功保存接受、正常删除或关闭生命周期中按既有规则退役，不把一次不可读当成项目已删除。
+
 - **项目资产**：归属于某个项目，文件存于项目目录内，`project.json` 的 `assets.byId` 只索引本项目资产。项目是**自包含**的——导出、备份、移动项目目录不会丢失任何引用。
 - **个人资产库**：跨项目复用的素材（角色立绘、参考图、常用模板），存于应用级 `library/` 目录，由独立的 `library.json` 索引，不进任何 ProjectDocument。
 
@@ -32,6 +34,8 @@ interface AssetRef {
 
 路径和规范 MIME 的判定由同一份[版本化 JSON 向量](../../crates/plotweave-core/testdata/asset-contract.json)分别在 Rust／Swift 消费，Web 通过实际项目归一化消费活动路径用例；维护和运行方式见[共享资产契约向量](../development/native-coverage.md#共享资产契约向量)。MIME 向量只锁定既有词法，不替媒体响应类型或下载策略作决定。
 
+**复制与导入的活动命名空间（[issue #887](https://github.com/hailingu/PlotWeave/issues/887)、[issue #888](https://github.com/hailingu/PlotWeave/issues/888)）**：项目复制在 Rust 与 Swift 两栈均逐层排除精确 `.trash` 条目，不复制隔离媒体或 receipt，源证据不变；`.trashcan` 等普通目录与活动资产仍正常复制，排他目标、no-follow 与失败回滚保持。库→项目导入在索引归一化之外也使用活动 relPath 谓词复核，拒绝任何 `.trash` 组件；该项为冗余防御一致性，现有归一化本已阻止隔离条目进入导入查询，不宣称修复当前可达的越界导入。
+
 **AssetRef 的 JSON 边界完整校验**：导入、Agent/MCP、磁盘项目文档与 `library.json` 中的 TypeScript 形状均已擦除。进入活动索引前必须确认条目是普通对象；`id` 满足 §8.1 的字符串 id 值域，`relPath` 是非空字符串并满足下述路径安全约束，`mime` 是去首尾空白后由两个非 `*` RFC 9110 token 组成的具体 `type/subtype` ASCII 媒体类型（索引不保存参数，统一小写），`source` 严格等于 `upload` 或 `generated`，`createdAt` 是带显式 `Z` 或 UTC offset、可解析且表示有效时刻的 ISO 8601 字符串并统一落为 UTC `toISOString()`。`set_asset` 的纯模型校验对完整形状执行该规则；此外公开 dispatcher 必须在调用内部 reducer 前，经 Rust `validate_project_asset(projectId, asset)` 以受信项目/资产根句柄逐组件 no-follow 打开 `relPath`、确认目标是资产根内普通文件，并只采用 Rust 返回的规范化 AssetRef。形状或真实路径任一失败时不得进入活动文档、undo/redo 栈或脏标记；导入/生成、Agent/MCP、撤销/重做与 batch 同样不得绕过。`save_project` 在任何临时文件或时间戳写入前对 `assets.byId` 全量执行同一 Rust 实路径复验，防止预检后目录项被替换；失败整份拒绝且不更新索引。加载项目时，`assets.byId` 的 Record 键/id 先按 §11.1 的共同规则修复；加载资产库时，旧数组格式先按 §7.2 的兼容迁移转换为目标 Record，再执行同款键/id 修复。随后，合法但未规范化的 MIME 大小写/空白与带显式时区的时间戳表示可确定性规范化并警告，其余无法无歧义修复的条目隔离并警告，引用按 §8.2.3 标记悬空。库侧即使另有分类字段归一化，也必须执行这些共享字段规则，不能因 `relPath` 合法就跳过基础形状。
 
 **relPath 安全约束**：relPath 必须是纯相对路径（禁止绝对路径），其**基准**为项目目录（项目资产）或 `library/` 目录（库资产）——维持既有磁盘格式（库条目写作 `assets/<文件>`），基准变更会让既有资产解析成 `library/assets/assets/<文件>` 而全部失效。解析目标必须位于**专用资产子目录**内（项目 `assets/`、库 `library/assets/`，§10.1），且不得进入保留的库隔离目录 `library/assets/.trash/`（该目录及其随机名称永不进入 AssetRef、媒体 URL 或孤儿候选）：控制文件（`project.json`/`library.json`/`index.json`）位于子目录之外——`"library.json"` 这类条目词法合法、解析后也在库目录内，但目标不在 `library/assets/` 内即非法，`delete_library_asset`/`remove_file` 之类的按路径操作由此永远触达不到索引自身；含 `..` 上跳段使解析目标越出子目录同样非法。词法规范化不足以兜底：资产目录内若存在指向根外的符号链接，`assets/link` 词法合法、不含 `..`，真实路径却已越界——因此校验以**真实路径包含关系**为准：对资产子目录与目标路径做 canonicalize（解析符号链接）后判定目标仍位于子目录之内，越界即非法；新增资产（目标文件尚不存在、无法 canonicalize）时拒绝路径各级中的符号链接，或对最近已存在祖先做 canonicalize 后拼接校验。**信任链必须从应用数据根逐级建立，不能把待校验的基准目录自身当作最外层锚**：先 canonicalize Tauri `app_data_dir` 作为受信根并确认 `projects/` 与 `library/` 的 canonical 路径仍位于该根内，再确认 `{projectId}/` 的 canonical 路径仍位于 canonical `projects/` 内，最后才确认项目 `assets/` 位于该项目目录内、`library/assets/` 位于 canonical `library/` 内；任一现存中间目录是指向其父级受信根外的符号链接，均拒绝整个对应资产区并记录警告。目录尚不存在时只能通过已验证且无符号链接的父目录创建，创建后重新 canonicalize 并复核逐级包含关系。由此即使项目目录与其 `assets/`、或 `library/` 与 `library/assets/` 一起指向同一外部树，也不能以“根与目标彼此包含”为由通过校验。**分层执行**：词法校验（纯相对、解析目标在子目录内）前端模型层可执行；上述逐级真实路径包含判定只能在可访问文件系统的 Rust 层执行——webview 模型层无法自行解析本机符号链接。Rust 在 `load_project` 与资产命令内对每个 relPath 做 canonical 校验并把非法条目清单随加载结果返回，前端归一化消费该清单隔离条目；库侧 `list_library_assets`/`delete_library_asset` 在 Rust 内同款校验。这是 §7.1「项目自包含」与备份/移动完整性的前提，也是信任边界校验（防解析或复制时逃逸资产根）：`set_asset` 命令边界拒绝非法值，归一化对脏数据隔离该索引项并记录警告（引用该资产的字段按 §8.2.3 悬空展示）。**库索引入口同款约束**：`library.json` 不走 §11.1 项目文档归一化（它不是 ProjectDocument），且可被手工修改或损坏——读取库索引（`list_library_assets`，§7.2 启动时全量载入）时对每个条目应用同款校验（含真实路径包含判定），非法条目不进内存索引并记录警告。仅在列表入口过滤不足以兜底：`delete_library_asset` 等操作会重读或消费索引中的 relPath，而目录项可能在列表校验之后、实际读删之前被替换（TOCTOU）。**canonicalize 只用于加载筛查、包含关系诊断与无句柄平台上的拒绝性兜底，绝不是后续文件 I/O 的授权凭据；缓存“本会话已验证”的 relPath 同样不构成授权，本文不再允许二者作为实际操作的替代方案。**凡按 relPath 触达项目或库资产文件的入口（导入、创建、读取、媒体响应、复制、移动、删除与清理）均由 Rust 在该次操作内从已验证的应用/项目/库父目录句柄出发，以 no-follow 语义打开并持有专用 `assets/` 根目录句柄；把词法校验后的 `assets/<子路径>` 去掉固定首段后，逐组件以相对目录句柄继续打开，拒绝空段、`.`/`..`、符号链接、非目录中间项及越界，整个句柄链保持到操作结束，不得在校验后退回原始绝对路径或字符串拼接路径。读取以最终父目录句柄相对 no-follow open，并在已打开句柄上确认普通文件后流式读取；删除不得只凭最终组件名称调用 `unlinkat`：no-follow 只能阻止跟随符号链接，不能证明该名称仍绑定此前打开的普通文件。库资产删除必须先按 §7.2 把经身份核验的目录项原子移入保留的私有隔离区，再提交索引；提交后只允许以仍绑定该已打开文件身份的平台原语清理隔离项，平台不能提供等价保证时保留隔离项并返回 `cleanupPending`，不得退化为按名称删除。创建/导入在句柄下排他创建随机临时文件并以句柄相对 rename 落位。Rust 文件系统适配层必须在各平台为路径解析、读取、创建与原子移动提供与 POSIX `openat`、Linux `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)` 同等的“根句柄绑定 + 逐组件不跟随”保证；普通 `unlinkat` 只约束删除发生在受信目录内，**不满足**库媒体的文件身份绑定清理，后者必须使用 §7.2 的更强平台原语或保留 `cleanupPending`。相应能力缺失时拒绝该阶段，不得降级为 check-then-use。媒体展示也不得把本机绝对路径或 relPath 交给前端 `mediaUrl` 拼接/通用文件协议：前端只获得含 scope + assetId 的 opaque asset URL，Rust 自定义协议处理器在**每次请求**重新从当前规范化索引解析 id，并通过上述句柄链读取后返回字节；索引内存快照可以减少 JSON 重读，但永远不能跳过这一步文件系统能力校验。由此目录项在列表后被替换也无法让任何项目或库入口触达资产根外文件。
@@ -44,7 +48,11 @@ interface AssetRef {
 
 ### 7.2 库资产的分类与编组
 
-**Web 资产面板回执呈现（[issue #700](https://github.com/hailingu/PlotWeave/issues/700)）**：面板逐个显示 `put` 已确认的成功条目；后续导入失败不隐藏或撤销这些结果，错误包含失败文件名。确认删除后保持既有乐观隐藏，只有 `remove` 成功才回收缩略 URL；拒绝时按资产 ID 恢复门面最近持久化条目（无快照时使用打开确认框前保留的已落盘名称锚点，避免改名与删除均拒绝后恢复乐观名称），保留错误与显式重新确认入口，不覆盖并发新增项。初始列表尚未落定时暂停 Web 文件导入，之后才接纳新变更；缩略 URL 的在途 token／句柄由挂载面板独占，删除成功与卸载会作废迟到回执并回收 blob，失败删除保留有效请求。该显示恢复不回写库、不重发变更，不改变同资产队列、提交不确定性及下述宿主日志恢复合同；Swift 原生图库模型的失败重读继续沿原规则。
+**Web 资产面板回执呈现（[issue #700](https://github.com/hailingu/PlotWeave/issues/700)）**：面板逐个显示 `put` 已确认的成功条目；后续导入失败不隐藏或撤销这些结果，错误包含失败文件名。确认删除后保持既有乐观隐藏，只有 `remove` 成功才回收缩略 URL；拒绝时按资产 ID 恢复门面最近持久化条目（无快照时使用打开确认框前保留的已落盘名称锚点，避免改名与删除均拒绝后恢复乐观名称），保留错误与显式重新确认入口，不覆盖并发新增项。初始列表尚未落定时暂停 Web 文件导入，之后才接纳新变更；缩略 URL 的在途 token／句柄由挂载面板独占，删除成功与卸载会作废迟到回执并回收 blob，失败删除保留有效请求。该显示恢复不回写库、不重发变更，不改变同资产队列、提交不确定性及下述宿主日志恢复合同；Swift 原生图库模型的失败重读继续沿原规则。门面在导入、元数据更新、删除每次成功落盘后发布变更通知（issue #802）：存活面板实例据此失效重读列表，旧实例在面板重挂载后落定的成功结果即时对当前实例可见；重读保留在途/未解决失败意图的本地投影与乐观隐藏的删除行，仅采纳最新一次发出的读取（界面行为见[界面设计 §8.1](../ui-design.md#81-资产库面板按影视美术部门分类)）。
+
+**库媒体瞬时读取失败（[issue #883](https://github.com/hailingu/PlotWeave/issues/883)）**：原生库操作的媒体筛查对 `PW_STORAGE_ERROR`（包括 EMFILE、EIO、EACCES）保留索引条目，返回可见 warnings 并记录 `PW_LIBRARY_MEDIA_UNAVAILABLE`，不因此设置 changed 或持久化删除。确证缺失／不可信文件仍沿既有隔离路径处理。原有索引归一化或恢复写入不因该诊断失效；不能将一次打开失败解释为媒体字节已丢失。
+
+Tauri 库列表的媒体读取分流（[issue #907](https://github.com/hailingu/PlotWeave/issues/907)）：列表投影只隔离确证缺失或不可信的媒体；媒体打开的 EMFILE、EIO、EACCES 等非 NotFound I/O 错误保留条目，并返回 `PW_LIBRARY_MEDIA_TEMPORARILY_UNAVAILABLE` 警告，不再宣称缺失或已隔离。分类沿 LibraryError/StoreError 的来源链读取 io::ErrorKind；下次成功列表自然恢复。列表过滤不改磁盘索引或媒体，冲突期标记和只读恢复分流不变；Swift 仍遵循上文原生库操作的持久化分流口径。
 
 **Swift 原生批量导入呈现（[PR #526](https://github.com/hailingu/PlotWeave/pull/526)）**：原生系统选择的文件逐个沿 `NativeLibrary` 落盘，不新增整批事务或自动重试。后段读取或导入失败时，`NativeLibraryModel` 重读权威列表，显示已提交的真实资产并保留失败提示；其他写入口共用失败重读。列表恢复也失败时保留最后有效快照，同时报告原错误与刷新失败，不制造空索引。关闭使旧任务失去发布权限；原生选择注入仅供本机组合和隔离测试，不增加 Web 文件路径入口。见[矩阵 R16–R17](../swiftui-react-flow-pr526-fixes.md)。 所选 URL 使用 no-follow、非阻塞打开，随后由 `NativeMediaFile` 在实际 descriptor 上核验普通文件；FIFO 不等待 writer、目录／symlink 不读取，失败回到同一列表恢复路径，既有普通文件字节上限与取消保持（[PR #526 R26](../swiftui-react-flow-pr526-fixes.md)）。 接纳导入或直接变更的展示批次还同步登记应用级退出资格（[issue #529](https://github.com/hailingu/PlotWeave/issues/529)）：批次落定——含失败重读与 sheet 取消完成——先于退出事件投递与最终批准，最终批准复查仍有在途批次时拒绝 `PW_NATIVE_LIBRARY_PENDING` 并保留重试；已提交项与 R38 恢复保持，不自动重放或回滚，只读刷新不设资格，合同详见[桥的原生图库批次退出资格](../swiftui-react-flow-feature-parity.md#桥合同)。
 
@@ -54,7 +62,7 @@ interface AssetRef {
 
 恢复移动或日志提交再次失败时，原记录或完整新统计仍可重读；未解决导入阻止继续写入，避免恢复失败下反复累积不可见媒体。原生表单沿 R16–R17 的失败重读显示这些诊断并保留原错误。平台仍无身份绑定删除原语，因此物理媒体保留到人工核对清理，不能把隔离收敛宣称为磁盘空间已释放。无日志的历史孤儿不扫描、不猜测；Tauri 历史导入和待实现收藏仍保持下述保留边界，新 Swift 应用使用独立开发数据根，不将本协议宣称为跨旧宿主迁移。物理断电、真实满卷和手工隔离区清理未实测；确定性阶段故障及真实目录权限／占位回归见 R38 矩阵。
 
-**落地状态（#17、#25、#29）**：锚定句柄访问、1 MiB 库索引限读、脏条目隔离、日志驱动删除与恢复、Record 迁移、完整归一化、组命令及库命令重命名均已合入 `dev`。库操作由进程内互斥锁与跨进程文件锁串行化；列表及写入前先恢复未完成事务，返回 `warnings`/`cleanupPending`，只读告警态暂停写入。平台缺少身份绑定清理能力时仍保留隔离文件，不把“事务已实现”解释为“必定立即物理删除”；已核验清理项在下次恢复折叠退役（[issue #359](https://github.com/hailingu/PlotWeave/issues/359)），日志不随生命周期累积。库操作锁的中毒后行为为可验证恢复（[issue #145](https://github.com/hailingu/PlotWeave/issues/145)）：锁不守卫内存状态，磁盘一致性由本节日志可恢复提交协议独立保证。平台编译边界（[issue #546](https://github.com/hailingu/PlotWeave/issues/546)）：本协议官方仅支持 macOS；非 Unix 目标保持可编译（仅提供源码，Windows 等由使用者自行构建，见 README 平台声明），运行时身份原语（`(dev, ino)` 路径/隔离项身份核验）与目录持久性屏障按能力缺失显式拒绝、删除入口在无身份平台拒绝，绝不基于猜测身份移动或删除媒体。
+**落地状态（#17、#25、#29）**：锚定句柄访问、1 MiB 库索引限读、脏条目隔离、日志驱动删除与恢复、Record 迁移、完整归一化、组命令及库命令重命名均已合入 `dev`。库操作由进程内互斥锁与跨进程文件锁串行化；跨进程锁文件 `.library-op.lock` 自身的打开遵循本域 no-follow 归类纪律（[issue #721](https://github.com/hailingu/PlotWeave/issues/721)）：先 `symlink_metadata` 归类，既有符号链接或非普通文件保护性拒绝，仅确证缺失才以 `create_new` 首建，跨进程首建竞态经重新归类收敛。列表及写入前先恢复未完成事务，返回 `warnings`/`cleanupPending`，只读告警态暂停写入。平台缺少身份绑定清理能力时仍保留隔离文件，不把“事务已实现”解释为“必定立即物理删除”；已核验清理项在下次恢复折叠退役（[issue #359](https://github.com/hailingu/PlotWeave/issues/359)），日志不随生命周期累积。库操作锁的中毒后行为为可验证恢复（[issue #145](https://github.com/hailingu/PlotWeave/issues/145)）：锁不守卫内存状态，磁盘一致性由本节日志可恢复提交协议独立保证。平台编译边界（[issue #546](https://github.com/hailingu/PlotWeave/issues/546)）：本协议官方仅支持 macOS；非 Unix 目标保持可编译（仅提供源码，Windows 等由使用者自行构建，见 README 平台声明），运行时身份原语（`(dev, ino)` 路径/隔离项身份核验）与目录持久性屏障按能力缺失显式拒绝、删除入口在无身份平台拒绝，绝不基于猜测身份移动或删除媒体。
 
 资产库要回答"我有哪些人物/场景/道具的哪些视图"，扁平标签不足以表达（"三视图"是结构而非标签），因此采用结构化分类 + 编组 + 自由标签三层：
 
@@ -89,6 +97,7 @@ interface AssetGroup {
   - **保守恢复规则**：共享引用与重隔离路径的身份核验一致项同款折叠；证据类条目（身份不符/被占用、`indexUncertain`）与非权威视图（索引损坏、迁移挂起）期间一律不折叠。折叠仅在删除提交已被权威视图证明后发生，事务就此闭合；后续索引损坏不再对已折叠项重新置闩（#389 的置闩保护针对仍驻留日志、提交未被证明的事务）。闭合后用户把旧备份索引换回 `library.json` 时，折叠项媒体保持隔离，与具备清理原语平台的既有语义一致，不再回迁。
   - **字节统计与整体清理**：每笔折叠从已核验打开句柄的 fstat 取得隔离项大小，零路径解析，与计数同源累计；恢复路径不遍历隔离区（issue #427 评审 5355629881：媒体 URL 解析和打开同样逐请求在库锁内恢复，遍历会让成本再次随历史删除数线性增长）。仍驻留日志/证据项及外来文件不计入。旧统计缺 `trashBytes` 或字段异型时，历史份额不可测，未知跨后续折叠保持，不将总量改写为仅新增字节的「已知」值（评审 5355849137）。用户整体移除 `assets/.trash/` 后，下次恢复联合写入计数 0 与已知字节 0，摘要消失；后续折叠从零重新可知。部分清理文件而保留目录时，计数和字节数可能偏高；精确对账需要逐条核验，记录为已知边界。
   - **容量与清理边界**：删除入口在恢复前的半上限投影守卫与 1 MiB 受限读取上限保留，投影包含完整对象根；因每次恢复折叠已完成条目，真实可达删除次数内不会触达，驻留项来自崩溃窗口和未解决证据。极接近 1 MiB 的旧数组日志可能因新增对象头部超过写入上限而拒绝迁移，事务条目和媒体字节保持，不扩大既有上限或自动删减证据。触达时按受限错误文案人工核对 `assets/.trash/` 并同步修复日志事务条目，统计随恢复管理。折叠消除了隔离区增长的间接背压，单文件上限 20 MiB，数千次删除仍可能占数 GB 并填满同卷；摘要中的字节量级因此保持可见，message 用二进制单位，结构化 `bytes` 携带精确值。隔离区不设上限、不因大小拒绝删除，用户主动整体清理前媒体不被回收；可配置上限和达到时拒绝删除仍属待所有者决策的删除契约变更。
+- **Web 大文件导入（[issue #716](https://github.com/hailingu/PlotWeave/issues/716)）**：`libraryStore.put` 保留读取前 `file.size` 与读取后实际字节长度的 20 MiB 闸门。<=64 KiB 沿用 `import_library_asset`；更大输入经两宿主共有的 `import_library_asset_chunk`，参数为 `{ request: { uploadId, name, mime, kind, total, offset, data } }`。`data` 为标准 base64，每帧解码后不超过 64 KiB，顺序等待确认并在帧间显式让出 Web 事件循环；中间回执 `{received}`，恰好达到总长的末包返回原导入条目。宿主各自独立校验每帧、累计总长和固定元数据摘要；最多两笔上传（包含正在提交者），暂存无文件、无路径读取。未完成上传在首帧后 120 秒到期，于下次请求回收，闲置时仍受两槽硬上限约束。`total:0,offset:0,data:''` 仅取消暂存，不能撤销正在提交或结果未知的非幂等导入；前端不自动重试提交。失败取消自身失败时记录 `LIBRARY_UPLOAD_ABORT_FAILED`，原导入错误保留。最终提交继续使用原内核、日志恢复、`normalizeAsset` 与 `reportLibraryDiagnostics`；原生文件面板继续使用用户选择的受限描述符读取和直接 Data 导入。响应性实测及边界见[验证记录](../development/library-import-716.md)。
 - **库写边界**：`import_library_asset`/`collect_library_asset` 对 meta 及构造出的完整 `LibraryAsset` 执行上述规则后才写索引。`update_library_asset` 要求 patch 是普通对象且仅含 `name`/`kind`/`view`/`groupId`/`tags`：字段一旦出现就先做运行时类型和值域校验，`view: null`/`groupId: null` 是唯一清除标记且落盘时删除对应可选字段，其他异型值拒绝；字符串保存规范化值，tags 须在输入时满足数组、成员和值域规则。补丁应用到当前条目后必须复验**完整合并结果**（含不可编辑的 AssetRef 字段及 groupId 存在性/kind 一致性），失败则整次命令不写盘，不能让本次未触及的旧脏字段继续落盘。组写入由 `upsert_library_group` 执行同款完整形状校验；修改组 kind 若会与任一成员资产冲突则拒绝。`delete_library_group` 要求组存在，并在同一次原子索引写入中删除该组、剥离成员资产的 `groupId`；因此不会留下悬空编组引用。每个库写命令在操作开始时必须通过 §10.2 的受信控制文件句柄读取当前索引并按本节完成归一化，再以该次读取结果作为唯一逻辑基线；会话内存快照只用于 UI 展示/缓存，不得作为写命令的权威输入，也不得把补丁直接套在重新读出的原始 JSON 上。最终索引经同目录 tmp 写入、文件内容 flush/fsync、原子 rename 与父目录 fsync 全部成功后才视为耐久提交并替换会话快照。这份由命令在操作开始时通过受信句柄读取并归一化的索引快照只代表本次操作的逻辑基线，不携带文件系统权限；任何由条目 relPath 引发的文件读写仍必须逐次执行 §7.1 的根目录句柄绑定与 no-follow 操作。
 - **清理指引的证据完整性（[PR #222](https://github.com/hailingu/PlotWeave/pull/222)，已实现）**：`cleanupPending` 不是完整的冲突清单。索引仍引用的事务遇到原路径占用、媒体缺失或隔离项身份不符时，恢复可能只设置 `conflicted` 并返回 `warnings`，仍须保留媒体与日志。前端只在当前待清理快照无证据项、且本会话未收到任何有效图库警告时显示目录级清理指引；所有有效警告均保守暂停（不从非结构化文案推断安全）。关闭提示和后续空/缺失/失败/迟到响应均不能解除会话保护；先备份、人工核对并完全退出重启，由新一轮恢复诊断重新判定。一次性修复警告也会暂缓本会话指引，正常图库编辑不受影响；不新增自动删除或更改后端恢复协议。详见 [UI 设计 §8.1](../ui-design.md#81-资产库面板按影视美术部门分类)。
 
@@ -106,7 +115,24 @@ interface AssetGroup {
 - **旧库索引兼容迁移（已实现）**：当前 `library.json` 使用 `assets.byId`/`groups.byId` Record；旧格式使用 `assets: LibraryAsset[]`/`groups: AssetGroup[]`，条目 `createdAt` 是 epoch 毫秒、`source` 缺失，且可选 `view`/`groupId` 用 `null` 表示。读取旧格式时先安全预检两个数组及普通对象成员，按 §11.1 键控桶同款的数组键化规则校验 id：重复 id 保留文档序首项、后续项重发本域未占用 id，缺失/非字符串/空白 id 同样重发，最后才键化为 `assets.byId`/`groups.byId`。组 id 重复时既有 `groupId` 引用本就解析到首项，不随后续项重发而改接；仅一个空白原 id 组时建立映射并同步改写精确匹配的 `groupId`，多个同值空白组则映射歧义，删除相关 `groupId` 并警告。当前库资产均由本地导入产生，缺失 `source` 确定性补为 `upload`，非负安全整数且能表示有效日期的毫秒时间戳转为 UTC ISO 8601，`null` 可选字段删除，旧 `prop` kind 按上条改写。完成这些兼容改写及 Record 键/id 引用同步后才按上一条顺序执行完整 `AssetGroup`、`LibraryAsset` 与跨条目 groupId/kind 校验；缺失/异型时间戳或显式未知 source 不得猜测，隔离条目并警告。不得把目标校验直接套在旧数组成员上，否则所有缺 source、数字时间戳的现有库资产都会被误删。
 - **迁移身份稳定性**：检测到迁移/修复即耐久回写，保证重发 id 跨读取稳定。只读告警态、迁移挂起态或损坏索引的局部视图不暴露未落定的新身份；不能在每次列表时再次产生漂移 id。
 - **绑定方式**：分类信息写在 `library.json` 索引项里、以资产 id 为键；改标签、换组、改视角只更新索引，不动媒体文件。
-- **快速读取**：`library.json` 启动时全量载入内存（桌面量级，数千条索引项仅数百 KB），列表页筛选/搜索全走内存过滤，媒体文件懒加载。规模失控时再迁 SQLite（见十三）。
+- **快速读取**：`library.json` 启动时全量载入内存（桌面量级，数千条索引项仅数百 KB），列表页筛选/搜索全走内存过滤，媒体文件懒加载。规模失控时再迁 SQLite（见十三）。Swift 原生侧目前每次库操作重读并逐条规范化索引（而非仅启动时载入）：时间戳规范化成本已由 [issue #824](https://github.com/hailingu/PlotWeave/issues/824) 消除（严格快路径 + 共享缓存格式器，复测 ≈ 63 µs/资产、1600 资产列表中位 ≈ 100 ms），每次操作重读整份索引的设计层边界与完整规模-耗时基线见[持久化 §10.2](persistence.md#102-写入安全)（[issue #730](https://github.com/hailingu/PlotWeave/issues/730)）。
+
+#### 库列表媒体可用性校验（issue #851）
+
+Rust `list_assets_with` 在日志恢复、索引归一化之后，对非冲突活动条目复用 `open_library_asset` 校验：从既有 `library/assets/` 受信根逐组件 no-follow 定位，终点必须为普通文件，打开的句柄与归类身份一致。缺失、symlink、目录、FIFO 或不可访问条目逐项从返回的内存索引隔离，并在 `warnings` 中携带资产 id 和原因；健康项继续返回。媒体校验不读取内容，不创建缺失目录，也不覆写索引或移动／删除媒体。后续重新列表会再次检查，文件恢复后可重新显示；Rust 删除入口仍坚持原身份绑定事务，不对异型目标降级按名删除。Swift 既有 `filterMedia()` 继续按原有可写性条件持久化过滤结果，两侧共用 `asset-contract.json` 的 `libraryMedia` 磁盘状态向量校验可用性。
+
+日志恢复的 `conflicted` 条目保留在投影中并显式标记，不因媒体缺失被过滤，`cleanupPending` 与警告仍可见；媒体服务与项目导入继续拒绝冲突身份。索引损坏、只读日志和迁移挂起的既有只读边界保持。列表隔离使不可用条目不再呈现为可正常操作的资产，不宣称已修复磁盘媒体或完成物理清理。
+
+| 前置／状态 | 动作及顺序 | 可观察结果 | 不变量与 owner | 回归／缺口 |
+| --- | --- | --- | --- | --- |
+| 普通或嵌套普通媒体 | 恢复→列表→重复列表 | 条目可用、无媒体警告 | `library_fs` 保持真实文件、no-follow、句柄身份一致 | Rust／Swift 共用 `libraryMedia` 正向量 |
+| 媒体缺失、symlink、目录、FIFO；父 symlink、普通文件或缺失 | 恢复→逐项打开→列表 | 坏项隐藏并警告，健康项和库外字节保持 | `list_assets_with` 只过滤投影，不改媒体或原始索引 | `shared_library_media_vectors_isolate_only_unavailable_entries`；`sharedLibraryMediaVectors` |
+| `assets/` 根缺失 | 列表 | 隔离条目，目录仍缺失 | 读侧不创建目录，错误不放大成整库失败 | `listing_missing_assets_root_does_not_create_it` |
+| 普通文件列出后被替换为目录，再恢复成文件 | 再列表→恢复文件→再列表→删除 | 替换后隐藏并警告，恢复后可见且正常删除 | 每次列表复核，删除仍由原日志协议绑定身份 | `listing_rechecks_media_and_restored_asset_can_be_deleted` |
+| 未决删除事务且媒体已缺失 | 恢复→过滤→重复列表 | 保留 `conflicted` 和待清理证据 | 恢复 owner 的证据不能被列表吞掉；冲突媒体仍不可用 | `listing_preserves_conflicted_transaction_with_missing_media` 及既有媒体／导入恢复回归 |
+| 只读日志、损坏索引、迁移挂起 | 恢复→列表 | 局部可用列表，原件仍受既有保护 | 不越过归一化／日志的写入资格 | 既有 `read_only_tests`／`recovery_tests`；健康项夹具现在包含真实媒体 |
+
+本次不增加并发入口或修改锁；主动同用户攻击者替换目录树的残余窗口沿用现有威胁模型。真实损坏用户库、Tauri UI 手工操作、物理断电未实测；共享向量验证两宿主的可用性判定，不声称统一其索引持久化策略。
 
 #### 删除日志联合统计状态与不变量矩阵（issue #421）
 
@@ -148,6 +174,26 @@ Tauri的导入参数借用框架已解析的 `InvokeBody::Json` 先取数组长�
   截断源名至可容纳后缀再拼接——直接追加后缀会让接近上限的合法源名复制即被
   持久化层拒绝，复制操作必须总能成功。
 
+### 模型提供者响应的 JSON 深度（issue #889）
+
+`llm_chat` 与 `llm_image_generate` 在状态码和响应字节预算之后，经 `HostJSON.decode` 执行同一 32 层深度限制；超过限制映射为稳定的 `PW_MODEL_ERROR`，不进入递归 Codable 解码。图像 b64 与 URL 两种响应均先受该限制，URL 下载不会先于 JSON 验证。忽略字段仍属于不可信响应并计入深度；合法 32 层响应及原有大小、取消、下载校验保持。
+
 ### 媒体响应的文档隔离（#654）
 
 `pwmedia` 的响应层保留规范的图片／音频／视频类型，其他声明仅以 `application/octet-stream` 交付原字节；磁盘 `AssetRef.mime` 和共享词法规则不变。SVG 继续以图片类型交付，媒体响应统一附带强制 sandbox／禁脚本 CSP 与 nosniff；404 保持固定纯文本。读取授权、描述符身份、容量和取消仍由原 owner 负责。真实 WK 正向对照、SVG 文档／图片回归及限制见[媒体响应边界](../development/media-response-boundary.md)。
+
+### 原生投递粒度（#718）
+
+Swift `NativeMediaScheme` 的 WKURLSchemeTask 回调受 WebKit 框架约束只能在主线程执行（[WKURLSchemeTask](https://developer.apple.com/documentation/webkit/wkurlschemetask) 协议方法由主线程调用），因此大媒体的响应性由**投递粒度**决定，而非后台读取：投递循环以 **4 MiB**（`NativeMediaScheme.deliveryChunkBytes`）为一个「后台 pread + 主线程 `didReceive`」单元——256 MiB 项目媒体上限只产生 64 次主线程投递（64 KiB 粒度需 4096 次，issue #718 修复前），单次投递为亚毫秒级数据搬运，主线程在加载期间保持可响应；后台读取、取消传播、身份绑定与并发闸门契约不变，瞬时读取缓冲峰值由闸门约束为 ≤ 4 并发 × 4 MiB。Tauri 侧 `pwmedia` 处理器在阻塞线程整包缓冲读取、经异步 Responder 单次 respond 交付（协议 API 无流式 body，见 [media_protocol](../../src-tauri/src/media_protocol.rs)），主线程不参与媒体字节搬运，无对应问题。
+
+### 未绑定库导入副本的隔离（issue #864）
+
+Web 拖放与原生库绑定均在导入返回后复核权威 MIME、目标节点类型及会话所有权；失败时调用 `discard_project_asset_import(id, assetId)`，前端导入后的预检失败也走同一路径。成功绑定及其撤销/重做保留原有媒体生命周期，不随撤销删除字节。 [issue #886](https://github.com/hailingu/PlotWeave/issues/886) 的保留边界明确如下：导入已绑定后，即使在首次接受保存前撤销，后续空引用保存也保留媒体与会话凭据，以支持 redo；保存曾接受过该资产后，回收资格永久退役。退出后未引用的最终名媒体仍在，内存凭据不跨重启恢复，不自动猜测孤儿并删除。清理入口是完全退出、备份项目，再根据文档全部资产引用及媒体清单人工核对未引用文件；保留副本优先于误删 redo／用户媒体，当前没有自动孤儿扫描或空间回收承诺。
+
+Swift 项目 actor / Rust 项目操作锁只接受本宿主为本次库拷贝登记的身份凭据，不接受客户端 `relPath`，不操作源库。已保存文档接受过的资产永久退役该回收资格；正在被文档以 id/路径引用、身份改变或无凭据的文件均拒绝隔离。未绑定副本放入项目 `assets/.trash/import-…/`，保留 `receipt.json`（逻辑身份、原路径、设备/inode）与 `media` 原字节；先持久化凭据，再隔离并按目标→源目录顺序同步。活动资产准入继续拒绝 `.trash`。
+
+隔离是可回收记录，不代表物理删除或空间已释放。清理失败保留现场和凭据并向调用方显式报错；自动崩溃恢复扫描及物理释放尚未实现。人工处理前完全退出应用、备份项目并逐项核对隔离凭据；此目录不得作为活动资产索引使用。浏览器预览只移除独立内存映射，不声称磁盘回收。
+
+Swift 原生项目导入的同步凭据失败（[issue #890](https://github.com/hailingu/PlotWeave/issues/890)）：媒体落位后凭据登记抛错时，在同一 actor 无挂起事务内移除刚写入的最终名，并同步目录后返回原始错误；pendingMedia 只在凭据成功后发布。回滚本身失败返回 `PW_IMPORT_ROLLBACK_FAILED`，包含登记与清理诊断并保留现场，不能将失败宣称为媒体已删除；正常导入、既有凭据隔离和撤销保留语义保持。
+
+Tauri 历史路径的同步登记失败保留边界（[issue #906](https://github.com/hailingu/PlotWeave/issues/906)，采用验收方案 b）：`import_asset_from_library` 在媒体拷贝成功后调用 `import_discard::register`；若目录句柄复制或重开媒体失败，命令直接返回原错误，不发布 pending 引用或导入凭据，也不回滚刚落位的最终名。该孤儿副本至多 20 MiB，不在临时文件清扫白名单内；因没有凭据，`discard_project_asset_import` 拒绝回收，不承诺自动清理。此处与 Swift 的回滚契约不同，保留字节优先于无身份凭据时按名删除；不丢失源媒体、不污染项目索引。人工清理遵循上文的完全退出、备份项目、核对全部文档引用与媒体清单后移除未引用文件的步骤。正常导入、#864 已登记凭据的隔离和 #886 撤销保留语义均不变；本边界不表示导入成功或空间已释放。

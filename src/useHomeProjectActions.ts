@@ -38,6 +38,13 @@ const logEvents = {
  * 重命名/复制/删除动作编排，不触碰打开态与编辑器域；对外入口是
  * useHomeProjectActions，动作细则见各导出符号的意图文档。
  */
+/** 每项目最新重命名意图令牌（issue #801）：重命名各自独立执行
+ * load→rename→save，保存队列仅按 save 到达序串行——慢读取的旧意图会在
+ * 新名称落盘后把旧名写回。发起即认领本项目令牌，读档返回后仅最新令牌
+ * 可交付保存；被取代的旧意图静默作废（其可见结果已由新意图拥有，不是
+ * 失败，不上横幅）。注册表随进程存续，与保存链 owner 同生命周期语义。 */
+const renameIntents = new Map<string, symbol>()
+
 /** 重命名动作（useHomeProjectActions 拆分，守 80 行上限）：读档改名后
  * 拒绝式保存（PR #199 评审：落盘失败上浮横幅并可重试，失败同经保存链
  * 登记后台重试，绝不静默吞掉），成功后刷新首页摘要。 */
@@ -48,8 +55,13 @@ function useRenameProject(
   const handleRenameProject = useCallback(
     async (id: string, name: string) => {
       const seq = feedback.begin()
+      const intent = Symbol('renameIntent')
+      renameIntents.set(id, intent)
       try {
         const doc = await projectStore.load(id)
+        // 后发起的重命名拥有最终持久化状态（issue #801）：读档期间已被
+        // 新意图取代的旧意图不再交付保存，迟到的读取结果就此作废
+        if (renameIntents.get(id) !== intent) return
         const renamed = { ...doc, name }
         feedback.watchSave(seq, renamed)
         await projectStore.save(id, renamed)

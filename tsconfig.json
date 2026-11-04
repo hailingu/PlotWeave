@@ -17,6 +17,11 @@
     "noFallthroughCasesInSwitch": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": ["src", "vite.config.ts"],
+  "include": [
+    "src",
+    "vite.config.ts",
+    "vite.native-canvas.config.ts",
+    "vite.native-canvas.test.ts"
+  ],
   "exclude": ["src/**/*.test-d.ts"]
 }

@@ -104,9 +104,9 @@ describe('SceneForm', () => {
     // 小数向下取整
     fireEvent.change(noInput, { target: { value: '7.9' } })
     expect(patchOf(api, 1)).toEqual({ sceneNo: 7 })
-    // 清空：场景号必填，非法输入不产生 patch
+    // 清空：可选场次提交显式清除补丁（#933）
     fireEvent.change(noInput, { target: { value: '' } })
-    expect(api.patchNode).toHaveBeenCalledTimes(2)
+    expect(patchOf(api, 2)).toEqual({ sceneNo: undefined })
   })
 
   it('场次/集归属拒绝非安全整数（§4.1 正安全整数域：有限但越界如 1e20 落载后会被顺位重发，输入边界同域拒收、保留原值）', () => {
@@ -119,7 +119,9 @@ describe('SceneForm', () => {
     })
     expect(api.patchNode).not.toHaveBeenCalled()
   })
+})
 
+describe('SceneForm 的上下文和集归属', () => {
   it('内外景分段与角色 chip 切换（引用设定集 id 增删）', () => {
     const { api, container } = setup(sceneNode)
     // happy-dom 会把 label 内点击同步激活其首个可标记控件（多派发一次 内），

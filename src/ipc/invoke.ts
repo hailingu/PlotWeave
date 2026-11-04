@@ -49,6 +49,24 @@ export function setHostCommandTransportForTests(
   testTransport = transport
 }
 
+/** Tauri invoke 的惰性单例（issue #802）：动态导入按模块规范本就只评估
+ * 一次，这里把「同一次评估的 promise」也共享给并发调用——否则前一次
+ * import 尚未落定时再次发起同名动态导入，会退化成绕过 vi.mock 注册表
+ * 的原生导入（测试侧拦截失稳；生产环境无差别）。失败不缓存，允许重试。 */
+type TauriInvoke = typeof import('@tauri-apps/api/core').invoke
+let tauriInvokeLoader: Promise<TauriInvoke> | null = null
+
+function loadTauriInvoke(): Promise<TauriInvoke> {
+  tauriInvokeLoader ??= import('@tauri-apps/api/core').then(
+    (module) => module.invoke,
+    (error) => {
+      tauriInvokeLoader = null
+      throw error
+    },
+  )
+  return tauriInvokeLoader
+}
+
 /** 经共享常量执行宿主命令：Swift 走带会话身份的原生桥，其余延迟加载 Tauri。 */
 export function ipcInvoke<T = unknown>(
   cmd: IpcCommandName,
@@ -62,7 +80,7 @@ export function ipcInvoke<T = unknown>(
         throw new HostCommandUnavailableError(cmd, host)
       return invokeSwiftHost<T>(cmd, args)
     }
-    const { invoke } = await import('@tauri-apps/api/core')
+    const invoke = await loadTauriInvoke()
     return args === undefined ? invoke<T>(cmd) : invoke<T>(cmd, args)
   })()
 }

@@ -48,6 +48,7 @@ fn validate_project_asset_id(id: &str) -> Result<(), String> {
 /// 登记（文档为权威并 opportunistic 清除），map 单项 infallible 操作不会
 /// 留下结构损坏，经 `crate::lock::recover_guard` 恢复，不传播 panic。
 pub(crate) struct PendingProjectAssets {
+    pub(crate) imports: Mutex<HashMap<(String, String), super::import_discard::ImportReceipt>>,
     entries: Mutex<HashMap<(String, String), (String, String)>>,
     aliases: Mutex<HashMap<(String, String), String>>,
 }
@@ -55,6 +56,7 @@ pub(crate) struct PendingProjectAssets {
 impl PendingProjectAssets {
     pub(crate) fn new() -> Self {
         Self {
+            imports: Mutex::new(HashMap::new()),
             entries: Mutex::new(HashMap::new()),
             aliases: Mutex::new(HashMap::new()),
         }
@@ -86,7 +88,7 @@ impl PendingProjectAssets {
     }
 
     /// 取走登记项（仅文档权威命中时调用，清理已完成使命的条目）。
-    fn take(&self, project_id: &str, asset_id: &str) -> Option<(String, String)> {
+    pub(super) fn take(&self, project_id: &str, asset_id: &str) -> Option<(String, String)> {
         crate::lock::recover_guard(self.entries.lock(), "项目媒体登记表")
             .remove(&(project_id.to_string(), asset_id.to_string()))
     }
@@ -102,7 +104,9 @@ impl PendingProjectAssets {
 
     /// 清空某项目的全部登记项与别名（项目控制文件缺失/异型时调用——已删
     /// 项目的登记项/别名不得让其媒体经回退路径复活）。
-    fn drain_project(&self, project_id: &str) {
+    pub(crate) fn drain_project(&self, project_id: &str) {
+        crate::lock::recover_guard(self.imports.lock(), "导入凭据")
+            .retain(|(pid, _), _| pid != project_id);
         crate::lock::recover_guard(self.entries.lock(), "项目媒体登记表")
             .retain(|(pid, _), _| pid != project_id);
         crate::lock::recover_guard(self.aliases.lock(), "项目媒体登记表")

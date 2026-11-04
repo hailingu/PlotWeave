@@ -18,6 +18,8 @@ describe('classifyChangedPaths', () => {
   it.each([
     [['docs/quality-assessment.md', 'README.md', 'AGENTS.md'], 'docs'],
     [['src/editor/App.tsx'], 'frontend'],
+    [['public/favicon.png'], 'frontend'],
+    [['public/nested/static.svg', 'docs/guide.md'], 'frontend'],
     [['src-tauri/src/lib.rs'], 'rust'],
     [['crates/plotweave-core/src/lib.rs'], 'rust'],
     [['native/macos/App/ShellStage.swift'], 'native'],

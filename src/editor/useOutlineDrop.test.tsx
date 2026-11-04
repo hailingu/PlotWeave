@@ -17,12 +17,26 @@ import {
 import { useNodePatch } from './useNodePatch'
 import { useOutlineDrop } from './useOutlineDrop'
 import { CommandStack, type HistoryCommand } from './history'
+import { parseProject, serializeProject } from '../model/convert'
 import type {
+  BranchFlowNode,
   CanvasNode,
   ImageFlowNode,
   SceneFlowNode,
   ShotFlowNode,
 } from './nodes/types'
+
+/** 分支仅有选项 source 句柄，不能作为 sequence source。 */
+const branchNode = (id: string, episodeNo = 1): BranchFlowNode => ({
+  id,
+  type: 'branch',
+  position: { x: 500, y: 0 },
+  data: {
+    prompt: '选择？',
+    options: [{ id: 'yes', label: '继续' }],
+    episodeNo,
+  },
+})
 
 function sceneNode(
   id: string,
@@ -129,6 +143,85 @@ const dropRow = (
     position,
   })
 
+it('分支 after 落点拒绝且保存重开完整保留原图（#903）', () => {
+  const nodes = [
+    ...['p', 'x', 'n', 'a'].map((id, i) => sceneNode(id, 1, i * 100)),
+    branchNode('br'),
+  ]
+  const edges = [seq('px', 'p', 'x'), seq('xn', 'x', 'n'), seq('ab', 'a', 'br')]
+  const h = setup(nodes, edges)
+  act(() => dropRow(h, 'x', 'br', 'after'))
+  expect(h.result.current.doc.edges).toEqual(edges)
+  expect(h.result.current.doc.nodes).toEqual(nodes)
+  expect(h.pushHistory).not.toHaveBeenCalled()
+  expect(h.onError).toHaveBeenCalledTimes(1)
+  const saved = serializeProject(
+    {
+      name: '回归',
+      nodes: h.result.current.doc.nodes,
+      edges: h.result.current.doc.edges,
+      settings: { characters: [], locations: [] },
+    },
+    'p1',
+  )
+  const reopened = parseProject(JSON.parse(JSON.stringify(saved)))
+  expect(reopened.warnings).toEqual([])
+  expect(reopened.content.edges.map((e) => [e.source, e.target])).toEqual(
+    edges.map((e) => [e.source, e.target]),
+  )
+})
+
+it('分支 before 合法，分支组尾回退合法锚点（#903）', () => {
+  const nodes = [sceneNode('a', 1, 0), branchNode('br'), sceneNode('x', 2, 100)]
+  const edges = [seq('ab', 'a', 'br')]
+  for (const target of [
+    { kind: 'row', anchorId: 'br', position: 'before' },
+    { kind: 'groupEnd', episode: 1 },
+  ] as const) {
+    const h = setup(nodes, edges)
+    act(() => h.result.current.outlineDrop('x', target))
+    expect(seqPairs(h).sort()).toEqual(['a->x', 'x->br'])
+    expect(h.onError).not.toHaveBeenCalled()
+    act(() => h.stack.undo())
+    expect(h.result.current.doc.edges).toEqual(edges)
+    expect(episodeNoOf(h, 'x')).toBe(2)
+  }
+})
+
+it('拖动分支不能创建 sequence source（#903）', () => {
+  const h = setup(
+    [sceneNode('a', 1, 0), sceneNode('b', 1, 100), branchNode('br')],
+    [seq('ab', 'a', 'b')],
+  )
+  act(() => dropRow(h, 'br', 'b', 'before'))
+  expect(seqPairs(h)).toEqual(['a->b'])
+  expect(h.onError).toHaveBeenCalledTimes(1)
+  expect(h.pushHistory).not.toHaveBeenCalled()
+})
+
+it.each([[['x']], [['x', 'y']]])(
+  '全游离同组 %j 组尾静默无操作（#904）',
+  (ids) => {
+    const nodes = ids.map((id, i) => sceneNode(id, 2, i * 100))
+    const h = setup(nodes, [])
+    act(() =>
+      h.result.current.outlineDrop('x', { kind: 'groupEnd', episode: 2 }),
+    )
+    expect(h.result.current.doc.nodes).toEqual(nodes)
+    expect(h.result.current.doc.edges).toEqual([])
+    expect(h.onError).not.toHaveBeenCalled()
+    expect(h.pushHistory).not.toHaveBeenCalled()
+  },
+)
+
+it('跨集无锚点仍可见拒绝（#904）', () => {
+  const h = setup([sceneNode('x', 1, 0), sceneNode('y', 2, 100)], [])
+  act(() => h.result.current.outlineDrop('x', { kind: 'groupEnd', episode: 2 }))
+  expect(episodeNoOf(h, 'x')).toBe(1)
+  expect(h.onError).toHaveBeenCalledTimes(1)
+  expect(h.pushHistory).not.toHaveBeenCalled()
+})
+
 describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
   it('同集后移：缝合缺口重排 sequence 边，episodeNo 不动，单命令 undo/redo', () => {
     const h = setup(
@@ -172,7 +265,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
     expect(seqPairs(h)).toEqual(['s1->s2'])
     expect(h.pushHistory).not.toHaveBeenCalled()
   })
+})
 
+describe('useOutlineDrop（拒绝与历史不变量：不存在的节点 id）', () => {
   it('不存在的节点 id：不入栈不写状态', () => {
     const h = setup(
       [sceneNode('s1', 1, 0), sceneNode('s2', 1, 100)],
@@ -184,7 +279,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
     expect(h.result.current.doc.nodes.map((n) => n.id)).toEqual(['s1', 's2'])
     expect(seqPairs(h)).toEqual(['s1->s2'])
   })
+})
 
+describe('useOutlineDrop（拒绝与历史不变量：原位重放）', () => {
   it('原位重放（无可执行变化）：不入栈不写状态', () => {
     const h = setup(
       [sceneNode('s1', 1, 0), sceneNode('s2', 1, 100), sceneNode('s3', 1, 200)],
@@ -196,7 +293,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
     expect(episodeNoOf(h, 's2')).toBe(1)
     expect(h.pushHistory).not.toHaveBeenCalled()
   })
+})
 
+describe('useOutlineDrop（分叉汇合拒绝）', () => {
   it.each([
     ['分叉成员（多出边）', ['a->x', 'x->b', 'x->c'], 'x', 'a'],
     ['汇合成员（多入边）', ['p->x', 'q->x', 'x->r'], 'x', 'p'],
@@ -224,7 +323,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
       expect(seqPairs(h)).toEqual(pairs)
     },
   )
+})
 
+describe('useOutlineDrop（拒绝与历史不变量：拒绝同样覆盖组尾）', () => {
   it('拒绝同样覆盖组尾落点：分叉成员拖入组尾不删边、给提示', () => {
     const h = setup(
       [
@@ -243,7 +344,9 @@ describe('useOutlineDrop（§3.5 同集重排与拒绝路径）', () => {
     expect(h.pushHistory).not.toHaveBeenCalled()
     expect(h.onError).toHaveBeenCalledTimes(1)
   })
+})
 
+describe('useOutlineDrop（拒绝与历史不变量：分叉目标的下游）', () => {
   it('分叉目标的下游行不受影响：线性成员仍可正常重排', () => {
     const h = setup(
       [
@@ -326,3 +429,96 @@ describe('useOutlineDrop（§3.5 跨集与未分集移动单命令）', () => {
     expect(episodeNoOf(h, 's1')).toBe(1)
   })
 })
+
+it('中段跨集接入完整替换接缝，重复移动邻居仍可一步 undo/redo（#879）', () => {
+  const nodes = ['a', 'b', 'c', 'd', 'x'].map((id, i) =>
+    sceneNode(id, id === 'x' ? 2 : 1, i * 100),
+  )
+  const original = [
+    seq('ab', 'a', 'b'),
+    seq('bc', 'b', 'c'),
+    seq('cd', 'c', 'd'),
+  ]
+  const h = setup(nodes, original)
+  act(() => dropRow(h, 'x', 'b', 'after'))
+  const inserted = h.result.current.doc.edges
+  expect([...seqPairs(h)].sort()).toEqual(['a->b', 'b->x', 'c->d', 'x->c'])
+  expect(episodeNoOf(h, 'x')).toBe(1)
+  expect(h.pushHistory).toHaveBeenCalledTimes(1)
+  act(() => h.stack.undo())
+  expect(
+    [...h.result.current.doc.edges].sort((a, b) => a.id.localeCompare(b.id)),
+  ).toEqual(original)
+  expect(episodeNoOf(h, 'x')).toBe(2)
+  act(() => h.stack.redo())
+  expect(h.result.current.doc.edges).toEqual(inserted)
+  expect(episodeNoOf(h, 'x')).toBe(1)
+  act(() => dropRow(h, 'b', 'c', 'after'))
+  expect([...seqPairs(h)].sort()).toEqual(['a->x', 'b->d', 'c->b', 'x->c'])
+  expect(h.pushHistory).toHaveBeenCalledTimes(2)
+  expect(h.onError).not.toHaveBeenCalled()
+  act(() => h.stack.undo())
+  expect(new Set(h.result.current.doc.edges)).toEqual(new Set(inserted))
+  act(() => h.stack.redo())
+  expect([...seqPairs(h)].sort()).toEqual(['a->x', 'b->d', 'c->b', 'x->c'])
+  act(() => dropRow(h, 'c', 'a', 'before'))
+  expect([...seqPairs(h)].sort()).toEqual(['a->x', 'b->d', 'c->a', 'x->b'])
+  expect(h.onError).not.toHaveBeenCalled()
+})
+
+it.each(['before', 'after'] as const)(
+  '非剧情流行 %s 落点可见拒绝（#884，共享 web/native hook）',
+  (position) => {
+    const h = setup(
+      ['a', 'b', 'x'].map((id, i) => sceneNode(id, 1, i * 100)),
+      [seq('ab', 'a', 'b')],
+    )
+    act(() => dropRow(h, 'a', 'x', position))
+    expect(seqPairs(h)).toEqual(['a->b'])
+    expect(h.pushHistory).not.toHaveBeenCalled()
+    expect(h.onError).toHaveBeenCalledTimes(1)
+    expect(h.onError.mock.calls[0]?.[0]).toContain('未接入剧情流')
+  },
+)
+
+it.each([
+  ['after', ['a->b', 'b->c', 'b->q'], 'b'],
+  ['before', ['a->c', 'b->c', 'c->d'], 'c'],
+] as const)('多接缝 %s 锚点可见拒绝（#885）', (position, pairs, anchor) => {
+  const nodes = ['a', 'b', 'c', 'd', 'q', 'x'].map((id, i) =>
+    sceneNode(id, 1, i * 100),
+  )
+  const edges = pairs.map((p, i) => {
+    const [source, target] = p.split('->')
+    return seq(`e${i}`, source, target)
+  })
+  const h = setup(nodes, edges)
+  act(() => dropRow(h, 'x', anchor, position))
+  expect(h.result.current.doc.edges).toEqual(edges)
+  expect(h.pushHistory).not.toHaveBeenCalled()
+  expect(h.onError).toHaveBeenCalledTimes(1)
+})
+
+it.each([
+  ['after', ['p->x', 'p->q'], 'p'],
+  ['before', ['x->n', 'q->n'], 'n'],
+  ['after', ['p->x', 'x->n', 'p->q'], 'p'],
+  ['before', ['p->x', 'x->n', 'q->n'], 'n'],
+] as const)(
+  '分支邻接原位 %s 不写状态、不提示、不入栈（#894 review）',
+  (position, pairs, anchor) => {
+    const nodes = ['p', 'x', 'q', 'n'].map((id, i) => sceneNode(id, 1, i * 100))
+    const edges = pairs.map((pair, i) => {
+      const [source, target] = pair.split('->')
+      return seq(`e${i}`, source, target)
+    })
+    const h = setup(nodes, edges)
+    const beforeNodes = h.result.current.doc.nodes
+    act(() => dropRow(h, 'x', anchor, position))
+    expect(h.result.current.doc.edges).toEqual(edges)
+    expect(h.result.current.doc.nodes).toBe(beforeNodes)
+    expect(h.pushHistory).not.toHaveBeenCalled()
+    expect(h.stack.canUndo).toBe(false)
+    expect(h.onError).not.toHaveBeenCalled()
+  },
+)

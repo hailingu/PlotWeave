@@ -156,6 +156,32 @@ function listAction(
   )
 }
 
+/** Clears only the target node's allowed optional fields through ordinary patch history. */
+function clearNativeNodeField(
+  editor: EditorController,
+  args: Record<string, unknown>,
+): void {
+  const node = currentNativeNode(editor, args)
+  if (
+    (args.field === 'locationId' || args.field === 'sceneNo') &&
+    node.type === 'scene'
+  ) {
+    if (node.data[args.field] !== undefined)
+      editor.graph.patch.patchNode(node.id, {
+        nodeType: 'scene',
+        patch: { [args.field]: undefined },
+      })
+  } else if (
+    args.field === 'episodeNo' &&
+    (node.type === 'scene' ||
+      node.type === 'beat' ||
+      node.type === 'dialogue' ||
+      node.type === 'branch')
+  )
+    editor.graph.patch.patchNode(node.id, episodeNoPatch(node.type, undefined))
+  else throw new Error('不允许清除此字段。')
+}
+
 /** Clear and membership actions avoid sending nulls or arrays copied from an old projection. */
 export function nativeNodeExtra(
   editor: EditorController,
@@ -173,24 +199,7 @@ export function nativeNodeExtra(
     return true
   }
   if (command === 'editor.clearNodeField') {
-    const node = currentNativeNode(editor, args)
-    if (args.field === 'locationId' && node.type === 'scene')
-      editor.graph.patch.patchNode(node.id, {
-        nodeType: 'scene',
-        patch: { locationId: undefined },
-      })
-    else if (
-      args.field === 'episodeNo' &&
-      (node.type === 'scene' ||
-        node.type === 'beat' ||
-        node.type === 'dialogue' ||
-        node.type === 'branch')
-    )
-      editor.graph.patch.patchNode(
-        node.id,
-        episodeNoPatch(node.type, undefined),
-      )
-    else throw new Error('不允许清除此字段。')
+    clearNativeNodeField(editor, args)
     return true
   }
   if (command === 'editor.toggleCharacter') {

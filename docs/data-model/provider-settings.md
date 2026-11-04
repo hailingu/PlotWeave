@@ -14,6 +14,19 @@
 
 **字段回改缺陷的修复**（[issue #527](https://github.com/hailingu/PlotWeave/issues/527)、[PR #526 R39](../swiftui-react-flow-pr526-fixes.md#服务文字回改缺陷的后续修复r39)→修复记录）：`39089f7`（R34）引入的值比较保护未覆盖 A→B→A 回改时序，已于 2026-10-14 按上述编辑身份设计修复。最小真实名称／地址 A→B→A 旧投影回归在生产 WK owner 与隔离 Swift `settings.json` 上先红（4 处：字段被旧 B 投影覆盖、磁盘保存非预期文字）后绿；规范化模型列表回改、同值合并确认、三字段交叉与非法元数据拒绝在 Web 与原生边界均有语义回归。磁盘 schema 与密钥生命周期不变；真实中文 IME／VoiceOver 仍属 P5 人工缺口。
 
+**Web 密钥回执的意图归属**（[#850](https://github.com/hailingu/PlotWeave/issues/850)）：Web/Tauri 设置页按 provider 记录密钥提交序号；后续保存或清除立即使旧回执失效，过期成功和失败都不修改设置、草稿或错误。有效回执只将目标 `keyEnc` 合入同步维护的当前设置，不采用加密调用时的完整快照；同批完成的不同 provider 各自保留密文。成功只清空本次提交对应的草稿，提交后继续录入的草稿保留。加密及状态合并仍整体登记到既有 saver，在关闭／退出前等待，并经原串行保存链落盘；原生设置页继续沿用独立的 revision／load generation 防护，envelope 与 `settings.json` 协议不变。
+
+| 前置状态 | 动作／时序 | 预期可观察结果 | 不变量及所有者／入口 | 验证 |
+| --- | --- | --- | --- | --- |
+| 已有凭据，加密在途 | 保存 → 清除 → 旧成功／失败 → 关闭 | 页面未配置，保存结果不含已清除密钥，无旧错误阻断关闭 | Web key 表单：清除失效此前同 provider 的全部密钥意图 | `SettingsView.keyRace.test.tsx`：clear success/failure |
+| 加密在途 | 修改本条／其他 provider、两个默认模型 → 回执 | 新密文与新地址、模型、启用状态、默认模型共同保留 | key 表单仅拥有目标 `keyEnc`，其他字段由当前设置持有 | concurrent edits |
+| 同 provider 两次保存 | 第二次先成功 → 第一次成功／失败 | 第二次密文、后续草稿保留，无旧错误 | 序号按提交而非完成顺序递增，保存按钮与 Enter 共用 | superseded success/failure |
+| 不同 provider 均在途 | 两个回执在同一 React 批次完成 | 两条新密文均落盘 | 同步合并快照，序号按 provider 隔离 | independent provider completions |
+| 最新提交失败 | 更旧成功迟到 → 新提交重试 | 旧密文不复活，最新错误仍可见，重试成功后消除 | 失败不恢复过期意图，当前失败仍沿原错误出口反馈 | latest failure/retry |
+| 保存后继续录入 | 关闭 → 有效回执 → 冲刷 | 后续草稿不被消费，新密文落盘后才关闭 | saver 继续拥有固定点关闭冲刷，key 表单只消费提交时草稿 | later draft/close |
+
+上述回归运行真实 Web 页面、settingsStore、typed IPC 与 saver，只在宿主传输边界控制加密延迟、模拟 JSON 持久化；未在真实 Tauri 桌面注入慢加密，不据此宣称重新验证密码学或磁盘原子写。原生现有回归同时保留。
+
 BYOK 下 provider 分两层：**内置适配器在代码里，用户配置（含加密后的 API key）在 `settings.json`**。
 
 代码层（不进配置文件的静态定义）：

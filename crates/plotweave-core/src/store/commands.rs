@@ -17,7 +17,7 @@ use crate::store::persist::{
 use crate::store::types::{
     new_id, new_project_file, sanitize_name, validate_id, ProjectFile, ProjectMeta,
 };
-use crate::store::validate::{prepare_save, verify_save_asset_files};
+use crate::store::validate::{prepare_save, recheck_save_asset_files, verify_save_asset_files};
 /// create_project 的可测内核：名称清洗 → 本地 id 复核 → 新建空信封 →
 /// 原子落盘（与 persist_project 同款：词法校验先于任何文件名拼接——
 /// id 虽为本地生成，仍以同一口径复核后才参与路径构造）。
@@ -235,7 +235,8 @@ pub fn persist_project_expect_existing(
         }
     }
     // 句柄持有至函数结束——复验过的实体覆盖整个保存决策
-    let _verified_assets = verify_save_asset_files(root, id, &doc.assets)?;
+    let _verified_assets = verify_save_asset_files(root, id, &doc.assets)
+        .map_err(|e| e.prefixed("保存前资产复验失败（文档未提交）"))?;
     let file = prepare_save(id, &doc)?;
     let text =
         serde_json::to_string_pretty(&file).map_err(|e| StoreError::serialize("序列化失败", e))?;
@@ -245,9 +246,9 @@ pub fn persist_project_expect_existing(
         &format!("项目文件 {id}"),
     )?;
     atomic_write(root, &format!("{id}.json"), &text)?;
-    if let Err(e) = verify_save_asset_files(root, id, &doc.assets) {
-        log::error!(target: "plotweave::store", "保存后资产复验失败，路径可能在保存期间被替换：{e}");
-        return Err(e.prefixed("保存后资产复验失败（路径可能在保存期间被替换）"));
+    if let Err(e) = recheck_save_asset_files(root, id, &doc.assets) {
+        log::error!(target: "plotweave::store", "保存后资产复验失败（文档已提交）：{e}");
+        return Err(e.prefixed("保存后资产复验失败（文档已提交）"));
     }
     Ok(read_meta(id, &file))
 }
@@ -362,3 +363,6 @@ pub fn delete_project_files(root: &CapDir, id: &str) -> Result<(), StoreError> {
 mod limit_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod asset_fd_tests;

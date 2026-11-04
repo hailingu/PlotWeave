@@ -50,4 +50,17 @@
 
 ## SwiftUI 分支导入 dev（2026-10-04）
 
-本地 `dev` 合并进 `codex/swiftui-react-flow` 时保留现行数据模型主题拆分与旧章节兼容入口，原生迁移职责同步到[总体分层](data-model/overview.md#二总体分层)、[持久化](data-model/persistence.md#十本地存储体系)和[UI §12](ui-design.md#十二macos-原生界面与服务已实现验收边界保留)。实现归属、FFI 保存存在性、IPC 收敛与门禁范围见[P2 合并同步](swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)，原生启动及路由验证见[开发工作流](development/workflow.md#原生应用启动与验证)。本次是既有阶段与 `dev` 的兼容性同步，P2 后续业务链路和原生视觉验收仍待续。
+本地 `dev` 合并进 `codex/swiftui-react-flow` 时保留现行数据模型主题拆分与旧章节兼容入口，原生迁移职责同步到[总体分层](data-model/overview.md#二总体分层)、[持久化](data-model/persistence.md#十本地存储体系)和[UI §12](ui-design.md#十二macos-原生界面与服务已实现验收边界保留)。实现归属、FFI 保存存在性、IPC 收敛与门禁范围见[P2 合并同步](swiftui-react-flow-p2-evidence.md#dev-合并兼容性同步2026-10-04)，原生启动及路由验证见[开发工作流](development/workflow.md#native-application-launch-and-verification)。本次是既有阶段与 `dev` 的兼容性同步，P2 后续业务链路和原生视觉验收仍待续。
+
+
+## 归一化最终类型边界（2026-11-02，#946）
+
+在既有逐项修复之后、会话构造之前增加完整的节点／边领域形状校验，并以映射类型连接类型演进与校验表。保留候选阶段修复编排和 schemaVersion／IPC，不提前拒绝可修复输入；无效可选时间戳按字段剥离并警告，最终程序失配给出稳定拒绝诊断。对白的 nullable speaker 注解对齐既有加载行为。合同及限制见[归一化](data-model/normalization.md#最终领域形状边界946)与[验证记录](testing/issue-946-normalization.md)。
+## 现行产品与规格状态澄清（2026-11-02）
+
+本次追加记录保留上方各历史快照的时点含义。当前实现与规划的区分沿用既有合入记录；本轮文档修正由关联任务 PR 审阅，不补作整体设计批准。
+
+| Issue | 正文影响 | 现行依据与本次范围 |
+| --- | --- | --- |
+| [#945](https://github.com/hailingu/PlotWeave/issues/945) | `AGENTS.md` 引言 | 与 README、开发工作流及 v0.3.0 源码说明对齐：原生实现已由 [PR #526](https://github.com/hailingu/PlotWeave/pull/526) 合入，Tauri/Rust 是保留基线；工程门禁和职责不变。 |
+| [#949](https://github.com/hailingu/PlotWeave/issues/949) | [UI 规格状态与依据](ui-design.md#规格状态与依据) | [PR #288](https://github.com/hailingu/PlotWeave/pull/288) 的令牌契约及后续已合入条目构成现行定稿约束；已实现功能、规划、验收缺口与明确不支持的能力分别标记。本次只澄清状态，不新增 UI 行为或验收结论。 |

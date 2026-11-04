@@ -9,6 +9,133 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeAiDraftTests {
+    /// A free-standing same-font glyph reference can reveal clipping shared by both editor lines.
+    @Test(arguments: ["创建", "连线", "创建，连线"], [0.0, 1.0, 2.0])
+    func firstLineCjkMatchesUnconstrainedGlyphs(text: String, rasterScale: Double) async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        fixture.window.appearance = NSAppearance(named: .aqua)
+        let editor = try await fixture.editor()
+        fixture.enter(text, in: editor)
+        try await fixture.focusEditor(editor)
+        editor.setSelectedRange(NSRange(location: text.utf16.count, length: 0))
+        fixture.window.makeFirstResponder(nil)
+        fixture.window.contentView?.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let hosting = try #require(fixture.window.contentView)
+        let capture = rasterScale == 0 ? "native" : "\(Int(rasterScale))x"
+        let requestedScale = rasterScale == 0 ? nil : CGFloat(rasterScale)
+        let actual = try NativePresentationEvidenceFixture.bitmap(of: hosting, scale: requestedScale)
+        let scale = CGFloat(actual.pixelsWide) / hosting.bounds.width
+        let reference = try unconstrainedGlyphs(text, attributes: editor.typingAttributes, scale: scale)
+        var range = NSRange()
+        let screen = editor.firstRect(forCharacterRange: NSRange(location: 0, length: text.utf16.count), actualRange: &range)
+        try #require(range.length == text.utf16.count)
+        let frame = hosting.convert(fixture.window.convertFromScreen(screen), from: nil).insetBy(dx: 0, dy: -8)
+        let top = hosting.isFlipped ? frame.minY : hosting.bounds.maxY - frame.maxY
+        let actualInk = glyphInk(actual, rect: NSRect(x: frame.minX * scale, y: top * scale, width: frame.width * scale, height: frame.height * scale))
+        let referenceInk = glyphInk(reference, rect: NSRect(x: 0, y: 0, width: reference.pixelsWide, height: reference.pixelsHigh))
+        print("[cjk-independent] text=\(text) capture=\(capture) scale=\(scale) font=\(String(describing: editor.font)) actual=\(actualInk) reference=\(referenceInk)")
+        try #require(referenceInk.count > 10, "独立对照必须真正画出中文笔画")
+        #expect(actualInk.height >= referenceInk.height - 1, "字形总高度不能被编辑器裁短")
+        #expect(actualInk.width >= referenceInk.width - 1, "字形横向边界不能被编辑器裁短")
+        #expect(actualInk.weight >= referenceInk.weight * 0.90, "连续墨迹对照应保留笔画，避免二值化丢掉抗锯齿覆盖率")
+        try NativePresentationEvidenceFixture.record(try #require(actual.representation(using: .png, properties: [:])), named: "cjk-independent-actual-\(capture)-\(text).png")
+        try NativePresentationEvidenceFixture.record(try #require(reference.representation(using: .png, properties: [:])), named: "cjk-independent-reference-\(capture)-\(text).png")
+        let cover = try coverTopStrokes(editor, screenRect: screen, in: fixture.window)
+        defer { cover.removeFromSuperview() }
+        try await Task.sleep(for: .milliseconds(40))
+        let occluded = try NativePresentationEvidenceFixture.bitmap(of: hosting, scale: requestedScale)
+        let clippedInk = glyphInk(occluded, rect: NSRect(x: frame.minX * scale, y: top * scale,
+                                                       width: frame.width * scale, height: frame.height * scale))
+        #expect(editor.string == text, "遮挡不能修改草稿")
+        print("[cjk-occlusion] text=\(text) capture=\(capture) scale=\(scale) actual=\(clippedInk) reference=\(referenceInk)")
+        #expect(clippedInk.count > 0, "部分遮挡应保留下部笔画，而非把编辑器整体移除")
+        #expect(clippedInk.height < referenceInk.height - 1, "真实覆盖上部笔画必须使可见高度检查失败")
+        #expect(clippedInk.weight < referenceInk.weight * 0.90, "遮挡也必须使连续墨迹检查失败")
+        try NativePresentationEvidenceFixture.record(try #require(occluded.representation(using: .png, properties: [:])), named: "cjk-occlusion-\(capture)-\(text).png")
+    }
+
+    /// A test-owned sibling in the public clip view obscures top strokes without changing text or layout.
+    private func coverTopStrokes(_ editor: NSTextView, screenRect: NSRect, in window: NSWindow) throws -> NSView {
+        let clip = try #require(editor.enclosingScrollView?.contentView)
+        let document = try #require(clip.documentView)
+        let rect = clip.convert(window.convertFromScreen(screenRect), from: nil)
+        let height = rect.height * 0.60
+        let y = clip.isFlipped ? rect.minY : rect.maxY - height
+        let cover = GlyphOcclusion(frame: NSRect(x: rect.minX, y: y, width: rect.width, height: height))
+        clip.addSubview(cover, positioned: .above, relativeTo: nil)
+        try #require(clip.documentView === document, "遮挡不能替换文档视图")
+        print("[cjk-cover] glyph=\(screenRect) clipBounds=\(clip.bounds) localGlyph=\(rect) cover=\(cover.frame)")
+        return cover
+    }
+
+    /// Opaque painting makes the occlusion visible in both native and controlled-scale view caches.
+    @MainActor private final class GlyphOcclusion: NSView {
+        /// Only the owned glyph region is covered; no desktop or other application is involved.
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor.white.setFill()
+            NSBezierPath(rect: bounds).fill()
+        }
+    }
+
+    /// Independent drawing uses the actual display scale and ample point-space around every glyph.
+    private func unconstrainedGlyphs(_ text: String, attributes: [NSAttributedString.Key: Any], scale: CGFloat) throws -> NSBitmapImageRep {
+        let width = Int(ceil(256 * scale))
+        let height = Int(ceil(64 * scale))
+        let bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                                                  bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                                  isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = context
+        NSColor.white.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: height)).fill()
+        let transform = NSAffineTransform()
+        transform.scale(by: scale)
+        transform.concat()
+        var resolved = attributes
+        resolved[.foregroundColor] = NSColor.black
+        NSAttributedString(string: text, attributes: resolved).draw(at: NSPoint(x: 20, y: 20))
+        return bitmap
+    }
+
+    /// Visible pixel bounds and integrated contrast separate glyph geometry from anti-aliasing darkness.
+    private func glyphInk(_ bitmap: NSBitmapImageRep, rect: NSRect) -> (height: Int, width: Int, count: Int, weight: Double) {
+        let left = max(0, Int(floor(rect.minX)))
+        let right = min(bitmap.pixelsWide, Int(ceil(rect.maxX)))
+        let top = max(0, Int(floor(rect.minY)))
+        let bottom = min(bitmap.pixelsHigh, Int(ceil(rect.maxY)))
+        guard left < right, top < bottom else { return (0, 0, 0, 0) }
+        var samples: [(column: Int, row: Int, luminance: Double)] = []
+        for y in top..<bottom {
+            for x in left..<right {
+                if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.alphaComponent > 0.5 {
+                    samples.append((x, y, (color.redComponent + color.greenComponent + color.blueComponent) / 3))
+                }
+            }
+        }
+        let background = max(samples.map(\.luminance).max() ?? 1, Double.leastNormalMagnitude)
+        var first = bottom
+        var last = top
+        var firstColumn = right
+        var lastColumn = left
+        var count = 0
+        var weight = 0.0
+        for sample in samples {
+            weight += max(0, background - sample.luminance) / background
+            if sample.luminance < 0.5 {
+                first = min(first, sample.row)
+                last = max(last, sample.row)
+                firstColumn = min(firstColumn, sample.column)
+                lastColumn = max(lastColumn, sample.column)
+                count += 1
+            }
+        }
+        return (count > 0 ? last - first + 1 : 0, count > 0 ? lastColumn - firstColumn + 1 : 0, count, weight)
+    }
+
     /// A missing page has no Web user message, so its rejected send must leave the native draft intact.
     @Test func rejectedSendPreservesDraftAndAllowsRetry() async throws {
         let fixture = try Fixture()
@@ -74,6 +201,192 @@ struct NativeAiDraftTests {
         #expect(try await page.webView.evaluateJavaScript("window.sent") as? [String] == ["合成失败重试稿", "合成失败重试稿"])
     }
 
+    /// Plain Return submits the focused composer through the same ai.send path as the send button (issue #744).
+    @Test func plainReturnSendsThroughComposerPath() async throws {
+        let fixture = try Fixture(bridge: true)
+        defer { fixture.remove() }
+        let page = try #require(fixture.page)
+        try await page.waitUntilReady()
+        let editor = try await fixture.editor()
+        fixture.enter("回车发送稿", in: editor)
+        try await fixture.focusEditor(editor)
+        fixture.postReturnKey(to: editor)
+        try await page.waitForSend(count: 1)
+        #expect(editor.string == "回车发送稿")
+        try await page.completeSend()
+        try await fixture.wait { editor.string.isEmpty }
+        #expect(try await page.webView.evaluateJavaScript("window.sent") as? [String] == ["回车发送稿"])
+    }
+
+    /// Shift+Return keeps AppKit's newline editing and never dispatches a send (issue #744).
+    @Test func shiftReturnInsertsNewlineWithoutSending() async throws {
+        let fixture = try Fixture(bridge: true)
+        defer { fixture.remove() }
+        let page = try #require(fixture.page)
+        try await page.waitUntilReady()
+        let editor = try await fixture.editor()
+        fixture.enter("换行第一行", in: editor)
+        try await fixture.focusEditor(editor)
+        fixture.postReturnKey(to: editor, shift: true)
+        try await fixture.wait { editor.string.contains("\n") }
+        #expect(editor.string.hasPrefix("换行第一行"))
+        #expect(try await page.webView.evaluateJavaScript("window.sent.length") as? Int == 0)
+    }
+
+    /// Return during an input-method composition belongs to the candidate confirmation, never to sending.
+    @Test func returnDuringCompositionConfirmsCandidatesWithoutSending() async throws {
+        let fixture = try Fixture(bridge: true)
+        defer { fixture.remove() }
+        let page = try #require(fixture.page)
+        try await page.waitUntilReady()
+        let editor = try await fixture.editor()
+        fixture.enter("", in: editor)
+        try await fixture.focusEditor(editor)
+        editor.setMarkedText("pinyin", selectedRange: NSRange(location: 6, length: 0),
+                             replacementRange: NSRange(location: 0, length: 0))
+        try await fixture.wait { editor.hasMarkedText() }
+        fixture.postReturnKey(to: editor)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try await page.webView.evaluateJavaScript("window.sent.length") as? Int == 0)
+    }
+
+    /// The Web owner publishing the accepted user entry clears the draft before the round completes (issue #744).
+    @Test func admittedUserEntryClearsDraftAndAllowsNextDraft() async throws {
+        let fixture = try Fixture(bridge: true)
+        defer { fixture.remove() }
+        let page = try #require(fixture.page)
+        try await page.waitUntilReady()
+        let editor = try await fixture.editor()
+        fixture.enter("接受即清空稿", in: editor)
+        _ = AXUIElementPerformAction(try await fixture.sendButton(), kAXPressAction as CFString)
+        try await page.waitForSend(count: 1)
+        #expect(editor.string == "接受即清空稿")
+        // 真实 Web 端在派发时同步入列用户消息并置 busy；投影到达即应清空草稿。
+        try fixture.publishAI(busy: true, thread: [["id": 11, "kind": "msg", "role": "user", "text": "接受即清空稿"]])
+        try await fixture.wait { editor.string.isEmpty }
+        // 回合结束投影复位 busy；随后撰写的新草稿立即可发送，且迟到回执不清除它。
+        try fixture.publishAI(busy: false, thread: [
+            ["id": 11, "kind": "msg", "role": "user", "text": "接受即清空稿"],
+            ["id": 12, "kind": "msg", "role": "assistant", "text": "回合结束"],
+        ])
+        try await fixture.wait { fixture.state.ai["busy"]?.bool == false }
+        fixture.enter("回合后新草稿", in: try await fixture.editor())
+        _ = try await fixture.sendButton(enabled: true)
+        try await page.completeSend()
+        try await Task.sleep(for: .milliseconds(200))
+        let finalEditor = try await fixture.editor()
+        #expect(finalEditor.string == "回合后新草稿")
+    }
+
+    /// A busy round blocks sending but must not block composing the next message (issue #744):
+    /// the composer still accepts focus and keeps its editing capability during the round.
+    /// Boundary: assistive focus does not traverse SwiftUI's disabled hit-testing, so this
+    /// guards the retained editing capability, while the real click-to-compose path stays
+    /// with the documented on-device verification gap.
+    @Test func composerRemainsEditableWhileRoundIsBusy() async throws {
+        let fixture = try Fixture(bridge: true)
+        defer { fixture.remove() }
+        let page = try #require(fixture.page)
+        try await page.waitUntilReady()
+        let editor = try await fixture.editor()
+        fixture.enter("忙碌可写稿", in: editor)
+        _ = AXUIElementPerformAction(try await fixture.sendButton(), kAXPressAction as CFString)
+        try await page.waitForSend(count: 1)
+        try fixture.publishAI(busy: true, thread: [["id": 21, "kind": "msg", "role": "user", "text": "忙碌可写稿"]])
+        try await fixture.wait { fixture.state.ai["busy"]?.bool == true }
+        let area = try await fixture.textArea()
+        let focusError = AXUIElementSetAttributeValue(area, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        #expect(focusError == .success)
+        let busyEditor = try await fixture.editor()
+        try await fixture.wait { fixture.window.firstResponder === busyEditor }
+        #expect(busyEditor.isEditable)
+        #expect(busyEditor.isSelectable)
+    }
+
+    /// The first text line stays fully visible with positive top breathing room inside the composer (issue #744).
+    @Test func firstLineStaysFullyVisibleBelowComposerTopEdge() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let editor = try await fixture.editor()
+        fixture.enter("首行可见性检查\n第二行内容", in: editor)
+        try await fixture.wait { Self.firstLineTopInset(editor) >= 3 }
+        #expect(Self.firstLineFrame(editor, in: fixture.window).maxY <= editor.visibleRect.maxY + 1)
+    }
+
+    /// Actual rasterized top strokes must match the same unobstructed glyphs on the second line (#744).
+    /// This owned component window does not claim independent product, physical-focus or real-IME acceptance.
+    @Test(arguments: ["创建", "连线", "创建，连线"])
+    func firstLineCjkInkMatchesUnclippedSecondLine(text: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        fixture.window.appearance = NSAppearance(named: .aqua)
+        let editor = try await fixture.editor()
+        for width: CGFloat in [600, 300] {
+            fixture.window.setContentSize(NSSize(width: width, height: 620))
+            for busy in [false, true] {
+                try fixture.publishAI(busy: busy, thread: [["id": 1, "kind": "msg", "role": "user", "text": text]])
+                for focused in [false, true] {
+                    fixture.enter(text + "\n" + text + "\n", in: editor)
+                    editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+                    if focused { try await fixture.focusEditor(editor) }
+                    else { fixture.window.makeFirstResponder(nil) }
+                    fixture.window.contentView?.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(40))
+                    let first = try upperInk(editor, location: 0, length: text.utf16.count)
+                    let second = try upperInk(editor, location: text.utf16.count + 1, length: text.utf16.count)
+                    print("[cjk-ink] text=\(text) width=\(width) busy=\(busy) focused=\(focused) first=\(first) reference=\(second) scale=\(fixture.window.backingScaleFactor)")
+                    #expect(second > 10, "对照行必须真实绘出上部笔画")
+                    #expect(Double(first) >= Double(second) * 0.90,
+                            "首行上部笔画不应被裁切：first=\(first), reference=\(second), width=\(width), busy=\(busy), focused=\(focused)")
+                    try NativePresentationEvidenceFixture.record(try #require(fixture.window.contentView), name: "cjk-\(text)-\(Int(width))-busy\(busy)-focus\(focused)")
+                    for (kind, value) in [("single", text), ("long", String(repeating: text + "。", count: 80))] {
+                        fixture.enter(value, in: editor)
+                        editor.setSelectedRange(NSRange(location: value.utf16.count, length: 0))
+                        if kind == "long" { editor.scrollRangeToVisible(NSRange(location: 0, length: text.utf16.count)) }
+                        fixture.window.contentView?.layoutSubtreeIfNeeded()
+                        try await Task.sleep(for: .milliseconds(40))
+                        let ink = try upperInk(editor, location: 0, length: text.utf16.count)
+                        print("[cjk-ink] kind=\(kind) text=\(text) width=\(width) busy=\(busy) focused=\(focused) first=\(ink) reference=\(second)")
+                        #expect(Double(ink) >= Double(second) * 0.90, "单行与长文本首行的实际笔画应完整可见")
+                        try NativePresentationEvidenceFixture.record(try #require(fixture.window.contentView), name: "cjk-\(kind)-\(text)-\(Int(width))-busy\(busy)-focus\(focused)")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sampling the actual view cache checks visible ink, independent of declared insets or TextKit's layout engine.
+    private func upperInk(_ editor: NSTextView, location: Int, length: Int) throws -> Int {
+        let window = try #require(editor.window)
+        let hosting = try #require(window.contentView)
+        var actual = NSRange()
+        let screenRect = editor.firstRect(forCharacterRange: NSRange(location: location, length: length), actualRange: &actual)
+        let frame = hosting.convert(window.convertFromScreen(screenRect), from: nil)
+        let bitmap = try NativePresentationEvidenceFixture.bitmap(of: hosting)
+        let scaleX = CGFloat(bitmap.pixelsWide) / hosting.bounds.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / hosting.bounds.height
+        let top = hosting.isFlipped ? frame.minY : hosting.bounds.maxY - frame.maxY
+        let minX = max(0, Int((frame.minX * scaleX).rounded()))
+        let maxX = min(bitmap.pixelsWide, Int((frame.maxX * scaleX).rounded()))
+        let minY = max(0, Int((top * scaleY).rounded()))
+        let maxY = min(bitmap.pixelsHigh, minY + Int((frame.height * scaleY * 0.45).rounded()))
+        try #require(minX < maxX && minY < maxY)
+        return glyphInk(bitmap, rect: NSRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)).count
+    }
+
+    /// The first character's on-screen frame converted into the editor's coordinate space.
+    private static func firstLineFrame(_ editor: NSTextView, in window: NSWindow) -> NSRect {
+        var actual = NSRange()
+        let screenRect = editor.firstRect(forCharacterRange: NSRange(location: 0, length: 1), actualRange: &actual)
+        return editor.convert(window.convertFromScreen(screenRect), from: nil)
+    }
+
+    /// Positive top inset proves the first line sits below the composer's visible top edge.
+    private static func firstLineTopInset(_ editor: NSTextView) -> CGFloat {
+        guard let window = editor.window else { return -1 }
+        return firstLineFrame(editor, in: window).minY - editor.visibleRect.minY
+    }
+
     /// Read-only synthetic projections never connect this composer to a model service or user data root.
     @MainActor private final class Fixture {
         /// The real action boundary rejects because this initial fixture has no coordinator.
@@ -86,26 +399,79 @@ struct NativeAiDraftTests {
         /// A ready synthetic AI projection enables normal controls without granting service authority.
         init(bridge: Bool = false) throws {
             page = bridge ? try ReplyPage(application: state) : nil
-            let session = page?.coordinator.sessionId ?? "ai-draft"
+            session = page?.coordinator.sessionId ?? "ai-draft"
             state.beginSession(session)
-            try state.receiveProjection([
-                "protocolVersion": 1, "sessionId": session, "sequence": 1,
-                "projection": [
-                    "app": ["route": "editor", "project": ["id": "fixture", "name": "合成剧本"]],
-                    "ai": ["projectId": "fixture", "ready": true, "busy": false, "thread": []]
-                ]
-            ])
             window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 620),
                               styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.level = .floating
+            try publishAI(busy: false, thread: [])
             mount()
             window.orderFrontRegardless()
         }
 
+        /// Projection envelopes are session-bound and monotonically sequenced like the real stream.
+        private let session: String
+        /// Local sequence authority keeps synthetic envelopes ahead of the initial projection.
+        private var sequence: Double = 0
+
+        /// Publishes the next synthetic AI-domain projection, repeating the app domain like the Web owner.
+        func publishAI(busy: Bool, thread: [[String: Any]]) throws {
+            sequence += 1
+            try state.receiveProjection([
+                "protocolVersion": 1, "sessionId": session, "sequence": sequence,
+                "projection": [
+                    "app": ["route": "editor", "project": ["id": "fixture", "name": "合成剧本"]],
+                    "ai": ["projectId": "fixture", "ready": true, "busy": busy, "thread": thread]
+                ]
+            ])
+        }
+
+        /// Focuses the composer the way an assistive interaction would, so SwiftUI's own focus
+        /// routing engages before the direct first-responder fallback.
+        func focusEditor(_ editor: NSTextView) async throws {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            let area = try await textArea()
+            AXUIElementSetAttributeValue(area, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            if window.firstResponder !== editor {
+                guard window.makeFirstResponder(editor) else {
+                    throw HostFailure(code: "PW_TEST_COMPOSER_FOCUS", message: "合成窗口无法聚焦输入框")
+                }
+            }
+        }
+
+        /// Delivers a real Return keyDown through the application event queue; a handler-consumed
+        /// press never returns from dequeue, and a press the handlers ignore falls back to the
+        /// focused editor's AppKit default because this runner provides no key window.
+        func postReturnKey(to editor: NSTextView, shift: Bool = false) {
+            let event = CGEvent(keyboardEventSource: CGEventSource(stateID: .combinedSessionState),
+                                virtualKey: 0x24, keyDown: true)
+            var characters: [UniChar] = Array("\r".utf16)
+            event?.keyboardSetUnicodeString(stringLength: characters.count, unicodeString: &characters)
+            event?.flags = shift ? .maskShift : []
+            guard let cgEvent = event, let keyDown = NSEvent(cgEvent: cgEvent) else { return }
+            NSApp.postEvent(keyDown, atStart: false)
+            while let next = NSApp.nextEvent(matching: .any, until: nil, inMode: .default, dequeue: true) {
+                if next === keyDown { editor.keyDown(with: next) } else { NSApp.sendEvent(next) }
+            }
+        }
+
+        /// The composer's accessibility text area exposes SwiftUI's effective enabled state.
+        func textArea() async throws -> AXUIElement {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            repeat {
+                let elements = try await NativeCreationControlFixture.elements(in: window)
+                if let area = elements.first(where: {
+                    NativeCreationControlFixture.string($0, kAXRoleAttribute) == kAXTextAreaRole
+                }) { return area }
+            } while ContinuousClock.now < deadline
+            throw HostFailure(code: "PW_TEST_COMPOSER_TEXTAREA_TIMEOUT", message: "合成窗口未找到输入框无障碍元素")
+        }
+
         /// Mounts the actual composer under the same fixed pane constraints used by this disposable window.
         func mount() {
-            window.contentView = NSHostingView(rootView: NativeAiView(state: state, projectId: "fixture").frame(width: 600, height: 620))
+            window.contentView = NSHostingView(rootView: NativeAiView(state: state, projectId: "fixture").frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .windowBackgroundColor)))
             window.contentView?.layoutSubtreeIfNeeded()
         }
 

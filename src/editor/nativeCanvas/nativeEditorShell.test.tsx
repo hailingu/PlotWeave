@@ -47,6 +47,61 @@ const PROJECT: EditorProjectContent = {
 }
 let requestNo = 0
 
+it('native outlineMove 拒绝分支 after 并保持保存载荷（#903）', async () => {
+  const project: EditorProjectContent = {
+    ...PROJECT,
+    nodes: [
+      ...['p', 'x', 'n', 'a'].map((id) => ({ ...SCENE, id })),
+      {
+        id: 'br',
+        type: 'branch',
+        position: { x: 500, y: 0 },
+        data: { prompt: '选择？', options: [] },
+      },
+    ],
+    edges: [
+      ['p', 'x'],
+      ['x', 'n'],
+      ['a', 'br'],
+    ].map(([source, target], i) => ({
+      id: `e${i}`,
+      source,
+      target,
+      className: 'pw-edge-sequence',
+    })),
+  }
+  const view = nativeEditorFixture(project)
+  const before = await exportedDocument()
+  await act(async () => {
+    await intent('editor.outlineMove', {
+      id: 'x',
+      target: { kind: 'row', anchorId: 'br', position: 'after' },
+    })
+  })
+  expect((await exportedDocument()).graph).toEqual(before.graph)
+  expect(view.getByRole('alert').textContent).toContain('大纲拖拽未执行')
+  await act(async () => {
+    await intent('editor.undo')
+  })
+  expect((await exportedDocument()).graph).toEqual(before.graph)
+})
+
+it('native outlineMove 同组全游离组尾静默无操作（#904）', async () => {
+  const view = nativeEditorFixture({
+    ...PROJECT,
+    nodes: [{ ...SCENE, data: { ...SCENE.data, episodeNo: 2 } }],
+  })
+  const before = await exportedDocument()
+  await act(async () => {
+    await intent('editor.outlineMove', {
+      id: SCENE.id,
+      target: { kind: 'groupEnd', episode: 2 },
+    })
+  })
+  expect((await exportedDocument()).graph).toEqual(before.graph)
+  expect(view.queryByRole('alert')).toBeNull()
+})
+
 /** Explicit project targeting prevents old native panels from editing a newer project. */
 function intent(command: string, args: Record<string, unknown> = {}) {
   return host.__pwNativeIntent?.({
@@ -561,6 +616,7 @@ it('native library binding and undo keep project index and shot references toget
 
 it('late native library completion cannot bind a deleted target', async () => {
   const asset = libraryAssetFixture()
+  const discard = vi.spyOn(projectAssets, 'discardImport').mockResolvedValue()
   let complete!: (value: typeof asset) => void
   vi.spyOn(projectAssets, 'importFromLibrary').mockImplementation(
     () =>
@@ -595,6 +651,11 @@ it('late native library completion cannot bind a deleted target', async () => {
   const document = await exportedDocument()
   expect(document.assets.byId.asset).toBeUndefined()
   expect(document.graph.nodes).toEqual([])
+  expect(discard).toHaveBeenCalledWith(
+    'native-project',
+    asset.id,
+    expect.any(Error),
+  )
 })
 
 it('native optional fields clear through the existing serialization contract', async () => {
@@ -1494,5 +1555,93 @@ it('invalid native command arguments reject without changing the document or his
     })
     expect(await exportedDocument(), command).toEqual(before)
     expect(view.editorProjection().canUndo, command).toBe(false)
+  }
+})
+
+it('sceneNo clears independently, keeps content and topology, and has field-specific history (#933)', async () => {
+  nativeEditorFixture({
+    ...PROJECT,
+    nodes: [
+      { ...SCENE, data: { ...SCENE.data, sceneNo: 7, episodeNo: 2 } },
+      { ...SCENE, id: 'other' },
+    ],
+    edges: [
+      {
+        id: 'edge',
+        source: SCENE.id,
+        target: 'other',
+        className: 'pw-edge-sequence',
+      },
+    ],
+  })
+  const before = await exportedDocument()
+  await act(async () => {
+    expect(
+      await intent('editor.clearNodeField', { id: SCENE.id, field: 'sceneNo' }),
+    ).toEqual({ ok: null })
+  })
+  const cleared = await exportedDocument()
+  expect(cleared.graph.nodes[0].data.spec.sceneNo).toBeUndefined()
+  expect(cleared.graph.nodes[0].data.meta.episodeNo).toBe(2)
+  const expected = structuredClone(before)
+  delete expected.graph.nodes[0].data.spec.sceneNo
+  expect(cleared).toEqual(expected)
+  await act(async () => {
+    await intent('editor.clearNodeField', { id: SCENE.id, field: 'episodeNo' })
+  })
+  expect(
+    (await exportedDocument()).graph.nodes[0].data.meta.episodeNo,
+  ).toBeUndefined()
+  await act(async () => {
+    await intent('editor.undo')
+  })
+  expect(await exportedDocument()).toEqual(cleared)
+  await act(async () => {
+    await intent('editor.undo')
+  })
+  expect(await exportedDocument()).toEqual(before)
+  await act(async () => {
+    await intent('editor.redo')
+  })
+  expect(await exportedDocument()).toEqual(cleared)
+  await act(async () => {
+    await intent('editor.redo')
+  })
+  expect(
+    (await exportedDocument()).graph.nodes[0].data.meta.episodeNo,
+  ).toBeUndefined()
+  await act(async () => {
+    await intent('editor.patchNode', { id: SCENE.id, patch: { sceneNo: 8 } })
+  })
+  expect((await exportedDocument()).graph.nodes[0].data.spec.sceneNo).toBe(8)
+})
+
+it('repeated scene clearing is a no-op and rejects stale or foreign targets (#933)', async () => {
+  nativeEditorFixture(nativeListProject())
+  await act(async () => {
+    await intent('editor.clearNodeField', { id: SCENE.id, field: 'sceneNo' })
+  })
+  const cleared = await exportedDocument()
+  await act(async () => {
+    await intent('editor.clearNodeField', { id: SCENE.id, field: 'sceneNo' })
+  })
+  expect(await exportedDocument()).toEqual(cleared)
+  await act(async () => {
+    await intent('editor.undo')
+  })
+  expect((await exportedDocument()).graph.nodes[0].data.spec.sceneNo).toBe(1)
+  for (const args of [
+    { id: 'dialogue', field: 'sceneNo' },
+    { id: SCENE.id, field: 'shotNo' },
+    { id: SCENE.id, field: 'sceneNo', projectId: 'stale' },
+    { id: 'deleted', field: 'sceneNo' },
+  ]) {
+    const before = await exportedDocument()
+    await act(async () => {
+      expect(await intent('editor.clearNodeField', args)).toMatchObject({
+        error: { code: 'PW_INTENT_FAILED' },
+      })
+    })
+    expect(await exportedDocument()).toEqual(before)
   }
 })

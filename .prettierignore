@@ -4,6 +4,10 @@ dist
 coverage
 package-lock.json
 
+# ub-mode 变异执行器的生成工作树与恢复副本；维护源码保持正常格式检查
+target/mutation-workers
+target/mutator-backup
+
 # Rust 后端由 cargo fmt 负责（见 src-tauri 路由）
 src-tauri
 crates/target

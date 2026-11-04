@@ -33,6 +33,8 @@
 
 ### 9.3 命令数据模型
 
+**场次清除（[#933](https://github.com/hailingu/PlotWeave/issues/933)）**：当前 Web 场景表单提交 `{sceneNo: undefined}`，原生以 `editor.clearNodeField` 的 `field: "sceneNo"` 进入同一 `useNodePatch`，JSON 请求不发送 null。该入口只允许 scene；集号仍有独立清除入口。不同字段的补丁历史各自捕获旧值，连续清除可分别撤销和重做。AI 的省略字段继续表示不修改，非空编号仍经正安全整数校验，本单不新增 AI 清除协议。
+
 命令创建时只携带**变更意图**（目标值）；`inverse` 不由创建者填写，而是 `applyCommand` 执行时从变更前文档（docBefore）自动捕获。这保证 undo 数据永远与文档真实旧值一致，创建者不可能填错。
 
 > **实施对照**：自动捕获未以集中 reducer 落地，「创建者不可能填错」的结构性保证**尚未成立**——各生产点自行编写回退闭包（`useNodePatch.patchNode` 手工枚举补丁键构造 before、`useSettingsActions.patchSettings` 的 before 快照由调用方提供、`useNodeDeletion`/`useEdgeDeletion`/`ai/batchSim.ts` 各自构造撤销闭包），遗漏旧值或快照错误的窗口由各入口的单测守护，而非结构排除。
@@ -79,7 +81,7 @@ interface CommandPayloads {
   // 的边端点与空 React key；id 已存在于活动图时拒绝执行——否则追加会产生
   // 同 id 的歧义节点，且生成的 delete_node inverse 会把既有节点一并抹掉。
   // 导入器/Agent 须自行保证 id 新鲜；必要时由命令边界分配新 id 后再应用。
-  // spec 数值域：sceneNo/shotNo 须为正整数且为安全整数（Number.isSafeInteger
+  // spec 数值域：sceneNo 可缺失（未设置），有值时与必填 shotNo 同须为正安全整数（Number.isSafeInteger
   // 且 > 0——场号/镜号进卡片标题与导出排序，非有限值经 JSON 序列化变 null，
   // 超出安全整数范围的编号会与相邻编号折叠，导致重复编号与排序错误）。
   create_node: { node: StoryNode }              // 完整节点，含初始 layout/spec/meta
@@ -93,13 +95,13 @@ interface CommandPayloads {
   // 分集，§3.5），可用于其余类型但须为正整数（与 create_node 同域）。
   // 异型 set 拒绝执行。branch 的 options 补丁同样校验选项 id
   // 非空且数组内唯一；dialogue.lines / shot.refs 补丁同款（与 create_node
-  // 同域，理由见其注释）。sceneNo/shotNo 补丁同样校验正整数域
+  // 同域，理由见其注释）。sceneNo/shotNo 非空补丁同样校验正整数域
   // （与 create_node 同域）。
   // update_node_meta 的 set 是联合而非交集：改名走 LabeledMeta 分支，
   // branch/shot 的 meta 编辑走 DerivedMeta 分支——交集会因 never 可选属性
   // 让改名补丁（{ label: '新名称' }）在类型上不可能成立。
   // 清除语义：unset 列出要删除的可选字段（如 episodeNo 回退未分集、
-  // scene 的 locationId 解除引用）——JSON 无法传输 undefined，省略属性
+  // scene 的 locationId 解除引用、sceneNo 清除场次）——JSON 无法传输 undefined，省略属性
   // 只表示「不修改」，清除必须走 unset。unset 与 set 同名字段、字段为必选
   // 或不存在（类型上无此键）一律拒绝；unset 空数组与省略等价。
   update_node_spec: { nodeId: string; set: Partial<NodeSpec>; unset?: string[] }

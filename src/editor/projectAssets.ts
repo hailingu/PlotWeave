@@ -23,6 +23,19 @@ import { uid } from '../uid'
  * 源 blob，脱离库内条目存活；会话内有效，重载即失效）。 */
 const memoryUrls = new Map<string, string>()
 
+/** Preserve both the rejected import and cleanup failure when rollback cannot complete. */
+class ProjectAssetCleanupError extends Error {
+  readonly cause: unknown
+  readonly cleanupError: unknown
+  constructor(cause: unknown, cleanupError: unknown) {
+    super(
+      `导入失败：${String(cause)}；副本隔离也失败：${String(cleanupError)}，请保留项目现场`,
+    )
+    this.cause = cause
+    this.cleanupError = cleanupError
+  }
+}
+
 interface RawAssetRef {
   id?: unknown
   relPath?: unknown
@@ -31,12 +44,20 @@ interface RawAssetRef {
   createdAt?: unknown
 }
 
+/** unknown 线值 → RawAssetRef 的唯一收窄出口（issue #729）：RawAssetRef
+ * 全字段可选（unknown 占位），非空对象即候选；字段形状契约由
+ * normalizeAssetRef 的全量校验背书，调用点不得再散布裸 cast。 */
+function isAssetRefCandidate(raw: unknown): raw is RawAssetRef {
+  return typeof raw === 'object' && raw !== null
+}
+
 /** IPC 返回条目的边界校验 + 规范化（mime trim/小写）：坏数据不进会话索引。
- * 导出供生成产物并入索引时共用（llm_image_generate 返回值同域，§9.3）。 */
-export function normalizeAssetRef(raw: RawAssetRef | null): AssetRef {
+ * 入参诚实接受 unknown 线值（IPC 与生成命令的返回值无类型标注，§9.3），
+ * 经 isAssetRefCandidate 收窄后逐字段全量校验。导出供生成产物并入索引
+ * 时共用（llm_image_generate 返回值同域）。 */
+export function normalizeAssetRef(raw: unknown): AssetRef {
   if (
-    raw === null ||
-    typeof raw !== 'object' ||
+    !isAssetRefCandidate(raw) ||
     typeof raw.id !== 'string' ||
     raw.id === '' ||
     typeof raw.relPath !== 'string' ||
@@ -87,12 +108,17 @@ async function tauriImport(
     }),
   )
   // §9.3：入索引前过 Rust 预检，使用预检返回的规范化条目
-  return normalizeAssetRef(
-    await ipcInvoke<RawAssetRef>(IPC_COMMANDS.validateProjectAsset, {
-      id: projectId,
-      asset: imported,
-    }),
-  )
+  try {
+    return normalizeAssetRef(
+      await ipcInvoke<RawAssetRef>(IPC_COMMANDS.validateProjectAsset, {
+        id: projectId,
+        asset: imported,
+      }),
+    )
+  } catch (error) {
+    await projectAssets.discardImport(projectId, imported.id, error)
+    throw error
+  }
 }
 
 // 浏览器预览无项目目录：projectId 仅保持与 Tauri 路径接口同形，不参与逻辑
@@ -144,6 +170,28 @@ export function tauriInvoke<T>(
 
 /** 统一门面：两种环境同签名。 */
 export const projectAssets = {
+  /** Only host-minted unaccepted imports may be quarantined; clients never supply a filesystem path. */
+  discardImport: async (
+    projectId: string,
+    assetId: string,
+    cause?: unknown,
+  ): Promise<void> => {
+    if (isBrowserPreviewHost()) {
+      const url = memoryUrls.get(assetId)
+      if (url) URL.revokeObjectURL(url)
+      memoryUrls.delete(assetId)
+      return
+    }
+    try {
+      await ipcInvoke(IPC_COMMANDS.discardProjectAssetImport, {
+        id: projectId,
+        assetId,
+      })
+    } catch (error_) {
+      if (cause !== undefined) throw new ProjectAssetCleanupError(cause, error_)
+      throw error_
+    }
+  },
   /** 库资产拷贝进项目（§7.3）：返回项目级 AssetRef（新 id）。 */
   importFromLibrary: (
     projectId: string,

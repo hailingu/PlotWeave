@@ -6,7 +6,7 @@ tracker, by humans and agents alike. Like the other standards under
 interoperability; issue bodies themselves SHOULD follow the project
 documentation language (Chinese).
 
-**Last reviewed**: 2026-09-08
+**Last reviewed**: 2026-10-26
 
 ## Required Reading
 
@@ -100,6 +100,17 @@ Feature / improvement:
     ## 方案草案 (Draft Approach)
     ## 验收标准 (Acceptance Criteria)
 
+Every new issue MUST include explicit, testable acceptance criteria. State the
+observable outcome, relevant trigger or state transition, and how completion
+will be verified. For defects, include criteria under Evidence while preserving
+the six required headings; for known boundaries, put them under Disposition
+and distinguish verification of the boundary from a proposed implementation.
+Feature / improvement issues use their Acceptance Criteria section. Criteria
+MUST define the issue's scope and relevant behavior that must be preserved;
+vague goals such as “works correctly” or “improve quality” are insufficient.
+Unknown design choices MUST remain explicit questions rather than invented
+requirements.
+
 Evidence cites stable artifacts — commit identifiers, command output,
 logs, screenshots — per the AGENTS.md verification rules; mutable line
 numbers are supplementary only. `Regression Source` cites the commit that
@@ -132,8 +143,8 @@ source of policy. Keep the six required headings in the order above.
   Record verification commands with their working directories, results, and
   limits; explicitly say when tests or live reproduction were not run.
   Passing existing tests MUST NOT be described as proof that the reported
-  defect does not exist. Include focused repair suggestions and observable
-  acceptance criteria here when available; proposals do not authorize an
+  defect does not exist. Include explicit, observable acceptance criteria here;
+  focused repair suggestions MAY accompany them. Proposals do not authorize an
   implementation or a contract change.
 - **Regression Source** identifies the introducing commit only when known.
   Otherwise say it is unknown; an analysis baseline MUST NOT be described
@@ -192,11 +203,13 @@ remove inapplicable optional detail rather than inventing evidence.
 
 验证情况：<工作目录、实际执行命令、结果和未执行项；未运行则明确说明>。
 
-建议修复与验收（如已有建议）：
+验收标准（必填，可验证）：
 
-- <针对本问题的修复方向，标明仍需确认的方案>
-- <可观察、可验证的成功条件与回归场景>
-- <应保留的行为或需要另行确定范围的契约变更>
+- <触发状态／操作与可观察、可验证的成功条件>
+- <对应验证方法与相关回归场景>
+- <应保留的行为，以及明确排除或仍需确认的范围>
+
+建议修复（可选）：<针对本问题的方向；不授权实现或契约变更>
 
 ## 回归来源 (Regression Source)
 

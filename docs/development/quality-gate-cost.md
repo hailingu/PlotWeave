@@ -7,7 +7,7 @@ dedup marker helper `scripts/gate-tree-marker.sh` (issue #404). Like the root
 `AGENTS.md` and the other standards under `docs/development/`, this file is
 written in English for agent interoperability.
 
-**Last reviewed**: 2026-10-18
+**Last reviewed**: 2026-10-25
 
 **Status**: Active — accepted decision. Recorded 2026-09-27, resolving
 [issue #356](https://github.com/hailingu/PlotWeave/issues/356); extended
@@ -46,7 +46,8 @@ conditions maintained in the push-gating topic doc (see
 [快路径可达性与恢复条件](quality-gate-push.md#快路径可达性与恢复条件issue-463));
 extended 2026-10-16 by the **gate CPU budget** (owner direction, recorded
 here rather than via a tracker issue): coverage-phase parallelism is capped
-at one third of the machine's logical cores — a scheduling change only; the
+at a fixed default of 4, overridable with a positive integer
+`PLOTWEAVE_GATE_CPU_BUDGET` — a scheduling change only; the
 check set, sequence, thresholds, and failure semantics are unchanged (see
 [Gate CPU Budget](#gate-cpu-budget-2026-10-16-owner-direction) and the
 re-measured [CPU-Budget Baseline](#cpu-budget-baseline-2026-10-16)).
@@ -56,7 +57,21 @@ hooks remain the complete uniform gate; `pre-push` now routes docs-only,
 single-frontend, single-Rust, single-native, and cross-stack/tooling ranges
 to the minimum sufficient check set (see
 [Scoped Push Cost](#scoped-push-cost-2026-10-18-owner-direction) and
-[Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18)).
+[Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18));
+clarified 2026-10-24 for
+[issue #807](https://github.com/hailingu/PlotWeave/issues/807): the absolute
+"every hook runs the complete gate / nothing reduces the check set" wording in
+the Decision tail and [Impact On Gate Strength](#impact-on-gate-strength) is
+now scoped to the commit-creating hooks and links the push-path routing — a
+consistency fix only; no hook, threshold, or governance decision changed; and
+baseline refreshed 2026-10-25 for
+[issue #733](https://github.com/hailingu/PlotWeave/issues/733): the frontend
+suite baseline (plain uncapped and gate-capped) now records the scripts
+meta-test share and cost structure, and the frontend coverage phase's share
+crossed the single-phase mark — the option-level revisit that crossing demands
+is the cost-structure evaluation recorded in the same change, which adopts no
+lever and changes no gate step (see
+[Frontend Suite And Meta-Test Baseline](#frontend-suite-and-meta-test-baseline-2026-10-25-issue-733)).
 
 ## Required Reading
 
@@ -132,10 +147,10 @@ is a deliberate gate-strength change, not an optimization hidden in a script.
 | Push range | Checks | Coverage | Expected cost relative to full |
 | --- | --- | --- | --- |
 | docs-only (`docs/**`, root Markdown, `LICENSE`) | `scripts/check-docs.sh` (`git diff --check`) only | none | near-zero; no npm install, tests, Rust, or Sonar |
-| single frontend (`src/**`, frontend-only root configs) | static checks + full frontend suite | frontend full; Rust reuses the most recent LCOV | one stack's coverage + Sonar |
-| single Rust (`src-tauri/**`, `crates/**`, `rust-toolchain.toml`) | static checks + full Rust suite | Rust full; frontend reuses the most recent LCOV | one stack's coverage + Sonar |
-| single native (`native/**`) | static checks + `sh scripts/test-native.sh` (canvas build + serial functional regression; stress measurements opt in) | no native LCOV; frontend/Rust reuse the most recent LCOV | functional regression time + Sonar |
-| cross-stack / tooling / unknown / empty / no baseline | static checks + frontend/Rust suites + native functional regression + Sonar | frontend + Rust full | existing baseline plus native functional regression |
+| single frontend (`src/**`, `public/**` static build inputs, frontend-only root configs), clean checked-out head | static checks + full frontend suite | frontend full; Rust reuses the most recent LCOV | one stack's coverage + Sonar |
+| single Rust (`src-tauri/**`, `crates/**`, `rust-toolchain.toml`), clean checked-out head | static checks + full Rust suite | Rust full; frontend reuses the most recent LCOV | one stack's coverage + Sonar |
+| single native (`native/**`), clean checked-out head | static checks + `sh scripts/test-native.sh` (canvas build + serial functional regression; stress measurements opt in) | no native LCOV; frontend/Rust reuse the most recent LCOV | functional regression time + Sonar |
+| single-stack temporary-worktree slow path; cross-stack / tooling / unknown / empty / no baseline | static checks + frontend/Rust suites + native functional regression + Sonar | frontend + Rust full | existing baseline plus native functional regression |
 
 Boundaries:
 
@@ -145,10 +160,16 @@ Boundaries:
   fails closed instead of silently omitting a report.
 - A reused LCOV can be stale if the unchanged stack moved since that report.
   Existing refs require their remote old tip locally; a missing tip runs `full`.
-  Only new refs fall back to local `dev` merge-base, `origin/dev`, or the commit
+  Only new refs fall back to local `develop` merge-base, `origin/develop`, or the commit
   parent. All ranges for a shared commit are combined before deduplication;
-  different implementation stacks require `full`. If the unchanged stack is
-  not actually unchanged, use a full push.
+  different implementation stacks require `full`. Single-stack LCOV reuse is
+  limited to the fast path: the pushed commit is checked out and the index,
+  tracked files and all untracked non-ignored inputs match it. A non-checked-out
+  ref or dirty worktree takes the temporary-worktree slow path; the hook emits
+  `PRE_PUSH_SCOPE_ESCALATED` and automatically runs `full`, including native
+  functional regression, because reused LCOV cannot be attributed to that tree
+  ([issue #805](https://github.com/hailingu/PlotWeave/issues/805)). The single-stack
+  cost rows therefore apply only to the fast path.
 - Every `full` push conservatively runs native functional regression, so adding
   another stack or losing the baseline cannot remove native checks. `pre-push`
   forces `PLOTWEAVE_GATE_FULL_NATIVE=1`; all three commit-creating entry points
@@ -177,8 +198,12 @@ This is option C of issue #356. The issue did not argue for lower quality
 requirements; it argued that the "cost tier" question deserved one explicit
 decision and a recorded baseline. Both now exist.
 
-There is no cheaper or faster variant of that sequence, and no configuration
-that selects one. Which commit-producing commands actually reach it — and which
+For the commit-creating hooks there is no cheaper or faster variant of that
+sequence, and no configuration that selects one; the scoped push routing
+(2026-10-18 owner direction,
+[Scoped Push Cost](#scoped-push-cost-2026-10-18-owner-direction)) is the only
+owner-approved exception and applies to `pre-push` only, never to commit
+creation. Which commit-producing commands actually reach it — and which
 currently do not — is recorded precisely in
 [What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces).
 
@@ -217,8 +242,8 @@ Issue #601 also applies the same positive-integer budget (unset: fixed `4`) to `
   `[GATE_CPU_BUDGET_INVALID]` — no silent fallback to full parallelism.
 - **Gate strength**: unchanged. The same complete sequence runs with the
   same thresholds; nothing is skipped, reduced, or tiered. This is a
-  scheduling bound, not a cheaper variant: the "no environment variable …
-  reduces the check set" invariant in
+  scheduling bound, not a cheaper variant: the commit-creation "no
+  environment variable … reduces the check set" invariant in
   [Impact On Gate Strength](#impact-on-gate-strength) keeps holding, because
   `PLOTWEAVE_GATE_CPU_BUDGET` can only change how many cores execute the
   checks, never which checks execute. Setting it to the full logical-core
@@ -251,6 +276,11 @@ the *gate path* runs those same tests under the
 [Gate CPU Budget](#gate-cpu-budget-2026-10-16-owner-direction) parallelism
 cap — scheduling only; #498's statement above is a point-in-time fact as of
 2026-10-03, and the standalone `npm test` entry remains fully parallel.)
+Since 2026-10-25 that fully-parallel entry's wall clock is itself measured:
+the meta-test critical path — `scripts/pre-push-refs.test.ts` — holds it,
+and issue #733's cost-structure evaluation records the levers against it
+(see
+[Frontend Suite And Meta-Test Baseline](#frontend-suite-and-meta-test-baseline-2026-10-25-issue-733)).
 
 Options A and B were evaluated against the measurement below and are recorded
 here as **considered and declined**, not as pending work.
@@ -336,14 +366,17 @@ The following decisions must not be conflated (评审 4120364296):
   cheaper variant, skip, or fast path, and relaxes nothing.
 - The **issue #405 extension (2026-09-30) also deliberately changes gate
   behavior**: the push path no longer scans whatever happens to be checked
-  out. `pre-push` reads the refs Git hands it on stdin and runs the complete
-  gate once per unique pushed commit, at that commit's own state — see
-  [Push-Path Per-Ref Gating](quality-gate-push.md#push-path-per-ref-gating-issue-405). It
-  introduces no cheaper variant of the sequence: the fast path is the same
-  complete sequence in the current working tree, taken only when that tree
-  is provably identical to the pushed commit, and the slow path is the same
-  complete sequence in a temporary worktree checked out at the pushed
-  commit.
+  out. `pre-push` reads the refs Git hands it on stdin and gates every unique
+  pushed commit once, at that commit's own state — see
+  [Push-Path Per-Ref Gating](quality-gate-push.md#push-path-per-ref-gating-issue-405).
+  As introduced it ran the same complete sequence on both paths — the fast
+  path in the current working tree, taken only when that tree was provably
+  identical to the pushed commit, and the slow path in a temporary worktree
+  checked out at the pushed commit — with no cheaper variant. Since the
+  2026-10-18 scoped push routing (next bullet) the check set per pushed
+  range is scope-selected, while #405's per-commit dispatch invariant — one
+  gate run per unique pushed commit, at that commit's own state — is
+  unchanged.
 - The **CPU budget extension (2026-10-16) also deliberately changes gate
   behavior — scheduling only**: the coverage phases run under the
   one-third-of-cores parallelism cap recorded in
@@ -351,6 +384,14 @@ The following decisions must not be conflated (评审 4120364296):
   weaker variant, skip, or fast path: the check set, sequence, thresholds,
   and failure semantics are identical, and an invalid budget *blocks* the
   operation rather than relaxing anything.
+- The **scoped push extension (2026-10-18, owner direction) also
+  deliberately changes gate behavior — push path only**: `pre-push` routes
+  each pushed range to the minimum sufficient check set (docs-only,
+  single-stack, full), while the commit-creating hooks keep the complete
+  uniform gate. This is the owner-approved push-path exception recorded in
+  [Scoped Push Cost](#scoped-push-cost-2026-10-18-owner-direction) and
+  [Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18);
+  it is not a variant the commit-creating hooks can select.
 
   [issue #462](https://github.com/hailingu/PlotWeave/issues/462) 为慢路径依赖安装
   增加期限，并将 Sonar 环境变量与安装、检查、覆盖率执行分离；仍执行 lifecycle，
@@ -366,14 +407,28 @@ The following remain in force exactly as written in `AGENTS.md`, and nothing
 in this file is an exception to them:
 
 - All four hooks stay enabled (`pre-commit`, `pre-merge-commit`,
-  `prepare-commit-msg`, `pre-push`) and each runs the complete
-  `sonar-quality-gate.sh`; the tree marker only deduplicates within one
-  commit-creating operation and never selects a cheaper check set.
+  `prepare-commit-msg`, `pre-push`). Each commit-creating hook runs the
+  complete `sonar-quality-gate.sh`; the tree marker only deduplicates within
+  one commit-creating operation and never selects a cheaper check set.
+  `pre-push` runs the owner-approved scoped routing
+  ([Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18)):
+  docs-only and single-stack ranges run the minimum sufficient check set, and
+  every full-scope range still runs the complete gate.
 - `--no-verify` remains prohibited, and `core.hooksPath` remains pointed at the
   versioned `.githooks/` directory.
-- No new skip, allowlist, or "fast" path is introduced. There is no environment
-  variable, flag, or branch condition that reduces the check set.
-- SonarQube analysis and the Quality Gate still execute on the push path.
+- No new skip, allowlist, or "fast" path is introduced for commit creation:
+  there, no environment variable, flag, or branch condition reduces the check
+  set. On the push path, the scope variables (`PLOTWEAVE_GATE_SCOPE` and the
+  reused-LCOV pointers) are that owner-approved routing rather than a bypass —
+  they fail closed on missing or empty reports, and the commit-creating entry
+  points force the full scope so no inherited environment can weaken a commit
+  gate.
+- SonarQube analysis and the Quality Gate still execute on the push path for
+  every non-docs scope: single-stack scopes import both stacks' reports (the
+  unchanged stack through its most recent LCOV), and full scopes run the
+  complete analysis. Docs-only pushes skip them by the same owner decision
+  recorded in
+  [Scoped Push Routing](quality-gate-push.md#scoped-push-routing-2026-10-18).
 - A failed or unavailable gate still blocks the Git operation.
 - The New Code period incremental zeroing rule is unchanged: new-code unresolved
   issues must be zero, while historical issues on overall code stay triaged
@@ -381,8 +436,9 @@ in this file is an exception to them:
 
 测试专用注入项与其保留边界统一记录在[测试注入边界](quality-gate-lifecycle.md#test-injection-boundary)；这些入口不授权绕过门禁。
 
-Anyone reading a faster local workflow elsewhere in this repository should
-treat it as a defect in that workflow, not as sanctioned by this decision.
+Anyone reading a faster local workflow elsewhere in this repository that no
+recorded owner decision approves should treat it as a defect in that
+workflow, not as sanctioned by this decision.
 
 ## Push-Path Per-Ref Gating (issue #405)
 
@@ -406,7 +462,7 @@ treat it as a defect in that workflow, not as sanctioned by this decision.
 
 ## Measured Baseline
 
-Three measurements live here. The **founding baseline (2026-09-27)** is what
+Four measurements live here. The **founding baseline (2026-09-27)** is what
 the decision above was taken against, as delivered by PR #403. The
 **refreshed baseline (2026-09-30)** measures the complete gate as it exists
 after the issue #404 commit-creation wiring, the issue #393 coverage floor,
@@ -416,7 +472,11 @@ version pinned by `.nvmrc` (the founding run did not — see its caveats). The
 coverage-phase parallelism capped per the
 [Gate CPU Budget](#gate-cpu-budget-2026-10-16-owner-direction) — the schedule
 every gated operation uses today, so compare future measurements against it
-first. The two earlier baselines are retained because the decision and the
+first. The **frontend suite and meta-test baseline (2026-10-25, issue #733)**
+refreshes both the plain uncapped `npm test` entry and the capped complete
+gate at the budget-4 default, and records the per-file span distribution, the
+scripts meta-test share, and the cost-structure evaluation that maintains the
+status quo. The earlier baselines are retained because the decision and the
 alternatives analysis above were argued on their numbers; when comparing
 back to them, note the OS-version gap recorded in the CPU-budget caveats.
 
@@ -707,6 +767,128 @@ still triggers the normal revisit.
    future reader does not "fix" it: +23% user CPU against +21% wall clock is
    the efficiency cost of fewer cores, accepted with the decision.
 
+### Frontend Suite And Meta-Test Baseline (2026-10-25, issue #733)
+
+Taken 2026-10-25 at commit `4061d0ca5e6a` (the `dev` tip; measured in the task
+worktree `docs/issue-733-refresh-cost-baseline` before any file was edited),
+same machine as all prior baselines (macOS 27.0.1, 16 cores / 64 GiB, Node
+v24.18.0 pinned, npm 11.16.0, vitest 5.0.5). The worktree was freshly created
+and installed via `npm ci` from local caches, then warmed by one unrecorded
+full gate run (279.29s cold) so the recorded runs below measure the typical
+repeated cost. The gate resolved its CPU budget to the unset default **4**
+(the CPU-budget baseline of 2026-10-16 measured budget 5 — the derived default
+of that day; compare within the same budget where possible).
+
+#### Plain uncapped entry (`npm test`)
+
+Three timed runs plus one JSON-reporter run for the per-file distribution:
+86.67s / 84.00s / 84.76s — **median 84.76s**, 269 files / 3581 tests, 0
+failures. Vitest's own summary for the middle run: `Duration 83.74s (tests
+87%, environment 7%, import 5%, transform 1%)`. This confirms issue #733's
+2026-10-22 measurement (84.23s wall, 3534 tests at `4e17c1c1`) and the
+doubling against the 2026-09-30 coverage phase (41.8s, 2536 tests): the
+growth is in test count (+41%) and in per-case real-process integration
+spans, not in the product suites.
+
+Per-file spans from the JSON run (a file's span is its own parallel window;
+spans are **not additive** into a wall clock):
+
+| File (all top-10 are `scripts/` meta-tests) | Span | Tests |
+| --- | ---: | ---: |
+| `scripts/pre-push-refs.test.ts` | 92.12s | 61 |
+| `scripts/sonar-quality-gate.test.ts` | 54.84s | 66 |
+| `scripts/verify-gate-evidence.test.ts` | 48.06s | 54 |
+| `scripts/check-file-size.test.ts` | 26.01s | 91 |
+| `scripts/gate-tree-marker.test.ts` | 23.55s | 26 |
+| `scripts/pre-push-install.test.ts` | 19.56s | 18 |
+| `scripts/test-native.test.ts` | 17.79s | 19 |
+| `scripts/gate-history.test.ts` | 11.49s | 31 |
+| `scripts/gate-evidence-workflow.test.ts` | 9.78s | 10 |
+| `scripts/pre-push-install-watchdog.test.ts` | 6.79s | 5 |
+| slowest non-`scripts/` file: `src/editor/EditorView.aiDelivery.test.tsx` | 5.29s | 7 |
+
+Across all 269 files the span sum is 366.61s, of which `scripts/**` supplies
+318.48s (**86.9%**) with 504 of 3581 tests (**14.1%**); the top-10 table
+above is 309.99s (**84.6%**) with 381 tests (**10.6%**) — reproducing issue
+#733's shares at the current tip.
+
+**The finding that matters: the plain wall clock is the critical path of one
+file.** In the JSON run the whole test window was 92.17s, and
+`scripts/pre-push-refs.test.ts` spanned 92.12s of it — started 0.05s into the
+window and ended exactly at its end. Every other file schedules inside that
+window, so the plain entry's wall clock is the span of its slowest file plus
+startup. Worker count cannot change it: the maxWorkers-4 plain runs recorded
+in [test-workload.md](test-workload.md)（issue #681：82.87–88.22s）are
+indistinguishable from the uncapped medians. Any lever that shortens *other*
+files — the spawn-to-import conversion, shared seeding — cannot move the
+plain wall while `pre-push-refs.test.ts` holds the path.
+
+#### Capped complete gate (budget 4)
+
+Three complete runs: 206.22s / 211.84s / 202.69s — **median 206.22s**, all
+exit 0 (`Quality Gate 已通过，新增代码未解决问题为 0`); median-run user /
+system CPU 357.92s / 73.52s. Per-phase timing taken after the three runs,
+same budget as the gate resolved:
+
+| Phase | Wall (budget 4) | Budget-5 baseline (2026-10-16) | Delta |
+| --- | ---: | ---: | ---: |
+| `scripts/check-static.sh` | 12.74s | 12.49s | ~0 (not capped; single-threaded tools) |
+| `npm run test:coverage -- --maxWorkers 4` | 92.42s | 53.19s | **+39.23s (+74%)** |
+| `scripts/rust-coverage.sh` (`--jobs 4`, `RUST_TEST_THREADS=4`) | 66.81s | 66.71s | ~0 |
+| `sonar-scanner` + Quality Gate wait (remainder) | ~34.25s | ~31.8s | ~+2.5s |
+| **Total (median of three complete runs)** | **206.22s** | **164.17s** | **+42.05s (+26%)** |
+
+The Rust phase is unchanged against the budget-5 point, so the gate's growth
+since 2026-10-16 is essentially all in the frontend coverage phase. That
+phase's share is now **44.8%** (92.42s / 206.22s) — past the ~40% single-phase
+mark in [Reconsideration Triggers](#reconsideration-triggers). Unlike the
+2026-10-16 Rust crossing (40.6%, declined *with attribution* because the cap
+itself caused it), this crossing tracks real suite growth — the meta-test
+expansion between the two dates (scoped-push routing scenarios, verifier and
+per-ref-dispatch cases) is exactly what the span table records, and the
+worker-insensitivity above bounds the budget-4-vs-5 scheduling effect. No
+budget-5 run was taken today, so the cap's exact residual contribution is
+not isolated from this measurement. The option-level revisit the mark
+demands is the cost-structure evaluation below.
+
+#### Cost-structure evaluation (issue #733; decision: maintain status quo)
+
+Issue #733's draft options, re-stated against the measured structure. This
+change adopts **none** of them — each changes coverage shape or suite
+placement and requires a recorded owner decision; the numbers here are the
+decision basis (P3: record, do not fix).
+
+| Lever | Quantified bound from this baseline | Why it does not move the plain wall |
+| --- | --- | --- |
+| Spawn-type checkers become importable functions, keeping 1–2 CLI-contract spawn cases (`check-file-size.test.ts`: 26.01s / 91 cases ≈ **0.29s per case** amortized, each case spawning a real node subprocess) | saving bounded by that file's 26.01s span; the issue's own per-case subprocess estimate (0.15–0.2s × 91) puts the realistic saving at **~14–18s** | the file is off the critical path (26.01s ≪ 92.12s); the plain wall stays at the `pre-push-refs` span |
+| Same-seed templates promoted to module-level shared seeding | bounded at **~2–4s** (companion measurement already recorded in the issue; `gate-history.test.ts` confirmed feasible) | seeding cost sits inside off-path files; isolation policy (per-case sandbox) is untouched either way |
+| CI/local layering — select where meta-test subsets run | moves the whole meta-test block off the local path | largest potential local reduction, but it is a suite-placement policy (which checks gate what), not a cost optimization — owner decision |
+| Critical-path file split: `pre-push-refs.test.ts` runs 61 sequential real-push scenarios in one worker; splitting across files spreads scenarios over workers without sharing mutable repos (per-case isolation unchanged) | plain-wall upside bounded by the next-longest file (54.84s): **≤ ~37s**, minus per-split-file template re-seeding overhead | — (this is the only lever that scales the plain wall itself; it restructures a 1764-line maintained test file and its module-level fixtures) |
+
+Constraints preserved unchanged: the per-case sandbox isolation documented
+for the Git fixtures (`scripts/git-scenario-fixture.ts` — 只复用播种结果，
+不共享可变仓库) and the duplication policy's no-merge-by-structure rule are
+not weakened by anything here, because nothing here changes a test.
+
+#### Caveats On This Baseline
+
+1. **Three samples per entry on one day, in a task worktree** — medians, not
+   a distribution across days; sub-second differences are not signal. The
+   warm-up run absorbed the fresh worktree's cold caches; a fully cold
+   machine is slower (279.29s measured for the first gate run).
+2. **Spans are not wall clocks.** The per-file table and the 86.9% share use
+   parallel file spans; only the critical-path statement translates spans
+   into wall time, and only because the slowest file's span was verified to
+   cover the window edge-to-edge in the measured run.
+3. **Budget-4 point versus the budget-5 CPU-budget baseline.** The unset
+   default is 4 since PR #581; no budget-5 run was taken today, so the
+   phase-delta column mixes budget change and suite growth for the coverage
+   phase — attribution to suite growth rests on the worker-insensitivity
+   argument, not on an isolated measurement.
+4. **The coverage variant is not the plain entry.** 92.42s is
+   `test:coverage` (instrumented); 84.76s is the plain median. Compare each
+   within its own column.
+
 ### Push-Path Slow-Path Cost (2026-09-30, issue #405)
 
 Measured once on landing the issue #405 fix (task branch
@@ -739,6 +921,8 @@ a fully cold machine and overstates a repeat slow path against a recently
 built tree); dependencies resolved from the shared local npm/cargo caches.
 The fast path is unaffected — it is the same complete-gate run the refreshed
 baseline measures, with only the equality preconditions added ahead of it.
+Both paths were measured at the 2026-09-30 hook state, before the 2026-10-18
+scoped push routing made the pushed range scope-select the check set.
 
 **Reachability caveat (issue #463).** The fast/slow comparison above is
 conditional on the fast path being *reachable*, and in daily workflow it
@@ -778,7 +962,14 @@ these becomes true:
   absorbed the largest relative slowdown while the uncapped phases held
   steady), and the option-A-level revisit it nominally demands is declined
   with that attribution in the baseline section. A future crossing measured
-  at an uncapped or re-tuned budget fires the normal revisit.
+  at an uncapped or re-tuned budget fires the normal revisit. Status as of
+  the [2026-10-25 frontend baseline](#frontend-suite-and-meta-test-baseline-2026-10-25-issue-733):
+  the frontend coverage phase's share reaches ~44.8% at the budget-4 default
+  — past the mark again, this time attributable to real meta-test suite
+  growth rather than the cap. The revisit it demands is the cost-structure
+  evaluation recorded in that baseline (issue #733): four levers quantified,
+  none adopted — each requires a recorded owner decision. A future
+  measurement re-checks the share at whatever budget is then in effect.
 - The commit rate rises materially above the ~25/day this baseline assumes, or
   the gate is reported as a recurring source of blocked or abandoned work. The
   argument for accepting a fixed cost weakens with frequency. Because option B
@@ -843,7 +1034,8 @@ Run from the repository root with `SONAR_HOST_URL` set and a token available as
 
 Take at least three complete runs and compare medians — a single run is not
 a distribution (the founding caveat 3 / refresh caveat 3). The gate resolves
-its CPU budget from the machine it runs on; record the budget value
+its CPU budget as fixed default 4 or an explicit positive-integer
+`PLOTWEAVE_GATE_CPU_BUDGET` override; record the actual budget value
 alongside the environment table so two measurements stay comparable. To
 measure an uncapped comparison run (not the daily schedule), set
 `PLOTWEAVE_GATE_CPU_BUDGET` to the full logical-core count for that run
@@ -851,18 +1043,33 @@ only.
 
 For the per-phase split, time the three non-scanner stages individually in the
 order the gate script runs them, and take the remainder as the scanner
-phase — with the same budget the gate resolved (5 on the 16-core baseline
-machine):
+phase — with the same budget the gate resolved (the unset default is a fixed
+`4`; the 2026-10-16 baseline machine resolved the derived `5` of that day):
 
 ```sh
 time sh scripts/check-static.sh
-time npm run test:coverage -- --maxWorkers 5
+time npm run test:coverage -- --maxWorkers 4
 time sh scripts/rust-coverage.sh
+```
+
+For the plain frontend entry and its per-file span distribution (the
+2026-10-25 issue #733 baseline), time three plain runs for the median, then
+take one JSON-reporter run: a file's span is its `testResults`
+`endTime − startTime`; spans are parallel windows and never additive, and the
+critical-path check is whether the slowest file's span covers the test window
+edge-to-edge:
+
+```sh
+/usr/bin/time -p npm test        # ×3，比较中位数
+npm test -- --reporter=json --outputFile=<临时报告>
 ```
 
 For the push-path slow path (issue #405), push a non-checked-out commit to a
 disposable local bare remote and time the whole push — the hook's worktree
-checkout, `npm ci`, and complete gate all sit inside it:
+checkout, `npm ci`, and the scope-selected gate run all sit inside it. Pick a
+commit whose range classifies as `full` (cross-stack or tooling changes) to
+re-measure the complete-gate slow path; docs-only and single-stack ranges run
+their shorter scoped checks instead:
 
 ```sh
 git init --bare -q "$(mktemp -d)/origin.git"   # 把输出路径用于下行

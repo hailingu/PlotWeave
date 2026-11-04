@@ -1,6 +1,6 @@
 import { DialogFooter } from '../ui/DialogFooter'
 import { useRef, useState } from 'react'
-import { useModalKeyboard } from './useModalKeyboard'
+import { useModalKeyboard } from '../ui/useModalKeyboard'
 import type { ScriptExportModel } from './exportScript'
 import {
   useScriptExportActions,

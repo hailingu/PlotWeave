@@ -3,6 +3,6 @@
   "compilerOptions": {
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src", "vite.config.ts"],
+  "include": ["src", "vite.config.ts", "vite.native-canvas.config.ts"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

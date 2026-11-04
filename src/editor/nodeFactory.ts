@@ -33,7 +33,7 @@ const NODE_SEED_BUILDERS: Record<CreatableType, SeedBuilder> = {
     selected: select,
     data: {
       name: '新场景',
-      sceneNo: maxNo((n) => (n.type === 'scene' ? n.data.sceneNo : 0)),
+      sceneNo: maxNo((n) => (n.type === 'scene' ? (n.data.sceneNo ?? 0) : 0)),
       interior: true,
       time: '🌙 夜',
       synopsis: '这一场发生了什么…',

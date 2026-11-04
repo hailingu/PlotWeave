@@ -216,12 +216,11 @@ fn dispatch(root: &CapDir, request: &str) -> Result<String, String> {
                 .map_err(core_store::to_ipc_text)?;
             ok_json(serde_json::Value::Null)
         }
-        "verifyProjectAssets" => {
-            let assets = object.get("assets").cloned().ok_or("缺少 assets 字段")?;
-            let id = id_field("id")?;
-            core_store::validate_id(&id)?;
-            ok_json(core_store::unverifiable_asset_keys(root, &id, &assets))
-        }
+        "verifyProjectAssets" => verify_project_assets_request(
+            root,
+            &object.get("assets").cloned().ok_or("缺少 assets 字段")?,
+            &id_field("id")?,
+        ),
         "copyProjectAssets" => {
             core_store::copy_assets_tree(root, &id_field("fromId")?, &id_field("toId")?)
                 .map_err(core_store::to_ipc_text)?;
@@ -231,6 +230,16 @@ fn dispatch(root: &CapDir, request: &str) -> Result<String, String> {
         "debugPanic" => panic!("FFI 边界 panic 注入"),
         _ => Err(format!("未知操作：{op}")),
     }
+}
+
+/// A transient verification error remains an error across the historical ABI, never a partial key array.
+fn verify_project_assets_request(
+    root: &CapDir,
+    assets: &serde_json::Value,
+    id: &str,
+) -> Result<String, String> {
+    core_store::validate_id(id)?;
+    ok_json(core_store::unverifiable_asset_keys(root, id, assets).map_err(core_store::to_ipc_text)?)
 }
 
 /// 回执一层：JSON → CString → 裸指针；CANCELLED 传 NULL。结果指针归宿主

@@ -5,10 +5,49 @@ import { useOutlineGroups } from '../useOutlineGroups'
 import { nodeLabelOf } from '../useAiBridge'
 import type { EditorController } from '../useEditorController'
 import type { EditorProjectContent } from '../useEditorDocument'
+import type { OutlineGroup } from '../outline'
+import type { ProjectContent } from '../../model/content'
+import type { ProjectSettings } from '../settings'
 import type { CanvasNode } from '../nodes/types'
 
 const DISABLED_NODES: CanvasNode[] = []
 const DISABLED_SOURCES: readonly unknown[] = []
+
+/** One representative per existing kind prepares controls without selecting or editing nodes. */
+export interface NativeInspectorSeed {
+  id: string
+  type: CanvasNode['type']
+  data: CanvasNode['data']
+}
+
+/** Labelled node identity the native outline and toolbar render instead of graph coordinates. */
+export interface NativeNodeSummary {
+  id: string
+  type: CanvasNode['type']
+  label: string
+}
+
+/** Structured editor chrome published to the Swift host; field identities drive payload reuse. */
+export interface NativeEditorProjection {
+  aiSessionLoadFailed: boolean
+  aiSessionError: string | null
+  projectId: string
+  contentRevision: number
+  canUndo: boolean
+  canRedo: boolean
+  saveError: string | null
+  editingNodeId: string | null
+  nodeSettingsRequest: number
+  selected: NativeInspectorSeed | null
+  inspectorSeeds: NativeInspectorSeed[]
+  nodes: NativeNodeSummary[]
+  outline: OutlineGroup[]
+  settings: ProjectSettings
+  assets: ProjectContent['assets']
+  focusedEpisode: number | null
+  zoom: number
+  aiOpen: boolean
+}
 
 /** Projection fields come from the existing controller, never a second editable document. */
 interface ProjectionInput {
@@ -37,11 +76,7 @@ function inspectorSeeds(
 ) {
   const seen = new Set<CanvasNode['type']>()
   if (selectedType) seen.add(selectedType)
-  const seeds: {
-    id: string
-    type: CanvasNode['type']
-    data: CanvasNode['data']
-  }[] = []
+  const seeds: NativeInspectorSeed[] = []
   for (const node of nodes) {
     if (seen.has(node.type)) continue
     seen.add(node.type)
@@ -106,8 +141,18 @@ function useContentProjection(input: ProjectionInput, enabled: boolean) {
   return { selected, seeds, nodes, outline, contentRevision }
 }
 
-/** Serializes only when a wire field changes; genuine x/id outline changes still publish immediately. */
-export function useNativeEditorProjection(input: ProjectionInput): string {
+/**
+ * Rebuilds the payload object only when a wire field identity changes and stays
+ * null off a Swift host. Publishing follows payload identity, which reproduces
+ * the former whole-string byte dedup: every heavy field (nodes, seeds, outline)
+ * re-derives only after its sources churn, and those same sources feed the
+ * identity-keyed contentRevision, so a rebuild always coincides with a content
+ * change. The payload crosses to the host as a structured value — WebKit
+ * serializes it once, with no stringify/parse round-trip in between (issue #728).
+ */
+export function useNativeEditorProjection(
+  input: ProjectionInput,
+): NativeEditorProjection | null {
   const enabled = isSwiftHost()
   const { projectId, aiSessionLoadFailed, aiSessionError } = input
   const { doc, history, persistence, panels } = input.editor
@@ -122,7 +167,7 @@ export function useNativeEditorProjection(input: ProjectionInput): string {
   return useMemo(
     () =>
       enabled
-        ? JSON.stringify({
+        ? {
             aiSessionLoadFailed,
             aiSessionError,
             projectId,
@@ -141,8 +186,8 @@ export function useNativeEditorProjection(input: ProjectionInput): string {
             focusedEpisode,
             zoom,
             aiOpen,
-          })
-        : '',
+          }
+        : null,
     [
       enabled,
       aiSessionLoadFailed,

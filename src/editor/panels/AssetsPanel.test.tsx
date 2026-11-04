@@ -136,6 +136,27 @@ describe('AssetsPanel 类别内操作', () => {
     expect(spies.remove).toHaveBeenCalledWith('a1')
     await waitFor(() => expect(revokeSpy).toHaveBeenCalledWith('blob:mock-url'))
   })
+
+  // #803：✕ 键盘激活后确认框接管焦点（进入/Tab 环绕/Escape 归还仍存在的 ✕）
+  it('删除确认框接管键盘焦点：进入「取消」、Tab 环绕、Escape 归还 ✕（#803）', async () => {
+    mockStore([asset()])
+    await enterCharacter()
+    const removeBtn = screen.getByRole('button', { name: '删除资产 女主正面' })
+    removeBtn.focus()
+    fireEvent.click(removeBtn)
+    const dialog = await screen.findByRole('dialog', { name: '删除资产' })
+    const cancel = screen.getByRole('button', { name: '取消' })
+    const confirm = screen.getByRole('button', { name: '删除' })
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    expect(document.activeElement).toBe(cancel)
+    fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(confirm)
+    fireEvent.keyDown(confirm, { key: 'Tab' })
+    expect(document.activeElement).toBe(cancel)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '删除资产' })).toBeNull()
+    expect(document.activeElement).toBe(removeBtn)
+  })
 })
 
 describe('AssetsPanel 行内改名', () => {
@@ -803,31 +824,66 @@ describe('AssetsPanel 标签提交：多资产与跨操作错误（PR #176 评�
   })
 })
 
+/** 标题首帧就存在；导入按钮解除禁用才表明首读完成（#844）。 */
+async function waitForImportReady() {
+  await waitFor(() =>
+    expect(
+      (screen.getByRole('button', { name: '导入其他' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  )
+}
+
 describe('AssetsPanel 导入', () => {
   it('选择文件逐个写库并追加到列表；busy 期间禁用导入按钮', async () => {
     const spies = mockStore([])
-    spies.put.mockResolvedValue(
-      asset({ id: 'a9', name: '新图.png', kind: 'other' }),
+    // #844：首读跨任务完成，保留可使旧标题等待稳定失败的夹具（远小于 1 s）。
+    spies.list.mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(() => resolve([]), 25)),
+    )
+    let finishPut!: (value: LibraryAsset) => void
+    spies.put.mockImplementation(
+      () => new Promise((resolve) => (finishPut = resolve)),
     )
     render(<AssetsPanel />)
-    await screen.findByText('个人资产库 · 跨项目')
+    expect(screen.getByText('个人资产库 · 跨项目')).toBeTruthy()
+    expect(
+      (screen.getByRole('button', { name: '导入其他' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+    await waitForImportReady()
 
     const input = document.querySelector('input[type=file]') as HTMLInputElement
     const file = new File(['x'], '新图.png', { type: 'image/png' })
     // happy-dom 的 files 只有 getter，fireEvent 的 target 注入写不进，直接定义属性
     Object.defineProperty(input, 'files', { value: [file], configurable: true })
     fireEvent.change(input)
+    expect(spies.put).toHaveBeenCalledWith(file, 'other')
+    expect(
+      screen
+        .getAllByRole<HTMLButtonElement>('button', { name: /^导入/ })
+        .every((button) => button.disabled),
+    ).toBe(true)
     // 导入从分类列表发起：importKind 默认为 other，资产落「其他」类
     fireEvent.click(screen.getByText('其他'))
+    const importButton = screen.getByRole<HTMLButtonElement>('button', {
+      name: '＋ 导入',
+    })
+    expect(importButton.disabled).toBe(true)
+    await act(async () =>
+      finishPut(asset({ id: 'a9', name: '新图.png', kind: 'other' })),
+    )
     expect(await screen.findByText('新图.png')).toBeTruthy()
     expect(spies.put).toHaveBeenCalledWith(file, 'other')
+    expect(spies.put).toHaveBeenCalledTimes(1)
+    expect(importButton.disabled).toBe(false)
   })
 
   it('写库失败显示错误', async () => {
     const spies = mockStore([])
     spies.put.mockRejectedValue(new Error('磁盘满'))
     render(<AssetsPanel />)
-    await screen.findByText('个人资产库 · 跨项目')
+    await waitForImportReady()
     const input = document.querySelector('input[type=file]') as HTMLInputElement
     Object.defineProperty(input, 'files', {
       value: [new File(['x'], 'f.png')],
@@ -835,6 +891,33 @@ describe('AssetsPanel 导入', () => {
     })
     fireEvent.change(input)
     expect(await screen.findByText(/磁盘满/)).toBeTruthy()
+  })
+
+  it('中途失败不中断：剩余文件继续导入并汇总失败清单（#719）', async () => {
+    const spies = mockStore([])
+    spies.put.mockImplementation((file) =>
+      file.name === '坏图.png'
+        ? Promise.reject(new Error('磁盘满'))
+        : Promise.resolve(
+            asset({ id: `a-${file.name}`, name: file.name, kind: 'other' }),
+          ),
+    )
+    render(<AssetsPanel />)
+    await waitForImportReady()
+    const input = document.querySelector('input[type=file]') as HTMLInputElement
+    const files = ['图1.png', '坏图.png', '图3.png'].map(
+      (name) => new File(['x'], name, { type: 'image/png' }),
+    )
+    Object.defineProperty(input, 'files', { value: files, configurable: true })
+    fireEvent.change(input)
+    // 每个文件都恰好尝试一次：失败后循环继续处理后续文件
+    await waitFor(() => expect(spies.put).toHaveBeenCalledTimes(3))
+    fireEvent.click(screen.getByText('其他'))
+    expect(await screen.findByText('图1.png')).toBeTruthy()
+    expect(await screen.findByText('图3.png')).toBeTruthy()
+    // 汇总点名失败文件与原因，并给出成功数（#719 验收）
+    expect(await screen.findByText(/成功 2 个，失败 1 个/)).toBeTruthy()
+    expect(screen.getByText(/「坏图.png」失败：Error: 磁盘满/)).toBeTruthy()
   })
 })
 

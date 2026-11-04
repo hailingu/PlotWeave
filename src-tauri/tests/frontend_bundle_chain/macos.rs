@@ -101,6 +101,13 @@ pub fn run_child() -> i32 {
         );
         return 0;
     }
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let build = std::process::Command::new("node")
+        .arg("scripts/build-library-import-probe.ts")
+        .current_dir(repository)
+        .status()
+        .unwrap();
+    assert!(build.success(), "library import probe build failed");
     let dist = Arc::new(dist);
     let mut context = tauri::generate_context!();
     context.config_mut().identifier = format!("com.plotweave.bundle-chain-{}", std::process::id());
@@ -125,7 +132,7 @@ pub fn run_child() -> i32 {
         "main",
         tauri::WebviewUrl::External(BUNDLE_INDEX_URL.parse().unwrap()),
     )
-    .visible(false)
+    .visible(true)
     .on_page_load(move |window, payload| {
         if !matches!(payload.event(), PageLoadEvent::Finished)
             || started.swap(true, Ordering::SeqCst)
@@ -185,6 +192,7 @@ fn run_chain_checks(window: &WebviewWindow, app: &AppHandle, dir: &Path) -> Resu
     let cards = wait_home_rendered(window, app)?;
     assert_seed_persisted(dir)?;
     let id = run_page_chain(window, app, dir)?;
+    library_probe::run(window, app, dir)?;
     Ok(format!("PW-CHAIN-OK host=tauri cards={cards} saved={id}"))
 }
 
@@ -409,3 +417,7 @@ fn percent_decode(raw: &str) -> String {
 fn dist_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../dist")
 }
+
+/// Real library facade probe shares this harness's production app and disposable data root.
+#[path = "macos/library_probe.rs"]
+mod library_probe;

@@ -11,6 +11,8 @@
 export interface CanvasFlushGate {
   /** 仍有未落盘编辑（脏文档或在途保存）。 */
   hasPending: () => boolean
+  /** 当前编辑水位；新编辑前进，旧失败不得阻断后续工作。 */
+  revision: () => number
   /** 立即冲刷：等在途落定并补交脏文档；失败保留脏态由防抖节律重试，
    * 不在闸内紧循环（退出屏障据 hasPending 阻断并提示）。 */
   flush: () => Promise<void>
@@ -28,7 +30,19 @@ export function hasPendingCanvasSaves(): boolean {
   return gate?.hasPending() ?? false
 }
 
-/** 立即冲刷画布脏文档；无登记闸时为无操作。 */
-export async function flushPendingCanvasSaves(): Promise<void> {
-  await gate?.flush()
+/** 绑定失败 owner 与编辑水位的只读探针，供其他保存源冲刷后复核。 */
+export type CanvasFlushFailure = () => boolean
+
+/** 立即冲刷画布脏文档；仍脏时返回归属探针，否则返回 null。
+ * 其他源等待期间的新编辑、已注销或替换 owner 不继承旧失败。 */
+export async function flushPendingCanvasSaves(): Promise<CanvasFlushFailure | null> {
+  const flushing = gate
+  await flushing?.flush()
+  if (flushing === null || flushing !== gate || !flushing.hasPending())
+    return null
+  const revision = flushing.revision()
+  return () =>
+    flushing === gate &&
+    flushing.revision() === revision &&
+    flushing.hasPending()
 }

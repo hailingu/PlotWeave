@@ -273,4 +273,21 @@ export interface BatchValidation {
   issues: BatchIssue[]
   /** 删除类或级联断线（danger）在预览中：置顶展示并要求二次确认（§6）。 */
   hasDeletes: boolean
+  /** #931：只保存原始命令；关联计划每次按当前图重算，确认不落盘。 */
+  episodeAssignment?: {
+    fingerprint: string
+    conflicts: string[]
+    commandCount: number
+  }
+}
+
+/** 一次执行所确认的关联预览；冲突确认仅适用于该签名，不是会话永久授权。 */
+export interface AiBatchConfirmation {
+  episodeFingerprint?: string | undefined
+  episodeConflicts?: boolean | undefined
+}
+
+/** 删除或分集冲突需要单独的人工确认动作。 */
+export function requiresBatchConfirmation(v: BatchValidation): boolean {
+  return v.hasDeletes || (v.episodeAssignment?.conflicts.length ?? 0) > 0
 }

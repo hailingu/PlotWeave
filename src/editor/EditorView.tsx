@@ -114,6 +114,7 @@ function EditorContent({
     graph,
     ai,
     actionError,
+    actionFeedback,
     nodeEditApi,
     imageGen,
   } = controller
@@ -148,6 +149,7 @@ function EditorContent({
           graph={graph}
           ai={ai}
           actionError={actionError}
+          actionFeedback={actionFeedback}
           aiSession={aiSession}
           aiSessionError={aiSessionError}
           aiSessionRetryable={aiSessionRetryable}

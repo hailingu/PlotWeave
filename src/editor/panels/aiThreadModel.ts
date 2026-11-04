@@ -8,13 +8,14 @@ import {
 } from '../ai/agentLoop'
 import { type ChatMessage } from '../ai/chat'
 import { CREATION_GUIDE } from '../ai/creationGuide'
+import { episodeScopeForRequest } from '../ai/episodeScope'
 import {
   documentFieldTableText,
   entityFieldTableText,
 } from '../ai/entityFields'
 import { nodeFieldTableText } from '../ai/nodeFields'
 import type { ProviderConfig } from '../../settings/types'
-import type { ThreadEntry } from '../../ai/session'
+import type { AiEpisodeScope, ThreadEntry } from '../../ai/session'
 
 export type { ThreadEntry } from '../../ai/session'
 
@@ -188,6 +189,7 @@ export function buildMessages(
 function assistantEntries(
   result: AgentLoopResult,
   nextId: () => number,
+  episodeScope: AiEpisodeScope,
 ): ThreadEntry[] {
   const { prose, toolErrors, validation } = result
   let displayText = validation
@@ -216,7 +218,7 @@ function assistantEntries(
         displayText ||
         (validation ? '（本次回复只有改动批次，见下方预览卡）' : ''),
       ...(validation
-        ? { card: { v: validation, status: 'pending' as const } }
+        ? { card: { v: validation, status: 'pending' as const, episodeScope } }
         : {}),
     },
   ]
@@ -236,6 +238,11 @@ export async function runModelTurn(
   nextId: () => number,
   signal?: TurnCancelSignal,
 ): Promise<ThreadEntry[]> {
+  // 必须先捕获：循环会把包含分集诊断的纠正消息追加进 messages，不能借它扩大范围。
+  const request =
+    [...messages].reverse().find((message) => message.role === 'user')
+      ?.content ?? ''
+  const episodeScope = episodeScopeForRequest(request)
   try {
     const result = await runAgentLoop(
       provider,
@@ -245,7 +252,7 @@ export async function runModelTurn(
       validators,
       signal,
     )
-    return assistantEntries(result, nextId)
+    return assistantEntries(result, nextId, episodeScope)
   } catch (err) {
     if (err instanceof TurnCancelledError) {
       return [{ id: nextId(), kind: 'note', text: '已取消' }]

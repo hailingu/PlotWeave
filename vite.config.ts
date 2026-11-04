@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { nativeCanvasCoverageThresholds } from './scripts/native-canvas-coverage.ts'
+import { scriptsCoverageLineFloors } from './scripts/scripts-coverage-floor.ts'
 import { configDefaults, defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
@@ -16,7 +17,13 @@ export default defineConfig({
     // 基准运行（PostCSS from 等路径相对 CWD 解析，从父仓库根跑其测试会
     // 误判令牌源归属），不应被父仓库的测试发现扫描（.worktrees 出现于
     // issue #362 评审期间，排除对主仓测试集无影响）。
-    exclude: [...configDefaults.exclude, '.worktrees/**'],
+    // #941：变异执行器的生成副本也属于独立测试根；中断残留不能进入维护测试。
+    exclude: [
+      ...configDefaults.exclude,
+      '.worktrees/**',
+      'target/mutation-workers/**',
+      'target/mutator-backup/**',
+    ],
     // lcov 供 SonarQube（sonar.javascript.lcov.reportPaths）；text 供本地直观核对
     coverage: {
       provider: 'v8',
@@ -38,8 +45,16 @@ export default defineConfig({
         ...nativeCanvasCoverageThresholds(
           fileURLToPath(new URL('.', import.meta.url)),
         ),
+        // #726: scripts 门禁生产 TS 的登记制 exact-path 下限（in-process
+        // 可测者；子进程驱动与测试设施的排除见 scripts-coverage-floor.ts
+        // 与 scripts/scripts-coverage-scope.test.ts 的同源分类守卫）。
+        ...scriptsCoverageLineFloors(
+          fileURLToPath(new URL('.', import.meta.url)),
+        ),
       },
-      include: ['src/**'],
+      // scripts 只纳入 .ts：.mjs/.sh 为子进程或 shell 驱动，.json 是数据
+      // 文件——纳入会让 v8 对非 JS 文件解析失败并计入 0% 噪声（#726）。
+      include: ['src/**', 'scripts/**/*.ts'],
       // 测试设施不计入产品覆盖率（issue #311，issue #343 补录
       // sheetRuleQuery、issue #534 补录 nodes 测试脚手架、issue #538 补录
       // sheetToken 共享用例数据表、issue #539 补录 panels 共享 DOM 桩，
@@ -62,6 +77,20 @@ export default defineConfig({
         'src/styles/sheetRuleQuery.ts',
         'src/styles/sheetTokenCaseMatrix.ts',
         'src/styles/sheetTokensEngine.ts',
+        // scripts 生产代码排除（issue #726，分类由
+        // scripts/scripts-coverage-scope.test.ts 同源守卫）：子进程驱动文件
+        // 由测试 spawn(node) 集成执行，v8 进程内覆盖率不可见、计入只会以
+        // 0% 污染聚合口径；测试设施沿用 #311「不计入产品覆盖率」政策。
+        'scripts/check-file-size.ts',
+        'scripts/check-workspace-drift.ts',
+        'scripts/gate-scope.ts',
+        'scripts/verify-gate-evidence.ts',
+        'scripts/build-library-import-probe.ts',
+        'scripts/gate-routing-probe.ts',
+        'scripts/git-scenario-fixture.ts',
+        'scripts/native-coverage-fixture.ts',
+        'scripts/pre-push-scenario-fixture.ts',
+        'scripts/fixtures/**',
       ],
     },
   },

@@ -31,7 +31,8 @@ export type NodeType =
 
 /** 场景（索引卡）：一个时空单元的叙事容器。 */
 export interface SceneSpec {
-  sceneNo: number
+  /** 缺失表示未设置场次；有值须为正安全整数（#933）。 */
+  sceneNo?: number
   interior: boolean
   locationId?: string
   time?: string
@@ -50,7 +51,8 @@ export interface DialogueLine {
   id: string
   kind: 'line' | 'action'
   text: string
-  speaker?: string
+  /** null is the existing persisted no-speaker value accepted during loading (#946). */
+  speaker?: string | null
   side?: 'left' | 'right'
   vo?: boolean
 }

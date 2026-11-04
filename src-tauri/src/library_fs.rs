@@ -119,6 +119,11 @@ pub(crate) fn assets_root(library: &CapDir) -> Result<CapDir, LibraryError> {
         }
         Err(e) => return Err(LibraryError::io("读取资产目录元数据失败", e)),
     }
+    existing_assets_root(library)
+}
+
+/// 只打开既有 assets 根；列表和媒体读取不因缺失媒体创建目录，仍保留 no-follow 与身份绑定。
+fn existing_assets_root(library: &CapDir) -> Result<CapDir, LibraryError> {
     let md = library
         .symlink_metadata("assets")
         .map_err(|e| LibraryError::io("读取资产目录元数据失败", e))?;
@@ -577,7 +582,7 @@ pub(crate) fn open_library_asset(
     let suffix = rel_path
         .strip_prefix("assets/")
         .ok_or_else(|| LibraryError::invalid(format!("库资产 relPath 越出 assets/：{rel_path}")))?;
-    let assets = assets_root(library)?;
+    let assets = existing_assets_root(library)?;
     let Some((parent, last)) = open_parent_dir(&assets, suffix)? else {
         // 中间目录缺失：终点媒体必然不存在，导入侧为显式错误（坏数据绝不
         // 进入拷贝流程；删除侧才按幂等处理，语义分野见 library_fs）

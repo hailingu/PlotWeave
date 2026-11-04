@@ -375,6 +375,8 @@ function gateEnvironment(
   // PLOTWEAVE_GATE_SCOPE 会随 ...process.env 泄入夹具门禁，使未指定范围的
   // 用例走单栈分流而非被测的完整流程；默认删除，按用例显式注入。
   delete environment.PLOTWEAVE_GATE_SCOPE
+  // 默认预算用例拥有未配置状态，不继承宿主完整门禁的资源预算。
+  delete environment.PLOTWEAVE_GATE_CPU_BUDGET
   if (options.scope !== undefined) {
     environment.PLOTWEAVE_GATE_SCOPE = options.scope
   }
@@ -738,6 +740,7 @@ describe(
   () => {
     it('两个覆盖率阶段按默认预算 4 限核：--maxWorkers / --jobs / RUST_TEST_THREADS 同值', () => {
       const budget = 4
+      vi.stubEnv('PLOTWEAVE_GATE_CPU_BUDGET', '2')
       const result = runGate('scripts/sonar-quality-gate.sh')
 
       expect(result.status, result.stderr).toBe(0)
@@ -905,15 +908,8 @@ describe('Sonar 地址与前端覆盖率报告边界', { timeout: 30_000 }, () =
 })
 
 describe('扫描与服务门禁失败时阻断提交', { timeout: 30_000 }, () => {
-  it('另一个门禁正在运行时停止，避免共享扫描目录互相覆盖', () => {
-    const result = runGate('scripts/sonar-quality-gate.sh', {
-      lockOccupied: true,
-    })
-
-    expect(result.status).not.toBe(0)
-    expect(result.log).toBe('')
-    expect(`${result.stdout}${result.stderr}`).toContain('正在运行')
-  })
+  // 锁占用的阻断行为（措辞与稳定码双断言）由「门禁锁恢复命令」组断言
+  // （issue #735 合并重复的 lockOccupied 早退运行）。
 
   it('扫描器失败时停止，不接受旧的服务器结果', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', { scannerExit: 2 })
@@ -943,7 +939,9 @@ describe('扫描与服务门禁失败时阻断提交', { timeout: 30_000 }, () =
 })
 
 describe('Sonar 凭据传递与优先级', { timeout: 30_000 }, () => {
-  it('SONAR_TOKEN 经 curl 标准输入传 Authorization 头并以环境变量供扫描器，不进入命令参数或调用日志', () => {
+  // 同输入单次运行承载凭据三面断言（issue #735）：curl 传参路径、调用日志、
+  // 待物化门禁记录——「记录不携带令牌」原属门禁历史记录组，契约随断言并入此处。
+  it('SONAR_TOKEN 经 curl 标准输入传 Authorization 头并以环境变量供扫描器，不进入命令参数、调用日志或门禁记录', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       sonarToken: 'sqp_token-a.1',
     })
@@ -952,6 +950,7 @@ describe('Sonar 凭据传递与优先级', { timeout: 30_000 }, () => {
     expect(result.curlStdin).toContain('Authorization: Bearer sqp_token-a.1')
     expect(result.scannerToken).toBe('sqp_token-a.1')
     expect(result.log).not.toContain('sqp_token-a.1')
+    expect(result.pending).not.toContain('sqp_token-a.1')
   })
 
   it('未设 SONAR_TOKEN 时回退到 PLOTWEAVE_SONAR_TOKEN（如 ~/.zshrc 导出的值），扫描器与 API 调用同源', () => {
@@ -1004,7 +1003,7 @@ it('统一门禁执行检查与覆盖率时不向被分析代码下发 Sonar 令
   expect(result.log).not.toContain('rust-token-present')
   expect(result.scannerToken).toBe('test_primary')
   expect(result.curlStdin).toContain('Authorization: Bearer test_primary')
-})
+}, 30_000)
 
 it('门禁检查与记录绑定最小测试仓库，不扫描完整工作区（issue #498）', () => {
   vi.stubEnv('PLOTWEAVE_GATE_REPOSITORY_ROOT', repositoryRoot)
@@ -1036,7 +1035,7 @@ it('门禁检查与记录绑定最小测试仓库，不扫描完整工作区（i
   expect(blocked.log).not.toContain('test:coverage')
   expect(blocked.log).not.toContain('sonar-scanner')
   expect(blocked.pending).toBe(result.pending)
-})
+}, 30_000)
 
 it.each(['OK', 'ERROR'])(
   '不覆盖根变量时，夹具内完整门禁从脚本目录推导根并处理 %s（PR #513）',
@@ -1110,6 +1109,7 @@ it.each(['primary', 'fallback'] as const)(
     expect(result.scannerToken).toBe(expectedToken)
     expect(result.curlStdin).toContain(`Authorization: Bearer ${expectedToken}`)
   },
+  30_000,
 )
 
 it('宿主 pre-push 导出的范围变量不泄入夹具：未指定 scope 的用例仍走完整门禁（PR #599 推送阻断）', () => {
@@ -1122,7 +1122,7 @@ it('宿主 pre-push 导出的范围变量不泄入夹具：未指定 scope 的�
   expect(result.status).toBe(0)
   expect(result.log).toContain('npm run test:coverage')
   expect(result.log).toContain('cargo-llvm-cov')
-})
+}, 30_000)
 
 describe('门禁锁恢复命令（issue #430）', { timeout: 30_000 }, () => {
   it.each(['sonar-gate.lock', "sonar lock's $(touch injected).lock"])(
@@ -1152,12 +1152,16 @@ describe('门禁锁恢复命令（issue #430）', { timeout: 30_000 }, () => {
     },
   )
 
-  it('锁被占用时说明运行中的推送门禁会持有锁数分钟并建议等待（issue #465）', () => {
+  // 同输入单例双断言（issue #735 合并原「另一个门禁正在运行时停止」用例）：
+  // 占用期不启动任何外部命令，人类可读措辞与稳定诊断码同源一次运行。
+  it('锁被占用时停止且不启动任何外部命令，措辞建议等待运行中的门禁（issue #465）', () => {
     const result = runGate('scripts/sonar-quality-gate.sh', {
       lockOccupied: true,
     })
 
     expect(result.status).not.toBe(0)
+    expect(result.log).toBe('')
+    expect(`${result.stdout}${result.stderr}`).toContain('正在运行')
     // Stable diagnostic contract: quality-gate-lifecycle.md（issue #465）.
     expect(result.stderr).toContain('[SONAR_GATE_LOCK_WAIT_FOR_RUNNING_GATE]')
   })
@@ -1274,7 +1278,7 @@ while :; do sleep 1; done`,
 // pre-push 的门禁分派与按 ref 行为见 scripts/pre-push-refs.test.ts（issue
 // #405：钩子读取 stdin，空 stdin 不再触发门禁）；此处只覆盖 pre-commit
 // 的接线与失败透传。
-describe('.githooks/pre-commit', () => {
+describe('.githooks/pre-commit', { timeout: 30_000 }, () => {
   it.each(['pre-commit', 'pre-merge-commit', 'prepare-commit-msg'])(
     '%s 覆盖外部范围，始终刷新两侧覆盖率',
     (hook) => {
@@ -1412,14 +1416,8 @@ describe(
       expect(`${result.stdout}${result.stderr}`).toContain('无法写入门禁记录')
     })
 
-    it('记录不携带令牌：摘要只入结论，凭据不入库', () => {
-      const result = runGate('scripts/sonar-quality-gate.sh', {
-        sonarToken: 'sqp_token-a.1',
-      })
-
-      expect(result.status).toBe(0)
-      expect(result.pending).not.toContain('sqp_token-a.1')
-    })
+    // 记录不携带令牌（凭据不入库）由「Sonar 凭据传递与优先级」组的同输入
+    // 运行断言承载（issue #735 合并重复的完整成功流水线运行）。
 
     it('pre-commit 完整通过只写待物化文件：不物化、不弄脏版本化文件', () => {
       const result = runGate('.githooks/pre-commit')

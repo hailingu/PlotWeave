@@ -41,6 +41,13 @@ import {
 /** src 根目录：测试文件位于 src/ 下，直接锚定自身位置。 */
 const SRC_ROOT = fileURLToPath(new URL('./', import.meta.url))
 
+/** 真图共享构建（issue #734）：全仓维护模块的依赖图与外部包边各解析一次，
+ * 所有真图用例复用。此前各真图用例分别全量重扫（readFileSync + AST 解析，
+ * 图 8 处、外部边 4 处），是文件耗时主因。构建在收集期同步完成，describe
+ * 顶层派生（如运行时图）可直接引用；合成图反例仍各自构造小图，不受影响。 */
+const srcGraph = buildSrcModuleGraph(SRC_ROOT)
+const srcExternalEdges = buildSrcExternalEdges(SRC_ROOT)
+
 describe('相对边采集的语法形态覆盖（PR #116 评审 4000329365）', () => {
   it("import type 查询 import('./x').Foo 记录为编译期边", () => {
     const edges = relativeEdgesOfSource(
@@ -88,7 +95,7 @@ describe('相对边采集的语法形态覆盖（PR #116 评审 4000329365）', 
 })
 
 describe('模块依赖图无环（issue 106，Dependency Design）', () => {
-  const edges: Map<string, ModuleEdge[]> = buildSrcModuleGraph(SRC_ROOT)
+  const edges = srcGraph
   const runtimeEdges = new Map<string, ModuleEdge[]>()
   for (const [k, list] of edges)
     runtimeEdges.set(
@@ -153,18 +160,18 @@ describe('模型层纯度守卫（issue #266）', () => {
   })
 
   it('src/model 生产模块无框架运行时依赖（框架类型仅 import type）', () => {
-    expect(
-      modelFrameworkRuntimeViolations(
-        buildSrcModuleGraph(SRC_ROOT),
-        buildSrcExternalEdges(SRC_ROOT),
-      ),
-    ).toEqual([])
+    // 真图 framework 守卫的唯一承载处（issue #734）：PR #305 边界完整性组
+    // 与动态导入组的同断言已去重；JSX 隐式 react/jsx-runtime 边由同一判定
+    // 函数覆盖，其合成由上方「边界完整性」组的反例验证。
+    expect(modelFrameworkRuntimeViolations(srcGraph, srcExternalEdges)).toEqual(
+      [],
+    )
   })
 
   it('src/model 运行时闭包无 editor 值依赖（issue #353 后无白名单）', () => {
-    expect(modelEditorRuntimeViolations(buildSrcModuleGraph(SRC_ROOT))).toEqual(
-      [],
-    )
+    // 真图 editor 守卫的唯一承载处（issue #734）：与 framework 守卫共同
+    // 覆盖真图无动态不可解析导入（两守卫均对 dynamic 边 fail-closed）。
+    expect(modelEditorRuntimeViolations(srcGraph)).toEqual([])
   })
 })
 
@@ -205,14 +212,8 @@ describe('模型层纯度守卫的边界完整性（PR #305 评审）', () => {
     ])
   })
 
-  it('真图：模型层无 JSX/框架运行时依赖', () => {
-    expect(
-      modelFrameworkRuntimeViolations(
-        buildSrcModuleGraph(SRC_ROOT),
-        buildSrcExternalEdges(SRC_ROOT),
-      ),
-    ).toEqual([])
-  })
+  // 真图「模型层无 JSX/框架运行时依赖」与 issue #266 组的 framework 守卫
+  // 逐字节同断言（issue #734 去重）：该唯一承载处保留，本组只留反例。
 })
 
 describe('模型层编译期独立性（issue #353，方向一）', () => {
@@ -268,17 +269,14 @@ describe('模型层编译期独立性（issue #353，方向一）', () => {
 
   it('真图：model 闭包无 editor/ 编译期边、无 @xyflow 编译期边', () => {
     expect(
-      modelCompileTimeInversionViolations(
-        buildSrcModuleGraph(SRC_ROOT),
-        buildSrcExternalEdges(SRC_ROOT),
-      ),
+      modelCompileTimeInversionViolations(srcGraph, srcExternalEdges),
     ).toEqual([])
   })
 })
 
 describe('模型层运行时闭包（PR #305 二轮评审）', () => {
   it('闭包含共享叶子，不含 editor 纯叶子与不可达的组件层（issue #353 后 model 无 editor 依赖）', () => {
-    const closure = modelRuntimeClosure(buildSrcModuleGraph(SRC_ROOT))
+    const closure = modelRuntimeClosure(srcGraph)
     // 评审引用的具体传递路径：model/normalize*.ts → src/uid.ts（运行时边）
     expect(closure.has('uid.ts')).toBe(true)
     // issue #353 方向一：model 改为自有 graphSemantics/settings，白名单
@@ -339,8 +337,7 @@ describe('动态不可解析导入的 fail-closed（PR #305 四轮评审）', ()
       { spec: 'pkg-${n}', typeOnly: false, dynamic: true },
     ])
     // 环构图只收可静态定目标的边：dynamic 边不参与（fixture 路径无法解析）
-    const edges = buildSrcModuleGraph(SRC_ROOT)
-    expect(cyclesOf(edges)).toEqual([])
+    expect(cyclesOf(srcGraph)).toEqual([])
   })
 
   it('守卫②：闭包内相对动态导入视为违规（运行时可达任意模块，纯度不可静态验证）', () => {
@@ -371,12 +368,10 @@ describe('动态不可解析导入的 fail-closed（PR #305 四轮评审）', ()
     ])
   })
 
-  it('真图：无动态不可解析导入，两守卫维持全空', () => {
-    const graph = buildSrcModuleGraph(SRC_ROOT)
-    const external = buildSrcExternalEdges(SRC_ROOT)
-    expect(modelEditorRuntimeViolations(graph)).toEqual([])
-    expect(modelFrameworkRuntimeViolations(graph, external)).toEqual([])
-  })
+  // 真图「无动态不可解析导入，两守卫维持全空」去重（issue #734）：framework
+  // 部分与 issue #266 组逐字节相同；editor 部分亦与「src/model 运行时闭包
+  // 无 editor 值依赖」逐字节相同——保留任一部分都会留下同输入同断言的新
+  // 重复，故整例删除。真图动态 fail-closed 由那两个保留守卫共同承载。
 })
 
 describe('外壳→功能方向守卫（issue #399 缺口二）', () => {
@@ -435,8 +430,6 @@ describe('外壳→功能方向守卫（issue #399 缺口二）', () => {
   })
 
   it('真图：外壳层无 editor 运行期值依赖（会话契约已提取至 src/ai）', () => {
-    expect(shellEditorRuntimeViolations(buildSrcModuleGraph(SRC_ROOT))).toEqual(
-      [],
-    )
+    expect(shellEditorRuntimeViolations(srcGraph)).toEqual([])
   })
 })

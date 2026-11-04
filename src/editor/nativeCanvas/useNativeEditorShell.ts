@@ -162,9 +162,8 @@ export function useNativeEditorShell(input: NativeEditorInput): void {
       remove()
     }
   }, [])
-  const encoded = useNativeEditorProjection(input)
+  const projection = useNativeEditorProjection(input)
   useEffect(() => {
-    if (encoded)
-      publishNativeProjection('editor', JSON.parse(encoded) as unknown)
-  }, [encoded])
+    if (projection) publishNativeProjection('editor', projection)
+  }, [projection])
 }

@@ -36,14 +36,14 @@ checks, the changed stack's full coverage (or the reused unchanged-stack
 reports), native functional regression for `native` and every `full` push,
 the scanner, Quality Gate `OK`, and zero new-code unresolved issues —
 `scripts/sonar-quality-gate.sh` appends exactly one JSON line to a pending
-file inside `.git`
-(`plotweave-gate-history.pending`), never to the tracked file mid-gate
+file inside the common Git directory
+(`git rev-parse --path-format=absolute --git-common-dir` / `plotweave-gate-history.pending`), never to the tracked file mid-gate
 (PR #415 评审 5338815626: a gate-side write to the tracked file leaves an
 unstaged change that aborts the next rebase replay, checkout, or merge
 updating that file). Since issue #548, `pre-commit` and `pre-merge-commit` run
 `gate-history.sh materialize --stage-for-commit` before their gate: they
 fold pending lines into the versioned ledger and `git add` it into the
-commit being created, so the versioned ledger lags one commit (the
+commit being created. Since owner decision #917 (2026-10-27), linked worktrees share this queue and `plotweave-sonar-gate.lock`; a successful eligible next ordinary commit in any worktree carries the records. Deferrals can extend that lag (the
 `prepare-commit-msg` fallback gate — revert, cherry-pick, rebase replays —
 deliberately does not touch the ledger; see the timing property below).
 Since PR #581 评审 5537970549, `pre-push` does not materialize either:
@@ -56,7 +56,7 @@ line:
 | `timestamp` | UTC ISO-8601 time of the record append, second precision. |
 | `tree` | The gated **index tree** (`git write-tree`) — the same key the dedup marker uses, and the value a reader compares against `git rev-parse <commit>^{tree}` to find a success claim for that content. Matching does not authenticate the claim. |
 | `head` | The commit `HEAD` pointed at during the run — the parent of the commit being created on pre-commit-style paths, the tip being pushed on `pre-push`. Provenance context, not the content-matching key; it does not authenticate execution. |
-| `scope` | The push scope recorded by owner decision 2026-10-18: `full`, `frontend`, `rust`, or `native`. A commit-gate run records `full` (the default); full pushes additionally require native functional regression. Native failure prevents a success record. |
+| `scope` | The push scope recorded by owner decision 2026-10-18: `full`, `frontend`, `rust`, or `native`. A commit-gate run records `full` (the default); full pushes additionally require native functional regression. Native failure prevents a success record. The field records the scope that actually executed: since issue #805 a single-stack push that takes the temporary-worktree slow path escalates to `full` before dispatch, so its record reads `full` and only fast-path scoped pushes record `frontend`/`rust`/`native`. |
 | `qualityGate` | The Quality Gate status for this run's analysis (`OK`; only fully passing runs are recorded). Native scope records the Sonar result for the reused frontend/Rust reports; native source itself is not a Sonar source in either `native` or `full` pushes. |
 | `newCodeUnresolvedIssues` | Unresolved issue count on new code for this run (`0`; only fully passing runs are recorded). |
 | `frontendLineCoveragePercent` / `rustLineCoveragePercent` | Line coverage computed from the same LCOV reports this run submitted (`DA` records with execution count > 0 count as covered). |
@@ -190,8 +190,8 @@ NODE
   开发者补换行并暂存后可重试；Node 或读取不可用时输出
   `[GATE_HISTORY_BOUNDARY_UNAVAILABLE]` 并同样保留输入。裸物化和提交入口共用此规则，
   空文件与无文件引导态不受阻止。
-- *Materialize timing and the one-commit lag.* Gate runs write only to the
-  pending file inside `.git`, so they never dirty the tracked file mid-gate
+- *Materialize timing and conditional next-commit lag.* Gate runs write only to the
+  pending file inside the common Git directory, so they never dirty the tracked file mid-gate
   and never interfere with subsequent Git steps. The pending file drains
   **only at commit-creation folds**: `pre-commit` and `pre-merge-commit` —
   the ordinary commit and merge paths, which reliably adopt hook staging —
@@ -212,11 +212,15 @@ NODE
   5542467935): the fold rebuilds only the worktree file, the hook warns
   `[GATE_HISTORY_STAGED_DELETION]` and keeps the deletion staged instead of
   resurrecting the ledger via `git add` (a both-absent path is the bootstrap
-  state and still folds normally). The lines are carried by that commit, so no unstaged residue
+  state and still folds normally). The attribution reads the index and
+  `HEAD` with the hook-exported `GIT_DIR` cleared, so a linked worktree
+  (`git worktree add`, whose hooks receive an absolute `GIT_DIR`) resolves
+  the ledger path from its own worktree root exactly like the main worktree
+  (issue #829). The lines are carried by that commit, so no unstaged residue
   remains while the operation proceeds — the PR #415 breakage was an
   *unstaged* write; this path folds and stages into the same commit. The
-  record for commit C's own gate run is therefore versioned in the **next**
-  ordinary commit (C's tree contains the staged lines, so it cannot contain
+  record for commit C's own gate run is therefore versioned in the **next eligible successful**
+  ordinary commit in the same repository (any linked worktree) (C's tree contains the staged lines, so it cannot contain
   its own record — self-reference). The `prepare-commit-msg` fallback gate
   — automatic `git revert` / `git cherry-pick` commits and every
   `git rebase` replay — deliberately does **not** materialize: sequencer
@@ -291,6 +295,9 @@ NODE
 | 上述暂缓状态 | 开发者补换行并暂存，再次物化 | pending 正常入库并清空，所有行仍可解析 | 边界修复后的重试必须保留原记录与待物化记录 | 补换行后恢复用例 |
 | 台账为空、不存在，或末行已有换行 | 正常物化 | 沿用既有追加、归因和暂存规则 | 边界检查不能阻止首条记录或正常追加 | 空文件、引导态与正常追加用例 |
 | Node 不可用或台账读取失败 | 排水前的边界检查无法完成 | `GATE_HISTORY_BOUNDARY_UNAVAILABLE`，保留全部输入供重试 | 无法验证边界时不得追加或清空 pending | Node 不可用与既有目录占位不可写用例 |
+| 链接 worktree（`git worktree add`）的普通提交，pending 有记录，台账无额外改动 | 钩子导出绝对 `GIT_DIR` 与 `GIT_INDEX_FILE` → 折并 → 归因读取索引与 HEAD | 记录自动暂存进本提交，pending 清空，台账状态干净 | 归因读取不依赖钩子导出的 `GIT_DIR`：Git 从台账目录发现 worktree 根，字节契约在链接 worktree 与主 worktree 下一致 | 链接 worktree 自动暂存用例（issue #829） |
+| 同上，台账在折并之外另有人工追加 | 折并后归因 | `GATE_HISTORY_UNATTRIBUTED_CHANGE`，提交只含开发者的暂存选择，pending 清空 | 修复执行环境不放宽内容归因守卫 | 链接 worktree 人工追加反例 |
+| 同上，台账删除已暂存 | 折并重建工作树文件后归因 | `GATE_HISTORY_STAGED_DELETION`，提交保留删除 | 空索引引导态只能来自「索引与 HEAD 都无该路径」的判定，不能来自读取失败 | 链接 worktree 已暂存删除用例（修复前读取失败被当作引导态，误判 attributed 并替换删除） |
 
 最初的索引修复只改变索引分类；并发排水仍由既有门禁互斥锁保护，锁超时与恢复继续由
 既有物化测试覆盖。sequencer 回退入口仍不调用物化。本地真实 Git 用例覆盖当前
@@ -300,6 +307,19 @@ EOF 归因修复由 `ledger_change_attribution` 负责，`pre-commit` 与
 `pre-merge-commit` 共用同一入口；不改变排水、锁超时或临时索引延后规则。
 比较时读取索引、工作树与折并捕获文件的原始字节，仅将折并内容解码后逐行
 验证 JSON；并发排水仍由既有互斥锁负责，不新增重试或恢复状态。
+
+链接 worktree 归因修复（issue #829）：`git worktree add` 的链接 worktree 中，
+Git 向提交钩子导出绝对 `GIT_DIR`（`.git/worktrees/<name>`）与绝对
+`GIT_INDEX_FILE`；显式 `GIT_DIR` 使 Git 把当前目录当作工作树根，
+`ledger_change_attribution` 的 `:./gate-history.jsonl` 与
+`HEAD:./gate-history.jsonl` 被解析为根级路径，两条读取都失败并落入空索引
+分支——字节匹配场景必然警告 `GATE_HISTORY_UNATTRIBUTED_CHANGE`、自动暂存
+退化为人工暂存；已暂存删除场景则反而被误判 attributed，把折并重建的台账暂存
+回去替换删除（评审 5542467935 的保护在该环境失效）。现在归因读取经
+`ledger_git` 清除 `GIT_DIR`，以台账目录为起点让 Git 自动发现 worktree 根
+（主 worktree 的钩子本就不导出 `GIT_DIR`，两种形态语义一致）；`GIT_INDEX_FILE`
+原样保留，仍读取钩子选定的索引。字节精确归因、EOF 换行、部分暂存、临时索引
+推迟与 `git add` 本身均不变。
 
 2026-10-16 索引分类修复的本地验证：Node 24.18.0、Git 2.48.1；当时的物化测试
 21/21 通过，`npm run check:size && npm test -- scripts` 的规模检查通过，完整
@@ -321,6 +341,23 @@ EOF 归因修复由 `ledger_change_attribution` 负责，`pre-commit` 与
 `npm run check:size && npm test -- scripts` 在沙箱外 360/360 通过，
 `sh scripts/check-static.sh`、`sh -n scripts/gate-history.sh` 与 diff 检查通过。
 文档及 AGENTS.md 已按路由结构化审阅，无配置的自动化文档检查。
+
+2026-10-25 链接 worktree 归因修复（issue #829）：先在夹具仓库内真实
+`git worktree add` 并经 pre-commit 钩子提交，复现字节匹配场景的
+`GATE_HISTORY_UNATTRIBUTED_CHANGE` 与已暂存删除被误自动暂存两个反例，再让
+归因读取清除 `GIT_DIR`。物化测试 34/34 通过；`sh scripts/check-static.sh` 通过，
+`npm test -- scripts` 514/514（28 个文件）通过，`sh -n scripts/gate-history.sh`
+通过。文档完成结构化审阅，无配置的自动化文档检查。平台验证边界仍为 macOS
+Git 2.48.1 / Node 24.18.0，未新增其他平台实测。
+
+
+### Shared worktree state and history diagnostics (issue #917)
+
+Owner decision (2026-10-27): `gate-history.sh`, `sonar-quality-gate.sh` and `pre-push` resolve the same absolute common Git directory before changing checkout. The default queue is `plotweave-gate-history.pending`, and the default mutex is `plotweave-sonar-gate.lock` in that directory. A linked checkout can be deleted after its records are archived or confirmed in this shared queue without deleting the queue itself. Gate append and materialization use the same mutex; `[GATE_HISTORY_LOCK_TIMEOUT]` preserves pending bytes for retry. Explicit pending/mutex overrides remain supported and callers must coordinate the pair. This does not merge independent clones, change thresholds or push cleanliness, or weaken byte-exact attribution, staged-deletion, temporary-index and #829 localization protections.
+
+The verifier additionally inspects at most eight recent non-merge ancestors of the PR merge base. More than one missing tree self-report (excluding pre-ledger and pure ledger-append commits) emits `[GATE_EVIDENCE_HISTORY_LAG]`; unavailable supplemental diagnostics emit `[GATE_EVIDENCE_HISTORY_UNAVAILABLE]`. Both are warning-only. Existing non-tip missing-record and destructive-ledger failures, and single-tip lag tolerance, stay unchanged. This bounded diagnostic is visibility, not complete historical coverage or proof of gate execution.
+
+Existing checkouts running older scripts retain their private queues until updated. Historic private gitdir queues and independent-clone archives are not automatically imported. Preserve their original bytes, hashes and logs before cleanup; any proposed historic backfill needs separately verified provenance and approval. A ledger miss does not prove missing CI or that all evidence was lost. Recounting the eight hashes listed in #917 finds `28b66dda` with one tree match and seven others without a tree/head match; `4a33e65c` is outside that list and has two tree matches / one head match at the inspected `9540bf7f` baseline. Existing archived closeout evidence remains independent of these ledger observations.
 
 ## Server-Side Evidence Verification (issue #548)
 
@@ -406,7 +443,7 @@ two complementary backstops (方案 1 + 方案 2):
 
 1. **CI evidence check（方案 1）.** The `gate-evidence` job in
    `.github/workflows/ci.yml` runs `scripts/verify-gate-evidence.ts` on
-   every pull request targeting `dev` or `main` (`ubuntu-latest`,
+   every pull request targeting `develop` or `main` (`ubuntu-latest`,
    pull-request events only — push runs contain server-created merge
    commits that have no local ledger record by design). Since issue #593,
    the job checks out the immutable event `pull_request.base.sha`; both the
@@ -513,10 +550,9 @@ two complementary backstops (方案 1 + 方案 2):
    non-tip commits.
 
    **Release-PR integration boundary (PR #581 评审 5542207474/5542342537).**
-   A `dev → main` release PR's range enumerates GitHub-created merge commits
+   A `develop → main` release PR's range enumerates GitHub-created merge commits
    and every integrated task branch — including each task's tip, whose
-   records by the one-commit-lag design are still materializing on the
-   developer's machine when the release opens. The verifier therefore
+   records may still be pending in that repository when the release opens. Linked worktree removal now preserves the common queue; an independently discarded clone or an older private gitdir has no automatic migration guarantee. The verifier therefore
    recognizes the integration boundary instead of demanding impossible
    records: merge commits in the range are skipped (server integration
    points never ran a local gate; their content was covered by the
@@ -528,10 +564,10 @@ two complementary backstops (方案 1 + 方案 2):
    a commit that merely deletes the ledger has touched the path and is not
    exempt. **These tolerances are gated on the explicit `--release-boundary`
    flag, which ci.yml passes only for the actual release PR — base `main`,
-   head `dev`, and the head repository being this repository itself (PR
+   head `develop`, and the head repository being this repository itself (PR
    #581 评审 5542467935/5542611194: base-only would hand the exemptions to
    any task branch opening a PR straight to `main`, and a short branch name
-   alone to a fork's identically named `dev`; branch protection does not
+   alone to a fork's identically named `develop`; branch protection does not
    restrict PR source branches)**: every other PR gets
    no integration-boundary exemptions at all — its merge
    commits and non-first parents require evidence like every other commit,
@@ -541,7 +577,7 @@ two complementary backstops (方案 1 + 方案 2):
    either.
 
 2. **Branch protection（方案 2）.** GitHub branch protection is enabled on
-   `dev` and `main` (owner decision, 2026-10-16): pull requests required
+   `develop` and `main` (owner decision, 2026-10-16): pull requests required
    (no approving-review count), the four `ci` jobs required as status
    checks, administrators included, force pushes and deletions blocked. A
    `git push --no-verify` direct push is rejected server-side before any
@@ -553,7 +589,7 @@ unchanged: the ledger is unsigned, so the check raises the cost of
 bypassing from "push with `--no-verify`" to "actively falsify the versioned
 ledger inside a pushed commit", and does not authenticate that the gate
 executed. A single-commit bypass PR that preserves its parent ledger surfaces
-only the tip warning — it is visible at merge time but not blocking.
+the tip warning (plus the bounded #917 ancestry warning when applicable) — visible at merge time but not blocking.
 Destructive ledger changes fail even in a single-commit PR. The uncovered
 creation paths
 (`git am`, plumbing, history rewriters) produce commits without records and

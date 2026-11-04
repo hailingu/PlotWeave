@@ -6,12 +6,23 @@ import { describe, expect, it } from 'vitest'
 // exclude 排除 src/**/*.test-d.ts，探针仅由严格类型检查入口
 // （tsconfig.strict.json）编译。断言以 TypeScript 自身的配置解析
 // 语义展开两个入口实际纳入的文件集合，不读取任何文档文字。
+// 根级文件集合契约（issue #806）：根级生产 Vite 配置全部进入两个入口；
+// 根级运行时测试沿用 src/**/*.test.ts 的既有策略——只由主构建检查，
+// 严格入口排除。tsconfig.strict.json 的 include 覆盖而非合并基配置，
+// 因此两个入口的根级清单各自固定，漏配任一方都由此处暴露。
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const mainConfigPath = resolve(repositoryRoot, 'tsconfig.json')
 const strictConfigPath = resolve(repositoryRoot, 'tsconfig.strict.json')
 const probeFile = resolve(repositoryRoot, 'src/model/typeContracts.test-d.ts')
 const productionFile = resolve(repositoryRoot, 'src/model/document.ts')
+/** 两个入口都必须纳入的根级生产 Vite 配置（主应用与原生画布构建）。 */
+const rootViteConfigs = [
+  resolve(repositoryRoot, 'vite.config.ts'),
+  resolve(repositoryRoot, 'vite.native-canvas.config.ts'),
+]
+/** 根级运行时测试：主构建纳入，严格入口排除。 */
+const rootRuntimeTest = resolve(repositoryRoot, 'vite.native-canvas.test.ts')
 
 /** 用 TypeScript 配置解析 API 展开一个 tsconfig 实际纳入的文件集合。 */
 function parseFileSet(configPath: string): readonly string[] {
@@ -52,10 +63,15 @@ describe('tsconfig 文件集合契约（issue #316）', () => {
     expect(strictFiles.some((file) => /\.test\.tsx?$/.test(file))).toBe(false)
   })
 
-  it('两个入口都覆盖生产源码与 vite 配置', () => {
+  it('两个入口都覆盖生产源码与全部根级 vite 配置', () => {
     for (const fileSet of [mainFiles, strictFiles]) {
       expect(fileSet).toContain(productionFile)
-      expect(fileSet).toContain(resolve(repositoryRoot, 'vite.config.ts'))
+      for (const config of rootViteConfigs) expect(fileSet).toContain(config)
     }
+  })
+
+  it('根级运行时测试由主构建检查，严格入口排除（issue #806）', () => {
+    expect(mainFiles).toContain(rootRuntimeTest)
+    expect(strictFiles).not.toContain(rootRuntimeTest)
   })
 })

@@ -75,21 +75,49 @@ invokes the strict entry alongside Prettier and ESLint so the local Git gate,
 the Sonar gate, and CI (`ci.yml`) all reject violations before coverage
 generation.
 
+The same command also runs `tsc --noEmit -p tsconfig.scripts.json`
+(issue [#855](https://github.com/hailingu/PlotWeave/issues/855)). This separate
+program checks all non-test `scripts/**/*.ts`, including test facilities,
+with Node types, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
+Its ES2023 library matches the pinned Node runtime; DOM libraries remain
+available because the browser import probe and its frontend imports are
+also compiled. Runtime scripts tests retain their existing behavior-test
+coverage. `scripts/static-tooling-config.test.ts` uses the compiler config
+parser to guard the complete non-test script inventory.
+
+Production `scripts/**/*.mjs` uses ESLint's recommended JavaScript rules
+with Node globals (issue [#856](https://github.com/hailingu/PlotWeave/issues/856)).
+The same configuration guard verifies an undefined identifier is rejected
+for every existing script and a future nested script path.
+
 - **`noUncheckedIndexedAccess`** (#230): Record and array index reads carry
   `undefined` at the type level.
 - **`exactOptionalPropertyTypes`** (#231): an optional property declared
   `?: T` no longer accepts an explicit `undefined` — "absent" and "explicitly
   undefined" are distinct, so every optional field states which side of that
   line it is on.
-- **Scope**: all production source under `src/` plus `vite.config.ts`, and
-  the compile-time contract probes `src/**/*.test-d.ts` (these are excluded
+- **Scope**: all production source under `src/` plus the root Vite build
+  configs `vite.config.ts` and `vite.native-canvas.config.ts`, and the
+  compile-time contract probes `src/**/*.test-d.ts` (these are excluded
   from the main build via `tsconfig.json` `exclude` and compiled only by the
   strict entry — probe assertions evaluate differently under the flags).
   **Out of scope**: `*.test.ts` / `*.test.tsx` — test fixtures build values
   locally where shapes are known by construction; the strictly mechanical
   widening pass there is large and low-value, while production code is where
   dirty data and missing keys matter. Test files stay on the plain `strict`
-  baseline.
+  baseline: `src/**` runtime tests arrive through the `src` include, and the
+  root-level `vite.native-canvas.test.ts` through an explicit `tsconfig.json`
+  include entry; `tsconfig.strict.json` declares its own `include` (it
+  overrides rather than merges the base), so the root runtime test is simply
+  absent there. Issue [#806](https://github.com/hailingu/PlotWeave/issues/806)
+  brought both root native-canvas files into these entries after neither
+  `tsc` entry had compiled them; the first pass surfaced a latent
+  `publicDir: false` widening in the function-form `defineConfig` (a
+  zero-parameter factory is not context-sensitive, so its returned literal
+  lost contextual typing under the overloads), fixed by an explicit
+  `UserConfig` return type. `scripts/tsconfig-scope.test.ts` pins both file
+  sets through TypeScript's own config parser, root-level entries included,
+  so a regression of either include list fails `npm test`.
 
 **Satisfying the index-access check** (#230): for values that can genuinely be
 missing, handle the missing case explicitly with the same dirty-data
@@ -281,6 +309,20 @@ The pinned Vitest 5.0.5 retains one exact-path group per source, using the provi
 The initial full V8 run after adding this policy passed all behavior tests and measured 96.95% aggregate lines, yet correctly failed `NativeHostApp` (0%), `main` (77.77%), `nativeEditorActions` (71.42%), and `useNativeEditorShell` (66.66%). Behavior tests cover real entry lifetime, native graph/settings/episode commands, undo and rejected arguments to bring those files above the floor. No production runtime behavior changes or coverage exclusion changes are required.
 
 The complete follow-up run passed 246 files / 3416 tests at 97.47% aggregate lines. The four files measured 100% (`NativeHostApp`), 100% (`main`), 92.86% (`nativeEditorActions`), and 88.46% (`useNativeEditorShell`). An isolated real-provider boundary probe used the same global floor and source-inventory policy: one file at 80% with 98.18% aggregate passed; at 60% with 96.36% aggregate it failed. This probe tests the threshold contract, not physical host behavior; the entry/controller cases use browser DOM, and no new visual, VoiceOver, or real IME acceptance is claimed.
+
+#### Scripts Tooling Per-File Floors (Issue #726)
+
+Issue [#941](https://github.com/hailingu/PlotWeave/issues/941) adds three
+in-process-tested publish-gate modules (`ub-mode-evidence.ts`, `ub-mode-run.ts`,
+`ub-mode-gate.ts`) at 80% each. Their integration tests call the real entry
+functions and use real Git repositories; external companion tools are replaced
+only in fault-injection tests. Separate real tool runs are required for publishing.
+
+Gate-critical production TypeScript under `scripts/` now has failable line-coverage floors instead of relying on test discipline alone. `vite.config.ts` adds `scripts/**/*.ts` to `coverage.include`, and `scripts/scripts-coverage-floor.ts` registers one exact-path threshold group per in-process-testable production file: `gate-scope-core.ts` and `native-canvas-coverage.ts` at 80 (the generator module itself is also registered at 80, executed in-process through `vite.config.ts`), and `native-coverage.ts` at a recorded starting floor of 50 (issue #726 permits starting below 80; measured 53.84% at dev `9e2d89b1`) — the aggregate 80% floor and the native-canvas groups are unchanged.
+
+The registered-list (not directory-discovery) design exists because most `scripts/` production files are driven by tests as spawned child processes (`check-file-size.ts`, `check-workspace-drift.ts`, `gate-scope.ts`, `verify-gate-evidence.ts`, the three `pre-push-install*.mjs` CLIs): V8 in-process coverage cannot observe child processes, so auto-flooding them at 80% would fail immediately and counting them at 0% would pollute the aggregate with instrumentation blindness rather than test absence. Those files are excluded from coverage and instead carry a **test-driver-evidence guard**: `scripts/scripts-coverage-scope.test.ts` fails unless every production `.ts`/`.mjs` under `scripts/` is classified (floored, subprocess-driven, or test facility per the #311 policy: the probe/fixture pair `build-library-import-probe.ts` + `scripts/fixtures/**`, `gate-routing-probe.ts`, `git-scenario-fixture.ts`, `native-coverage-fixture.ts`), registry entries are dangling, or a floored/subprocess file loses its last referencing test. Deleting all tests of any production file therefore fails either `npm run test:coverage` (floored files) or `npm test` (the guard, which also runs in CI), satisfying issue #726's acceptance; the same guard pins the include/exclude classification against the vite config.
+
+Residual boundaries, recorded rather than fixed: subprocess-driven files' actual line coverage remains unmeasured (V8 blindness; their behavior is integration-tested through the spawned CLI), and `scripts/**/*.sh` plus `.githooks/**` shells stay outside this policy pending the separate owner decision issue #726 reserves for them. Sonar scope is unchanged: static analysis of `scripts/**` rests on the zero-warning ESLint gate in `scripts/check-static.sh` (which covers the whole repository), and adding `scripts` to `sonar.sources` is deliberately not taken here — a first analysis would mark ~5k existing lines as new code under the zero-new-issue gate, which needs its own owner decision. The LCOV report now contains the floored `scripts/*.ts` files; Sonar ignores report entries outside its analyzed sources.
 
 ## TypeScript Engineering Practices
 

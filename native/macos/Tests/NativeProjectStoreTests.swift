@@ -62,6 +62,21 @@ struct NativeProjectStoreTests {
         #expect(rows.first { $0["id"]?.string == "broken" }?["diagnostic"]?.string != nil)
     }
 
+    /// The home order is newest first by the actual instant; equal or unparsable stamps fall back to id order,
+    /// with unparsable ones sorting as oldest — the contract the sort must keep however stamps are parsed.
+    @Test func listOrdersNewestFirstWithIdTieBreakAndUnparsableStampsLast() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("b-mid.json", Self.document("b-mid", updatedAt: "2026-10-04T00:00:01.000Z"))
+        try fixture.write("a-new.json", Self.document("a-new", updatedAt: "2026-10-04T08:00:02.000+08:00"))
+        try fixture.write("z-tie.json", Self.document("z-tie", updatedAt: "2026-10-04T00:00:01.000Z"))
+        try fixture.write("d-bad.json", Self.document("d-bad", updatedAt: "yesterday"))
+        try fixture.write("c-bad.json", Self.document("c-bad", updatedAt: ""))
+        try Data("{broken".utf8).write(to: fixture.projects.appendingPathComponent("e-broken.json"))
+        let listed = try await fixture.store.invoke(command: "list_projects", args: [:])
+        #expect(listed.array.map { $0["id"]?.string } == ["a-new", "b-mid", "z-tie", "c-bad", "d-bad", "e-broken"])
+    }
+
     /// Retired v0 flat envelopes are rejected like corruption (#519): the file stays untouched, listing keeps a diagnostic card, and loading fails.
     @Test func legacyFlatEnvelopeIsRejectedAndPreserved() async throws {
         let fixture = try Fixture()
@@ -98,6 +113,41 @@ struct NativeProjectStoreTests {
         #expect(try Data(contentsOf: file) == damaged)
     }
 
+    /// A deeply nested control file (issue #840) is an isolated diagnostic card like any other corruption:
+    /// the list keeps valid rows, load fails with the corrupt code, and the original file is never rewritten.
+    @Test func deeplyNestedControlFileIsAnIsolatedDiagnosticCard() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("good.json", Self.document("good", name: "正常"))
+        let deep = Data((String(repeating: "{\"a\":", count: 400) + "1" + String(repeating: "}", count: 400)).utf8)
+        try deep.write(to: fixture.projects.appendingPathComponent("deep.json"))
+        let listed = try await fixture.store.invoke(command: "list_projects", args: [:])
+        let rows = try #require(listed.arrayValue)
+        #expect(rows.count == 2)
+        #expect(rows.first { $0["id"]?.string == "good" }?["name"]?.string == "正常")
+        #expect(rows.first { $0["id"]?.string == "deep" }?["diagnostic"]?.string != nil)
+        do {
+            _ = try await fixture.store.invoke(command: "load_project", args: ["id": .string("deep")])
+            Issue.record("超深项目加载应返回结构化错误")
+        } catch let failure as HostFailure { #expect(failure.code == "PW_PROJECT_CORRUPT") }
+        #expect(try Data(contentsOf: fixture.projects.appendingPathComponent("deep.json")) == deep)
+    }
+
+    /// A deeply nested AI session file reports corruption instead of degrading to empty history or crashing
+    /// the actor's cooperative thread (issue #840).
+    @Test func deeplyNestedAiSessionReportsCorruptionWithoutRewrite() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("p-ai.json", Self.document("p-ai"))
+        let directory = fixture.projects.appendingPathComponent("p-ai")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let deep = Data((String(repeating: "[", count: 512) + String(repeating: "]", count: 512)).utf8)
+        try deep.write(to: directory.appendingPathComponent("ai-session.json"))
+        let reply = try await fixture.store.invoke(command: "load_ai_session", args: ["id": .string("p-ai")])
+        #expect(reply == .object(["session": .null, "corrupt": .bool(true)]))
+        #expect(try Data(contentsOf: directory.appendingPathComponent("ai-session.json")) == deep)
+    }
+
     /// Asset verification and copying keep real bytes within an independent, still-existing destination project.
     @Test func assetCopyAndVerificationFollowProjectIdentity() async throws {
         let fixture = try Fixture()
@@ -118,6 +168,27 @@ struct NativeProjectStoreTests {
         await #expect(throws: HostFailure.self) {
             try await fixture.store.invoke(command: "copy_project_assets", args: ["fromId": .string("source"), "toId": .string("destination")])
         }
+    }
+
+    /// Project copies keep active bytes but exclude quarantine at every depth without changing the source (#888).
+    @Test func copyExcludesQuarantineWithoutTouchingSource() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.write("source.json", Self.document("source"))
+        try fixture.write("destination.json", Self.document("destination"))
+        let source = fixture.projects.appendingPathComponent("source/assets")
+        for path in [".trash/import-token/media", "sub/.trash/receipt.json", ".trashcan/active.png", "active.png"] {
+            let file = source.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([7]).write(to: file)
+        }
+        _ = try await fixture.store.invoke(command: "copy_project_assets", args: ["fromId": .string("source"), "toId": .string("destination")])
+        let target = fixture.projects.appendingPathComponent("destination/assets")
+        #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent(".trash").path))
+        #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent("sub/.trash").path))
+        #expect(try Data(contentsOf: target.appendingPathComponent(".trashcan/active.png")) == Data([7]))
+        #expect(try Data(contentsOf: target.appendingPathComponent("active.png")) == Data([7]))
+        #expect(try Data(contentsOf: source.appendingPathComponent(".trash/import-token/media")) == Data([7]))
     }
 
     /// Save rejects a missing bucket as a whole instead of turning absent data into empty settings.
@@ -197,10 +268,10 @@ struct NativeProjectStoreTests {
     }
 
     /// Contract fixture uses complete authoritative v1 buckets without importing production builders.
-    private static func document(_ id: String, name: String = "测试剧") -> HostJSON {
+    private static func document(_ id: String, name: String = "测试剧", updatedAt: String = "2026-10-04T00:00:00.000Z") -> HostJSON {
         .object([
             "schemaVersion": .number(1), "project": .object([
-                "id": .string(id), "name": .string(name), "createdAt": .string("2026-10-04T00:00:00.000Z"), "updatedAt": .string("2026-10-04T00:00:00.000Z")
+                "id": .string(id), "name": .string(name), "createdAt": .string("2026-10-04T00:00:00.000Z"), "updatedAt": .string(updatedAt)
             ]), "graph": .object(["nodes": .array([]), "edges": .array([])]),
             "settings": .object(["characters": .object([:]), "locations": .object([:]), "props": .object([:]), "documents": .object([:])]),
             "episodeTitles": .object([:]), "assets": .object(["byId": .object([:])])

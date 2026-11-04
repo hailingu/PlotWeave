@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ApplicationServices
 import SwiftUI
 import Testing
 import WebKit
@@ -9,6 +10,485 @@ import WebKit
 @MainActor
 @Suite(.serialized, WebKitTestIsolation())
 struct NativeProductionLifecycleTests {
+    /// Physical events hit the real native outline; selection returns through the production React owner (#932).
+    @Test func outlineTextAndBlankSpaceSelectTheSameProductionNode() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("大纲整行命中")])
+        let id = try #require(created["id"]?.string)
+        var doc = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        doc["graph"] = outlineHitGraph()
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(doc), "expectExisting": .bool(true)])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let web = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(web)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.editor["nodes"]?.array.count == 2 }
+        let outline = fixture.mountOutline(state: mounted.state)
+        let target = try await outlineRowButton(in: outline, containing: "节拍 · 雨过天晴")
+        try NativeCreationControlFixture.press(target)
+        try await wait { mounted.state.selectedNodeID == "target" }
+        let targetFrame = try NativeCreationControlFixture.frame(target)
+        print("[outline-hit] button=\(targetFrame) window=\(outline.frame)")
+        let windowFrame = outline.convertToScreen(try #require(outline.contentView).bounds)
+        for x in [targetFrame.minX + 16, windowFrame.maxX - 14, windowFrame.minX + 14] {
+            _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string("first")])
+            try await wait { mounted.state.selectedNodeID == "first" }
+            print("[outline-hit] clicking x=\(x), from=\(mounted.state.selectedNodeID ?? "nil")")
+            try NativeMouseEventFixture.click(in: outline, accessibilityPoint: CGPoint(x: x, y: targetFrame.midY))
+            try await wait { mounted.state.selectedNodeID == "target" }
+            #expect(mounted.state.editor["selected"]?["data"]?["name"]?.string == "雨过天晴")
+            #expect(try await web.evaluateJavaScript("document.querySelector('.react-flow__node.selected')?.dataset.id ?? ''") as? String == "target")
+        }
+        _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string("first")])
+        try await wait { mounted.state.selectedNodeID == "first" }
+        try NativeMouseEventFixture.click(in: outline, accessibilityPoint: CGPoint(x: windowFrame.maxX - 14, y: targetFrame.maxY + 2))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(mounted.state.selectedNodeID == "first", "行间区域不得把点击归给目标行")
+        let first = try await outlineRowButton(in: outline, containing: "节拍 · 起风")
+        _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string("target")])
+        try await wait { mounted.state.selectedNodeID == "target" }
+        try NativeMouseEventFixture.click(in: outline, accessibilityPoint: CGPoint(x: windowFrame.maxX - 14, y: try NativeCreationControlFixture.frame(first).midY))
+        try await wait { mounted.state.selectedNodeID == "first" }
+        await fixture.services.close()
+    }
+
+    /// SwiftUI combines the beat title and fulfillment subtitle in one button's accessible name.
+    private func outlineRowButton(in window: NSWindow, containing title: String) async throws -> AXUIElement {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        repeat {
+            let elements = try await NativeCreationControlFixture.elements(in: window)
+            if let button = elements.first(where: { element in
+                NativeCreationControlFixture.string(element, kAXRoleAttribute) == kAXButtonRole
+                    && [kAXTitleAttribute, kAXDescriptionAttribute].contains { attribute in
+                        NativeCreationControlFixture.string(element, attribute)?.contains(title) == true
+                    }
+            }) { return button }
+        } while ContinuousClock.now < deadline
+        throw HostFailure(code: "PW_TEST_OUTLINE_ROW_TIMEOUT", message: "测试大纲行未呈现：" + title)
+    }
+
+    /// Two independent beats reproduce the reported second-episode row without a model or parallel graph owner.
+    private func outlineHitGraph() -> HostJSON {
+        let nodes: [HostJSON] = [("first", "起风"), ("target", "雨过天晴")].enumerated().map { index, item in
+            .object(["id": .string(item.0), "type": .string("beat"),
+                     "layout": .object(["position": .object(["x": .number(Double(index * 300)), "y": .number(0)])]),
+                     "ui": .object(["selected": .bool(false), "expanded": .bool(true)]),
+                     "data": .object(["meta": .object(["label": .string(item.1), "episodeNo": .number(Double(index + 1))]),
+                                      "spec": .object(["tone": .string("")])])])
+        }
+        return .object(["nodes": .array(nodes), "edges": .array([]),
+                        "viewport": .object(["x": .number(0), "y": .number(0), "zoom": .number(1)])])
+    }
+
+    /// A legacy beat-only AI card expands in the real page, commits all memberships and survives a new native window (#931).
+    @Test func aiEpisodeAssignmentPersistsUndoRedoAndWindowReopen() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("AI 分集持久化")])
+        let id = try #require(created["id"]?.string)
+        var doc = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        doc["graph"] = episodeGraph()
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(doc), "expectExisting": .bool(true)])
+        let session = try JSONDecoder().decode(HostJSON.self, from: Data("""
+            {"schemaVersion":1,"entries":[
+              {"id":1,"kind":"msg","role":"user","text":"为现有的节奏卡安排合适的分集"},
+              {"id":2,"kind":"msg","role":"assistant","text":"合成分集方案","card":{"status":"pending","v":{
+                "ok":true,"items":[],"issues":[],"hasDeletes":false,
+                "commands":[{"op":"update_node","nodeId":"b","patch":{"nodeType":"beat","patch":{"episodeNo":1}}}]
+              }}}
+            ]}
+            """.utf8))
+        _ = try await projects.invoke(command: "save_ai_session", args: ["id": .string(id), "session": session])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        try await waitForHostReady(try #require(findWebView(mounted.window.contentView)))
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.ai["thread"]?.array.count == 2 }
+        #expect(mounted.state.ai["thread"]?.array.last?["card"]?["v"]?["episodeAssignment"]?["commandCount"]?.number == 4)
+        _ = try await mounted.state.request("ai.execute", args: ["projectId": .string(id), "entryId": .number(2)])
+        let assigned: [String: HostJSON] = ["b": .number(1), "s": .number(1), "d": .number(1), "r": .number(1), "o": .number(2)]
+        #expect(episodeOwnership(try await numberingDocument(mounted.state, id: id)) == assigned)
+        _ = try await mounted.state.request("editor.undo", args: ["projectId": .string(id)])
+        #expect(episodeOwnership(try await numberingDocument(mounted.state, id: id)) == ["b": .null, "s": .null, "d": .null, "r": .null, "o": .number(2)])
+        _ = try await mounted.state.request("editor.redo", args: ["projectId": .string(id)])
+        #expect(episodeOwnership(try await numberingDocument(mounted.state, id: id)) == assigned)
+        _ = try await mounted.state.request("app.home")
+        try await wait { mounted.state.route == "home" }
+        let saved = try await waitForEpisodeDisk(projects, id: id, expected: assigned)
+        #expect(episodeOwnership(saved) == assigned)
+        #expect(edgePairs(saved) == ["b->s", "d->r", "s->d"])
+        mounted.window.close(); mounted.window.contentView = nil
+        let reopened = fixture.mount()
+        try await wait { reopened.state.route == "home" && reopened.state.app["loading"] == .bool(false) }
+        try await waitForHostReady(try #require(findWebView(reopened.window.contentView)))
+        _ = try await reopened.state.request("app.open", args: ["id": .string(id)])
+        try await wait { reopened.state.route == "editor" && reopened.state.ai["thread"]?.array.isEmpty == false }
+        #expect(episodeOwnership(try await numberingDocument(reopened.state, id: id)) == assigned)
+        #expect(reopened.state.ai["thread"]?.array.first { $0["id"]?.number == 2 }?["card"]?["status"]?.string == "executed")
+        await fixture.services.close()
+    }
+
+    /// The synthetic project has one outgoing beat chain plus another episode with no relationship to that chain.
+    private func episodeGraph() -> HostJSON {
+        let specs: [(String, String, [String: HostJSON])] = [
+            ("b", "beat", ["tone": .string("")]),
+            ("s", "scene", ["sceneNo": .number(1), "interior": .bool(true), "time": .string("夜"), "synopsis": .string("原文"), "characterIds": .array([])]),
+            ("d", "dialogue", ["lines": .array([.object(["id": .string("line"), "kind": .string("action"), "text": .string("原对白")])])]),
+            ("r", "branch", ["prompt": .string("留下？"), "options": .array([])]),
+            ("o", "beat", ["tone": .string("")])
+        ]
+        let nodes: [HostJSON] = specs.enumerated().map { index, item in
+            let (id, type, spec) = item
+            var meta: [String: HostJSON] = type == "branch" ? [:] : ["label": .string(id)]
+            if id == "o" { meta["episodeNo"] = .number(2) }
+            return .object(["id": .string(id), "type": .string(type),
+                            "layout": .object(["position": .object(["x": .number(Double(index * 220)), "y": .number(0)])]),
+                            "ui": .object(["selected": .bool(false), "expanded": .bool(true)]),
+                            "data": .object(["meta": .object(meta), "spec": .object(spec)])])
+        }
+        let edges: [HostJSON] = [("b", "s"), ("s", "d"), ("d", "r")].map { source, target in
+            .object(["id": .string(source + target), "source": .string(source), "target": .string(target), "data": .object(["kind": .string("sequence")])])
+        }
+        return .object(["nodes": .array(nodes), "edges": .array(edges), "viewport": .object(["x": .number(0), "y": .number(0), "zoom": .number(1)])])
+    }
+
+    /// Ownership is read from serialized node metadata, independently from the outline projection.
+    private func episodeOwnership(_ document: HostJSON) -> [String: HostJSON] {
+        Dictionary(uniqueKeysWithValues: (document["graph"]?["nodes"]?.array ?? []).compactMap { node -> (String, HostJSON)? in
+            guard let id = node["id"]?.string else { return nil }
+            return (id, node["data"]?["meta"]?["episodeNo"] ?? .null)
+        })
+    }
+
+    /// Navigation projects the home route before asynchronous storage settles; read real bytes until the confirmed ownership is durable.
+    private func waitForEpisodeDisk(_ projects: NativeProjectStore, id: String, expected: [String: HostJSON]) async throws -> HostJSON {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+        while ContinuousClock.now < deadline {
+            let document = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+            if episodeOwnership(document) == expected { return document }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        throw HostFailure(code: "PW_TEST_EPISODE_SAVE_TIMEOUT", message: "分集归属未在期限内保存到真实磁盘")
+    }
+
+    /// Real non-streaming WK requests publish readable native feedback; cancelled replies cannot replace a new round (#927).
+    @Test func aiRequestFeedbackFollowsActualTurnLifecycle() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let (mounted, id, gate) = try await prepareAiStatus(fixture)
+        let statusWindow = fixture.mountAi(state: mounted.state, projectId: id)
+        let args: [String: HostJSON] = ["projectId": .string(id), "text": .string("不要修改画布，只讨论人物。")]
+        let first = Task { try await mounted.state.request("ai.send", args: args) }
+        defer { first.cancel() }
+        try await wait { gate.replies.count == 1 && mounted.state.ai["feedback"]?["phase"]?.string == "waiting" }
+        try await assertAiStatus(statusWindow, title: "正在等待 AI 回复…")
+        _ = try await mounted.state.request("ai.cancel", args: ["projectId": .string(id)])
+        try await wait { mounted.state.ai["feedback"]?["phase"]?.string == "cancelled" }
+        try await assertAiStatus(statusWindow, title: "已停止本轮处理")
+        let second = Task { try await mounted.state.request("ai.send", args: args) }
+        defer { second.cancel() }
+        try await wait { gate.replies.count == 2 && mounted.state.ai["busy"]?.bool == true }
+        gate.finish(0, content: "旧轮迟到回复")
+        _ = try await first.value
+        #expect(mounted.state.ai["feedback"]?["phase"]?.string == "waiting")
+        #expect(mounted.state.ai["thread"]?.array.contains { $0["text"]?.string == "旧轮迟到回复" } != true)
+        // The native pane can remount without losing the still-current Web lifecycle.
+        statusWindow.contentView = nil
+        let remounted = fixture.mountAi(state: mounted.state, projectId: id)
+        try await assertAiStatus(remounted, title: "正在等待 AI 回复…")
+        gate.finish(1, content: "本轮文字回复")
+        _ = try await second.value
+        try await wait { mounted.state.ai["feedback"]?["phase"]?.string == "completed" }
+        try await assertAiStatus(remounted, title: "本轮回答已结束")
+        #expect(mounted.state.ai["busy"]?.bool == false)
+        let failed = Task { try await mounted.state.request("ai.send", args: args) }
+        defer { failed.cancel() }
+        try await wait { gate.replies.count == 3 }
+        gate.finish(2, error: true)
+        _ = try await failed.value
+        try await wait { mounted.state.ai["feedback"]?["phase"]?.string == "failed" }
+        try await assertAiStatus(remounted, title: "请求失败")
+        #expect(mounted.state.ai["error"]?.string?.contains("合成模型失败") == true)
+        await fixture.services.close()
+    }
+
+    /// Only the external model response is gated; production React, IPC, projection and native controls remain real.
+    private func prepareAiStatus(_ fixture: Fixture) async throws -> ((window: NSWindow, state: NativeApplicationState), String, AiReplyGate) {
+        let prefs = NativePreferences(root: fixture.root, machineMaterial: { "fixture-machine" })
+        let encrypted = try await prefs.invoke(command: "set_provider_key", args: ["providerId": .string("openai"), "key": .string("fixture-key")])
+        _ = try await prefs.invoke(command: "save_prefs", args: ["prefs": .object([
+            "providers": .array([.object(["id": .string("openai"), "label": .string("合成模型"), "baseUrl": .string("https://provider.example/v1"), "enabled": .bool(true), "models": .array([.string("fixture-model")]), "keyEnc": encrypted])]),
+            "defaultChat": .string("openai:fixture-model")
+        ])])
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("AI 状态回归")])
+        let id = try #require(created["id"]?.string)
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let web = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(web)
+        let coordinator = try #require(web.navigationDelegate as? WebCanvasCoordinator)
+        let gate = AiReplyGate(coordinator: coordinator)
+        let controller = web.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: "plotweaveHost", contentWorld: .page)
+        controller.addScriptMessageHandler(gate, contentWorld: .page, name: "plotweaveHost")
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.ai["ready"]?.bool == true }
+        return (mounted, id, gate)
+    }
+
+    /// The real native accessibility element must expose the same title as the request owner.
+    private func assertAiStatus(_ window: NSWindow, title: String) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            let elements = try await NativeCreationControlFixture.elements(in: window)
+            if elements.contains(where: {
+                NativeCreationControlFixture.string($0, kAXIdentifierAttribute) == "ai.requestStatus"
+                    && NativeCreationControlFixture.string($0, kAXDescriptionAttribute) == title
+            }) { return }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        Issue.record("原生 AI 请求状态未呈现：\(title)")
+    }
+
+    /// Deterministic external-response seam holds replies on the same production WK RPC futures.
+    @MainActor private final class AiReplyGate: NSObject, WKScriptMessageHandlerWithReply {
+        let coordinator: WebCanvasCoordinator
+        var replies: [@MainActor @Sendable (Any?, String?) -> Void] = []
+        /// Non-model requests keep their original service and session validation.
+        init(coordinator: WebCanvasCoordinator) { self.coordinator = coordinator }
+        /// Holds model transport only; no public endpoint or user credential is accessed.
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping @MainActor @Sendable (Any?, String?) -> Void) {
+            if (message.body as? [String: Any])?["command"] as? String == "llm_chat" { replies.append(replyHandler) }
+            else { coordinator.userContentController(controller, didReceive: message, replyHandler: replyHandler) }
+        }
+        /// Releases an owned pending transport request with a standard host envelope.
+        func finish(_ index: Int, content: String = "", error: Bool = false) {
+            replies[index](error ? ["error": ["code": "PW_FIXTURE_MODEL_FAILURE", "message": "合成模型失败"]]
+                : ["ok": ["role": "assistant", "content": content]], nil)
+        }
+    }
+
+    /// Real WKWebView timers retire repeated native-outline refusals without mutating the document (#930).
+    @Test func outlineFeedbackExpiresAndDoesNotReturnAfterNavigation() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("操作反馈生命周期")])
+        let id = try #require(created["id"]?.string)
+        var doc = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        // An explicit viewport prevents startup fitView from changing the document after baseline capture.
+        var graph = try #require(outlineGraph().object)
+        graph["viewport"] = .object(["x": .number(0), "y": .number(0), "zoom": .number(1)])
+        doc["graph"] = .object(graph)
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(doc), "expectExisting": .bool(true)])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let web = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(web)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.editor["nodes"]?.arrayValue?.count == 5 }
+        let before = try await numberingDocument(mounted.state, id: id)
+        let args: [String: HostJSON] = ["projectId": .string(id), "id": .string("A"),
+            "target": .object(["kind": .string("row"), "anchorId": .string("X"), "position": .string("after")])]
+        _ = try await mounted.state.request("editor.outlineMove", args: args)
+        try await waitForActionFeedback(web, present: true)
+        try await Task.sleep(for: .seconds(3))
+        _ = try await mounted.state.request("editor.outlineMove", args: args)
+        try await Task.sleep(for: .milliseconds(5_100))
+        let text = try await web.evaluateJavaScript("document.querySelector('.pw-error-banner[role=alert]')?.textContent ?? ''") as? String
+        #expect(text?.contains("大纲拖拽未执行") == true)
+        #expect(text?.contains("请先在画布上调整连线") == true)
+        try await waitForActionFeedback(web, present: false)
+        #expect(try await numberingDocument(mounted.state, id: id) == before)
+        _ = try await mounted.state.request("editor.outlineMove", args: args)
+        try await waitForActionFeedback(web, present: true)
+        _ = try await mounted.state.request("app.home")
+        try await wait { mounted.state.route == "home" }
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        try await waitForActionFeedback(web, present: false)
+        let reopened = try await numberingDocument(mounted.state, id: id)
+        var expected = try #require(before.object)
+        var metadata = try #require(before["project"]?.object)
+        // app.home flushes the document: export now uses the reloaded save timestamp.
+        metadata["updatedAt"] = .string(try #require(reopened["project"]?["updatedAt"]?.string))
+        expected["project"] = .object(metadata)
+        #expect(reopened == .object(expected))
+        #expect(mounted.state.error == nil)
+        await fixture.services.close()
+    }
+
+    /// Observe rendered alerts with real browser scheduling, independently of native projections.
+    private func waitForActionFeedback(_ web: WKWebView, present: Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+        while ContinuousClock.now < deadline {
+            let visible = try await web.evaluateJavaScript("Array.from(document.querySelectorAll('[role=alert]')).some(node => node.textContent.includes('大纲拖拽未执行'))") as? Bool
+            if visible == present { return }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        Issue.record("大纲操作反馈未达到预期可见状态：\(present)")
+    }
+
+    /// Actual native clear buttons, React history and Swift disk reload share the optional numbering contract (#933).
+    @Test func sceneNumberClearControlsPersistAndUndoIndependently() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("独立清除编号")])
+        let id = try #require(created["id"]?.string)
+        var doc = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        doc["graph"] = outlineGraph()
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(doc), "expectExisting": .bool(true)])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        try await waitForHostReady(try #require(findWebView(mounted.window.contentView)))
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        _ = try await mounted.state.request("editor.patchNode", args: ["projectId": .string(id), "id": .string("A"), "patch": .object(["sceneNo": .number(7), "episodeNo": .number(2)])])
+        _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string("A")])
+        try await wait { mounted.state.selectedNodeID == "A" && mounted.state.editor["selected"]?["data"]?["sceneNo"] == .number(7) }
+        let controls = mounted.window
+        let before = try await numberingDocument(mounted.state, id: id)
+        try await assertNumberField(controls, label: "场次", value: "7")
+        try numberPreview(controls, name: "scene7-episode2")
+        try await pressNumberButton(controls, named: "清除场次")
+        try await waitForNumbering(mounted.state, scene: nil, episode: 2)
+        try await assertNumberField(controls, label: "场次", value: "")
+        try numberPreview(controls, name: "scene-cleared-episode2")
+        #expect(numberingInvariant(try await numberingDocument(mounted.state, id: id)) == numberingInvariant(before))
+        _ = try await mounted.state.request("editor.undo", args: ["projectId": .string(id)])
+        try await waitForNumbering(mounted.state, scene: 7, episode: 2)
+        try await assertNumberField(controls, label: "场次", value: "7")
+        try await pressNumberButton(controls, named: "清除集号")
+        try await waitForNumbering(mounted.state, scene: 7, episode: nil)
+        _ = try await mounted.state.request("editor.undo", args: ["projectId": .string(id)])
+        try await waitForNumbering(mounted.state, scene: 7, episode: 2)
+        try await exerciseNumberHistory(controls, state: mounted.state, id: id)
+        for selected in ["B", "A"] {
+            _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string(selected)])
+            try await wait { mounted.state.selectedNodeID == selected }
+        }
+        try await assertNumberField(controls, label: "场次", value: "")
+        #expect(!(try await NativeCreationControlFixture.elements(in: controls)).contains { NativeCreationControlFixture.string($0, "AXDescription") == "清除场次" })
+        try await enterSceneNumber(controls, text: "8")
+        try await waitForNumbering(mounted.state, scene: 8, episode: nil)
+        try await pressNumberButton(controls, named: "清除场次")
+        controls.makeFirstResponder(nil)
+        try await waitForNumbering(mounted.state, scene: nil, episode: nil)
+        try await waitForNumberDisk(projects, id: id)
+        _ = try await mounted.state.request("app.home")
+        try await wait { mounted.state.route == "home" }
+        let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+        let savedA = try #require(saved["graph"]?["nodes"]?.arrayValue?.first { $0["id"] == .string("A") })
+        #expect(savedA["data"]?["spec"]?.object?["sceneNo"] == nil)
+        #expect(savedA["data"]?["meta"]?.object?["episodeNo"] == nil)
+        #expect(numberingInvariant(saved) == numberingInvariant(before))
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        _ = try await mounted.state.request("editor.select", args: ["projectId": .string(id), "id": .string("A")])
+        try await waitForNumbering(mounted.state, scene: nil, episode: nil)
+        try await assertNumberField(controls, label: "场次", value: "")
+        #expect(mounted.state.error == nil)
+        await fixture.services.close()
+    }
+
+    /// Sequential clears have separate inverse keys and restore exact empty/value combinations.
+    private func exerciseNumberHistory(_ controls: NSWindow, state: NativeApplicationState, id: String) async throws {
+        try await pressNumberButton(controls, named: "清除场次")
+        try await waitForNumbering(state, scene: nil, episode: 2)
+        try await pressNumberButton(controls, named: "清除集号")
+        try await waitForNumbering(state, scene: nil, episode: nil)
+        _ = try await state.request("editor.undo", args: ["projectId": .string(id)])
+        try await waitForNumbering(state, scene: nil, episode: 2)
+        _ = try await state.request("editor.undo", args: ["projectId": .string(id)])
+        try await waitForNumbering(state, scene: 7, episode: 2)
+        _ = try await state.request("editor.redo", args: ["projectId": .string(id)])
+        try await waitForNumbering(state, scene: nil, episode: 2)
+        _ = try await state.request("editor.redo", args: ["projectId": .string(id)])
+        try await waitForNumbering(state, scene: nil, episode: nil)
+    }
+
+    /// Read the actual production serializer, independently of native field projections.
+    private func numberingDocument(_ state: NativeApplicationState, id: String) async throws -> HostJSON {
+        let result = try await state.request("editor.exportPreview", args: ["projectId": .string(id), "format": .string("json")])
+        return try HostJSON.decode(Data(try #require(result["text"]?.string).utf8))
+    }
+
+    /// Remove only A's two target fields so whole-graph equality catches changes to content, edges or other nodes.
+    private func numberingInvariant(_ document: HostJSON) -> HostJSON {
+        let nodes = (document["graph"]?["nodes"]?.arrayValue ?? []).map { node -> HostJSON in
+            guard node["id"] == .string("A"), var object = node.object, var data = node["data"]?.object,
+                  var spec = data["spec"]?.object, var meta = data["meta"]?.object else { return node }
+            spec.removeValue(forKey: "sceneNo"); meta.removeValue(forKey: "episodeNo")
+            data["spec"] = .object(spec); data["meta"] = .object(meta); object["data"] = .object(data)
+            return .object(object)
+        }
+        return .object(["nodes": .array(nodes), "edges": document["graph"]?["edges"] ?? .null])
+    }
+
+    /// Await authoritative projections rather than timing a mocked callback or assuming the control action completed.
+    private func waitForNumbering(_ state: NativeApplicationState, scene: Double?, episode: Double?, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        try await wait(sourceLocation: sourceLocation) { state.selectedNodeID == "A" && state.editor["selected"]?["data"]?["sceneNo"]?.number == scene
+            && state.editor["selected"]?["data"]?["episodeNo"]?.number == episode }
+    }
+
+    /// Public accessibility reads prove that the actual native input agrees with the document after focus/history changes.
+    private func assertNumberField(_ controls: NSWindow, label: String, value: String) async throws {
+        let field = try await NativeCreationControlFixture.element(in: controls, named: label, roles: ["AXTextField"])
+        #expect(NativeCreationControlFixture.string(field, "AXValue") == value)
+    }
+
+    /// Public AX activation exercises the actual production inspector in the existing shell window.
+    private func pressNumberButton(_ window: NSWindow, named name: String) async throws {
+        let button = try await NativeCreationControlFixture.button(in: window, named: name)
+        #expect(try NativeCreationControlFixture.isEnabled(button))
+        try NativeCreationControlFixture.press(button)
+    }
+
+    /// Actual native editing follows AppKit's public text delegate and the field's exposed semantic label.
+    private func enterSceneNumber(_ window: NSWindow, text: String) async throws {
+        func fields(_ view: NSView?) -> [NSTextField] {
+            guard let view else { return [] }
+            return (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap { fields($0) }
+        }
+        let field = try #require(fields(window.contentView).first {
+            $0.isEditable && !$0.isHiddenOrHasHiddenAncestor && !$0.visibleRect.isEmpty && $0.accessibilityLabel() == "场次"
+        })
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(field)
+        field.stringValue = text
+        field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+    }
+
+    /// Synthetic project screenshots document the two numbered-field states without using private user data.
+    private func numberPreview(_ window: NSWindow, name: String) throws {
+        let view = try #require(window.contentView)
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        Attachment.record(png, named: name + ".png")
+        let output = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("build/scene-number-previews", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        try png.write(to: output.appendingPathComponent(name + ".png"))
+    }
+
+    /// Save completion is observed on disk before navigating; a route projection alone is not a storage receipt.
+    private func waitForNumberDisk(_ store: NativeProjectStore, id: String) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+        while ContinuousClock.now < deadline {
+            let document = try await store.invoke(command: "load_project", args: ["id": .string(id)])
+            let node = document["graph"]?["nodes"]?.arrayValue?.first { $0["id"] == .string("A") }
+            if node?["data"]?["spec"]?.object?["sceneNo"] == nil && node?["data"]?["meta"]?.object?["episodeNo"] == nil { return }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        Issue.record("清除后的场次与集号未保存到磁盘")
+    }
+
     /// Dynamic ports, deleted nodes and empty graphs survive permanent page disposal and actual same-view reload.
     @Test(arguments: [false, true])
     func pageDisposalAfterDynamicPortsReloadsSavedProject(retainNode: Bool) async throws {
@@ -52,6 +532,85 @@ struct NativeProductionLifecycleTests {
         let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
         #expect(saved["graph"]?["nodes"]?.arrayValue?.count == (retainNode ? 1 : 0))
         await fixture.services.close()
+    }
+
+    /// Outline insertion replaces the real canvas seam and survives undo/redo, disk save and reopening (#879).
+    @Test func outlineInsertionPersistsExactTopology() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let projects = try #require(fixture.services.projectStore)
+        let created = try await projects.invoke(command: "create_project", args: ["name": .string("大纲接缝回归")])
+        let id = try #require(created["id"]?.string)
+        var doc = try #require(try await projects.invoke(command: "load_project", args: ["id": .string(id)]).object)
+        doc["graph"] = outlineGraph()
+        _ = try await projects.invoke(command: "save_project", args: ["id": .string(id), "doc": .object(doc), "expectExisting": .bool(true)])
+        let mounted = fixture.mount()
+        try await wait { mounted.state.route == "home" && mounted.state.app["loading"] == .bool(false) }
+        let webView = try #require(findWebView(mounted.window.contentView))
+        try await waitForHostReady(webView)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" && mounted.state.editor["nodes"]?.arrayValue?.count == 5 }
+        _ = try await mounted.state.request("editor.outlineMove", args: [
+            "projectId": .string(id), "id": .string("X"),
+            "target": .object(["kind": .string("row"), "anchorId": .string("B"), "position": .string("after")])
+        ])
+        let inserted = ["A->B", "B->X", "C->D", "X->C"]
+        #expect(try await outlinePairs(mounted.state, id: id) == inserted)
+        #expect(try await webView.evaluateJavaScript("document.querySelectorAll('.react-flow__edge').length") as? Int == 4)
+        _ = try await mounted.state.request("editor.undo", args: ["projectId": .string(id)])
+        #expect(try await outlinePairs(mounted.state, id: id) == ["A->B", "B->C", "C->D"])
+        _ = try await mounted.state.request("editor.redo", args: ["projectId": .string(id)])
+        #expect(try await outlinePairs(mounted.state, id: id) == inserted)
+        try await waitForOutlineDisk(projects, id: id, expected: inserted)
+        _ = try await mounted.state.request("app.home")
+        try await wait { mounted.state.route == "home" }
+        let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+        #expect(edgePairs(saved) == inserted)
+        _ = try await mounted.state.request("app.open", args: ["id": .string(id)])
+        try await wait { mounted.state.route == "editor" }
+        #expect(try await outlinePairs(mounted.state, id: id) == inserted)
+        await fixture.services.close()
+    }
+
+    /// Route changes do not acknowledge the asynchronous save; observe the actual debounce completion on disk.
+    private func waitForOutlineDisk(_ projects: NativeProjectStore, id: String, expected: [String]) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+        while ContinuousClock.now < deadline {
+            let saved = try await projects.invoke(command: "load_project", args: ["id": .string(id)])
+            if edgePairs(saved) == expected { return }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        Issue.record("大纲重排未将完整边集保存到真实项目文件")
+    }
+
+    /// Seed only valid current-schema scenes and sequence edges into the fixture's private storage.
+    private func outlineGraph() -> HostJSON {
+        let nodes: [HostJSON] = ["A", "B", "C", "D", "X"].enumerated().map { index, id in
+            .object(["id": .string(id), "type": .string("scene"),
+                     "layout": .object(["position": .object(["x": .number(Double(index * 200)), "y": .number(0)])]),
+                     "ui": .object(["selected": .bool(false), "expanded": .bool(true)]),
+                     "data": .object(["meta": .object(["label": .string(id), "episodeNo": .number(1)]),
+                                      "spec": .object(["sceneNo": .number(Double(index + 1)), "interior": .bool(true),
+                                                       "time": .string("夜"), "synopsis": .string("回归"), "characterIds": .array([])])])])
+        }
+        let edges: [HostJSON] = [("A", "B"), ("B", "C"), ("C", "D")].map { source, target in
+            .object(["id": .string(source + target), "source": .string(source), "target": .string(target), "data": .object(["kind": .string("sequence")])])
+        }
+        return .object(["nodes": .array(nodes), "edges": .array(edges)])
+    }
+
+    /// Read the real production serializer after the native intent has completed its React update.
+    private func outlinePairs(_ state: NativeApplicationState, id: String) async throws -> [String] {
+        let result = try await state.request("editor.exportPreview", args: ["projectId": .string(id), "format": .string("json")])
+        let text = try #require(result["text"]?.string)
+        return edgePairs(try JSONDecoder().decode(HostJSON.self, from: Data(text.utf8)))
+    }
+
+    /// Exact complete edge sets detect a bypass even when every newly added edge is correct.
+    private func edgePairs(_ document: HostJSON) -> [String] {
+        (document["graph"]?["edges"]?.arrayValue ?? []).map {
+            ($0["source"]?.string ?? "?") + "->" + ($0["target"]?.string ?? "?")
+        }.sorted()
     }
 
     /// Native production intents change the real React Flow port DOM before deleting its owning branch.
@@ -412,6 +971,28 @@ struct NativeProductionLifecycleTests {
             // A nonactive app-hosted process still needs visible WebKit animation frames.
             window.orderFrontRegardless()
             return (window, state)
+        }
+
+        /// A second native projection window shares the existing production document owner and no mutable graph.
+        func mountOutline(state: NativeApplicationState) -> NSWindow {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.level = .floating
+            window.contentView = NSHostingView(rootView: NativeOutlineView(state: state))
+            windows.append(window)
+            window.orderFrontRegardless()
+            return window
+        }
+
+        /// The actual native AI pane consumes the production page's projection without another session owner.
+        func mountAi(state: NativeApplicationState, projectId: String) -> NSWindow {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.level = .floating
+            window.contentView = NSHostingView(rootView: NativeAiView(state: state, projectId: projectId))
+            windows.append(window)
+            window.orderFrontRegardless()
+            return window
         }
 
         /// Teardown invalidates Web owners before removing only this fixture's disposable data.

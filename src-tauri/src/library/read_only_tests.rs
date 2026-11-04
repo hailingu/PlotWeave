@@ -112,6 +112,7 @@ fn put_on_clean_index_omits_warnings() {
 #[test]
 fn list_read_does_not_persist_index_in_journal_read_only_mode() {
     let (library, root) = temp_fixture();
+    fs::write(library.join("assets/la-1.png"), b"healthy").unwrap();
     // 旧数组形状索引：正常路径下读取即迁移落盘
     write_index_raw(
         &library,

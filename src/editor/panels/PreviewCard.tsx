@@ -1,4 +1,8 @@
-import { batchIssueText, type BatchValidation } from '../ai/commands'
+import {
+  batchIssueText,
+  requiresBatchConfirmation,
+  type BatchValidation,
+} from '../ai/commands'
 
 const ITEM_ICONS: Record<BatchValidation['items'][number]['kind'], string> = {
   create: '＋',
@@ -13,6 +17,8 @@ const ITEM_ICONS: Record<BatchValidation['items'][number]['kind'], string> = {
 
 /** 执行按钮文案：含删除时按武装态分两步（S3358 独立成函数）。 */
 function executeLabel(v: BatchValidation, armed: boolean): string {
+  if (v.episodeAssignment?.conflicts.length)
+    return armed ? '确认本次分集冲突并执行' : '确认分集冲突…'
   if (!v.hasDeletes) return '✓ 执行改动'
   if (armed) return '再点一次确认执行删除'
   return `执行（含 ${v.items.filter((i) => i.danger).length} 项删除）`
@@ -65,7 +71,7 @@ function PreviewCardActions({
             className={`pw-ai-btn primary${v.hasDeletes ? ' danger' : ''}`}
             disabled={!v.ok || busy}
             onClick={() => {
-              if (!v.hasDeletes || armed) onExecute()
+              if (!requiresBatchConfirmation(v) || armed) onExecute()
               else onArm()
             }}
           >
@@ -95,6 +101,7 @@ interface PreviewCardProps {
   readonly onArm: () => void
   readonly onExecute: () => void
   readonly onDismiss: () => void
+  readonly executionError?: string | undefined
 }
 
 /** AI 改动预览卡（§6）：整批条目的图标化清单 + 确认/忽略动作；
@@ -108,6 +115,7 @@ export function PreviewCard({
   onArm,
   onExecute,
   onDismiss,
+  executionError,
 }: PreviewCardProps) {
   if (status === 'dismissed') return null
   return (
@@ -116,7 +124,27 @@ export function PreviewCard({
       className={`pw-ai-card${v.hasDeletes ? ' danger' : ''}`}
       aria-label="AI 改动预览"
     >
-      <div className="pw-ai-card-head">✦ 改动预览 · {v.commands.length} 项</div>
+      <div className="pw-ai-card-head">
+        ✦ 改动预览 · {v.episodeAssignment?.commandCount ?? v.commands.length} 项
+      </div>
+      {executionError && <div role="alert">{executionError}</div>}
+      {status === 'pending' &&
+        v.ok &&
+        !!v.episodeAssignment?.conflicts.length && (
+          <div role="alert">
+            <strong>
+              分集冲突：尚未执行，确认后才执行下列改动，也可忽略取消。
+            </strong>
+            <ul>
+              {v.episodeAssignment.conflicts.map((conflict) => (
+                <li key={conflict}>{conflict}</li>
+              ))}
+            </ul>
+            {v.hasDeletes && (
+              <p>本批同时包含删除，确认也将执行已列出的删除改动。</p>
+            )}
+          </div>
+        )}
       {!v.ok && (
         <ul className="pw-ai-issues">
           {v.issues.map((iss) => (

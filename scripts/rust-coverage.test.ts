@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const temporaryRoots: string[] = []
@@ -62,9 +62,9 @@ fi
       PLOTWEAVE_GATE_REPOSITORY_ROOT: sandbox,
       PLOTWEAVE_RUST_COVERAGE_REPORT_PATH: report,
       PLOTWEAVE_TEST_MODE: mode,
-      ...(budget !== undefined
-        ? { PLOTWEAVE_GATE_CPU_BUDGET: String(budget) }
-        : {}),
+      // undefined 在子进程环境中省略，缺省用例不继承宿主门禁预算。
+      PLOTWEAVE_GATE_CPU_BUDGET:
+        budget !== undefined ? String(budget) : undefined,
     },
   })
   return {
@@ -93,6 +93,7 @@ function lineHits(report: string): Map<string, Map<number, number>> {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true })
   }
@@ -132,6 +133,7 @@ describe('Rust 跨 workspace 覆盖率', () => {
 describe('Rust 覆盖率 CPU 预算', () => {
   it('两个 workspace 的 llvm-cov 调用都按默认预算 4 限制 --jobs 并导出 RUST_TEST_THREADS（评审 5545658713 owner 指示）', () => {
     const budget = 4
+    vi.stubEnv('PLOTWEAVE_GATE_CPU_BUDGET', '1')
     const result = runCoverage()
 
     expect(result.status, result.stderr).toBe(0)

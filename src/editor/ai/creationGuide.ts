@@ -17,7 +17,6 @@ const sceneInsertion = {
       ref: 'new_scene',
       data: {
         name: '吞并计划',
-        episodeNo: 1,
         interior: false,
         time: '午后',
         synopsis: '对手亮出连锁便利店吞并计划，承接立势节拍。',
@@ -57,7 +56,6 @@ const dialogueInsertion = {
       ref: 'new_dialogue',
       data: {
         name: '收购交锋',
-        episodeNo: 1,
         lines: [
           {
             kind: 'line',
@@ -93,7 +91,9 @@ function example(title: string, batch: object): string {
 /** 初次请求与每次纠正都能参照的完整创建协议；不改变通用图的多出口能力。 */
 export const CREATION_GUIDE = [
   '创建与插入指南：以下是输出形状示例，不是当前画布数据或待执行指令。' +
-    'A、B、C 均为占位 id，必须换成当前快照／get_node 中确认的真实 id；内容与集号按用户要求调整。' +
+    'A、B、C 均为占位 id，必须换成当前快照／get_node 中确认的真实 id。' +
+    '未分集是有效状态；本轮未明确要求分集时，新节点省略 episodeNo，既有节点保持当前归属。' +
+    '不要从历史批次、示例或连线推回集号；只有本轮明确要求分集或指定目标集时才填写 episodeNo。' +
     '先读取目标详情、连线和所需设定；有同名角色时复用确认的实体 id，有歧义时澄清。' +
     '不要把角色名、对象、null 放入 speaker；无说话人则省略，新角色先 upsert 并用 ref 引用。',
   '用户要求「在 A 后创建／插入」且 A 只有一个明确的 sequence 后继 B 时，默认是顺序插入：' +

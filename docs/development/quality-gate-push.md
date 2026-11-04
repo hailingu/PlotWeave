@@ -7,6 +7,10 @@
 
 **整理日期**：2026-10-01
 
+2026-10-30（[#941](https://github.com/hailingu/PlotWeave/issues/941)）：每个唯一
+非删除提交先通过 [ub-mode 本地发布门禁](ub-mode-gate.md)，再运行以下既有分流。
+docs-only 也需有效 ub-mode 记录；原覆盖率、Sonar、隔离与台账语义保持。
+
 ## Scoped Push Routing (2026-10-18)
 
 所有者指示（2026-10-18）在 `pre-push` 引入按变更范围分派；commit-creating
@@ -16,43 +20,73 @@
 | 变更范围 | 判定 | 推送门禁行为 |
 | --- | --- | --- |
 | docs-only | 所有变更路径为 `docs/**`、根 Markdown 或 `LICENSE` | 只运行 `scripts/check-docs.sh`（`git diff --check`）；跳过静态检查、覆盖率、Sonar 与推送台账记录。commit 钩子的完整门禁记录仍是证据。 |
-| frontend | 非文档路径只落在 `src/**` 与前端专属根配置 | 全量前端测试 + 前端覆盖率；Rust 复用主工作树最近 LCOV；Sonar 导入两侧报告。 |
-| rust | 非文档路径只落在 `src-tauri/**`、`crates/**`、`rust-toolchain.toml` | 全量 Rust 测试 + `rust-coverage.sh`；前端复用最近 LCOV；Sonar 导入两侧报告。 |
-| native | 非文档路径只落在 `native/**` | `sh scripts/test-native.sh` 构建画布并串行运行功能回归；压力测量按需运行（见下节）。前端/Rust 复用最近 LCOV；Sonar 导入两侧报告。原生代码不在 Sonar 源码范围，记录 `scope: native`。 |
+| frontend | 非文档路径只落在 `src/**`、`public/**`（前端构建静态输入）与前端专属根配置 | 快路径：全量前端测试 + 前端覆盖率，Rust 复用主工作树最近 LCOV；慢路径自动提升为 full（见下）。Sonar 导入两侧报告。 |
+| rust | 非文档路径只落在 `src-tauri/**`、`crates/**`、`rust-toolchain.toml` | 快路径：全量 Rust 测试 + `rust-coverage.sh`，前端复用最近 LCOV；慢路径自动提升为 full（见下）。Sonar 导入两侧报告。 |
+| native | 非文档路径只落在 `native/**` | 快路径：`sh scripts/test-native.sh` 构建画布并串行运行功能回归，压力测量按需运行（见下节），前端/Rust 复用最近 LCOV；慢路径自动提升为 full（见下）。Sonar 导入两侧报告。原生代码不在 Sonar 源码范围，快路径记录 `scope: native`。 |
 | full | 跨栈、工具（`scripts/**`、`.githooks/**`、`.github/**`、根 linter/配置）、未知路径、空差异或无法确定基线 | 完整推送门禁：静态检查 + 前端/Rust 全量覆盖率 + native 功能回归 + Sonar；压力测量仍按需运行。 |
 
 实现与边界：
 
 - `scripts/gate-scope.ts` 从 `git diff --no-renames --name-only <base> <commit>`
   分类；已有 ref 只取远端旧 tip，若该对象在本地不可用则按 `full`。
-  只有远端 SHA 全零的新 ref 才依次取本地 `dev` merge-base、
-  `origin/dev`、提交父提交。无法确定时按 `full`，不因“没有差异”跳过。
+  只有远端 SHA 全零的新 ref 才依次取本地 `develop` merge-base、
+  `origin/develop`、提交父提交。无法确定时按 `full`，不因“没有差异”跳过。
 - 同一提交的所有 ref 范围先收集再合并，随后才去重执行：docs 为中性，
   不同实现栈或任一 full 取 full；每个文档范围均执行差异检查。
   交换 ref 顺序不改变最终范围。三个提交创建入口显式设置
   `PLOTWEAVE_GATE_SCOPE=full PLOTWEAVE_GATE_FULL_NATIVE=0`，外部环境不能把提交门禁降为推送单栈路径，也不能继承推送专属成本。
 - `full` 推送显式设置 `PLOTWEAVE_GATE_FULL_NATIVE=1`，保守执行三栈检查，
-  包括合并范围、工具变更和无法确定基线；调用方的 `0` 不能降级。共享门禁
-  只接受 `0`/`1`，非法值以 `[GATE_FULL_NATIVE_INVALID]` 阻断。直接调用默认
-  `0`，保持既定提交门禁成本；手动验证完整推送须显式设为 `1`。
+  包括合并范围、工具变更、无法确定基线，以及慢路径单栈提升而来的 full
+  （issue #805）；调用方的 `0` 不能降级。共享门禁只接受 `0`/`1`，非法值
+  以 `[GATE_FULL_NATIVE_INVALID]` 阻断。直接调用默认 `0`，保持既定提交
+  门禁成本；手动验证完整推送须显式设为 `1`。
 - `pre-push` 把范围经 `PLOTWEAVE_GATE_SCOPE` 传给
   `scripts/sonar-quality-gate.sh`；未变更栈的 LCOV 经
   `PLOTWEAVE_REUSED_FRONTEND_LCOV` / `PLOTWEAVE_REUSED_RUST_LCOV` 指向
-  主工作树最近产物。缺文件、报告为空/无源文件/无覆盖行时 fail-closed，
-  禁止 Sonar 在缺少一侧报告时静默降级。
+  主工作树最近产物。该分派只在快路径（被推提交即 `HEAD` 且当前工作树
+  可证等价）下发；慢路径不下发范围与复用环境（见下条）。快路径下缺
+  文件、报告为空/无源文件/无覆盖行时 fail-closed，禁止 Sonar 在缺少
+  一侧报告时静默降级。
 - 单栈只跑该栈的全量回归与覆盖率；“代码覆盖率全量更新”指变更栈的完整
   栈内覆盖率，不是只测变更文件；未变更栈复用最近 LCOV，不重跑其测试。
-- 原生功能回归采集独立的 Swift App 行覆盖率报告（[#601](https://github.com/hailingu/PlotWeave/issues/601)，[报告与阈值规则](native-coverage.md)），默认先报告、不设百分比下限；显式下限低于要求或源文件清单不完整时失败。采集无效与原生测试失败同样阻断推送。前端/Rust LCOV 按上述复用；Sonar 对原生源码不建模，台账的 `scope: native` 明示该边界。
+- 原生功能回归采集独立的 Swift App 行覆盖率报告（[#601](https://github.com/hailingu/PlotWeave/issues/601)，[报告与阈值规则](native-coverage.md)），默认先报告、不设百分比下限；显式下限低于要求或源文件清单不完整时失败。采集无效与原生测试失败同样阻断推送。前端/Rust LCOV 按上述复用；Sonar 对原生源码不建模，快路径台账的 `scope: native` 明示该边界。
 - docs-only 不写推送台账；普通 commit 钩子已产生的全量记录继续作为
   gate-evidence 证据。若 docs-only 提交绕过 commit 钩子创建，则没有该
   记录——这与既有 hook 覆盖边界一致，不是新豁免。
-- 单栈慢路径在临时 worktree 中运行，复用的 LCOV 来自主工作树最近门禁；
-  若未变更栈代码已相对该报告变化，复用值可能陈旧。此时应运行完整门禁；
-  该边界不改变“变更栈覆盖率必须刷新”的要求。
+- **慢路径单栈自动提升为 full（[issue #805](https://github.com/hailingu/PlotWeave/issues/805)，2026-10-25）。**
+  单栈复用 LCOV 只在快路径成立：快路径证明当前工作树与被推提交等价，
+  主工作树最近报告与被推树同源。慢路径（临时 worktree）此前仍把复用
+  报告指向主工作树，而主工作树源码可以与被推树的未变更栈不同——旧
+  报告无法证明属于被推树，曾被登记为「此时应运行完整门禁」的人工
+  边界；该提升现由钩子自动执行：单栈慢路径以稳定诊断代码
+  `PRE_PUSH_SCOPE_ESCALATED` 输出后按 full 执行，两栈覆盖率在被推树
+  内刷新，`PLOTWEAVE_GATE_FULL_NATIVE=1` 照常下发，主工作树旧报告不
+  进入 Sonar 或推送台账（台账如实记录 `scope: full`）。快路径的复用
+  值仍以「主工作树最近一次门禁产物」为界——报告相对当前树自身的
+  陈旧性是既有残余（上次门禁后经未覆盖路径产生的提交等），不因本次
+  修复改变。
 
 回归：`scripts/gate-scope.test.ts` 覆盖分类与 CLI；`scripts/pre-push-refs.test.ts`
-覆盖 docs-only 跳过、单栈分派与复用路径；`scripts/sonar-quality-gate.test.ts`
-覆盖 frontend/rust/native 分流、缺 LCOV fail-closed 与 native 失败阻断。
+覆盖 docs-only 跳过、快路径单栈分派与复用路径，以及慢路径单栈提升为
+full、不向门禁下发复用环境、在被推树内刷新两栈覆盖率与原生回归
+（issue #805）；`scripts/sonar-quality-gate.test.ts` 覆盖 frontend/rust/native
+分流、缺 LCOV fail-closed 与 native 失败阻断。
+
+### 慢路径单栈提升矩阵（issue #805）
+
+`pre-push` 拥有快/慢判定与范围提升；共享门禁拥有覆盖率生成与台账记录。
+提升只改变单栈慢路径的范围环境，不新增异步状态；信号清理、临时树管理
+与监督语义沿用既有契约。
+
+| 前置状态 | 动作/顺序 | 预期可观察结果 | 跨转换不变量 | 验证 |
+| --- | --- | --- | --- | --- |
+| 单栈提交 = `HEAD` 且工作树可证等价 → 推送 | 快路径下发单栈范围与复用 LCOV | 变更栈全量覆盖率刷新，另一栈复用主工作树报告 | 快路径的单栈成本决策与缺报告 fail-closed 不变 | pre-push-refs 既有「单栈 %s 只分派 %s 范围并复用另一侧 LCOV」回归 |
+| 单栈提交非 `HEAD` 或工作树不可证等价，主工作树未变更栈源码与被推树不同 → 推送 | 快/慢判定先于范围环境设置；提升 full 后临时 worktree 安装并执行完整门禁 | `PRE_PUSH_SCOPE_ESCALATED` 诊断；门禁收不到范围与复用环境；两栈覆盖率在被推树内刷新；台账 `scope: full` 且 `head` 为被推提交 | 被推树的 Sonar 与台账只消费按该树生成的覆盖率；主工作树 LCOV 不进入慢路径扫描；docs-only、同提交多 ref 去重与变更栈全量刷新保留 | pre-push-refs 慢路径提升回归（探针断言无复用环境）与完整门禁集成回归（npm/cargo/xcodebuild 均执行） |
+| full / 跨栈 / 工具 / 无法确定基线 → 推送 | 行为不变 | 完整推送门禁，`PLOTWEAVE_GATE_FULL_NATIVE=1` | 提升逻辑不削弱既有 full 行为 | pre-push-refs 既有混合范围与 missing-tip 回归 |
+| docs-only → 推送 | 行为不变 | 仅 `check-docs.sh`，无门禁与台账 | docs 分流先于快/慢判定与提升 | pre-push-refs 既有 docs-only 回归 |
+
+残余边界：快路径复用报告相对当前树自身的陈旧性（上次门禁后被推入的
+提交未刷新主工作树报告）不属于本矩阵修复范围，沿用上一条的既有登记。
 
 ### PR #604 修复状态与不变量矩阵
 
@@ -105,7 +139,7 @@ CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建�
 入口的选择契约为：默认向 Xcode 显式传入环境变量
 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=0`；Xcode 去掉 `TEST_RUNNER_`
 前缀后把该值转发给测试宿主（[Apple 环境变量说明](https://developer.apple.com/documentation/xcode/environment-variable-reference)），
-以下六个方法通过 Swift Testing 的 `.enabled` 条件跳过。
+以下十个方法通过 Swift Testing 的 `.enabled` 条件跳过。
 开关未设置或不是精确值 `1` 时同样跳过：
 
 - `WebCanvasPerformanceTests/sustainedScriptedOperationsMatchFixtureScale(scale:)`
@@ -114,6 +148,10 @@ CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建�
 - `WebCanvasPerformanceTests/repeatedReloadsRecordLongMemoryTrend()`
 - `WebCanvasFirstDragLatencyTests/sameNodeFirstAndSecondDragRecordStartupEvidence()`
 - `WebCanvasFirstDragLatencyTests/openedProjectFirstDragsRecordPreparedEntryEvidence(mixedTypes:)`（首拖专用入口的项目加载对照）
+- `NativeListScalingBaselineTests/listProjectsDurationScalesWithStoredBytes(point:)`（issue #730 存储侧列表伸缩性基线）
+- `NativeListScalingBaselineTests/listLibraryAssetsDurationScalesWithAssetCount(assets:)`
+- `NativeListScalingBaselineTests/descriptorChainRebuildCostPerOperation()`
+- `NativeListScalingBaselineTests/perItemUnitCostsAttributeListTime()`
 
 `sh scripts/test-native.sh stress` 传入环境变量 `TEST_RUNNER_PLOTWEAVE_NATIVE_STRESS_TESTS=1`，
 通过 `-only-testing` 选择整个 `WebCanvasPerformanceTests` 套件与首拖测量；
@@ -125,6 +163,17 @@ CI 和 native 推送门禁统一使用 `sh scripts/test-native.sh`，先构建�
 只选择 `WebCanvasFirstDragLatencyTests` 套件，启用该套件中的首拖测量并关闭覆盖率；
 不选择 `WebCanvasPerformanceTests`，因此不运行大图持续交互、窗口重建或长循环 reload。
 原 `stress` 的选择、规模与断言不变；默认功能回归仍关闭压力开关。
+
+存储侧列表伸缩性基线（[issue #730](https://github.com/hailingu/PlotWeave/issues/730)）同样有专用入口
+`sh scripts/test-native.sh list-scaling`：只选择 `NativeListScalingBaselineTests` 套件，
+启用其中的 N×V 项目网格、资产数扫描、描述符链重建与单项成本归因测量并关闭覆盖率；
+不选择任何画布套件，因此不启动 WKWebView、大图持续交互、长循环或首拖测量。
+该入口以 `-configuration Release ENABLE_TESTABILITY=YES` 构建：Release 对应生产优化级别
+（与 Rust 侧 issue #731 基线的 release 口径一致），而 `@testable import` 需要显式开启
+testability，Release 配置默认关闭。测量以 `PW-LIST-SCALING` 前缀打印证据行；该套件的
+三个夹具不变量冒烟（项目行健康且有序、库索引规范不被重写、描述符链重建打开实际目录）
+不受开关影响，默认功能回归照常以 Debug 运行。`stress` 的选择不变，不包含该套件。
+测量结论与处置记录于[持久化 §10.2](../data-model/persistence.md#102-写入安全)。
 
 这将六组 100/500/1000 节点持续交互、五次窗口重建、100 次 reload 和首拖
 对照测量移出默认门禁，原来的规模、等待、断言与证据口径保留。
@@ -163,7 +212,10 @@ The issue #405 fix, wired 2026-09-30, closes it:
   input equality (PR #442 review 5361127076). Untracked documentation also
   triggers isolation; ignored generated artifacts retain the existing fast
   path behavior.
-  For a `full`-scope push the gate runs fresh frontend/Rust coverage and native functional regression before Sonar; the scoped routes above select a single stack.
+  For a `full`-scope push the gate runs fresh frontend/Rust coverage and native functional regression before Sonar; the scoped routes above select a single stack — but only on this fast path, where the current working tree is provably identical to the pushed commit, so the main worktree's reused LCOV is same-origin. A scoped range that takes the slow path escalates to the complete gate before dispatch, because the main worktree's reports cannot be proven to belong to the pushed tree
+  ([issue #805](https://github.com/hailingu/PlotWeave/issues/805);
+  the escalation matrix is recorded under
+  [Scoped Push Routing](#scoped-push-routing-2026-10-18)).
 - **Slow path — temporary worktree.** Every other commit — a non-checked-out
   ref, a dirty worktree, or an additional distinct commit in a multi-ref
   push — is checked out with
@@ -194,12 +246,14 @@ The issue #405 fix, wired 2026-09-30, closes it:
   terminated line, because a field-less line carries no ref record. Every
   ref line is analyzed or rejected — none is silently ignored.
 - **Evidence and serialization.** Slow-path runs write their gate-history
-  record through the main worktree's pending file and take the main
-  worktree's gate lock, so fast path, slow path, and `materialize` stay
-  serialized on one mutex and the record's `tree`/`head` are the pushed
-  commit's (issue #355 semantics unchanged). All refs must pass before
-  `materialize` runs; a failure blocks the push with earlier passing records
-  left pending for the next successful push.
+  record through the common Git directory's `plotweave-gate-history.pending`
+  and take its `plotweave-sonar-gate.lock` (owner decision #917, 2026-10-27).
+  Fast path, slow path, all linked worktrees and `materialize` share one mutex;
+  the record's `tree`/`head` remain the pushed commit's. A push never materializes
+  or changes the tracked ledger. Earlier passing records survive a later ref
+  failure and drain at the next eligible ordinary commit in this repository;
+  removing a linked checkout does not remove the common queue. Independent
+  clones and historical private gitdir archives are not automatically merged.
 - **Original object identity.** The hook exports `GIT_NO_REPLACE_OBJECTS=1`
   before any Git command. Resolution (including annotated-tag peeling),
   fast-path comparisons, temporary checkout, and descendant gate records
@@ -737,3 +791,13 @@ does not contain (omitted staged changes, unstaged tracked changes, or
 untracked/ignored inputs) — is recorded in
 [What The Gate Actually Enforces](quality-gate-enforcement.md#what-the-gate-actually-enforces) as a
 boundary of this inventory.
+
+
+## Implementation navigation (#948)
+
+The entry hook [`.githooks/pre-push`](../../.githooks/pre-push) owns environment initialization, the single trap registration, stdin ref collection, and commit dispatch. It sources two POSIX function libraries from the current gate tree:
+
+- [`pre-push-protocol.sh`](../../scripts/pre-push-protocol.sh) resolves pushed objects and scope bases, checks each ref scope, and aggregates the existing scope manifest. Documentation is neutral; distinct stacks and `full` converge to `full` independently of ref order.
+- [`pre-push-runtime.sh`](../../scripts/pre-push-runtime.sh) executes one commit in the current tree or an isolated worktree and owns the existing child supervision and cleanup helpers. The entry hook remains the sole initializer and trap owner.
+
+The extracted function bodies, stdin format, stable diagnostics, routing, receipt checks, pending evidence, and signal/lock lifecycle are preserved. The real-hook loaders in `pre-push-scenario-fixture.ts`, `ub-mode-gate.test.ts`, and `gate-tree-marker.test.ts` copy both libraries together with the entry hook, so publishing, ledger, and historical-tree scenarios use the same current gate implementation. The direct shell protocol test checks aggregation behavior; the existing real-Git tests retain the lifecycle and fast/slow-path coverage.

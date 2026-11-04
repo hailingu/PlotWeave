@@ -2,7 +2,7 @@ import { DialogFooter } from '../../ui/DialogFooter'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { DocumentEntity, ProjectSettings } from '../settings'
-import { useModalKeyboard } from '../useModalKeyboard'
+import { useModalKeyboard } from '../../ui/useModalKeyboard'
 
 /**
  * 设定文档查看/编辑弹窗（issue 56，docs/ui-design.md §5）：长篇自由文本

@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 
 /// 本测试专用的登记表实例（应用状态语义，非共享全局）。
-fn pending() -> project_media::PendingProjectAssets {
+pub(super) fn pending() -> project_media::PendingProjectAssets {
     project_media::PendingProjectAssets::new()
 }
 
@@ -20,7 +20,7 @@ fn seed_project(projects: &Path, id: &str) {
 }
 
 /// 库索引 + 媒体文件的最小合法 fixture（索引条目按 §7.2 Record 形状）。
-fn seed_library(library: &Path, id: &str, file: &str, bytes: &[u8], mime: &str) {
+pub(super) fn seed_library(library: &Path, id: &str, file: &str, bytes: &[u8], mime: &str) {
     fs::write(library.join("assets").join(file), bytes).expect("写入库媒体文件");
     let index = json!({
         "assets": library_by_id([library_entry(id, file, "character", mime, &format!("assets/{file}"))]),
@@ -31,6 +31,24 @@ fn seed_library(library: &Path, id: &str, file: &str, bytes: &[u8], mime: &str) 
         serde_json::to_string(&index).expect("序列化库索引"),
     )
     .expect("写入库索引");
+}
+
+/// 资产 id 形状契约（issue #720）：`new_asset_id()` 以自身前缀 `pa` 直接
+/// 走生成器，不再对 `new_id()` 返回值做 `[2..]` 字节切片——输出形状保持
+/// `pa-{ms:x}{rnd:x}-{seq:x}`（`pa-` + 两段非空小写十六进制）、文件名安全，
+/// 同毫秒连续调用不碰撞。生成器前缀若变更由 core 契约测试报出，此处不受
+/// 影响。
+#[test]
+fn new_asset_id_keeps_pa_prefix_shape_without_slicing_new_id() {
+    let id = new_asset_id();
+    let (ms_rnd, seq) = id
+        .strip_prefix("pa-")
+        .and_then(|body| body.rsplit_once('-'))
+        .unwrap_or_else(|| panic!("形状不符：{id}"));
+    let hex = |s: &str| !s.is_empty() && s.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+    assert!(hex(ms_rnd) && hex(seq), "分段须为非空小写十六进制：{id}");
+    assert!(validate_id(&id).is_ok(), "资产 id 须文件名安全：{id}");
+    assert_ne!(id, new_asset_id(), "同毫秒连续生成不得碰撞");
 }
 
 #[test]
@@ -564,4 +582,40 @@ fn asset_admission_refuses_existing_quarantine_file() {
     cleanup(&root);
     assert!(result.is_err(), "reserved reference admitted: {result:?}");
     assert_eq!(bytes, b"private quarantine");
+}
+
+/// Active-namespace protection applies before copying library bytes; similarly named active folders remain valid (#887).
+#[test]
+fn library_import_rejects_quarantine_and_accepts_trashcan() {
+    for folder in [".trash", ".trashcan"] {
+        let (projects, library, root) = temp_fixture();
+        seed_project(&projects, "p-1");
+        fs::create_dir_all(library.join("assets").join(folder)).unwrap();
+        let name = format!("{folder}/held.png");
+        seed_library(&library, "la-1", &name, b"PNGDATA", "image/png");
+        let result = import_asset_from_library(
+            &cap(&projects),
+            &cap(&library),
+            "p-1",
+            "la-1",
+            &pending(),
+            &mut |_| {},
+        );
+        if folder == ".trash" {
+            assert!(result.is_err());
+            assert!(!projects.join("p-1/assets").exists());
+        } else {
+            let asset = result.unwrap();
+            let path = asset["relPath"].as_str().unwrap();
+            assert_eq!(
+                fs::read(projects.join("p-1").join(path)).unwrap(),
+                b"PNGDATA"
+            );
+        }
+        assert_eq!(
+            fs::read(library.join("assets").join(name)).unwrap(),
+            b"PNGDATA"
+        );
+        cleanup(&root);
+    }
 }

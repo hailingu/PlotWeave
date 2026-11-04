@@ -55,6 +55,19 @@ fn expect_hop(received: &Receiver<String>, request_line: &str) {
     );
 }
 
+/// 有界等待恰好 `expected_requests` 跳请求行（issue #809）：客户端收到
+/// 响应只证明夹具已打印请求行，不证明 stdout 读取线程已完成向 channel
+/// 的转发，「必须发生」的跳数不能立即非阻塞计数；随后仅对「不应存在的
+/// 更多跳」做非阻塞断言——该方向没有必须到达的消息，不引入固定 sleep。
+fn expect_exact_request_hops(received: &Receiver<String>, expected_requests: usize) {
+    for hop in 1..=expected_requests {
+        received
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap_or_else(|_| panic!("应收到第 {hop} 跳请求"));
+    }
+    assert_eq!(received.try_iter().count(), 0, "拒绝后不应存在更多请求跳");
+}
+
 /// 验收：相对（根相对与纯相对）与绝对 Location 均经 `Url::join` 解析，
 /// 真实重定向循环逐跳推进、终态字节原样返回。
 #[test]
@@ -96,11 +109,7 @@ fn assert_refused_download(
         err.to_string().contains(diagnostic),
         "期望 {diagnostic}，实际诊断：{err}"
     );
-    assert_eq!(
-        received.try_iter().count(),
-        expected_requests,
-        "拒绝前的实际请求跳数"
-    );
+    expect_exact_request_hops(received, expected_requests);
 }
 
 /// 验收：重定向响应缺少 LOCATION 头即拒绝，且不发起第二跳请求。
@@ -343,7 +352,12 @@ fn redirect_mixed_dns_answer_is_rejected_before_connecting() {
     .unwrap_err();
     assert!(matches!(error, ProxyError::DownloadRefused { .. }));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!(received.try_iter().count(), 1);
+    expect_hop(&received, "GET /first HTTP/1.1");
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "混合答案应在第二跳连接前被拒，不存在第二跳请求"
+    );
 }
 
 /// HTTPS downgrade is refused on the next hop, even when the destination is an owned loopback server.

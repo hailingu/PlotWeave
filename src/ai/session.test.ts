@@ -2,6 +2,73 @@ import { describe, expect, it } from 'vitest'
 import { normalizeAiSession } from './session'
 
 describe('normalizeAiSession', () => {
+  it.each([
+    {},
+    { fingerprint: '旧签名', conflicts: null, commandCount: 2 },
+    '损坏',
+  ])(
+    '异常关联预览元数据被剥离，保留原始待重校验命令：%j',
+    (episodeAssignment) => {
+      const result = normalizeAiSession({
+        schemaVersion: 1,
+        entries: [
+          {
+            id: 1,
+            kind: 'msg',
+            role: 'assistant',
+            text: '预览',
+            card: {
+              status: 'pending',
+              v: {
+                ok: true,
+                items: [],
+                commands: [],
+                issues: [],
+                hasDeletes: false,
+                episodeAssignment,
+              },
+            },
+          },
+        ],
+      })
+      expect(
+        result.session.entries[0]?.card?.v.episodeAssignment,
+      ).toBeUndefined()
+      expect(result.session.entries[0]?.card?.status).toBe('pending')
+    },
+  )
+  it.each([
+    ['allow', 'allow'],
+    ['preserve', 'preserve'],
+    [undefined, undefined],
+    ['unexpected', 'preserve'],
+    [true, 'preserve'],
+    [null, 'preserve'],
+  ])('分集范围落盘归一化：%s → %s', (raw, expected) => {
+    const normalized = normalizeAiSession({
+      schemaVersion: 1,
+      entries: [
+        {
+          id: 1,
+          kind: 'msg',
+          role: 'assistant',
+          text: '预览',
+          card: {
+            v: {
+              ok: true,
+              commands: [],
+              items: [],
+              issues: [],
+              hasDeletes: false,
+            },
+            status: 'pending',
+            episodeScope: raw,
+          },
+        },
+      ],
+    })
+    expect(normalized.session.entries[0]?.card?.episodeScope).toBe(expected)
+  })
   it('保留可恢复的消息、预览卡状态与回执，并隔离损坏条目', () => {
     const result = normalizeAiSession({
       schemaVersion: 1,

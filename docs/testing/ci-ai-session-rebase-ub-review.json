@@ -1,0 +1,13 @@
+{
+  "reviewer": "Codex",
+  "tdd": "现有用例在合并后 CI run 41599584663、job 125794882661 的 ba94a2a5661a59f1270a42c304c6d44186abd959 上实际失败：回复已可见，但保存快照仍为 [1,2]，期望 [1,2,3]。以该原始红灯作为证据；仅修正原用例的等待边界，不制造产品故障或新增重复断言测试。",
+  "rootCause": "RightPanel.test.tsx 的恢复条目重定基用例以 findByText 的 DOM 可见性推断 onSaveSession 已收到最终快照；useAiSessionPersistence 在 React useEffect 中上交快照，两者不是同一个完成边界。将原有 ID 与 normalizeAiSession 断言放入已有 waitFor，观察同一实际保存回调。",
+  "model": "产品线程、持久化数据、ID 重定基和依赖解析均未改变；本次仅区分回复渲染与保存快照两个异步观测点。不新增状态机、定时器、公开测试接口或共享可变状态。",
+  "boundaries": "保留旧消息安全整数上限、新用户消息、助手回复、最终 [1,2,3] 及 repaired=false 的全部原断言。使用 waitFor 默认超时，不扩大任何测试超时、重试次数、覆盖率下限或生产容错；最终快照缺失仍会失败。",
+  "complexity": "人工复核被修改的单个用例及新增等待闭包，均低于80代码行，新增闭包没有分支或嵌套逻辑。RightPanel.test.tsx 已有超过1000行的多组面板行为测试，本次保留现有所属分组和夹具，仅局部等待调整，不拆分无关案例；仍通过1800行硬门禁。",
+  "duplication": "复用该文件已有 waitFor 导入及公共 onSaveSession 测试接线；没有增加同构测试、测试 helper 或另一个保存实现。",
+  "tests": "先核对完整失败日志、保存 hook 的 effect 边界和相邻保存回归，再执行 RightPanel 与 useAiSessionPersistence 聚焦回归、正常完整提交门禁、生产构建以及最终HEAD的真实ub-mode和正常pre-push。原始红灯来自真实CI；单次本机通过不能证明不存在该竞争。最终远端CI与实际评审仍须另查。",
+  "log": "先核实 #950/#951 已合并与任务分支已清理，主工作区仅保留用户 WORK_LOG.md 删除；确认当前 dev 与远端均为 ba94a2a5、没有遗留检查进程。定位合并后唯一失败用例后，从当前dev创建独立 fix/ai-session-rebase-save-wait；仅等待正确保存观测点，并为本次最终HEAD重新取得门禁和ub-mode证据。行动和检查日志位于 /tmp/plotweave-ci-save-wait-*。",
+  "testCommand": "npm test -- src/editor/panels/RightPanel.test.tsx src/editor/ai/useAiSessionPersistence.test.ts src/editor/ai/useAiSessionPersistence.cap.test.ts --maxWorkers=4",
+  "unsupported": "唯一维护代码变更是测试文件，另有本审查JSON；没有受crapper/dryer/mutator支持的变更生产源码。三项人工审查分别覆盖等待闭包复杂度、无重复脚手架及保留全部行为断言，不宣称CRAP或变异分数。覆盖率仍必须实际执行，产品保存调度未改。"
+}

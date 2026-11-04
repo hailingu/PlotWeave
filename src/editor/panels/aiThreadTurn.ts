@@ -29,6 +29,7 @@ import { type AppSettings, type ChatModelOption } from '../../settings/types'
 import { buildMessages, readToolOf, runModelTurn } from './aiThreadModel'
 import { TurnCancelledError } from '../ai/agentLoop'
 import { type ThreadEntry } from '../../ai/session'
+import { useAiTurnFeedback, type AiTurnStatus } from './aiTurnStatus'
 
 /** 回合世代守卫与取消信号（issue #154）：send 时 beginTurn 推进世代、
  * 重置信号；cancelTurn 置位并推进世代。回合 settle 时只有 generation 与
@@ -108,6 +109,7 @@ function runTurn(
   knowsCanvas: boolean,
   signal: { isCancelled: () => boolean },
   register: (box: TurnBox) => void,
+  startedAt: number,
 ): Promise<TurnResult> {
   const settled = runModelTurn(
     opts.activeProvider!,
@@ -132,6 +134,7 @@ function runTurn(
   )
   const box: TurnBox = {
     promise: settled,
+    startedAt,
     canceller: () => {
       signal.isCancelled = () => true
     },
@@ -193,13 +196,13 @@ function useHeldTurnBox(projectId: string) {
 function usePendingTurnClaim(
   projectId: string,
   applyRef: { readonly current: (result: TurnResult, box: TurnBox) => void },
-  setBusy: Dispatch<SetStateAction<boolean>>,
+  setStatus: Dispatch<SetStateAction<AiTurnStatus>>,
   claimBoxRef: { current: TurnBox | null },
 ): void {
   useEffect(() => {
     const box = takeTurn(projectId)
     if (!box) return
-    setBusy(true)
+    setStatus({ phase: 'waiting', startedAt: box.startedAt ?? Date.now() })
     claimBoxRef.current = box
     let active = true
     let delivered = false
@@ -220,7 +223,7 @@ function usePendingTurnClaim(
       active = false
       if (!delivered && !retireIfCancelled()) returnTurn(projectId, box)
     }
-  }, [projectId, setBusy, applyRef, claimBoxRef])
+  }, [projectId, setStatus, applyRef, claimBoxRef])
 }
 
 /** useAiTurn 的选项契约（AiThread 容器透传）。 */
@@ -244,8 +247,7 @@ export interface UseAiTurnOpts extends Omit<
 function useTurnClaimDelivery(
   opts: UseAiTurnOpts,
   heldBox: ReturnType<typeof useHeldTurnBox>,
-  setBusy: Dispatch<SetStateAction<boolean>>,
-  setError: Dispatch<SetStateAction<string | null>>,
+  setStatus: Dispatch<SetStateAction<AiTurnStatus>>,
   claimBoxRef: { current: TurnBox | null },
 ) {
   const applyClaimRef = useRef<(result: TurnResult, box: TurnBox) => void>(
@@ -260,19 +262,24 @@ function useTurnClaimDelivery(
       const wasCancelled = claimBoxRef.current === null
       claimBoxRef.current = null
       if (wasCancelled) return
-      setBusy(false)
+      setStatus(statusAfterResult(result))
       if (result.entries) {
         opts.append(
           claimedEntries(result.entries, opts.nextId, opts.onValidateCommands),
         )
-      } else {
-        setError(result.error ?? '请求失败')
       }
       heldBox.hold(box)
     }
   })
-  usePendingTurnClaim(opts.projectId, applyClaimRef, setBusy, claimBoxRef)
+  usePendingTurnClaim(opts.projectId, applyClaimRef, setStatus, claimBoxRef)
   return applyClaimRef
+}
+
+/** A settled reply ends waiting without claiming that any preview batch has executed. */
+function statusAfterResult(result: TurnResult): AiTurnStatus {
+  return result.entries
+    ? { phase: 'completed' }
+    : { phase: 'failed', error: result.error ?? '请求失败' }
 }
 
 /** 单轮发送域（逻辑 hook，issue #39 拆分）：输入草稿、画布感知开关与
@@ -281,8 +288,10 @@ function useTurnClaimDelivery(
  * 同一项目的实例认领（见 pendingTurns 与 usePendingTurnClaim）。 */
 export function useAiTurn(opts: UseAiTurnOpts) {
   const [draft, setDraft] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [status, setStatus] = useState<AiTurnStatus>({ phase: 'idle' })
+  const busy = status.phase === 'waiting'
+  const error = status.phase === 'failed' ? status.error : null
+  const feedback = useAiTurnFeedback(status)
   const [knowsCanvas, setKnowsCanvas] = useState(true)
   const turn = useTurnLifecycle(opts.projectId)
   /** 发起实例是否仍挂载：卸载后不得撤销登记（盒子留给认领方）或上屏。
@@ -297,7 +306,7 @@ export function useAiTurn(opts: UseAiTurnOpts) {
   const heldBox = useHeldTurnBox(opts.projectId)
   /** 认领盒子的 canceller（issue #154）：claim 存入、cancel 调用以停止旧轮。 */
   const claimBoxRef = useRef<TurnBox | null>(null)
-  useTurnClaimDelivery(opts, heldBox, setBusy, setError, claimBoxRef)
+  useTurnClaimDelivery(opts, heldBox, setStatus, claimBoxRef)
   const send = async (submittedDraft?: string) => {
     const text = (submittedDraft ?? draft).trim()
     if (!text || busy || !opts.activeOption || !opts.activeProvider) return
@@ -305,11 +314,18 @@ export function useAiTurn(opts: UseAiTurnOpts) {
     const { generation, signal } = turn.begin()
     opts.append([{ id: opts.nextId(), kind: 'msg', role: 'user', text }])
     setDraft('')
-    setBusy(true)
-    setError(null)
+    const startedAt = Date.now()
+    setStatus({ phase: 'waiting', startedAt })
     opts.setArmedIdx(null)
     // 校验在循环内进行（issue 41）：批次回喂纠错，最终校验随循环产出
-    const result = await runTurn(opts, text, knowsCanvas, signal, turn.register)
+    const result = await runTurn(
+      opts,
+      text,
+      knowsCanvas,
+      signal,
+      turn.register,
+      startedAt,
+    )
     // 世代守卫：新一轮或取消之后，本回合结果不再交付本实例（取消回执
     // 已由取消路径上屏，不随迟到结果重复交付）
     turn.settle(
@@ -317,8 +333,7 @@ export function useAiTurn(opts: UseAiTurnOpts) {
       aliveRef.current,
       () => {
         if (result.entries) opts.append(result.entries)
-        else setError(result.error ?? '请求失败')
-        setBusy(false)
+        setStatus(statusAfterResult(result))
       },
       heldBox.hold,
     )
@@ -336,7 +351,7 @@ export function useAiTurn(opts: UseAiTurnOpts) {
       claimBoxRef.current = null
       claimed.canceller?.()
     }
-    setBusy(false)
+    setStatus({ phase: 'cancelled' })
   }
   /** 取消回执上屏（issue #154）：随会话持久化的「已取消」note；供 AiThread
    * 在 cancel 后调用。 */
@@ -344,11 +359,12 @@ export function useAiTurn(opts: UseAiTurnOpts) {
     opts.append([{ id: opts.nextId(), kind: 'note', text: '已取消' }])
   /** 清除上屏的请求错误（issue #89 评审）：新会话不得继承上一会话的
    * 失败诊断——错误仅由下次 send 开头清除会让空会话带着旧横幅。 */
-  const clearError = () => setError(null)
+  const clearError = () => setStatus({ phase: 'idle' })
   return {
     draft,
     setDraft,
     busy,
+    feedback,
     error,
     clearError,
     knowsCanvas,

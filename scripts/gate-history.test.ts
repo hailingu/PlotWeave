@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import {
   gitFixtureEnvironment,
   gitScenarioFixture,
@@ -211,40 +211,53 @@ describe(
 
 const scenarioFixtures: Array<ReturnType<typeof gitScenarioFixture>> = []
 
-/** 准备独立 Git 仓库并提交种子台账（归因判定需要已跟踪基线）；
- * 返回台账与待物化文件的绝对路径。脚本副本放进 scripts/ 子目录镜像
- * 真实布局（脚本按自身位置推算仓库根）。 */
-function prepareIsolatedRepository(historySeed: string): {
-  root: string
-  historyPath: string
-  pendingPath: string
-} {
-  const fixture = gitScenarioFixture((root) => {
-    const environment = gitFixtureEnvironment()
-    const run = (args: string[]) =>
-      spawnSync('git', args, { cwd: root, encoding: 'utf8', env: environment })
-    run(['init', '--initial-branch=main'])
-    run(['config', 'user.name', 'Stage'])
-    run(['config', 'user.email', 'stage@example.invalid'])
-    mkdirSync(resolve(root, 'scripts'), { recursive: true })
-    mkdirSync(resolve(root, 'docs/development'), { recursive: true })
-    writeFileSync(
-      resolve(root, 'docs/development/gate-history.jsonl'),
-      historySeed,
-    )
-    // 目录保留文件：git rm 台账后目录不被修剪，贴合真实仓库形态
-    //（评审 5542467935 的复现前提是折并能重建工作树文件）
-    writeFileSync(resolve(root, 'docs/development/.keepme'), '')
-    run(['add', '-A'])
-    run(['commit', '-m', 'base'])
-  })
-  scenarioFixtures.push(fixture)
+/** 在指定根目录播种独立 Git 仓库并提交种子台账（归因判定需要已跟踪基线）。
+ * 与 prepareIsolatedRepository 分离，供组级共享夹具只播种一次（issue #736）。 */
+function seedIsolatedRepository(root: string, historySeed: string): void {
+  const environment = gitFixtureEnvironment()
+  const run = (args: string[]) =>
+    spawnSync('git', args, { cwd: root, encoding: 'utf8', env: environment })
+  run(['init', '--initial-branch=main'])
+  run(['config', 'user.name', 'Stage'])
+  run(['config', 'user.email', 'stage@example.invalid'])
+  mkdirSync(resolve(root, 'scripts'), { recursive: true })
+  mkdirSync(resolve(root, 'docs/development'), { recursive: true })
+  writeFileSync(
+    resolve(root, 'docs/development/gate-history.jsonl'),
+    historySeed,
+  )
+  // 目录保留文件：git rm 台账后目录不被修剪，贴合真实仓库形态
+  //（评审 5542467935 的复现前提是折并能重建工作树文件）
+  writeFileSync(resolve(root, 'docs/development/.keepme'), '')
+  run(['add', '-A'])
+  run(['commit', '-m', 'base'])
+}
+
+/** 从夹具复制独立仓库并返回台账/待物化路径；脚本副本放进 scripts/ 子目录
+ * 镜像真实布局（脚本按自身位置推算仓库根）。 */
+function createSeededRepository(
+  fixture: ReturnType<typeof gitScenarioFixture>,
+): { root: string; historyPath: string; pendingPath: string } {
   const root = fixture.create()
   return {
     root,
     historyPath: resolve(root, 'docs/development/gate-history.jsonl'),
     pendingPath: resolve(root, 'gate-pending.jsonl'),
   }
+}
+
+/** 准备独立 Git 仓库并提交种子台账（归因判定需要已跟踪基线）；
+ * 返回台账与待物化文件的绝对路径。 */
+function prepareIsolatedRepository(historySeed: string): {
+  root: string
+  historyPath: string
+  pendingPath: string
+} {
+  const fixture = gitScenarioFixture((root) =>
+    seedIsolatedRepository(root, historySeed),
+  )
+  scenarioFixtures.push(fixture)
+  return createSeededRepository(fixture)
 }
 
 /** 在准备好的仓库上执行物化；stageForCommit 选择提交入口或裸物化，
@@ -287,12 +300,14 @@ function runStageMaterialize(
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
 
-/** 在真实 Git 提交钩子中运行物化，验证 Git 自身选择的索引及最终提交/索引状态。 */
+/** 在真实 Git 提交钩子中运行物化，验证 Git 自身选择的索引及最终提交/索引状态。
+ * root 可为链接 worktree：其检出不含未跟踪的空 scripts/ 目录，先补建再放脚本。 */
 function commitWithMaterialize(
   root: string,
   pendingPath: string,
   args: string[],
 ) {
+  mkdirSync(resolve(root, 'scripts'), { recursive: true })
   cpSync(
     resolve(repositoryRoot, 'scripts/gate-history.sh'),
     resolve(root, 'scripts/gate-history.sh'),
@@ -361,6 +376,38 @@ function isolatedGit(root: string, ...args: string[]): string {
   return result.stdout
 }
 
+/** 在夹具仓库内添加链接 worktree（issue #829 的触发路径）：Git 在其中运行提交
+ * 钩子时导出绝对 GIT_DIR 与 GIT_INDEX_FILE。worktree 置于仓库根下的子目录，
+ * 随夹具一并清理。 */
+function addLinkedWorktree(root: string): string {
+  const worktreeRoot = resolve(root, 'linked-worktree')
+  isolatedGit(root, 'worktree', 'add', '-b', 'task', worktreeRoot, 'main')
+  return worktreeRoot
+}
+
+const ledgerRelativePath = 'docs/development/gate-history.jsonl'
+
+/** 在链接 worktree 内按 prepare 布置台账形态，暂存一处无关改动并写入 pending，
+ * 再经真实 pre-commit 钩子提交（Git 向钩子导出绝对 GIT_DIR，issue #829）。 */
+function commitInLinkedWorktree(
+  pending: string,
+  prepare: (worktreeRoot: string) => void = () => {},
+) {
+  const { root, pendingPath } = prepareIsolatedRepository(`${seedRecord}\n`)
+  const worktreeRoot = addLinkedWorktree(root)
+  prepare(worktreeRoot)
+  writeFileSync(resolve(worktreeRoot, 'docs/development/.keepme'), 'changed\n')
+  isolatedGit(worktreeRoot, 'add', '--', 'docs/development/.keepme')
+  writeFileSync(pendingPath, pending)
+  const result = commitWithMaterialize(worktreeRoot, pendingPath, [])
+  return {
+    ledgerPath: resolve(worktreeRoot, ledgerRelativePath),
+    pendingPath,
+    result,
+    worktreeRoot,
+  }
+}
+
 describe(
   '归因通过的自动暂存：工作树恰为索引内容 + 本次折并的待物化行（PR #581 评审 5537970549）',
   { timeout: 30_000 },
@@ -424,43 +471,35 @@ describe(
   '无折并时拒绝未归因台账改动（pending 为空，工作树改动不自动暂存）',
   { timeout: 30_000 },
   () => {
-    afterEach(() => {
-      for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
-    })
+    // 三种篡改形态共用同一种子（issue #736）：组级共享夹具只播种一次，
+    // 每例 create() 经 gitScenarioFixture 内置模板 + cpSync 复制独立仓库。
+    // 不进入 scenarioFixtures/afterEach——逐例 dispose 会清空模板导致重播；
+    // 模板与全部副本随 afterAll 统一清理。
+    const fixtures = gitScenarioFixture((root) =>
+      seedIsolatedRepository(root, `${seedRecord}\n`),
+    )
+    afterAll(() => fixtures.dispose())
 
-    it('人工追加的合法 JSON 行（评审场景：与门禁产物语法不可区分）：不暂存并警告', () => {
-      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
-        `${seedRecord}\n`,
-      )
-      appendFileSync(historyPath, `${secondRecord}\n`)
-
-      const result = runStageMaterialize(root, historyPath, pendingPath, '')
-      const state = isolatedLedgerState(root)
-
-      expect(result.status).toBe(0)
-      expect(state.stagedModified).toBe(false)
-      expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
-    })
-
-    it('修改既有记录行：不暂存并警告', () => {
-      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
-        `${seedRecord}\n`,
-      )
-      writeFileSync(historyPath, `${secondRecord}\n`)
-
-      const result = runStageMaterialize(root, historyPath, pendingPath, '')
-      const state = isolatedLedgerState(root)
-
-      expect(result.status).toBe(0)
-      expect(state.stagedModified).toBe(false)
-      expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
-    })
-
-    it('追加畸形行（如 diff 前缀污染形态）：不暂存并警告', () => {
-      const { root, historyPath, pendingPath } = prepareIsolatedRepository(
-        `${seedRecord}\n`,
-      )
-      appendFileSync(historyPath, `+${secondRecord}\n`)
+    it.each([
+      {
+        name: '人工追加的合法 JSON 行（评审场景：与门禁产物语法不可区分）',
+        tamper: (historyPath: string) =>
+          appendFileSync(historyPath, `${secondRecord}\n`),
+      },
+      {
+        name: '修改既有记录行',
+        tamper: (historyPath: string) =>
+          writeFileSync(historyPath, `${secondRecord}\n`),
+      },
+      {
+        name: '追加畸形行（如 diff 前缀污染形态）',
+        tamper: (historyPath: string) =>
+          appendFileSync(historyPath, `+${secondRecord}\n`),
+      },
+    ])('$name：不暂存并警告', ({ tamper }) => {
+      const { root, historyPath, pendingPath } =
+        createSeededRepository(fixtures)
+      tamper(historyPath)
 
       const result = runStageMaterialize(root, historyPath, pendingPath, '')
       const state = isolatedLedgerState(root)
@@ -841,6 +880,85 @@ describe(
         expect(state.stdout).toBe('')
       },
     )
+  },
+)
+
+describe(
+  '链接 worktree 钩子环境中的归因（issue #829）',
+  { timeout: 30_000 },
+  () => {
+    afterEach(() => {
+      for (const fixture of scenarioFixtures.splice(0)) fixture.dispose()
+    })
+
+    it('字节匹配的折并行自动暂存入库：HEAD 与工作树一致、pending 清空、无索引残留', () => {
+      const { ledgerPath, pendingPath, result, worktreeRoot } =
+        commitInLinkedWorktree(`${secondRecord}\n`)
+      const committed = isolatedGit(
+        worktreeRoot,
+        'show',
+        `HEAD:${ledgerRelativePath}`,
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).not.toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+      expect(committed).toBe(`${seedRecord}\n${secondRecord}\n`)
+      expect(readFileSync(ledgerPath, 'utf8')).toBe(committed)
+      expect(readFileSync(pendingPath, 'utf8')).toBe('')
+      expect(
+        isolatedGit(
+          worktreeRoot,
+          'status',
+          '--porcelain',
+          '--',
+          ledgerRelativePath,
+        ),
+      ).toBe('')
+    })
+
+    it('折并之外的人工追加仍不可归因：警告、不暂存，提交只含开发者的选择', () => {
+      const manualRecord = JSON.stringify({
+        tree: 'e'.repeat(40),
+        qualityGate: 'OK',
+        newCodeUnresolvedIssues: 0,
+      })
+      const { ledgerPath, pendingPath, result, worktreeRoot } =
+        commitInLinkedWorktree(`${secondRecord}\n`, (worktreeRoot) =>
+          appendFileSync(
+            resolve(worktreeRoot, ledgerRelativePath),
+            `${manualRecord}\n`,
+          ),
+        )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).toContain('GATE_HISTORY_UNATTRIBUTED_CHANGE')
+      expect(
+        isolatedGit(worktreeRoot, 'show', `HEAD:${ledgerRelativePath}`),
+      ).toBe(`${seedRecord}\n`)
+      expect(readFileSync(ledgerPath, 'utf8')).toBe(
+        `${seedRecord}\n${manualRecord}\n${secondRecord}\n`,
+      )
+      expect(readFileSync(pendingPath, 'utf8')).toBe('')
+    })
+
+    it('已暂存的台账删除不被折并重建的台账替换：警告 GATE_HISTORY_STAGED_DELETION，提交保留删除', () => {
+      const { ledgerPath, pendingPath, result, worktreeRoot } =
+        commitInLinkedWorktree(`${secondRecord}\n`, (worktreeRoot) =>
+          isolatedGit(worktreeRoot, 'rm', '-q', '--', ledgerRelativePath),
+        )
+      const committed = spawnSync(
+        'git',
+        ['cat-file', '-e', `HEAD:${ledgerRelativePath}`],
+        { cwd: worktreeRoot, encoding: 'utf8', env: gitFixtureEnvironment() },
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).toContain('GATE_HISTORY_STAGED_DELETION')
+      // 删除随提交入库：HEAD 中没有台账路径，折并只重建了工作树文件
+      expect(committed.status).not.toBe(0)
+      expect(readFileSync(ledgerPath, 'utf8')).toBe(`${secondRecord}\n`)
+      expect(readFileSync(pendingPath, 'utf8')).toBe('')
+    })
   },
 )
 

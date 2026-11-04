@@ -11,6 +11,32 @@ use std::time::Duration;
 
 type Completion = (u32, u8, Option<String>);
 
+/// The historical ABI preserves transient verification failures as errors and recovers after real EACCES.
+#[cfg(unix)]
+#[test]
+fn asset_verification_io_error_is_not_an_ok_quarantine_array() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new("asset-verification-io");
+    let created = fx.call_ok(r#"{"op":"createProject","name":"retained media"}"#);
+    let id = json_path(&created, &["ok", "id"]);
+    let media = fx.root.join("projects").join(&id).join("assets/ok.png");
+    std::fs::create_dir_all(media.parent().unwrap()).unwrap();
+    std::fs::write(&media, b"retained media").unwrap();
+    let request = serde_json::json!({"op": "verifyProjectAssets", "id": id,
+        "assets": {"byId": {"a-ok": {"relPath": "assets/ok.png"}}}})
+    .to_string();
+    std::fs::set_permissions(&media, std::fs::Permissions::from_mode(0o0)).unwrap();
+    let (status, text) = fx.call(&request);
+    std::fs::set_permissions(&media, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(status, plotweave_ffi::PW_STATUS_ERROR);
+    let error: serde_json::Value = serde_json::from_str(&text.unwrap()).unwrap();
+    assert!(error["error"].is_string());
+    assert!(error.get("ok").is_none());
+    let recovered: serde_json::Value = serde_json::from_str(&fx.call_ok(&request)).unwrap();
+    assert_eq!(recovered["ok"], serde_json::json!([]));
+    assert_eq!(std::fs::read(media).unwrap(), b"retained media");
+}
+
 /// 记录型完成回调：经 context 指针回投通道，复制结果后立即释放 Rust 分配。
 extern "C" fn record_completion(
     request_id: u32,
