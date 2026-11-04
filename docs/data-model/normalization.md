@@ -46,4 +46,4 @@
 
 校验不提前阻断原有可恢复输入或局部隔离规则。首版未使用的 `meta.createdAt`／`updatedAt` 若为非字符串，先剥离并记录 `[NORMALIZED_NODE_OPTIONAL_REPAIRED]`，保留节点内容、身份和连线；合法字符串保留。修复后的节点／边仍不满足领域形状时，以稳定的 `[NORMALIZED_GRAPH_SHAPE_INVALID] node|edge <id>` 诊断拒绝交付，在会话与修复回写之前停止，避免归一化程序的未来回归穿透。此边界针对程序失配，不把可修复脏输入改为整项目拒绝。
 
-对白 `speaker: null` 沿用既有加载行为，表示无说话人；类型注解与此保持一致。已有同版本扩展字段策略、信封版本、IPC 和保存契约不变。最终校验为一次线性遍历，夹具成本与验证边界见[本次证据](../testing/issue-946-normalization.md)。
+对白 `speaker: null` 沿用既有加载行为，表示无说话人；类型注解与此保持一致。已有同版本扩展字段策略、信封版本、IPC 和保存契约不变。最终校验为一次线性遍历，夹具成本与验证边界见 [issue #946](https://github.com/hailingu/PlotWeave/issues/946)。

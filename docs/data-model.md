@@ -2,7 +2,7 @@
 
 > 本文是旧路径与章节编号的兼容入口。现行契约见[数据模型主索引](data-model/README.md)；下表保留原章节标题和锚点，供历史记录及源码注释查找。结构迁移见 [issue #281](https://github.com/hailingu/PlotWeave/issues/281)。
 
-[数据模型主索引](data-model/README.md) · [修订历史](data-model-revisions.md) · [设计同步记录](design-sync.md)
+[数据模型主索引](data-model/README.md) · [设计同步记录](design-sync.md)
 
 ## 旧章节迁移对照
 

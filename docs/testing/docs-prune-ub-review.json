@@ -1,0 +1,13 @@
+{
+  "reviewer": "hailingu（单审查者，ZCode 会话 2026-11-04 执行）",
+  "tdd": "纯文档清理：删除 11 个已被已关闭 issue 覆盖的任务记录文档并改写 14 处引用，无生产代码修改；按 AGENTS.md 文档变更不制造 red test，改做结构化审查（残留引用扫描、全 docs 相对链接断链扫描、Prettier）。",
+  "rootCause": "非缺陷修复：用户授权的文档集清理。任务记录类文档的结论已由 GitHub issue（#716/#744/#928/#929/#931/#932/#939/#941/#946/#948）与 PR #526 承载，本地副本属重复载体；证据类五文档按用户决定保留。",
+  "model": "删除 swiftui-react-flow-integration、data-model-revisions、development/library-import-716 与 testing/ 下 8 个 issue-*.md 工作记录；14 处引用全部改写为对应 GitHub issue/PR 绝对链接，无信息断点（issue 正文含结论；R 矩阵、P5 实测等详细证据所在文档按用户决定未删）。",
+  "boundaries": "未删除：p1/p2/p5-evidence、pr526-fixes、feature-parity（用户决定保留，其测量数据与 R 锚点仍被 ui-design/swift-standard 在役引用）；docs/testing/*-ub-review.json（ub-mode 台账入库半边，receipt 按 sha256 校验）。docs/.DS_Store 原本未被跟踪，仅本地删除。",
+  "complexity": "无新增或修改的可执行单元（纯 Markdown 删除与链接改写），无 80 行单元审查对象。",
+  "duplication": "本变更即去重：移除与 GitHub issue 重复的任务记录载体；未复制任何代码。crapper/dryer 无可扫对象，按技能降级条款执行人工审查。",
+  "tests": "实跑并通过：11 个被删文件名的残留引用扫描为 0（docs/src/native/scripts/.github/.githooks/AGENTS/README，排除 ub-review.json）；docs 全部相对链接目标扫描 0 断链；npx prettier --check docs/ 通过。",
+  "log": "任务完整日志见本提交的 WORK_LOG.md（移除清单、14 处引用改写位置、验证结果）。",
+  "testCommand": "npm run test:coverage",
+  "unsupported": "crapper/dryer/mutator 与 mutator 对纯文档删除无可测生产路径（productionPaths 为空），按 ub-mode 技能明确降级条款执行人工审查并如实记录：复杂度、重复率与变异分三项指标不能对 Markdown 计算。"
+}
