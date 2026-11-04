@@ -2,6 +2,8 @@
 
 This document is the developer entry point for PlotWeave. It keeps repository structure, toolchain, branch policy, continuous integration, local gates, and delivery rules separate from the user-facing product README. Detailed gate behavior and engineering standards remain authoritative in the linked documents.
 
+For the creative workflow, start with the [product introduction](../../README.md) and [user quick start](../guide/quick-start.md). Source-build requirements and commands remain in Local Setup below.
+
 ## Technology And Repository Layout
 
 PlotWeave v0.3.0 publishes the existing SwiftUI/AppKit and React Flow implementation as source. The Tauri/React Flow/Rust application remains a retained baseline. SwiftUI owns the business interface, AppKit owns window and system integration, and Swift services own project storage, library assets, preferences, encrypted keys, and model requests. React, TypeScript, and `@xyflow/react` retain the single editing session, graph commands, undo/redo, and canvas inside WKWebView. The native application uses the existing typed IPC contracts without linking Rust or the historical C ABI; current capability and verification boundaries are recorded in [Feature Parity](../swiftui-react-flow-feature-parity.md). The native application was developed on the historical branch `codex/swiftui-react-flow`, whose content merged into `develop` through [PR #526](https://github.com/hailingu/PlotWeave/pull/526) on 2026-10-13; that branch no longer exists on the remote.
